@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
-# name: discourse-media-plugin
+# name: Discourse-Media-Plugin
 # about: Media gallery API with tokenized streaming, transcoding, tags, gender filter, and likes
 # version: 0.1.0
 # authors: Chris
-# url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin#
+# url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin
 
 enabled_site_setting :media_gallery_enabled
 
