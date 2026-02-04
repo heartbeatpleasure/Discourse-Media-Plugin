@@ -3,16 +3,16 @@
 # name: discourse-media-plugin
 # about: Media gallery API with tokenized streaming, transcoding, tags, gender filter, and likes
 # version: 0.1.0
-# authors: Your Team
-# url: https://example.invalid
+# authors: Chris
+# url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin#
 
 enabled_site_setting :media_gallery_enabled
 
-after_initialize do
-  module ::MediaGallery
-    PLUGIN_NAME = "discourse-media-plugin"
-  end
+module ::MediaGallery
+  PLUGIN_NAME = "Discourse-Media-Plugin"
+end
 
+after_initialize do
   require_relative "lib/media_gallery/engine"
   require_relative "lib/media_gallery/token"
   require_relative "lib/media_gallery/ffmpeg"
