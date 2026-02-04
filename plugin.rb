@@ -19,7 +19,8 @@ after_initialize do
   require_relative "lib/media_gallery/upload_path"
   require_relative "lib/media_gallery/permissions"
 
-  Discourse::Application.routes.append do
+  # IMPORTANT: prepend so our routes are matched before Discourse's catch-all not_found route.
+  Discourse::Application.routes.prepend do
     mount ::MediaGallery::Engine, at: "/"
   end
 end
