@@ -9,6 +9,7 @@
 enabled_site_setting :media_gallery_enabled
 
 module ::MediaGallery
+  # Must match plugin directory name AND plugin.rb "# name:" exactly
   PLUGIN_NAME = "Discourse-Media-Plugin"
 end
 
@@ -19,7 +20,7 @@ after_initialize do
   require_relative "lib/media_gallery/upload_path"
   require_relative "lib/media_gallery/permissions"
 
-  # IMPORTANT: prepend so our routes are matched before Discourse's catch-all not_found route.
+  # Prepend so routes are matched before Discourse catch-all
   Discourse::Application.routes.prepend do
     mount ::MediaGallery::Engine, at: "/"
   end
