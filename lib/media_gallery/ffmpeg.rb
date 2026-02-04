@@ -1,99 +1,108 @@
 # frozen_string_literal: true
 
-require "json"
 require "open3"
 
-module ::MediaGallery
-  class FfmpegError < StandardError; end
-
-  module Ffmpeg
-    module_function
-
-    def ffmpeg_path
+module MediaGallery
+  class Ffmpeg
+    def self.ffmpeg_path
       SiteSetting.media_gallery_ffmpeg_path.presence || "ffmpeg"
     end
 
-    def ffprobe_path
+    def self.ffprobe_path
       SiteSetting.media_gallery_ffprobe_path.presence || "ffprobe"
     end
 
-    def probe(input_path)
+    def self.probe(input_path)
       cmd = [
         ffprobe_path,
-        "-v", "error",
-        "-print_format", "json",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
         "-show_format",
         "-show_streams",
-        input_path
+        input_path,
       ]
 
       stdout, stderr, status = Open3.capture3(*cmd)
-      raise FfmpegError, "ffprobe failed: #{stderr}" unless status.success?
+      raise "ffprobe_failed: #{stderr.presence || "unknown error"}" unless status.success?
 
       JSON.parse(stdout)
-    rescue JSON::ParserError => e
-      raise FfmpegError, "ffprobe JSON parse failed: #{e.message}"
     end
 
-    def transcode_video(input_path, output_path, bitrate_kbps:, max_fps:)
-      scale = "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease"
+    def self.transcode_audio(input_path:, output_path:, bitrate_kbps:)
       cmd = [
         ffmpeg_path,
         "-y",
-        "-i", input_path,
-        "-vf", scale,
-        "-r", max_fps.to_s,
-        "-c:v", "libx264",
-        "-profile:v", "main",
-        "-level", "4.1",
-        "-b:v", "#{bitrate_kbps}k",
-        "-maxrate", "#{bitrate_kbps}k",
-        "-bufsize", "#{bitrate_kbps * 2}k",
-        "-preset", "veryfast",
-        "-movflags", "+faststart",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ac", "2",
-        output_path
-      ]
-
-      _stdout, stderr, status = Open3.capture3(*cmd)
-      raise FfmpegError, "ffmpeg video failed: #{stderr}" unless status.success?
-      true
-    end
-
-    def transcode_audio(input_path, output_path, bitrate_kbps:)
-      cmd = [
-        ffmpeg_path,
-        "-y",
-        "-i", input_path,
+        "-i",
+        input_path,
         "-vn",
-        "-c:a", "libmp3lame",
-        "-b:a", "#{bitrate_kbps}k",
-        "-ar", "44100",
-        "-ac", "2",
-        output_path
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "#{bitrate_kbps}k",
+        output_path,
       ]
 
       _stdout, stderr, status = Open3.capture3(*cmd)
-      raise FfmpegError, "ffmpeg audio failed: #{stderr}" unless status.success?
-      true
+      raise "ffmpeg_audio_failed: #{stderr.presence || "unknown error"}" unless status.success?
     end
 
-    def extract_video_thumbnail(input_path, output_path)
+    # audio_bitrate_kbps added to allow adaptive sizing vs. Discourse max attachment limits
+    def self.transcode_video(input_path:, output_path:, bitrate_kbps:, max_fps:, audio_bitrate_kbps: 96)
+      buf_kbps = [bitrate_kbps.to_i * 2, 256].max
+
       cmd = [
         ffmpeg_path,
         "-y",
-        "-ss", "2",
-        "-i", input_path,
-        "-frames:v", "1",
-        "-vf", "scale=512:-1",
-        output_path
+        "-i",
+        input_path,
+        "-movflags",
+        "+faststart",
+        "-vf",
+        "fps=fps=#{max_fps}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-profile:v",
+        "main",
+        "-pix_fmt",
+        "yuv420p",
+        "-b:v",
+        "#{bitrate_kbps}k",
+        "-maxrate",
+        "#{bitrate_kbps}k",
+        "-bufsize",
+        "#{buf_kbps}k",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "#{audio_bitrate_kbps}k",
+        "-ac",
+        "2",
+        output_path,
       ]
 
       _stdout, stderr, status = Open3.capture3(*cmd)
-      raise FfmpegError, "ffmpeg thumbnail failed: #{stderr}" unless status.success?
-      true
+      raise "ffmpeg_video_failed: #{stderr.presence || "unknown error"}" unless status.success?
+    end
+
+    def self.extract_video_thumbnail(input_path:, output_path:)
+      cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        input_path,
+        "-ss",
+        "00:00:01.000",
+        "-vframes",
+        "1",
+        output_path,
+      ]
+
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      raise "ffmpeg_thumb_failed: #{stderr.presence || "unknown error"}" unless status.success?
     end
   end
 end
