@@ -1,0 +1,76 @@
+plugins:
+  media_gallery_enabled:
+    default: true
+    client: true
+
+  # Viewing rules
+  media_gallery_public_view:
+    default: true
+    client: true
+
+  media_gallery_viewer_groups:
+    default: ""
+    type: list
+    client: false
+
+  # Upload rules
+  media_gallery_allowed_uploader_groups:
+    default: "trust_level_0"
+    type: list
+    client: false
+
+  media_gallery_max_tags_per_item:
+    default: 10
+    client: false
+
+  media_gallery_allowed_tags:
+    default: ""
+    type: list
+    client: true
+
+  # Transcoding / policy
+  media_gallery_video_max_duration_seconds:
+    default: 600
+    client: false
+
+  media_gallery_audio_max_duration_seconds:
+    default: 900
+    client: false
+
+  media_gallery_video_target_bitrate_kbps:
+    default: 5000
+    client: false
+
+  media_gallery_video_max_fps:
+    default: 30
+    client: false
+
+  media_gallery_audio_bitrate_kbps:
+    default: 128
+    client: false
+
+  media_gallery_delete_original_on_success:
+    default: true
+    client: false
+
+  # Tokenized streaming
+  media_gallery_stream_token_ttl_minutes:
+    default: 15
+    client: false
+
+  media_gallery_bind_stream_to_user:
+    default: true
+    client: false
+
+  media_gallery_bind_stream_to_ip:
+    default: false
+    client: false
+
+  # Tooling
+  media_gallery_ffmpeg_path:
+    default: "ffmpeg"
+    client: false
+
+  media_gallery_ffprobe_path:
+    default: "ffprobe"
+    client: false

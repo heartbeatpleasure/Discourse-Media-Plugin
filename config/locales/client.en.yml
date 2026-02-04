@@ -1,0 +1,7 @@
+en:
+  js:
+    media_gallery:
+      genders:
+        male: "Male"
+        female: "Female"
+        non_binary: "Non-binary"
