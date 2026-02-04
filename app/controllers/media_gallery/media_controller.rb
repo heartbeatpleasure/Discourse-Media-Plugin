@@ -6,7 +6,7 @@ module ::MediaGallery
 
     before_action :ensure_plugin_enabled
     before_action :ensure_can_view, only: %i[index show thumbnail my play]
-    before_action :ensure_logged_in, only: %i[create toggle_like]
+    before_action :ensure_logged_in, only: %i[create toggle_like my status]
     before_action :ensure_can_upload, only: %i[create]
 
     def index
@@ -56,21 +56,31 @@ module ::MediaGallery
     def show
       item = find_item_by_public_id!(params[:public_id])
 
+      # Public: only ready
+      unless item.ready?
+        # Allow owner/admin to see non-ready items
+        unless current_user && (guardian.is_admin? || current_user.id == item.user_id)
+          raise Discourse::NotFound
+        end
+      end
+
       render_json_dump(
         media_item: serialize_data(item, MediaGallery::MediaItemSerializer)
       )
     end
 
     def my
-      raise Discourse::NotLoggedIn unless current_user
-
       items = MediaGallery::MediaItem.where(user_id: current_user.id).order(created_at: :desc).limit(100)
       render_json_dump(media_items: serialize_data(items, MediaGallery::MediaItemSerializer))
     end
 
     def status
       item = find_item_by_public_id!(params[:public_id])
-      guardian.ensure_can_see!(item.user) unless guardian.is_admin? || current_user&.id == item.user_id
+
+      # Only owner or admin can see processing status/errors
+      unless guardian.is_admin? || current_user.id == item.user_id
+        raise Discourse::InvalidAccess
+      end
 
       render_json_dump(
         public_id: item.public_id,

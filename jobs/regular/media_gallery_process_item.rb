@@ -2,7 +2,8 @@
 
 module ::Jobs
   class MediaGalleryProcessItem < ::Jobs::Base
-    sidekiq_options queue: "media_gallery_encoding"
+    # Use a standard Discourse queue so jobs actually run without custom sidekiq config
+    sidekiq_options queue: "low"
 
     def execute(args)
       media_item_id = args[:media_item_id].to_i
@@ -42,7 +43,6 @@ module ::Jobs
         elsif has_audio
           "audio"
         else
-          # If neither audio nor video streams exist, treat as image (best-effort).
           "image"
         end
 
@@ -53,7 +53,6 @@ module ::Jobs
         height: height
       )
 
-      # Policy checks
       if media_type == "video" && duration_seconds && duration_seconds > SiteSetting.media_gallery_video_max_duration_seconds.to_i
         item.update!(status: "failed", error_message: "duration_exceeds_video_limit")
         return
@@ -64,7 +63,6 @@ module ::Jobs
         return
       end
 
-      # No transcode needed for images in this version
       if media_type == "image"
         item.update!(
           processed_upload_id: original.id,
@@ -92,8 +90,8 @@ module ::Jobs
             thumb_path = nil
           end
 
-          processed_upload = create_upload_for_user(item.user_id, out_path, "video/mp4")
-          thumb_upload = thumb_path && File.exist?(thumb_path) ? create_upload_for_user(item.user_id, thumb_path, "image/jpeg") : nil
+          processed_upload = create_upload_for_user(item.user_id, out_path)
+          thumb_upload = thumb_path && File.exist?(thumb_path) ? create_upload_for_user(item.user_id, thumb_path) : nil
 
           finalize_success(item, original, processed_upload, thumb_upload)
         elsif media_type == "audio"
@@ -105,7 +103,7 @@ module ::Jobs
             bitrate_kbps: SiteSetting.media_gallery_audio_bitrate_kbps.to_i
           )
 
-          processed_upload = create_upload_for_user(item.user_id, out_path, "audio/mpeg")
+          processed_upload = create_upload_for_user(item.user_id, out_path)
           finalize_success(item, original, processed_upload, nil)
         else
           item.update!(status: "failed", error_message: "unsupported_media_type")
@@ -120,7 +118,7 @@ module ::Jobs
 
     private
 
-    def create_upload_for_user(user_id, path, _content_type_hint)
+    def create_upload_for_user(user_id, path)
       filename = File.basename(path)
       file = File.open(path, "rb")
 
@@ -147,6 +145,7 @@ module ::Jobs
 
     def delete_original_upload(item, upload)
       user = ::User.find_by(id: item.user_id) || Discourse.system_user
+
       if defined?(::UploadDestroyer)
         ::UploadDestroyer.new(user, upload).destroy
       else
