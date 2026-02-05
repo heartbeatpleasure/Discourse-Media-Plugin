@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# name: discourse-media-plugin
+# name: Discourse-Media-Plugin
 # about: Media gallery API with tokenized streaming, transcoding, tags, gender filter, and likes
 # version: 0.1.0
 # authors: Chris
@@ -10,7 +10,7 @@ enabled_site_setting :media_gallery_enabled
 
 module ::MediaGallery
   # Must match the plugin "name:" header above (used by requires_plugin)
-  PLUGIN_NAME = "discourse-media-plugin"
+  PLUGIN_NAME = "Discourse-Media-Plugin"
 end
 
 after_initialize do
