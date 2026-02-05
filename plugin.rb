@@ -28,17 +28,10 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
 
   Discourse::Application.routes.append do
-    # Stream endpoint (tokenized)
-    #
-    # Important: force a non-HTML format by default so Discourse won't try to serve the Ember app shell.
-    # We also support an explicit ".mp4" suffix for clients that rely on an extension.
+    # Stream route includes the default optional (.:format) handled by Rails.
+    # Example: /media/stream/<token>.mp4 or /media/stream/<token>.jpg
     get "/media/stream/:token" => "media_gallery/stream#show",
-        constraints: { token: /[^\/\.]+/ },
-        defaults: { format: "mp4" }
-
-    get "/media/stream/:token.:format" => "media_gallery/stream#show",
-        constraints: { token: /[^\/\.]+/, format: /mp4/ },
-        defaults: { format: "mp4" }
+        constraints: { token: /[^\/\.]+/ }
 
     # Convenience route for "my items" must come before :public_id
     get "/media/my" => "media_gallery/media#my"

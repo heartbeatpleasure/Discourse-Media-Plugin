@@ -6,14 +6,14 @@ module ::MediaGallery
 
     layout false
 
-    # Discourse defaults try to serve the Ember app shell for HTML requests.
-    # This controller is a binary stream endpoint, so we disable HTML preloading/redirection.
+    before_action :ensure_plugin_enabled
+    before_action :force_non_html_format
+
+    # This is a binary streaming endpoint. We don't want any HTML bootstrapping,
+    # redirects, or preloaded JSON behavior that Discourse normally applies.
     skip_before_action :preload_json, raise: false
     skip_before_action :redirect_to_login_if_required, raise: false
     skip_before_action :check_xhr, raise: false
-
-    before_action :ensure_plugin_enabled
-    before_action :force_non_html_format
 
     rescue_from Discourse::NotLoggedIn do
       render plain: "not_logged_in", status: 403
@@ -32,7 +32,7 @@ module ::MediaGallery
       render plain: "error", status: 500
     end
 
-    # This endpoint is intentionally simple: validate token -> send_file inline.
+    # validate token -> send_file inline.
     # It does not expose Upload URLs and discourages caching.
     def show
       token = params[:token].to_s
@@ -49,9 +49,6 @@ module ::MediaGallery
       raise Discourse::NotFound if upload.nil?
 
       # Access control (viewer rules)
-      #
-      # Note: this endpoint can be hit from the browser (cookie session) or via Api-Key/Api-Username
-      # (useful for debugging). We do not rely on Discourse HTML redirects here; we return 403 instead.
       raise Discourse::InvalidAccess unless MediaGallery::Permissions.can_view?(guardian)
 
       # Optional binding checks
@@ -71,15 +68,11 @@ module ::MediaGallery
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
       response.headers["X-Content-Type-Options"] = "nosniff"
+      response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
       response.headers["Accept-Ranges"] = "bytes"
 
-      # Keep CSP strict for this endpoint.
-      response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
-
-      # Prefer a video content-type for mp4 responses.
-      content_type =
-        upload.content_type.presence ||
-          (path.to_s.downcase.end_with?(".mp4") ? "video/mp4" : "application/octet-stream")
+      # Force content type based on the Upload, not the (optional) URL extension.
+      content_type = upload.content_type.presence || "application/octet-stream"
 
       send_file(
         path,
@@ -95,8 +88,10 @@ module ::MediaGallery
     end
 
     def force_non_html_format
-      # If Rails treats this as HTML, Discourse may serve the Ember shell for errors/redirects.
-      request.format = :mp4 if request.format.html?
+      # When the client sends Accept: */* (curl default), Rails often resolves the request as HTML.
+      # In Discourse that can trigger HTML app-shell behavior on errors/redirects.
+      # We keep the endpoint binary by forcing a non-HTML format early.
+      request.format = :json if request.format&.html?
     end
   end
 end
