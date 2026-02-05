@@ -31,16 +31,22 @@ module ::MediaGallery
 
     def can_view?(guardian)
       return false unless enabled?
-
-      if public_view?
-        return true if viewer_groups.blank?
-        # If groups are specified, anonymous users can't match.
-      end
-
       return false if guardian.nil?
 
-      return true if viewer_groups.blank?
-      viewer_groups.any? { |g| guardian.user&.groups&.exists?(name: g) }
+      groups = viewer_groups
+
+      if public_view?
+        # Public view means anonymous is allowed ONLY if no groups are specified.
+        return true if groups.blank?
+        return false if guardian.user.nil?
+        return groups.any? { |g| guardian.user.groups.exists?(name: g) }
+      end
+
+      # Not public: require a logged-in user.
+      return false if guardian.user.nil?
+      return true if groups.blank?
+
+      groups.any? { |g| guardian.user.groups.exists?(name: g) }
     end
 
     def can_upload?(guardian)

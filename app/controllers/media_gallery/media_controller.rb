@@ -137,28 +137,25 @@ module ::MediaGallery
     end
 
     def play
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
-      raise Discourse::NotFound if item.processed_upload_id.blank?
+        media_item = MediaGallery::MediaItem.find_by!(public_id: params[:public_id])
+         raise Discourse::NotFound unless media_item.ready?
 
-      payload = MediaGallery::Token.build_stream_payload(
-        media_item: item,
-        upload_id: item.processed_upload_id,
-        kind: "main",
-        user: current_user,
-        request: request
-      )
+        upload_id = media_item.processed_upload_id || media_item.upload_id
+        upload = ::Upload.find_by(id: upload_id)
+            raise Discourse::NotFound if upload.nil?
 
-      token = MediaGallery::Token.generate(payload)
+         token = MediaGallery::Token.build_stream_token(
+            media_item_id: media_item.id,
+            upload_id: upload.id,
+            user: current_user,
+            ip: request.remote_ip
+  )
 
-      # Views are counted when a token is issued (best-effort)
-      MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
-
-      render_json_dump(
-        stream_url: "/media/stream/#{token}",
-        expires_at: payload["exp"]
-      )
-    end
+        render json: {
+        stream_url: "/media/stream/#{token}.mp4",
+        expires_at: MediaGallery::Token.expires_at
+  }
+end
 
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])

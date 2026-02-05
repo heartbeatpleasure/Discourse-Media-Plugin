@@ -4,7 +4,33 @@ module ::MediaGallery
   class StreamController < ::ApplicationController
     requires_plugin ::MediaGallery::PLUGIN_NAME
 
+    layout false
+
+    # Discourse defaults try to serve the Ember app shell for HTML requests.
+    # This controller is a binary stream endpoint, so we disable HTML preloading/redirection.
+    skip_before_action :preload_json, raise: false
+    skip_before_action :redirect_to_login_if_required, raise: false
+    skip_before_action :check_xhr, raise: false
+
     before_action :ensure_plugin_enabled
+    before_action :force_non_html_format
+
+    rescue_from Discourse::NotLoggedIn do
+      render plain: "not_logged_in", status: 403
+    end
+
+    rescue_from Discourse::InvalidAccess do
+      render plain: "forbidden", status: 403
+    end
+
+    rescue_from Discourse::NotFound do
+      render plain: "not_found", status: 404
+    end
+
+    rescue_from StandardError do |e|
+      Rails.logger.error("[media_gallery] stream error: #{e.class}: #{e.message}")
+      render plain: "error", status: 500
+    end
 
     # This endpoint is intentionally simple: validate token -> send_file inline.
     # It does not expose Upload URLs and discourages caching.
@@ -22,6 +48,12 @@ module ::MediaGallery
       upload = ::Upload.find_by(id: payload["upload_id"])
       raise Discourse::NotFound if upload.nil?
 
+      # Access control (viewer rules)
+      #
+      # Note: this endpoint can be hit from the browser (cookie session) or via Api-Key/Api-Username
+      # (useful for debugging). We do not rely on Discourse HTML redirects here; we return 403 instead.
+      raise Discourse::InvalidAccess unless MediaGallery::Permissions.can_view?(guardian)
+
       # Optional binding checks
       if SiteSetting.media_gallery_bind_stream_to_user && payload["user_id"].present?
         raise Discourse::NotLoggedIn if current_user.nil?
@@ -32,9 +64,6 @@ module ::MediaGallery
         raise Discourse::InvalidAccess if request.remote_ip != payload["ip"].to_s
       end
 
-      # Access control (viewer rules)
-      raise Discourse::InvalidAccess unless MediaGallery::Permissions.can_view?(guardian)
-
       path = MediaGallery::UploadPath.local_path_for(upload)
 
       # Anti-cache / anti-trivial-reuse headers
@@ -42,13 +71,20 @@ module ::MediaGallery
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
       response.headers["X-Content-Type-Options"] = "nosniff"
-      response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
       response.headers["Accept-Ranges"] = "bytes"
+
+      # Keep CSP strict for this endpoint.
+      response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+
+      # Prefer a video content-type for mp4 responses.
+      content_type =
+        upload.content_type.presence ||
+          (path.to_s.downcase.end_with?(".mp4") ? "video/mp4" : "application/octet-stream")
 
       send_file(
         path,
         disposition: "inline",
-        type: upload.content_type.presence || "application/octet-stream"
+        type: content_type
       )
     end
 
@@ -56,6 +92,11 @@ module ::MediaGallery
 
     def ensure_plugin_enabled
       raise Discourse::NotFound unless MediaGallery::Permissions.enabled?
+    end
+
+    def force_non_html_format
+      # If Rails treats this as HTML, Discourse may serve the Ember shell for errors/redirects.
+      request.format = :mp4 if request.format.html?
     end
   end
 end
