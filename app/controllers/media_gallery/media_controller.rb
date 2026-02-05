@@ -5,198 +5,170 @@ module ::MediaGallery
     requires_plugin ::MediaGallery::PLUGIN_NAME
 
     before_action :ensure_plugin_enabled
-    before_action :ensure_logged_in
+    before_action :ensure_can_view, only: [:index, :show, :status, :play, :thumbnail]
+    before_action :ensure_logged_in, only: [:create, :toggle_like, :play]
+    before_action :ensure_can_upload, only: [:create]
 
     def index
-      guardian.ensure_can_see_media_gallery!
-
-      page = (params[:page].presence || 1).to_i
-      per_page = [(params[:per_page].presence || SiteSetting.media_gallery_per_page).to_i, 50].min
-
       scope = MediaGallery::MediaItem.ready.order(created_at: :desc)
 
-      if params[:gender].present?
+      if params[:gender].present? && MediaGallery::MediaItem::GENDERS.include?(params[:gender])
         scope = scope.where(gender: params[:gender])
       end
 
       if params[:tags].present?
-        # allow "tags=a,b" or repeated "tags[]=a"
-        tags = params[:tags].is_a?(Array) ? params[:tags] : params[:tags].to_s.split(",")
-        tags = tags.map { |t| t.to_s.strip.downcase }.reject(&:blank?)
-        scope = scope.where("tags @> ARRAY[?]::varchar[]", tags) if tags.present?
+        tags =
+          case params[:tags]
+          when String then params[:tags].split(",").map(&:strip).reject(&:blank?)
+          when Array then params[:tags].map(&:to_s).map(&:strip).reject(&:blank?)
+          else []
+          end
+
+        tags.each { |t| scope = scope.where("tags @> ARRAY[?]::varchar[]", t) } if tags.any?
       end
 
-      total = scope.count
-      items = scope.offset((page - 1) * per_page).limit(per_page)
+      page = params[:page].to_i
+      page = 1 if page < 1
 
-      render_json_dump(
-        media_items: ActiveModel::ArraySerializer.new(items, each_serializer: MediaGallery::MediaItemSerializer, scope: guardian),
-        page: page,
-        per_page: per_page,
-        total: total
-      )
-    end
-
-    def my
-      guardian.ensure_can_see_media_gallery!
-
-      page = (params[:page].presence || 1).to_i
-      per_page = [(params[:per_page].presence || SiteSetting.media_gallery_per_page).to_i, 50].min
-
-      scope = MediaGallery::MediaItem.ready.where(uploader_user_id: current_user.id).order(created_at: :desc)
+      per_page = params[:per_page].to_i
+      per_page = 24 if per_page <= 0
+      per_page = [per_page, 100].min
 
       total = scope.count
       items = scope.offset((page - 1) * per_page).limit(per_page)
 
-      render_json_dump(
-        media_items: ActiveModel::ArraySerializer.new(items, each_serializer: MediaGallery::MediaItemSerializer, scope: guardian),
+      render json: {
+        media_items: items.map { |i| serialize_item(i) },
         page: page,
         per_page: per_page,
         total: total
-      )
+      }
     end
 
     def show
-      guardian.ensure_can_see_media_gallery!
+      item = MediaGallery::MediaItem.find_by(public_id: params[:public_id])
+      raise Discourse::NotFound if item.nil?
 
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
-
-      render_json_dump(
-        media_item: MediaGallery::MediaItemSerializer.new(item, scope: guardian)
-      )
+      render json: serialize_item(item)
     end
 
     def create
-      guardian.ensure_can_upload_media_gallery!
-
       upload_id = params[:upload_id].to_i
-      raise Discourse::InvalidParameters if upload_id <= 0
-
-      upload = ::Upload.find_by(id: upload_id)
-      raise Discourse::NotFound if upload.nil?
-
-      title = params[:title].to_s.strip
-      raise Discourse::InvalidParameters if title.blank?
-
+      title = params[:title].to_s
       description = params[:description].to_s
+      media_type = params[:media_type].to_s.presence
 
       gender = params[:gender].to_s
-      allowed_genders = %w[male female non-binary]
-      raise Discourse::InvalidParameters unless allowed_genders.include?(gender)
+      unless MediaGallery::MediaItem::GENDERS.include?(gender)
+        return render json: { errors: ["invalid_gender"] }, status: 400
+      end
 
-      tags = (params[:tags].presence || [])
-      tags = tags.is_a?(Array) ? tags : tags.to_s.split(",")
-      tags = tags.map { |t| t.to_s.strip.downcase }.reject(&:blank?).uniq
-      tags = tags.take(20)
+      tags =
+        case params[:tags]
+        when String then params[:tags].split(",").map(&:strip).reject(&:blank?)
+        when Array then params[:tags].map(&:to_s).map(&:strip).reject(&:blank?)
+        else []
+        end
 
-      item = MediaGallery::MediaItem.create!(
-        public_id: SecureRandom.uuid,
-        uploader_user_id: current_user.id,
+      item = MediaGallery::MediaItem.new(
+        upload_id: upload_id,
         title: title,
         description: description,
+        media_type: media_type,
         gender: gender,
         tags: tags,
-        original_upload_id: upload.id,
-        status: "queued"
+        uploader_id: current_user.id,
+        status: MediaGallery::MediaItem.statuses[:queued]
       )
 
-      Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
+      item.save!
 
-      render_json_dump(public_id: item.public_id, status: item.status)
+      ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
+
+      render json: { public_id: item.public_id, status: item.status }, status: 201
+    rescue StandardError => e
+      Rails.logger.error("[media_gallery] create failed: #{e.class}: #{e.message}\n#{e.backtrace&.take(40)&.join("\n")}")
+      render json: { errors: ["internal_error"], detail: e.message }, status: 500
     end
 
     def status
-      guardian.ensure_can_see_media_gallery!
+      item = MediaGallery::MediaItem.find_by(public_id: params[:public_id])
+      raise Discourse::NotFound if item.nil?
 
-      item = find_item_by_public_id!(params[:public_id])
-
-      render_json_dump(
+      render json: {
         public_id: item.public_id,
         status: item.status,
         error_message: item.error_message
-      )
+      }
     end
 
     def play
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
-      raise Discourse::NotFound if item.processed_upload_id.blank?
+      item = MediaGallery::MediaItem.find_by(public_id: params[:public_id])
+      raise Discourse::NotFound if item.nil?
+      raise Discourse::InvalidAccess unless item.ready?
 
-      upload = ::Upload.find_by(id: item.processed_upload_id)
+      upload = item.processed_upload || item.original_upload
       raise Discourse::NotFound if upload.nil?
 
       payload = MediaGallery::Token.build_stream_payload(
         media_item: item,
-        upload_id: item.processed_upload_id,
-        kind: "main",
+        upload: upload,
         user: current_user,
         request: request
       )
 
-      token = MediaGallery::Token.generate(payload)
+      token = MediaGallery::Token.sign(payload)
 
-      # Best-effort view count bump when issuing a token
-      MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
-
-      # Optional extension helps browsers pick a better default player.
-      # We still set Content-Type based on Upload in the stream controller.
-      ext = upload.extension.to_s.downcase.gsub(/[^a-z0-9]/, "")
-      ext = "" if ext.length > 10
-
+      # ✅ geen hardcoded mp4; extension dynamisch
+      ext = upload.extension.to_s.strip
       stream_url = ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}"
 
-      render_json_dump(
-        stream_url: stream_url,
-        expires_at: payload["exp"]
-      )
+      render json: { stream_url: stream_url, expires_at: payload[:exp] }
+    rescue StandardError => e
+      Rails.logger.error("[media_gallery] play failed: #{e.class}: #{e.message}\n#{e.backtrace&.take(40)&.join("\n")}")
+      render json: { errors: ["internal_error"], detail: e.message }, status: 500
     end
 
     def thumbnail
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
+      item = MediaGallery::MediaItem.find_by(public_id: params[:public_id])
+      raise Discourse::NotFound if item.nil?
+      raise Discourse::InvalidAccess unless item.ready?
 
-      upload_id = item.thumbnail_upload_id.presence || item.processed_upload_id
-      raise Discourse::NotFound if upload_id.blank?
-
-      upload = ::Upload.find_by(id: upload_id)
+      upload = item.thumbnail_upload || item.processed_upload || item.original_upload
       raise Discourse::NotFound if upload.nil?
 
       payload = MediaGallery::Token.build_stream_payload(
         media_item: item,
-        upload_id: upload_id,
-        kind: "thumbnail",
+        upload: upload,
         user: current_user,
         request: request
       )
 
-      token = MediaGallery::Token.generate(payload)
+      token = MediaGallery::Token.sign(payload)
 
-      ext = upload.extension.to_s.downcase.gsub(/[^a-z0-9]/, "")
-      ext = "" if ext.length > 10
-
+      ext = upload.extension.to_s.strip
       url = ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}"
+
       redirect_to url
     end
 
     def toggle_like
-      guardian.ensure_can_see_media_gallery!
-
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
+      item = MediaGallery::MediaItem.find_by(public_id: params[:public_id])
+      raise Discourse::NotFound if item.nil?
 
       like = MediaGallery::MediaLike.find_by(media_item_id: item.id, user_id: current_user.id)
+
       if like
         like.destroy!
-        MediaGallery::MediaItem.where(id: item.id).update_all("likes_count = GREATEST(likes_count - 1, 0)")
+        item.decrement!(:likes_count)
         liked = false
       else
         MediaGallery::MediaLike.create!(media_item_id: item.id, user_id: current_user.id)
-        MediaGallery::MediaItem.where(id: item.id).update_all("likes_count = likes_count + 1")
+        item.increment!(:likes_count)
         liked = true
       end
 
-      render_json_dump(liked: liked)
+      render json: { liked: liked, likes_count: item.likes_count }
     end
 
     private
@@ -205,10 +177,34 @@ module ::MediaGallery
       raise Discourse::NotFound unless MediaGallery::Permissions.enabled?
     end
 
-    def find_item_by_public_id!(public_id)
-      item = MediaGallery::MediaItem.find_by(public_id: public_id.to_s)
-      raise Discourse::NotFound if item.nil?
-      item
+    def ensure_can_view
+      raise Discourse::InvalidAccess unless MediaGallery::Permissions.can_view?(guardian)
+    end
+
+    def ensure_can_upload
+      raise Discourse::InvalidAccess unless MediaGallery::Permissions.can_upload?(guardian)
+    end
+
+    def serialize_item(item)
+      {
+        public_id: item.public_id,
+        title: item.title,
+        description: item.description.to_s,
+        media_type: item.media_type,
+        gender: item.gender,
+        tags: item.tags || [],
+        duration_seconds: item.duration_seconds,
+        width: item.width,
+        height: item.height,
+        filesize_processed_bytes: item.filesize_processed_bytes,
+        views_count: item.views_count,
+        likes_count: item.likes_count,
+        created_at: item.created_at,
+        uploader_username: item.uploader&.username,
+        thumbnail_url: "/media/#{item.public_id}/thumbnail",
+        liked: (current_user ? MediaGallery::MediaLike.exists?(media_item_id: item.id, user_id: current_user.id) : false),
+        status: item.status
+      }
     end
   end
 end

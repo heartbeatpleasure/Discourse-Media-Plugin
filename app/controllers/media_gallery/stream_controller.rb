@@ -1,39 +1,15 @@
 # frozen_string_literal: true
 
+require "uri"
+
 module ::MediaGallery
   class StreamController < ::ApplicationController
     requires_plugin ::MediaGallery::PLUGIN_NAME
 
-    layout false
-
     before_action :ensure_plugin_enabled
-    before_action :force_non_html_format
 
-    # This is a binary streaming endpoint. We don't want any HTML bootstrapping,
-    # redirects, or preloaded JSON behavior that Discourse normally applies.
-    skip_before_action :preload_json, raise: false
-    skip_before_action :redirect_to_login_if_required, raise: false
-    skip_before_action :check_xhr, raise: false
-
-    rescue_from Discourse::NotLoggedIn do
-      render plain: "not_logged_in", status: 403
-    end
-
-    rescue_from Discourse::InvalidAccess do
-      render plain: "forbidden", status: 403
-    end
-
-    rescue_from Discourse::NotFound do
-      render plain: "not_found", status: 404
-    end
-
-    rescue_from StandardError do |e|
-      Rails.logger.error("[media_gallery] stream error: #{e.class}: #{e.message}")
-      render plain: "error", status: 500
-    end
-
-    # validate token -> send_file inline.
-    # It does not expose Upload URLs and discourages caching.
+    # Belangrijk: deze endpoint moet nooit “app shell HTML” teruggeven.
+    # We serveren via nginx (X-Accel-Redirect) als we LocalStore hebben.
     def show
       token = params[:token].to_s
       payload = MediaGallery::Token.verify(token)
@@ -48,9 +24,6 @@ module ::MediaGallery
       upload = ::Upload.find_by(id: payload["upload_id"])
       raise Discourse::NotFound if upload.nil?
 
-      # Access control (viewer rules)
-      raise Discourse::InvalidAccess unless MediaGallery::Permissions.can_view?(guardian)
-
       # Optional binding checks
       if SiteSetting.media_gallery_bind_stream_to_user && payload["user_id"].present?
         raise Discourse::NotLoggedIn if current_user.nil?
@@ -61,19 +34,40 @@ module ::MediaGallery
         raise Discourse::InvalidAccess if request.remote_ip != payload["ip"].to_s
       end
 
-      path = MediaGallery::UploadPath.local_path_for(upload)
+      # Viewer access control
+      raise Discourse::InvalidAccess unless MediaGallery::Permissions.can_view?(guardian)
 
-      # Anti-cache / anti-trivial-reuse headers
+      # Anti-cache headers
       response.headers["Cache-Control"] = "private, no-store, no-cache, must-revalidate, max-age=0"
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
-      response.headers["Accept-Ranges"] = "bytes"
 
-      # Force content type based on the Upload, not the (optional) URL extension.
       content_type = upload.content_type.presence || "application/octet-stream"
+      response.headers["Content-Type"] = content_type
 
+      filename =
+        upload.original_filename.presence ||
+          begin
+            ext = upload.extension.presence
+            base = "media-#{media_item.public_id}"
+            ext.present? ? "#{base}.#{ext}" : base
+          end
+
+      safe_filename = filename.gsub(/[^0-9A-Za-z.\-_]/, "_")
+      response.headers["Content-Disposition"] = %(inline; filename="#{safe_filename}")
+
+      # ✅ FAST PATH: LocalStore -> laat nginx het bestand serveren (Range/streaming werkt dan goed)
+      # We gebruiken het bestaande publieke pad (/uploads/...) als internal accel redirect.
+      accel_path = internal_accel_path_for(upload)
+      if accel_path.present?
+        response.headers["X-Accel-Redirect"] = accel_path
+        return head :ok
+      end
+
+      # Fallback: Rails send_file (bijv. non-local store of rare URL)
+      path = MediaGallery::UploadPath.local_path_for(upload)
       send_file(
         path,
         disposition: "inline",
@@ -87,11 +81,23 @@ module ::MediaGallery
       raise Discourse::NotFound unless MediaGallery::Permissions.enabled?
     end
 
-    def force_non_html_format
-      # When the client sends Accept: */* (curl default), Rails often resolves the request as HTML.
-      # In Discourse that can trigger HTML app-shell behavior on errors/redirects.
-      # We keep the endpoint binary by forcing a non-HTML format early.
-      request.format = :json if request.format&.html?
+    # Zet upload.url om naar een nginx-serveable internal URI-pad ("/uploads/...")
+    def internal_accel_path_for(upload)
+      url = upload.url.to_s
+      return nil if url.blank?
+
+      # scheme-relative urls ("//host/path") -> maak parsebaar
+      url = "http:#{url}" if url.start_with?("//")
+
+      uri = URI.parse(url)
+      path = uri.path.to_s
+      return nil if path.blank?
+
+      # Alleen als het een echte path is (geen externe bucket URL die je niet intern kan serveren)
+      # Voor LocalStore is dit vrijwel altijd "/uploads/..."
+      path
+    rescue URI::InvalidURIError
+      nil
     end
   end
 end
