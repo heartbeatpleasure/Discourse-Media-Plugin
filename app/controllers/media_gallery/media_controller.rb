@@ -2,7 +2,7 @@
 
 module ::MediaGallery
   class MediaController < ::ApplicationController
-    requires_plugin "discourse-media-plugin"
+    requires_plugin "Discourse-Media-Plugin"
 
     before_action :ensure_plugin_enabled
 

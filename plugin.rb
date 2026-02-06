@@ -28,10 +28,8 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
 
   Discourse::Application.routes.append do
-    # Stream route includes the default optional (.:format) handled by Rails.
-    # Example: /media/stream/<token>.mp4 or /media/stream/<token>.jpg
-    get "/media/stream/:token" => "media_gallery/stream#show",
-        constraints: { token: /[^\/\.]+/ }
+    # Stream endpoint (tokenized)
+    get "/media/stream/:token" => "media_gallery/stream#show", constraints: { token: /[^\/]+/ }
 
     # Convenience route for "my items" must come before :public_id
     get "/media/my" => "media_gallery/media#my"
