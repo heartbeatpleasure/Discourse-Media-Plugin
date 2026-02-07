@@ -6,8 +6,12 @@ module ::MediaGallery
 
     before_action :ensure_plugin_enabled
 
-    before_action :ensure_can_view, only: [:index, :status, :thumbnail, :play]
-    before_action :ensure_logged_in, only: [:create, :like, :unlike]
+    # Members-only forum: no anonymous access.
+    before_action :ensure_logged_in
+
+    before_action :ensure_can_view,
+                  only: [:index, :show, :status, :thumbnail, :play, :my, :like, :unlike]
+
     before_action :ensure_can_upload, only: [:create]
 
     def index
@@ -15,9 +19,7 @@ module ::MediaGallery
       per_page = [(params[:per_page].presence || 24).to_i, 100].min
       offset = (page - 1) * per_page
 
-      items = MediaGallery::MediaItem
-        .where(status: "ready")
-        .order(created_at: :desc)
+      items = MediaGallery::MediaItem.where(status: "ready").order(created_at: :desc)
 
       if params[:media_type].present? && MediaGallery::MediaItem::TYPES.include?(params[:media_type].to_s)
         items = items.where(media_type: params[:media_type].to_s)
@@ -44,10 +46,41 @@ module ::MediaGallery
       )
     end
 
+    # Optional helper endpoint (spec: /user/media) for listing your own items, including queued/failed.
+    def my
+      page = (params[:page].presence || 1).to_i
+      per_page = [(params[:per_page].presence || 24).to_i, 100].min
+      offset = (page - 1) * per_page
+
+      items = MediaGallery::MediaItem.where(user_id: current_user.id).order(created_at: :desc)
+
+      if params[:status].present? && MediaGallery::MediaItem::STATUSES.include?(params[:status].to_s)
+        items = items.where(status: params[:status].to_s)
+      end
+
+      total = items.count
+      items = items.offset(offset).limit(per_page)
+
+      render_json_dump(
+        media_items: serialize_data(items, MediaGallery::MediaItemSerializer, root: false),
+        page: page,
+        per_page: per_page,
+        total: total
+      )
+    end
+
+    # POST /media
+    # Input: upload_id, title, description, extra_metadata, (optional) media_type, gender, tags
     def create
       upload_id = params[:upload_id].to_i
       if upload_id <= 0
         render_json_error("invalid_upload_id")
+        return
+      end
+
+      title = params[:title].to_s.strip
+      if title.blank?
+        render_json_error("title_required")
         return
       end
 
@@ -57,7 +90,23 @@ module ::MediaGallery
         return
       end
 
-      # Caller may pass media_type, otherwise infer from the Upload.
+      # Ownership check (spec)
+      if upload.user_id.present? && upload.user_id != current_user.id && !guardian.is_staff?
+        render_json_error("upload_not_owned")
+        return
+      end
+
+      # Optional additional size limit (on top of Discourse global max_attachment_size_kb)
+      max_mb = SiteSetting.media_gallery_max_upload_size_mb.to_i
+      if max_mb.positive?
+        max_bytes = max_mb * 1024 * 1024
+        if upload.filesize.to_i > max_bytes
+          render_json_error("upload_too_large")
+          return
+        end
+      end
+
+      # Caller may pass media_type; otherwise infer from the Upload.
       media_type = params[:media_type].to_s.downcase.presence
       media_type ||= infer_media_type(upload)
 
@@ -69,14 +118,18 @@ module ::MediaGallery
       tags = params[:tags]
       tags = tags.is_a?(Array) ? tags : tags.to_s.split(",") if tags.present?
 
+      extra_metadata = params[:extra_metadata]
+      extra_metadata = {} if extra_metadata.blank?
+
       # Images can be served as-is (no ffmpeg pipeline). Video/audio go through processing.
       status = (media_type == "image" ? "ready" : "queued")
 
       item = MediaGallery::MediaItem.create!(
         public_id: SecureRandom.uuid,
         user_id: current_user.id,
-        title: params[:title].to_s,
+        title: title,
         description: params[:description].to_s,
+        extra_metadata: (extra_metadata.is_a?(Hash) ? extra_metadata : { "raw" => extra_metadata.to_s }),
         media_type: media_type,
         gender: params[:gender].to_s.presence,
         tags: (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq,
@@ -85,24 +138,44 @@ module ::MediaGallery
         processed_upload_id: (status == "ready" ? upload.id : nil),
         thumbnail_upload_id: (status == "ready" ? upload.id : nil),
         width: (status == "ready" ? upload.width : nil),
-        height: (status == "ready" ? upload.height : nil)
+        height: (status == "ready" ? upload.height : nil),
+        duration_seconds: nil,
+        filesize_original_bytes: upload.filesize,
+        filesize_processed_bytes: (status == "ready" ? upload.filesize : nil)
       )
 
       Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id) if status == "queued"
 
       render_json_dump(public_id: item.public_id, status: item.status)
+    rescue ActiveRecord::RecordInvalid => e
+      render_json_error(e.record.errors.full_messages.join(", "))
     end
 
+    # GET /media/:public_id
+    def show
+      item = find_item_by_public_id!(params[:public_id])
+
+      if !item.ready? && !can_manage_item?(item)
+        raise Discourse::NotFound
+      end
+
+      render_json_dump(serialize_data(item, MediaGallery::MediaItemSerializer, root: false))
+    end
+
+    # GET /media/:public_id/status (only uploader/staff)
     def status
       item = find_item_by_public_id!(params[:public_id])
+      raise Discourse::NotFound unless can_manage_item?(item)
 
       render_json_dump(
         public_id: item.public_id,
         status: item.status,
-        error_message: item.error_message
+        error_message: item.error_message,
+        playable: item.ready?
       )
     end
 
+    # POST /media/:public_id/play
     def play
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless item.ready?
@@ -121,18 +194,13 @@ module ::MediaGallery
       # Best-effort view count
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
-      # Important: do NOT hardcode mp4. Use the actual extension (mp4/mp3/jpg/...)
       ext = item.processed_upload&.extension.to_s.downcase
-      stream_url =
-        if ext.present?
-          "/media/stream/#{token}.#{ext}"
-        else
-          "/media/stream/#{token}"
-        end
+      stream_url = ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}"
 
-      render_json_dump(stream_url: stream_url, expires_at: payload["exp"])
+      render_json_dump(stream_url: stream_url, expires_at: payload["exp"], playable: true)
     end
 
+    # GET /media/:public_id/thumbnail
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless item.ready?
@@ -147,14 +215,8 @@ module ::MediaGallery
       )
 
       token = MediaGallery::Token.generate(payload)
-
       ext = item.thumbnail_upload&.extension.to_s.downcase
-      url =
-        if ext.present?
-          "/media/stream/#{token}.#{ext}"
-        else
-          "/media/stream/#{token}"
-        end
+      url = ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}"
 
       redirect_to url
     end
@@ -192,11 +254,15 @@ module ::MediaGallery
     end
 
     def ensure_can_view
-      raise Discourse::NotFound unless MediaGallery::Permissions.can_view?(current_user)
+      raise Discourse::NotFound unless MediaGallery::Permissions.can_view?(guardian)
     end
 
     def ensure_can_upload
-      raise Discourse::NotFound unless MediaGallery::Permissions.can_upload?(current_user)
+      raise Discourse::NotFound unless MediaGallery::Permissions.can_upload?(guardian)
+    end
+
+    def can_manage_item?(item)
+      guardian.is_staff? || (guardian.user&.id == item.user_id)
     end
 
     def find_item_by_public_id!(public_id)

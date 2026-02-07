@@ -18,19 +18,23 @@ module ::MediaGallery
       :created_at,
       :uploader_username,
       :thumbnail_url,
+      :playable,
       :liked
     )
 
     attribute :status, if: :can_see_status?
+    attribute :error_message, if: :can_see_status?
 
     def uploader_username
       object.user&.username
     end
 
     def thumbnail_url
-      # Stable URL that performs a server-side redirect to a short-lived tokenized stream.
-      # This keeps raw Upload URLs out of HTML/JS.
       "/media/#{object.public_id}/thumbnail"
+    end
+
+    def playable
+      object.status == "ready" && object.processed_upload_id.present?
     end
 
     def liked
@@ -42,7 +46,7 @@ module ::MediaGallery
     def can_see_status?
       u = scope&.user
       return false if u.nil?
-      u.admin? || u.id == object.user_id
+      u.admin? || u.staff? || u.id == object.user_id
     end
   end
 end

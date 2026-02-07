@@ -30,6 +30,7 @@ module MediaGallery
       JSON.parse(stdout)
     end
 
+    # Audio profile (spec): MP3 128 kbps, 44.1kHz, stereo
     def self.transcode_audio(input_path:, output_path:, bitrate_kbps:)
       cmd = [
         ffmpeg_path,
@@ -41,6 +42,10 @@ module MediaGallery
         "libmp3lame",
         "-b:a",
         "#{bitrate_kbps}k",
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
         output_path,
       ]
 
@@ -48,9 +53,11 @@ module MediaGallery
       raise "ffmpeg_audio_failed: #{stderr.presence || "unknown error"}" unless status.success?
     end
 
-    # audio_bitrate_kbps added to allow adaptive sizing vs. Discourse max attachment limits
-    def self.transcode_video(input_path:, output_path:, bitrate_kbps:, max_fps:, audio_bitrate_kbps: 96)
+    # Video profile (spec): MP4, H.264 Main@4.1, max 1080p, max 30fps, ~5Mbps, AAC 128kbps
+    def self.transcode_video(input_path:, output_path:, bitrate_kbps:, max_fps:, audio_bitrate_kbps: 128)
       buf_kbps = [bitrate_kbps.to_i * 2, 256].max
+
+      vf = "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease,fps=fps=#{max_fps}"
 
       cmd = [
         ffmpeg_path,
@@ -60,13 +67,15 @@ module MediaGallery
         "-movflags",
         "+faststart",
         "-vf",
-        "fps=fps=#{max_fps}",
+        vf,
         "-c:v",
         "libx264",
         "-preset",
         "veryfast",
         "-profile:v",
         "main",
+        "-level",
+        "4.1",
         "-pix_fmt",
         "yuv420p",
         "-b:v",
@@ -81,6 +90,8 @@ module MediaGallery
         "#{audio_bitrate_kbps}k",
         "-ac",
         "2",
+        "-ar",
+        "48000",
         output_path,
       ]
 
@@ -98,6 +109,8 @@ module MediaGallery
         "00:00:01.000",
         "-vframes",
         "1",
+        "-vf",
+        "scale=640:-2",
         output_path,
       ]
 

@@ -5,11 +5,15 @@ require "tmpdir"
 
 module Jobs
   class MediaGalleryProcessItem < ::Jobs::Base
-    sidekiq_options queue: "low"
+    # Spec: dedicated queue
+    sidekiq_options queue: "media_encoding"
 
     def execute(args)
       item = MediaGallery::MediaItem.find_by(id: args[:media_item_id])
       return if item.blank?
+
+      # Only process queued/processing items
+      return unless item.status == "queued" || item.status == "processing"
 
       item.update!(status: "processing", error_message: nil)
 
@@ -42,34 +46,84 @@ module Jobs
       raise "original_upload_not_on_local_disk" if input_path.blank?
       raise "original_file_missing: #{input_path}" unless File.exist?(input_path)
 
+      # Fill original size if missing
+      item.filesize_original_bytes ||= item.original_upload.filesize
+
       probe = MediaGallery::Ffmpeg.probe(input_path)
 
-      duration_seconds = probe.dig("format", "duration").to_f
-      item.duration_seconds = duration_seconds if duration_seconds.positive?
+      duration_seconds_f = probe.dig("format", "duration").to_f
+      duration_seconds_i = duration_seconds_f.positive? ? duration_seconds_f.round : nil
 
-      stream = (probe["streams"] || []).find { |s| s["codec_type"] == "video" }
-      if stream.present?
-        item.width = stream["width"]
-        item.height = stream["height"]
+      streams = probe["streams"] || []
+      video_stream = streams.find { |s| s["codec_type"] == "video" }
+      audio_stream = streams.find { |s| s["codec_type"] == "audio" }
+
+      if video_stream.present?
+        item.media_type = "video"
+        item.width = video_stream["width"]
+        item.height = video_stream["height"]
+        item.duration_seconds = duration_seconds_i if duration_seconds_i
+      elsif audio_stream.present?
+        item.media_type = "audio"
+        item.duration_seconds = duration_seconds_i if duration_seconds_i
+      else
+        item.update!(status: "failed", error_message: "unsupported_media_type")
+        return
       end
+
+      # Policy checks (spec)
+      if item.media_type == "video"
+        max_dur = SiteSetting.media_gallery_video_max_duration_seconds.to_i
+        if max_dur.positive? && duration_seconds_f.positive? && duration_seconds_f > max_dur
+          item.update!(status: "failed", error_message: "duration_exceeds_#{max_dur}_seconds")
+          return
+        end
+      end
+
+      if item.media_type == "audio"
+        max_dur = SiteSetting.media_gallery_audio_max_duration_seconds.to_i
+        if max_dur.positive? && duration_seconds_f.positive? && duration_seconds_f > max_dur
+          item.update!(status: "failed", error_message: "duration_exceeds_#{max_dur}_seconds")
+          return
+        end
+      end
+
+      item.save!
 
       Dir.mktmpdir("media-gallery") do |dir|
         ext = safe_extension(item.original_upload.original_filename)
         tmp_input = File.join(dir, "in#{ext}")
         FileUtils.cp(input_path, tmp_input)
 
-        if video?(probe)
-          processed = process_video!(item, dir, tmp_input, duration_seconds)
-        elsif audio?(probe)
-          processed = process_audio!(item, dir, tmp_input)
-        else
-          raise "unsupported_media_type"
+        processed_upload =
+          if item.media_type == "video"
+            process_video!(item, dir, tmp_input, duration_seconds_f)
+          else
+            process_audio!(item, dir, tmp_input)
+          end
+
+        item.processed_upload_id = processed_upload.id
+        item.filesize_processed_bytes = processed_upload.filesize
+
+        # Best-effort: probe processed output to store final dimensions
+        begin
+          out_path = MediaGallery::UploadPath.local_path_for(processed_upload)
+          if out_path.present? && File.exist?(out_path)
+            out_probe = MediaGallery::Ffmpeg.probe(out_path)
+            out_vs = (out_probe["streams"] || []).find { |s| s["codec_type"] == "video" }
+            if out_vs.present?
+              item.width = out_vs["width"]
+              item.height = out_vs["height"]
+            end
+          end
+        rescue => _e
         end
 
-        item.processed_upload_id = processed.id
-
         if SiteSetting.media_gallery_delete_original_on_success
-          item.original_upload.destroy!
+          original = item.original_upload
+          item.original_upload_id = nil
+          item.save!
+          original.destroy!
         end
 
         item.status = "ready"
@@ -82,7 +136,7 @@ module Jobs
       out_path = File.join(dir, "media-#{item.public_id}.mp3")
 
       bitrate = SiteSetting.media_gallery_audio_bitrate_kbps.to_i
-      bitrate = 192 if bitrate <= 0
+      bitrate = 128 if bitrate <= 0
 
       MediaGallery::Ffmpeg.transcode_audio(
         input_path: tmp_input,
@@ -109,12 +163,15 @@ module Jobs
         audio_bitrate_kbps: audio_kbps,
       )
 
-      enforce_max_bytes!(out_path, duration_seconds, max_bytes, max_fps, audio_kbps, tmp_input, item)
+      enforce_max_bytes!(out_path, duration_seconds, max_bytes, max_fps, audio_kbps, tmp_input)
 
       thumb_path = File.join(dir, "thumb-#{item.public_id}.jpg")
       begin
         MediaGallery::Ffmpeg.extract_video_thumbnail(input_path: tmp_input, output_path: thumb_path)
-        item.thumbnail_upload_id = create_upload_for_user(item.user_id, thumb_path).id if File.exist?(thumb_path)
+        if File.exist?(thumb_path)
+          item.thumbnail_upload_id = create_upload_for_user(item.user_id, thumb_path).id
+          item.save!
+        end
       rescue => _e
         # Thumbnail is best-effort; do not fail the whole job.
       end
@@ -122,15 +179,14 @@ module Jobs
       create_upload_for_user(item.user_id, out_path)
     end
 
-    def enforce_max_bytes!(out_path, duration_seconds, max_bytes, max_fps, audio_kbps, tmp_input, item)
+    def enforce_max_bytes!(out_path, duration_seconds, max_bytes, max_fps, audio_kbps, tmp_input)
       return if max_bytes.blank? || max_bytes <= 0
-      return if duration_seconds.blank? || duration_seconds <= 0
+      return if duration_seconds.blank? || duration_seconds.to_f <= 0
 
       out_size = File.size?(out_path).to_i
       return if out_size <= max_bytes
 
       # One retry with lower video bitrate based on observed overshoot.
-      # This usually fixes "UploadCreator failed" when Discourse rejects by size.
       ratio = max_bytes.to_f / out_size.to_f
       current_video_kbps = estimated_video_kbps_from_file(out_size, duration_seconds, audio_kbps)
       new_video_kbps = [(current_video_kbps * ratio * 0.9).floor, 64].max
@@ -154,26 +210,25 @@ module Jobs
 
     def pick_video_bitrates(duration_seconds)
       configured_video = SiteSetting.media_gallery_video_target_bitrate_kbps.to_i
-      configured_video = 2500 if configured_video <= 0
+      configured_video = 5000 if configured_video <= 0
 
-      # We use a lower default audio bitrate to make it easier to stay within Discourse limits.
-      audio_kbps = 96
+      audio_kbps = 128
 
       max_kb = SiteSetting.max_attachment_size_kb.to_i
       max_bytes = max_kb.positive? ? (max_kb * 1024) : nil
 
-      return [configured_video, audio_kbps, max_bytes] if max_bytes.blank? || duration_seconds.blank? || duration_seconds <= 0
+      return [configured_video, audio_kbps, max_bytes] if max_bytes.blank? || duration_seconds.to_f <= 0
 
       safety = 0.92
-      total_kbps_budget = ((max_bytes * 8.0 * safety) / duration_seconds) / 1000.0
+      total_kbps_budget = ((max_bytes * 8.0 * safety) / duration_seconds.to_f) / 1000.0
 
       # If budget is tight, drop audio first.
-      audio_kbps = 48 if total_kbps_budget < (audio_kbps + 96)
+      audio_kbps = 96 if total_kbps_budget < (audio_kbps + 128)
 
       video_budget = (total_kbps_budget - audio_kbps).floor
       video_budget = 64 if video_budget < 64
 
-      [ [configured_video, video_budget].min, audio_kbps, max_bytes ]
+      [[configured_video, video_budget].min, audio_kbps, max_bytes]
     end
 
     def estimated_video_kbps_from_file(bytes, duration_seconds, audio_kbps)
@@ -204,14 +259,6 @@ module Jobs
       upload
     ensure
       file&.close
-    end
-
-    def video?(probe)
-      (probe["streams"] || []).any? { |s| s["codec_type"] == "video" }
-    end
-
-    def audio?(probe)
-      !video?(probe) && (probe["streams"] || []).any? { |s| s["codec_type"] == "audio" }
     end
 
     def safe_extension(name)

@@ -1,9 +1,9 @@
 en:
   site_settings:
     media_gallery_enabled: "Enable Secure Media Gallery API"
-    media_gallery_public_view: "Allow public (anonymous) viewing"
-    media_gallery_viewer_groups: "Groups allowed to view media (empty = everyone)"
+    media_gallery_viewer_groups: "Groups allowed to view media (empty = everyone logged in)"
     media_gallery_allowed_uploader_groups: "Groups allowed to register uploads into the media gallery"
+    media_gallery_max_upload_size_mb: "Optional extra max upload size (MB) for media registration (0 = disabled)"
     media_gallery_max_tags_per_item: "Maximum number of tags per media item"
     media_gallery_allowed_tags: "Allowed tags (empty = allow any)"
     media_gallery_video_max_duration_seconds: "Max video duration (seconds)"

@@ -5,25 +5,30 @@ module ::MediaGallery
     requires_plugin "Discourse-Media-Plugin"
 
     before_action :ensure_plugin_enabled
+
+    # Members-only: always require a logged-in user.
+    before_action :ensure_logged_in
+
     before_action :ensure_can_view
 
-    # GET/HEAD /media/stream/:token(.ext)
+    # GET/HEAD /media/stream/:token(.:ext)
     def show
       payload = MediaGallery::Token.verify(params[:token].to_s)
       raise Discourse::NotFound if payload.blank?
 
-      # If token is bound to a user, enforce it.
-      if payload["user_id"].present?
-        raise Discourse::NotFound if current_user.blank?
-        raise Discourse::NotFound if current_user.id != payload["user_id"].to_i
+      # Token can be bound to a user (recommended)
+      if payload["user_id"].present? && current_user.id != payload["user_id"].to_i
+        raise Discourse::NotFound
+      end
+
+      # Token can be bound to an IP (optional)
+      if payload["ip"].present? && request.remote_ip.to_s != payload["ip"].to_s
+        raise Discourse::NotFound
       end
 
       item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
       raise Discourse::NotFound if item.blank?
       raise Discourse::NotFound unless item.ready?
-
-      # Extra auth check (e.g. public view disabled)
-      raise Discourse::NotFound unless MediaGallery::Permissions.can_view?(current_user)
 
       upload = Upload.find_by(id: payload["upload_id"])
       raise Discourse::NotFound if upload.blank?
@@ -43,10 +48,16 @@ module ::MediaGallery
 
       content_type = upload.content_type.presence || "application/octet-stream"
 
+      # Discourage caching / storing.
+      response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
+      response.headers["Pragma"] = "no-cache"
+      response.headers["Expires"] = "0"
+      response.headers["X-Content-Type-Options"] = "nosniff"
+      response.headers["Accept-Ranges"] = "bytes"
+
       if request.head?
         response.headers["Content-Type"] = content_type
         response.headers["Content-Length"] = File.size(local_path).to_s
-        response.headers["Accept-Ranges"] = "bytes"
         return head :ok
       end
 
@@ -65,7 +76,7 @@ module ::MediaGallery
     end
 
     def ensure_can_view
-      raise Discourse::NotFound unless MediaGallery::Permissions.can_view?(current_user)
+      raise Discourse::NotFound unless MediaGallery::Permissions.can_view?(guardian)
     end
   end
 end

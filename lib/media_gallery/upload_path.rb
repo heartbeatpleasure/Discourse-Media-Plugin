@@ -4,8 +4,10 @@ module ::MediaGallery
   module UploadPath
     module_function
 
+    # Returns an absolute local filesystem path for an Upload when using local storage.
+    # Returns nil when the path can't be resolved.
     def local_path_for(upload)
-      raise ArgumentError, "upload is required" if upload.nil?
+      return nil if upload.nil?
 
       store = Discourse.store
       if store.respond_to?(:path_for)
@@ -19,7 +21,9 @@ module ::MediaGallery
         return candidate if candidate.present? && File.exist?(candidate)
       end
 
-      raise "Unable to resolve local path for upload #{upload.id}. Ensure local storage is enabled."
+      nil
+    rescue => _e
+      nil
     end
   end
 end

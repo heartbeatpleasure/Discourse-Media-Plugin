@@ -7,7 +7,6 @@ module ::MediaGallery
     module_function
 
     def verifier
-      # Uses Rails secret_key_base under the hood; scoped by purpose.
       Rails.application.message_verifier("media_gallery_stream")
     end
 
@@ -20,9 +19,19 @@ module ::MediaGallery
       Base64.urlsafe_encode64(signed, padding: false)
     end
 
+    # Returns the decoded payload Hash if valid, otherwise nil.
+    # Enforces signature + expiration.
     def verify(token)
       signed = Base64.urlsafe_decode64(token.to_s)
-      verifier.verify(signed)
+      payload = verifier.verify(signed)
+
+      return nil unless payload.is_a?(Hash)
+
+      exp = payload["exp"].to_i
+      return nil if exp <= 0
+      return nil if Time.now.to_i > exp
+
+      payload
     rescue ArgumentError, ActiveSupport::MessageVerifier::InvalidSignature
       nil
     end

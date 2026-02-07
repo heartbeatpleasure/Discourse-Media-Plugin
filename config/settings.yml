@@ -3,11 +3,7 @@ plugins:
     default: true
     client: true
 
-  # Viewing rules
-  media_gallery_public_view:
-    default: true
-    client: true
-
+  # Viewing rules (members-only). Leave empty to allow all logged-in users.
   media_gallery_viewer_groups:
     default: ""
     type: list
@@ -19,6 +15,11 @@ plugins:
     type: list
     client: false
 
+  # Optional extra size limit (MB) on top of Discourse's max_attachment_size_kb. 0 = disabled.
+  media_gallery_max_upload_size_mb:
+    default: 0
+    client: false
+
   media_gallery_max_tags_per_item:
     default: 10
     client: false
@@ -28,7 +29,7 @@ plugins:
     type: list
     client: true
 
-  # Transcoding / policy
+  # Transcoding / policy (spec)
   media_gallery_video_max_duration_seconds:
     default: 600
     client: false

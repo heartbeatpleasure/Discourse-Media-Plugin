@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 # name: Discourse-Media-Plugin
-# about: Media gallery API with tokenized streaming, transcoding, tags, gender filter, and likes
-# version: 0.1.0
+# about: Media gallery API with tokenized streaming + server-side transcoding (no direct upload URLs)
+# version: 0.2.0
 # authors: Chris
-# url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin#
+# url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin
 
 enabled_site_setting :media_gallery_enabled
 
@@ -28,11 +28,12 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
 
   Discourse::Application.routes.append do
-    # Stream endpoint (tokenized)
-    get "/media/stream/:token" => "media_gallery/stream#show", constraints: { token: /[^\/]+/ }
+    # Stream endpoint (tokenized). Optional extension keeps players happy.
+    get "/media/stream/:token(.:ext)" => "media_gallery/stream#show", constraints: { token: /[^\/\.]+/ }
 
-    # Convenience route for "my items" must come before :public_id
+    # "My items" must come before :public_id
     get "/media/my" => "media_gallery/media#my"
+    get "/user/media" => "media_gallery/media#my"
 
     # Gallery
     get "/media" => "media_gallery/media#index"
@@ -46,7 +47,8 @@ after_initialize do
     post "/media/:public_id/play" => "media_gallery/media#play"
     get "/media/:public_id/thumbnail" => "media_gallery/media#thumbnail"
 
-    # Likes (toggle)
-    post "/media/:public_id/like" => "media_gallery/media#toggle_like"
+    # Likes (optional)
+    post "/media/:public_id/like" => "media_gallery/media#like"
+    post "/media/:public_id/unlike" => "media_gallery/media#unlike"
   end
 end
