@@ -4,7 +4,9 @@ module ::MediaGallery
   class MediaLike < ::ActiveRecord::Base
     self.table_name = "media_gallery_media_likes"
 
-    belongs_to :user
+    # IMPORTANT: within the MediaGallery namespace, `belongs_to :user` would try to
+    # resolve MediaGallery::User (which does not exist). Force ::User.
+    belongs_to :user, class_name: "::User"
     belongs_to :media_item, class_name: "MediaGallery::MediaItem"
 
     validates :user_id, presence: true
