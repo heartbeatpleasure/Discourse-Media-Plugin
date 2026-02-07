@@ -4,8 +4,8 @@ module ::MediaGallery
   class MediaItem < ::ActiveRecord::Base
     self.table_name = "media_gallery_media_items"
 
-    # IMPORTANT: within the MediaGallery namespace, `belongs_to :user` would try to
-    # resolve MediaGallery::User (which does not exist). Force ::User.
+    # IMPORTANT: inside the MediaGallery namespace, `belongs_to :user` would try
+    # to resolve MediaGallery::User (which does not exist). We must point to ::User.
     belongs_to :user, class_name: "::User"
     belongs_to :original_upload, class_name: "::Upload", optional: true
     belongs_to :processed_upload, class_name: "::Upload", optional: true

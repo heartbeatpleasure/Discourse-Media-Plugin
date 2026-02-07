@@ -8,42 +8,48 @@ module ::MediaGallery
       SiteSetting.media_gallery_enabled
     end
 
+    # Discourse list site settings may come back as a String ("a|b") or an Array.
     def list_setting(value)
-      return value if value.is_a?(Array)
-      value.to_s.split("|").map(&:strip).reject(&:blank?)
+      arr = value.is_a?(Array) ? value : value.to_s.split("|")
+      arr.map { |v| v.to_s.strip }.reject(&:blank?)
     end
 
     def viewer_groups
-      list_setting(SiteSetting.media_gallery_viewer_groups)
+      list_setting(SiteSetting.media_gallery_viewer_groups).map(&:downcase)
     end
 
     def uploader_groups
-      list_setting(SiteSetting.media_gallery_allowed_uploader_groups)
+      list_setting(SiteSetting.media_gallery_allowed_uploader_groups).map(&:downcase)
     end
 
     def allowed_tags
-      list_setting(SiteSetting.media_gallery_allowed_tags)
+      list_setting(SiteSetting.media_gallery_allowed_tags).map(&:downcase)
     end
 
     # Members-only: always requires a logged-in user.
     def can_view?(guardian)
       return false unless enabled?
-      return false if guardian.nil? || guardian.user.nil?
+      user = guardian&.user
+      return false if user.nil?
 
       groups = viewer_groups
       return true if groups.blank?
 
-      groups.any? { |g| guardian.user.groups.exists?(name: g) }
+      user.groups.where("lower(name) IN (?)", groups).exists?
     end
 
     def can_upload?(guardian)
       return false unless enabled?
-      return false if guardian.nil? || guardian.user.nil?
+      user = guardian&.user
+      return false if user.nil?
 
-      return true if guardian.is_admin? || guardian.is_staff?
-      return true if uploader_groups.blank?
+      # Avoid relying on Guardian internal helper methods that may change across Discourse versions.
+      return true if user.admin? || user.staff?
 
-      uploader_groups.any? { |g| guardian.user.groups.exists?(name: g) }
+      groups = uploader_groups
+      return true if groups.blank?
+
+      user.groups.where("lower(name) IN (?)", groups).exists?
     end
   end
 end

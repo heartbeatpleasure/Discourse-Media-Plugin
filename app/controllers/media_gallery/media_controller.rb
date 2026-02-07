@@ -4,6 +4,10 @@ module ::MediaGallery
   class MediaController < ::ApplicationController
     requires_plugin "Discourse-Media-Plugin"
 
+    # These endpoints are intended to be callable via API-Key scripts.
+    # CSRF protection is session-based and not relevant for API-key auth.
+    skip_before_action :verify_authenticity_token
+
     before_action :ensure_plugin_enabled
 
     # Members-only forum: no anonymous access.
@@ -84,14 +88,14 @@ module ::MediaGallery
         return
       end
 
-      upload = Upload.find_by(id: upload_id)
+      upload = ::Upload.find_by(id: upload_id)
       if upload.blank?
         render_json_error("upload_not_found")
         return
       end
 
       # Ownership check
-      if upload.user_id.present? && upload.user_id != current_user.id && !guardian.is_staff?
+      if upload.user_id.present? && upload.user_id != current_user.id && !(current_user&.staff? || current_user&.admin?)
         render_json_error("upload_not_owned")
         return
       end
@@ -152,11 +156,22 @@ module ::MediaGallery
         filesize_processed_bytes: (status == "ready" ? upload.filesize : nil)
       )
 
-      Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id) if status == "queued"
+      if status == "queued"
+        begin
+          ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
+        rescue => e
+          # If Redis/Sidekiq is temporarily unavailable, keep the record queued.
+          # Admin can retry later by re-enqueueing the job.
+          Rails.logger.error("[media_gallery] enqueue failed for item_id=#{item.id}: #{e.class}: #{e.message}")
+        end
+      end
 
       render_json_dump(public_id: item.public_id, status: item.status)
     rescue ActiveRecord::RecordInvalid => e
       render_json_error(e.record.errors.full_messages.join(", "))
+    rescue => e
+      Rails.logger.error("[media_gallery] create failed: #{e.class}: #{e.message}\n#{e.backtrace&.first(20)&.join("\n")}")
+      render_json_error("internal_error")
     end
 
     # GET /media/:public_id
@@ -270,7 +285,7 @@ module ::MediaGallery
     end
 
     def can_manage_item?(item)
-      guardian.is_staff? || (guardian.user&.id == item.user_id)
+      (current_user&.staff? || current_user&.admin?) || (guardian.user&.id == item.user_id)
     end
 
     def find_item_by_public_id!(public_id)
