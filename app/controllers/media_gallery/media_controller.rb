@@ -83,6 +83,7 @@ module ::MediaGallery
         return render_json_error("upload_not_owned")
       end
 
+      # Optional extra global cap (plugin-level)
       max_mb = SiteSetting.media_gallery_max_upload_size_mb.to_i
       if max_mb.positive?
         max_bytes = max_mb * 1024 * 1024
@@ -92,6 +93,11 @@ module ::MediaGallery
       media_type = infer_media_type(upload)
       return render_json_error("unsupported_file_type") unless MediaGallery::MediaItem::TYPES.include?(media_type)
       return render_json_error("unsupported_file_extension") unless allowed_extension_for_type?(upload, media_type)
+
+      # Per-type caps (plugin-level)
+      if (err = enforce_type_size_limit(upload, media_type))
+        return render_json_error(err)
+      end
 
       tags = params[:tags]
       tags = tags.is_a?(Array) ? tags : tags.to_s.split(",") if tags.present?
@@ -314,6 +320,36 @@ module ::MediaGallery
       item = MediaGallery::MediaItem.find_by(public_id: public_id.to_s)
       raise Discourse::NotFound if item.blank?
       item
+    end
+
+    # Plugin-level per-type size enforcement (MB).
+    # Returns an error key string when too large, or nil when OK.
+    def enforce_type_size_limit(upload, media_type)
+      size_bytes = upload.filesize.to_i
+
+      max_mb =
+        case media_type
+        when "video"
+          SiteSetting.respond_to?(:media_gallery_max_video_size_mb) ? SiteSetting.media_gallery_max_video_size_mb.to_i : 0
+        when "audio"
+          SiteSetting.respond_to?(:media_gallery_max_audio_size_mb) ? SiteSetting.media_gallery_max_audio_size_mb.to_i : 0
+        when "image"
+          SiteSetting.respond_to?(:media_gallery_max_image_size_mb) ? SiteSetting.media_gallery_max_image_size_mb.to_i : 0
+        else
+          0
+        end
+
+      return nil unless max_mb.positive?
+
+      max_bytes = max_mb * 1024 * 1024
+      return nil if size_bytes <= max_bytes
+
+      case media_type
+      when "video" then "video_too_large"
+      when "audio" then "audio_too_large"
+      when "image" then "image_too_large"
+      else "upload_too_large"
+      end
     end
 
     # Discourse Upload changed across versions; some have `mime_type`, some had `content_type`.

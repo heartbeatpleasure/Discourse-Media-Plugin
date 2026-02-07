@@ -20,6 +20,21 @@ plugins:
     default: 0
     client: false
 
+  # Per-type size limits for registering media into the gallery (MB).
+  # IMPORTANT: uploads.json is still governed by Discourse core limits + nginx upload_size.
+  # These limits are enforced when calling POST /media (registration), not at the raw upload step.
+  media_gallery_max_video_size_mb:
+    default: 200
+    client: false
+
+  media_gallery_max_audio_size_mb:
+    default: 50
+    client: false
+
+  media_gallery_max_image_size_mb:
+    default: 20
+    client: false
+
   media_gallery_max_tags_per_item:
     default: 10
     client: false
@@ -79,7 +94,6 @@ plugins:
   media_gallery_original_retention_hours:
     default: 4
     client: false
-
 
   # Tokenized streaming
   media_gallery_stream_token_ttl_minutes:

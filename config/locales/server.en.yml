@@ -4,6 +4,11 @@ en:
     media_gallery_viewer_groups: "Groups allowed to view media (empty = everyone logged in)"
     media_gallery_allowed_uploader_groups: "Groups allowed to register uploads into the media gallery"
     media_gallery_max_upload_size_mb: "Optional extra max upload size (MB) for media registration (0 = disabled)"
+
+    media_gallery_max_video_size_mb: "Max video size for media gallery registration (MB, 0 = disabled)"
+    media_gallery_max_audio_size_mb: "Max audio size for media gallery registration (MB, 0 = disabled)"
+    media_gallery_max_image_size_mb: "Max image size for media gallery registration (MB, 0 = disabled)"
+
     media_gallery_max_tags_per_item: "Maximum number of tags per media item"
     media_gallery_allowed_tags: "Allowed tags (empty = allow any)"
     media_gallery_video_max_duration_seconds: "Max video duration (seconds)"
