@@ -4,17 +4,10 @@ module ::MediaGallery
   class MediaController < ::ApplicationController
     requires_plugin "Discourse-Media-Plugin"
 
-    # These endpoints are intended to be callable via API-Key scripts.
-    # CSRF protection is session-based and not relevant for API-key auth.
     skip_before_action :verify_authenticity_token
-
-    # Discourse can enforce XHR for POSTs; API-key scripts (curl) are not XHR.
-    # raise: false makes this safe across Discourse versions.
     skip_before_action :check_xhr, raise: false
 
     before_action :ensure_plugin_enabled
-
-    # Members-only forum: no anonymous access.
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
@@ -54,7 +47,6 @@ module ::MediaGallery
       )
     end
 
-    # Optional helper endpoint (/user/media): list your own items, including queued/failed.
     def my
       page = (params[:page].presence || 1).to_i
       per_page = [(params[:per_page].presence || 24).to_i, 100].min
@@ -77,53 +69,29 @@ module ::MediaGallery
       )
     end
 
-    # POST /media
-    # Input: upload_id, title, description, extra_metadata, (optional) gender, tags
     def create
       upload_id = params[:upload_id].to_i
-      if upload_id <= 0
-        render_json_error("invalid_upload_id")
-        return
-      end
+      return render_json_error("invalid_upload_id") if upload_id <= 0
 
       title = params[:title].to_s.strip
-      if title.blank?
-        render_json_error("title_required")
-        return
-      end
+      return render_json_error("title_required") if title.blank?
 
       upload = ::Upload.find_by(id: upload_id)
-      if upload.blank?
-        render_json_error("upload_not_found")
-        return
-      end
+      return render_json_error("upload_not_found") if upload.blank?
 
-      # Ownership check
       if upload.user_id.present? && upload.user_id != current_user.id && !(current_user&.staff? || current_user&.admin?)
-        render_json_error("upload_not_owned")
-        return
+        return render_json_error("upload_not_owned")
       end
 
-      # Optional additional size limit (on top of Discourse global max_attachment_size_kb)
       max_mb = SiteSetting.media_gallery_max_upload_size_mb.to_i
       if max_mb.positive?
         max_bytes = max_mb * 1024 * 1024
-        if upload.filesize.to_i > max_bytes
-          render_json_error("upload_too_large")
-          return
-        end
+        return render_json_error("upload_too_large") if upload.filesize.to_i > max_bytes
       end
 
       media_type = infer_media_type(upload)
-      unless MediaGallery::MediaItem::TYPES.include?(media_type)
-        render_json_error("unsupported_file_type")
-        return
-      end
-
-      unless allowed_extension_for_type?(upload, media_type)
-        render_json_error("unsupported_file_extension")
-        return
-      end
+      return render_json_error("unsupported_file_type") unless MediaGallery::MediaItem::TYPES.include?(media_type)
+      return render_json_error("unsupported_file_extension") unless allowed_extension_for_type?(upload, media_type)
 
       tags = params[:tags]
       tags = tags.is_a?(Array) ? tags : tags.to_s.split(",") if tags.present?
@@ -131,7 +99,13 @@ module ::MediaGallery
       extra_metadata = params[:extra_metadata]
       extra_metadata = {} if extra_metadata.blank?
 
-      transcode_images = SiteSetting.media_gallery_transcode_images_to_jpg
+      # Default OFF unless the setting exists and is enabled
+      transcode_images =
+        if SiteSetting.respond_to?(:media_gallery_transcode_images_to_jpg)
+          SiteSetting.media_gallery_transcode_images_to_jpg
+        else
+          false
+        end
 
       status =
         if media_type == "image"
@@ -164,7 +138,7 @@ module ::MediaGallery
         begin
           ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
         rescue => e
-          Rails.logger.error("[media_gallery] enqueue failed for item_id=#{item.id}: #{e.class}: #{e.message}")
+          Rails.logger.error("[media_gallery] enqueue failed item_id=#{item.id}: #{e.class}: #{e.message}")
         end
       end
 
@@ -172,22 +146,16 @@ module ::MediaGallery
     rescue ActiveRecord::RecordInvalid => e
       render_json_error(e.record.errors.full_messages.join(", "))
     rescue => e
-      Rails.logger.error("[media_gallery] create failed: #{e.class}: #{e.message}\n#{e.backtrace&.first(20)&.join("\n")}")
-      render_json_error("internal_error")
+      Rails.logger.error("[media_gallery] create failed request_id=#{request.request_id}: #{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}")
+      render_json_error("internal_error (request_id=#{request.request_id})")
     end
 
-    # GET /media/:public_id
     def show
       item = find_item_by_public_id!(params[:public_id])
-
-      if !item.ready? && !can_manage_item?(item)
-        raise Discourse::NotFound
-      end
-
+      raise Discourse::NotFound if !item.ready? && !can_manage_item?(item)
       render_json_dump(serialize_data(item, MediaGallery::MediaItemSerializer, root: false))
     end
 
-    # GET /media/:public_id/status (only uploader/staff)
     def status
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless can_manage_item?(item)
@@ -200,7 +168,6 @@ module ::MediaGallery
       )
     end
 
-    # POST /media/:public_id/play
     def play
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless item.ready?
@@ -224,7 +191,6 @@ module ::MediaGallery
       render_json_dump(stream_url: stream_url, expires_at: payload["exp"], playable: true)
     end
 
-    # GET /media/:public_id/thumbnail
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless item.ready?
@@ -299,12 +265,10 @@ module ::MediaGallery
       ext = upload.extension.to_s.downcase
       ctype = upload.content_type.to_s.downcase
 
-      # Explicit allowlist (no GIF, no QuickTime/MOV).
       return "image" if ctype.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
       return "audio" if ctype.start_with?("audio/") && MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
       return "video" if ctype.start_with?("video/") && MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
 
-      # Fallback to extension only (some uploads miss content_type)
       return "image" if MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
       return "audio" if MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
       return "video" if MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
@@ -315,14 +279,10 @@ module ::MediaGallery
     def allowed_extension_for_type?(upload, media_type)
       ext = upload.extension.to_s.downcase
       case media_type
-      when "image"
-        MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
-      when "audio"
-        MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
-      when "video"
-        MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
-      else
-        false
+      when "image" then MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
+      when "audio" then MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
+      when "video" then MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
+      else false
       end
     end
   end
