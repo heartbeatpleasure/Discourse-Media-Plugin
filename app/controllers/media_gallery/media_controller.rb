@@ -99,7 +99,6 @@ module ::MediaGallery
       extra_metadata = params[:extra_metadata]
       extra_metadata = {} if extra_metadata.blank?
 
-      # Default OFF unless the setting exists and is enabled
       transcode_images =
         if SiteSetting.respond_to?(:media_gallery_transcode_images_to_jpg)
           SiteSetting.media_gallery_transcode_images_to_jpg
@@ -261,17 +260,29 @@ module ::MediaGallery
       item
     end
 
+    # Discourse Upload changed across versions; some have `mime_type`, some had `content_type`.
+    def upload_mime(upload)
+      if upload.respond_to?(:mime_type) && upload.mime_type.present?
+        upload.mime_type.to_s.downcase
+      elsif upload.respond_to?(:content_type) && upload.content_type.present?
+        upload.content_type.to_s.downcase
+      else
+        ""
+      end
+    end
+
     def infer_media_type(upload)
       ext = upload.extension.to_s.downcase
-      ctype = upload.content_type.to_s.downcase
+      mime = upload_mime(upload)
 
-      return "image" if ctype.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
-      return "audio" if ctype.start_with?("audio/") && MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
-      return "video" if ctype.start_with?("video/") && MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
+      return "image" if (mime.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)) ||
+                        MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
 
-      return "image" if MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
-      return "audio" if MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
-      return "video" if MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
+      return "audio" if (mime.start_with?("audio/") && MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)) ||
+                        MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
+
+      return "video" if (mime.start_with?("video/") && MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)) ||
+                        MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
 
       nil
     end
