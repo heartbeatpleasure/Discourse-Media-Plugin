@@ -11,7 +11,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                  only: [:index, :show, :status, :thumbnail, :play, :my, :like, :unlike]
+                  only: [:index, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing]
 
     before_action :ensure_can_upload, only: [:create]
 
@@ -149,6 +149,32 @@ module ::MediaGallery
       render_json_error("internal_error (request_id=#{request.request_id})")
     end
 
+    # POST /media/:public_id/retry
+    # Requeues processing after a failure (or if stuck). Owner/staff only.
+    def retry_processing
+      item = find_item_by_public_id!(params[:public_id])
+      raise Discourse::NotFound unless can_manage_item?(item)
+
+      if item.ready?
+        return render_json_error("already_ready")
+      end
+
+      # Reset and requeue
+      item.update!(status: "queued", error_message: nil)
+
+      begin
+        ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
+      rescue => e
+        Rails.logger.error("[media_gallery] retry enqueue failed item_id=#{item.id}: #{e.class}: #{e.message}")
+        return render_json_error("enqueue_failed")
+      end
+
+      render_json_dump(public_id: item.public_id, status: item.status)
+    rescue => e
+      Rails.logger.error("[media_gallery] retry failed request_id=#{request.request_id}: #{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}")
+      render_json_error("internal_error (request_id=#{request.request_id})")
+    end
+
     def show
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound if !item.ready? && !can_manage_item?(item)
@@ -260,7 +286,6 @@ module ::MediaGallery
       item
     end
 
-    # Discourse Upload changed across versions; some have `mime_type`, some had `content_type`.
     def upload_mime(upload)
       if upload.respond_to?(:mime_type) && upload.mime_type.present?
         upload.mime_type.to_s.downcase
