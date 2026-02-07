@@ -30,30 +30,11 @@ module ::MediaGallery
       raise Discourse::NotFound if item.blank?
       raise Discourse::NotFound unless item.ready?
 
-      upload = Upload.find_by(id: payload["upload_id"])
-      raise Discourse::NotFound if upload.blank?
+      kind = payload["kind"].to_s
+      kind = "main" if kind.blank?
 
-      allowed_upload_ids = [item.processed_upload_id, item.thumbnail_upload_id, item.original_upload_id]
-        .compact
-        .map(&:to_i)
-      raise Discourse::NotFound unless allowed_upload_ids.include?(upload.id)
-
-      local_path = MediaGallery::UploadPath.local_path_for(upload)
+      local_path, content_type, filename = resolve_file(item, payload, kind)
       raise Discourse::NotFound if local_path.blank? || !File.exist?(local_path)
-
-      filename_ext = upload.extension.to_s.downcase
-      filename = "media-#{item.public_id}"
-      filename = "#{filename}.#{filename_ext}" if filename_ext.present?
-
-      content_type =
-        if upload.respond_to?(:mime_type) && upload.mime_type.present?
-          upload.mime_type.to_s
-        elsif upload.respond_to?(:content_type) && upload.content_type.present?
-          upload.content_type.to_s
-        else
-          (defined?(Rack::Mime) ? Rack::Mime.mime_type(".#{filename_ext}") : "application/octet-stream")
-        end
-      content_type = "application/octet-stream" if content_type.blank?
 
       file_size = File.size(local_path)
 
@@ -106,6 +87,58 @@ module ::MediaGallery
     end
 
     private
+
+    def resolve_file(item, payload, kind)
+      # Backwards compat: old tokens carried an Upload id.
+      if payload["upload_id"].present?
+        upload = Upload.find_by(id: payload["upload_id"])
+        raise Discourse::NotFound if upload.blank?
+
+        allowed_upload_ids = [item.processed_upload_id, item.thumbnail_upload_id, item.original_upload_id]
+          .compact
+          .map(&:to_i)
+        raise Discourse::NotFound unless allowed_upload_ids.include?(upload.id)
+
+        local_path = MediaGallery::UploadPath.local_path_for(upload)
+        raise Discourse::NotFound if local_path.blank?
+
+        ext = upload.extension.to_s.downcase
+        filename = "media-#{item.public_id}"
+        filename = "#{filename}.#{ext}" if ext.present?
+
+        content_type =
+          if upload.respond_to?(:mime_type) && upload.mime_type.present?
+            upload.mime_type.to_s
+          elsif upload.respond_to?(:content_type) && upload.content_type.present?
+            upload.content_type.to_s
+          else
+            (defined?(Rack::Mime) ? Rack::Mime.mime_type(".#{ext}") : "application/octet-stream")
+          end
+        content_type = "application/octet-stream" if content_type.blank?
+
+        return [local_path, content_type, filename]
+      end
+
+      # New mode: resolve from private storage (no Upload records).
+      raise Discourse::NotFound unless MediaGallery::PrivateStorage.enabled?
+
+      case kind
+      when "thumbnail", "thumb"
+        local_path = MediaGallery::PrivateStorage.thumbnail_abs_path(item)
+        filename = "media-#{item.public_id}-thumb.jpg"
+        content_type = "image/jpeg"
+      when "main"
+        local_path = MediaGallery::PrivateStorage.processed_abs_path(item)
+        ext = MediaGallery::PrivateStorage.processed_ext_for_type(item.media_type)
+        filename = "media-#{item.public_id}.#{ext}"
+        content_type = (defined?(Rack::Mime) ? Rack::Mime.mime_type(".#{ext}") : "application/octet-stream")
+        content_type = "application/octet-stream" if content_type.blank?
+      else
+        raise Discourse::NotFound
+      end
+
+      [local_path, content_type, filename]
+    end
 
     def ensure_plugin_enabled
       raise Discourse::NotFound unless SiteSetting.media_gallery_enabled

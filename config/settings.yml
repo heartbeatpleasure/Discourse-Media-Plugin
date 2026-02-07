@@ -59,6 +59,28 @@ plugins:
     default: true
     client: false
 
+  # Storage hardening (Option A): store processed media + thumbs outside /uploads.
+  # When enabled, the plugin streams files from /shared via tokenized URLs only.
+  media_gallery_private_storage_enabled:
+    default: true
+    client: false
+
+  # Base folder inside the container for private (processed) media. Must be writable by the discourse user.
+  media_gallery_private_root_path:
+    default: "/shared/media_gallery/private"
+    client: false
+
+  # Optional export location for originals (so a NAS can rsync-pull them). Originals are never served publicly.
+  media_gallery_original_export_root_path:
+    default: "/shared/media_gallery/original_export"
+    client: false
+
+  # Retention window for originals in HOURS. 0 = delete immediately after successful processing.
+  media_gallery_original_retention_hours:
+    default: 4
+    client: false
+
+
   # Tokenized streaming
   media_gallery_stream_token_ttl_minutes:
     default: 15

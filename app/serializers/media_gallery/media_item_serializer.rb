@@ -36,7 +36,7 @@ module ::MediaGallery
     end
 
     def playable
-      object.status == "ready" && object.processed_upload_id.present?
+      object.status == "ready" && object.filesize_processed_bytes.to_i > 0
     end
 
     def liked

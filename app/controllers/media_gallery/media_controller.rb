@@ -106,8 +106,12 @@ module ::MediaGallery
           false
         end
 
+      private_storage = MediaGallery::PrivateStorage.enabled?
+
       status =
-        if media_type == "image"
+        if private_storage
+          "queued"
+        elsif media_type == "image"
           transcode_images ? "queued" : "ready"
         else
           "queued"
@@ -124,13 +128,13 @@ module ::MediaGallery
         tags: (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq,
         original_upload_id: upload.id,
         status: status,
-        processed_upload_id: (status == "ready" ? upload.id : nil),
-        thumbnail_upload_id: (status == "ready" ? upload.id : nil),
-        width: (status == "ready" ? upload.width : nil),
-        height: (status == "ready" ? upload.height : nil),
+        processed_upload_id: (status == "ready" && !private_storage ? upload.id : nil),
+        thumbnail_upload_id: (status == "ready" && !private_storage ? upload.id : nil),
+        width: (status == "ready" && !private_storage ? upload.width : nil),
+        height: (status == "ready" && !private_storage ? upload.height : nil),
         duration_seconds: nil,
         filesize_original_bytes: upload.filesize,
-        filesize_processed_bytes: (status == "ready" ? upload.filesize : nil)
+        filesize_processed_bytes: (status == "ready" && !private_storage ? upload.filesize : nil)
       )
 
       if status == "queued"
@@ -195,11 +199,20 @@ module ::MediaGallery
     def play
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless item.ready?
-      raise Discourse::NotFound if item.processed_upload_id.blank?
+
+      upload_id = item.processed_upload_id
+
+      if upload_id.blank?
+        # New (private storage) mode stores files on disk outside /uploads.
+        raise Discourse::NotFound unless MediaGallery::PrivateStorage.enabled?
+        # If the processed file doesn't exist, treat as missing.
+        raise Discourse::NotFound unless File.exist?(MediaGallery::PrivateStorage.processed_abs_path(item))
+        upload_id = nil
+      end
 
       payload = MediaGallery::Token.build_stream_payload(
         media_item: item,
-        upload_id: item.processed_upload_id,
+        upload_id: upload_id,
         kind: "main",
         user: current_user,
         request: request
@@ -209,7 +222,13 @@ module ::MediaGallery
 
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
-      ext = item.processed_upload&.extension.to_s.downcase
+      ext =
+        if upload_id.present?
+          item.processed_upload&.extension.to_s.downcase
+        else
+          MediaGallery::PrivateStorage.processed_ext_for_type(item.media_type)
+        end
+
       stream_url = ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}"
 
       render_json_dump(stream_url: stream_url, expires_at: payload["exp"], playable: true)
@@ -218,21 +237,33 @@ module ::MediaGallery
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless item.ready?
-      raise Discourse::NotFound if item.thumbnail_upload_id.blank?
+
+      upload_id = item.thumbnail_upload_id
+
+      if upload_id.blank?
+        raise Discourse::NotFound unless MediaGallery::PrivateStorage.enabled?
+        raise Discourse::NotFound unless File.exist?(MediaGallery::PrivateStorage.thumbnail_abs_path(item))
+        upload_id = nil
+      end
 
       payload = MediaGallery::Token.build_stream_payload(
         media_item: item,
-        upload_id: item.thumbnail_upload_id,
+        upload_id: upload_id,
         kind: "thumbnail",
         user: current_user,
         request: request
       )
 
       token = MediaGallery::Token.generate(payload)
-      ext = item.thumbnail_upload&.extension.to_s.downcase
-      url = ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}"
 
-      redirect_to url
+      ext =
+        if upload_id.present?
+          item.thumbnail_upload&.extension.to_s.downcase
+        else
+          "jpg"
+        end
+
+      redirect_to(ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}")
     end
 
     def like

@@ -23,7 +23,7 @@ module Jobs
       end
     rescue => e
       if item&.persisted?
-        item.update!(status: "failed", error_message: e.message.truncate(1000))
+        item.update!(status: "failed", error_message: e.message.to_s.truncate(1000))
       end
       raise e
     end
@@ -42,107 +42,114 @@ module Jobs
     def process_item!(item)
       raise "missing_original_upload" if item.original_upload.blank?
 
-      input_path = MediaGallery::UploadPath.local_path_for(item.original_upload)
+      original_upload = item.original_upload
+      input_path = MediaGallery::UploadPath.local_path_for(original_upload)
       raise "original_upload_not_on_local_disk" if input_path.blank?
       raise "original_file_missing: #{input_path}" unless File.exist?(input_path)
 
-      item.filesize_original_bytes ||= item.original_upload.filesize
+      item.filesize_original_bytes ||= original_upload.filesize
 
-      # Decide type primarily from the Upload (avoids ffprobe misclassifying still images as 'video').
-      media_type = item.media_type.presence || infer_media_type_from_upload(item.original_upload)
+      media_type = item.media_type.presence || infer_media_type_from_upload(original_upload)
       raise "unsupported_file_type" if media_type.blank?
 
       item.media_type = media_type
       item.save!
 
+      private_mode = MediaGallery::PrivateStorage.enabled?
+
       Dir.mktmpdir("media-gallery") do |dir|
-        ext = safe_extension(item.original_upload.original_filename)
+        ext = safe_extension(original_upload.original_filename)
         tmp_input = File.join(dir, "in#{ext}")
         FileUtils.cp(input_path, tmp_input)
 
+        processed_tmp = nil
+        thumb_tmp = nil
+
         case media_type
         when "video"
-          processed_upload = process_video!(item, dir, tmp_input)
-          item.duration_seconds ||= processed_upload_metadata_seconds(item, processed_upload)
-          item.processed_upload_id = processed_upload.id
-          item.filesize_processed_bytes = processed_upload.filesize
+          processed_tmp, thumb_tmp = process_video_tmp!(item, dir, tmp_input)
         when "audio"
-          processed_upload = process_audio!(item, dir, tmp_input)
-          item.duration_seconds ||= processed_upload_metadata_seconds(item, processed_upload)
-          item.processed_upload_id = processed_upload.id
-          item.filesize_processed_bytes = processed_upload.filesize
+          processed_tmp = process_audio_tmp!(item, dir, tmp_input)
         when "image"
-          processed_upload, thumb_upload = process_image!(item, dir, tmp_input)
-
-          item.processed_upload_id = processed_upload.id
-          item.filesize_processed_bytes = processed_upload.filesize
-          item.thumbnail_upload_id = thumb_upload.id if thumb_upload.present?
-
-          item.width = processed_upload.width if processed_upload.respond_to?(:width)
-          item.height = processed_upload.height if processed_upload.respond_to?(:height)
-          item.duration_seconds = nil
+          processed_tmp, thumb_tmp = process_image_tmp!(item, dir, tmp_input, force_jpg: private_mode)
         else
           raise "unsupported_file_type"
         end
 
-        item.save!
+        raise "processed_output_missing" if processed_tmp.blank? || !File.exist?(processed_tmp)
 
+        if private_mode
+          store_private_outputs!(item, processed_tmp: processed_tmp, thumb_tmp: thumb_tmp)
+        else
+          store_as_uploads!(item, processed_tmp: processed_tmp, thumb_tmp: thumb_tmp)
+        end
+
+        # Export + delete original upload (Option A)
         if SiteSetting.media_gallery_delete_original_on_success
-          original = item.original_upload
+          maybe_export_original!(item, original_upload, input_path)
+          destroy_upload_safely!(original_upload)
           item.original_upload_id = nil
           item.save!
-          original.destroy!
         end
 
         item.update!(status: "ready", error_message: nil)
       end
     end
 
-    def processed_upload_metadata_seconds(item, processed_upload)
-      # Best-effort probe on the processed upload to persist duration/size data consistently
-      out_path = MediaGallery::UploadPath.local_path_for(processed_upload)
-      return item.duration_seconds if out_path.blank? || !File.exist?(out_path)
+    def maybe_export_original!(item, upload, input_path)
+      return unless MediaGallery::PrivateStorage.enabled?
 
-      probe = MediaGallery::Ffmpeg.probe(out_path)
-      duration_seconds_f = probe.dig("format", "duration").to_f
-      duration_seconds_f.positive? ? duration_seconds_f.round : item.duration_seconds
-    rescue
-      item.duration_seconds
+      hours = MediaGallery::PrivateStorage.original_retention_hours
+      return if hours <= 0
+
+      # Export original to a private folder so a NAS can rsync-pull it.
+      MediaGallery::PrivateStorage.export_original!(
+        item: item,
+        source_path: input_path,
+        original_filename: upload.original_filename,
+        extension: upload.extension
+      )
+
+      meta = (item.extra_metadata || {}).dup
+      meta["original_exported_at"] = Time.now.utc.iso8601
+      meta["original_retention_hours"] = hours
+      item.extra_metadata = meta
+      item.save!
     end
 
-    def infer_media_type_from_upload(upload)
-      ext = upload.extension.to_s.downcase
-      ctype = upload.content_type.to_s.downcase
+    def destroy_upload_safely!(upload)
+      return if upload.blank?
 
-      return "image" if ctype.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
-      return "audio" if ctype.start_with?("audio/") && MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
-      return "video" if ctype.start_with?("video/") && MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
-
-      return "image" if MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
-      return "audio" if MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
-      return "video" if MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
-
-      nil
+      if defined?(::UploadDestroyer)
+        ::UploadDestroyer.new(Discourse.system_user, upload).destroy
+      else
+        upload.destroy!
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] failed to destroy original upload id=#{upload&.id}: #{e.class}: #{e.message}")
     end
 
-    def process_audio!(item, dir, tmp_input)
+    # --- Processing to tmp files (no DB writes) ---
+
+    def process_audio_tmp!(item, dir, tmp_input)
       out_path = File.join(dir, "media-#{item.public_id}.mp3")
 
       bitrate = SiteSetting.media_gallery_audio_bitrate_kbps.to_i
       bitrate = 128 if bitrate <= 0
 
-      # duration policy: 15 minutes
+      # Duration policy
       begin
         probe = MediaGallery::Ffmpeg.probe(tmp_input)
         duration = probe.dig("format", "duration").to_f
         item.duration_seconds = duration.round if duration.positive?
+
         max_dur = SiteSetting.media_gallery_audio_max_duration_seconds.to_i
         if max_dur.positive? && duration.positive? && duration > max_dur
           item.update!(status: "failed", error_message: "duration_exceeds_#{max_dur}_seconds")
           raise "duration_policy_failed"
         end
       rescue
-        # if probe fails we still try to transcode, and will fail later if unsupported
+        # If probe fails we still try to transcode; ffmpeg will error if unsupported.
       end
 
       MediaGallery::Ffmpeg.transcode_audio(
@@ -151,10 +158,10 @@ module Jobs
         bitrate_kbps: bitrate,
       )
 
-      create_upload_for_user(item.user_id, out_path)
+      out_path
     end
 
-    def process_video!(item, dir, tmp_input)
+    def process_video_tmp!(item, dir, tmp_input)
       out_path = File.join(dir, "media-#{item.public_id}.mp4")
 
       max_fps = SiteSetting.media_gallery_video_max_fps.to_i
@@ -168,7 +175,7 @@ module Jobs
       end
       item.duration_seconds = duration_seconds_f.round if duration_seconds_f.positive?
 
-      # duration policy: 10 minutes
+      # Duration policy
       max_dur = SiteSetting.media_gallery_video_max_duration_seconds.to_i
       if max_dur.positive? && duration_seconds_f.positive? && duration_seconds_f > max_dur
         item.update!(status: "failed", error_message: "duration_exceeds_#{max_dur}_seconds")
@@ -189,44 +196,155 @@ module Jobs
       thumb_path = File.join(dir, "thumb-#{item.public_id}.jpg")
       begin
         MediaGallery::Ffmpeg.extract_video_thumbnail(input_path: tmp_input, output_path: thumb_path)
-        if File.exist?(thumb_path)
-          item.thumbnail_upload_id = create_upload_for_user(item.user_id, thumb_path).id
-          item.save!
-        end
       rescue
+        thumb_path = nil
       end
 
-      create_upload_for_user(item.user_id, out_path)
+      thumb_path = nil if thumb_path.present? && !File.exist?(thumb_path)
+
+      [out_path, thumb_path]
     end
 
-    def process_image!(item, dir, tmp_input)
-      # If setting is off, we keep the original as processed.
-      unless SiteSetting.media_gallery_transcode_images_to_jpg
-        processed = item.original_upload
+    def process_image_tmp!(item, dir, tmp_input, force_jpg: false)
+      # In private mode we always produce a JPG to keep paths deterministic.
+      transcode = force_jpg || SiteSetting.media_gallery_transcode_images_to_jpg
+
+      if !transcode
+        # Keep the original bytes, but still try to generate a JPG thumbnail.
+        out_path = File.join(dir, "media-#{item.public_id}#{safe_extension(item.original_upload.original_filename)}")
+        FileUtils.cp(tmp_input, out_path)
+
         thumb_path = File.join(dir, "thumb-#{item.public_id}.jpg")
         begin
           MediaGallery::Ffmpeg.create_jpg_thumbnail(input_path: tmp_input, output_path: thumb_path)
-          thumb = File.exist?(thumb_path) ? create_upload_for_user(item.user_id, thumb_path) : nil
-          return [processed, thumb]
         rescue
-          return [processed, nil]
+          thumb_path = nil
         end
+        thumb_path = nil if thumb_path.present? && !File.exist?(thumb_path)
+        return [out_path, thumb_path]
       end
 
       out_path = File.join(dir, "media-#{item.public_id}.jpg")
       MediaGallery::Ffmpeg.transcode_image_to_jpg(input_path: tmp_input, output_path: out_path)
 
-      processed = create_upload_for_user(item.user_id, out_path)
-
       thumb_path = File.join(dir, "thumb-#{item.public_id}.jpg")
-      thumb = nil
       begin
         MediaGallery::Ffmpeg.create_jpg_thumbnail(input_path: out_path, output_path: thumb_path)
-        thumb = create_upload_for_user(item.user_id, thumb_path) if File.exist?(thumb_path)
       rescue
+        thumb_path = nil
+      end
+      thumb_path = nil if thumb_path.present? && !File.exist?(thumb_path)
+
+      [out_path, thumb_path]
+    end
+
+    # --- Storage backends ---
+
+    def store_private_outputs!(item, processed_tmp:, thumb_tmp:)
+      # Move into /shared (private, not /uploads)
+      MediaGallery::PrivateStorage.ensure_dir!(MediaGallery::PrivateStorage.item_private_dir(item.public_id))
+
+      final_main = MediaGallery::PrivateStorage.processed_abs_path(item)
+      FileUtils.rm_f(final_main)
+      FileUtils.mv(processed_tmp, final_main)
+
+      final_thumb = nil
+      if thumb_tmp.present? && File.exist?(thumb_tmp)
+        final_thumb = MediaGallery::PrivateStorage.thumbnail_abs_path(item)
+        FileUtils.rm_f(final_thumb)
+        FileUtils.mv(thumb_tmp, final_thumb)
       end
 
-      [processed, thumb]
+      # Persist metadata (do not rely on Upload rows)
+      item.processed_upload_id = nil
+      item.thumbnail_upload_id = nil
+
+      item.filesize_processed_bytes = File.size?(final_main).to_i
+      enrich_dimensions_and_duration!(item, final_main)
+
+      meta = (item.extra_metadata || {}).dup
+      meta["storage"] = "private"
+      meta["processed_rel_path"] = MediaGallery::PrivateStorage.processed_rel_path(item)
+      meta["thumbnail_rel_path"] = MediaGallery::PrivateStorage.thumbnail_rel_path(item) if final_thumb.present?
+      item.extra_metadata = meta
+
+      item.save!
+    end
+
+    def store_as_uploads!(item, processed_tmp:, thumb_tmp:)
+      processed = create_upload_for_user(item.user_id, processed_tmp)
+
+      item.processed_upload_id = processed.id
+      item.filesize_processed_bytes = processed.filesize
+
+      if processed.respond_to?(:width) && processed.width.present?
+        item.width = processed.width
+      end
+      if processed.respond_to?(:height) && processed.height.present?
+        item.height = processed.height
+      end
+
+      if thumb_tmp.present? && File.exist?(thumb_tmp)
+        thumb = create_upload_for_user(item.user_id, thumb_tmp)
+        item.thumbnail_upload_id = thumb.id
+      end
+
+      # Best-effort duration probing from processed file
+      item.duration_seconds ||= probe_duration_seconds(MediaGallery::UploadPath.local_path_for(processed))
+      item.save!
+    end
+
+    def enrich_dimensions_and_duration!(item, path)
+      probe = MediaGallery::Ffmpeg.probe(path)
+
+      duration_seconds_f = probe.dig("format", "duration").to_f
+      item.duration_seconds = duration_seconds_f.round if duration_seconds_f.positive?
+
+      streams = probe["streams"] || []
+      vs = streams.find { |s| s["codec_type"] == "video" } || streams.first
+      if vs.present?
+        item.width = vs["width"] if vs["width"].present?
+        item.height = vs["height"] if vs["height"].present?
+      end
+    rescue
+      # ignore
+    end
+
+    def probe_duration_seconds(path)
+      return nil if path.blank? || !File.exist?(path)
+
+      probe = MediaGallery::Ffmpeg.probe(path)
+      duration_seconds_f = probe.dig("format", "duration").to_f
+      duration_seconds_f.positive? ? duration_seconds_f.round : nil
+    rescue
+      nil
+    end
+
+    # --- Helpers ---
+
+    def infer_media_type_from_upload(upload)
+      ext = upload.extension.to_s.downcase
+      ctype = upload_mime(upload)
+
+      return "image" if ctype.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
+      return "audio" if ctype.start_with?("audio/") && MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
+      return "video" if ctype.start_with?("video/") && MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
+
+      return "image" if MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
+      return "audio" if MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
+      return "video" if MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
+
+      nil
+    end
+
+    def upload_mime(upload)
+      if upload.respond_to?(:mime_type) && upload.mime_type.present?
+        upload.mime_type.to_s.downcase
+      elsif upload.respond_to?(:content_type) && upload.content_type.present?
+        upload.content_type.to_s.downcase
+      else
+        ""
+      end
     end
 
     def pick_video_bitrates(tmp_input)
@@ -268,7 +386,6 @@ module Jobs
 
       [[configured_video, video_budget].min, audio_kbps, max_bytes, duration_seconds_f, width, height]
     end
-
 
     def enforce_max_bytes!(out_path, duration_seconds, max_bytes, max_fps, audio_kbps, tmp_input)
       return if max_bytes.blank? || max_bytes <= 0
