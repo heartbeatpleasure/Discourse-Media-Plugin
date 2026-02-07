@@ -29,12 +29,6 @@ plugins:
     type: list
     client: true
 
-  # If ON, images will be transcoded to JPG (requires ffmpeg/worker). If OFF, images are marked ready as-is.
-  # Default OFF for now so the gallery works even before you install ffmpeg/sidekiq.
-  media_gallery_transcode_images_to_jpg:
-    default: false
-    client: false
-
   # Transcoding / policy
   media_gallery_video_max_duration_seconds:
     default: 600
@@ -57,6 +51,11 @@ plugins:
     client: false
 
   media_gallery_delete_original_on_success:
+    default: true
+    client: false
+
+  # Images: standardize output to JPG (requested). Turn off to match the original spec.
+  media_gallery_transcode_images_to_jpg:
     default: true
     client: false
 

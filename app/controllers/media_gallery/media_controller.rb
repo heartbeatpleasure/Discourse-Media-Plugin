@@ -159,7 +159,6 @@ module ::MediaGallery
         return render_json_error("already_ready")
       end
 
-      # Reset and requeue
       item.update!(status: "queued", error_message: nil)
 
       begin
@@ -286,6 +285,7 @@ module ::MediaGallery
       item
     end
 
+    # Discourse Upload changed across versions; some have `mime_type`, some had `content_type`.
     def upload_mime(upload)
       if upload.respond_to?(:mime_type) && upload.mime_type.present?
         upload.mime_type.to_s.downcase
