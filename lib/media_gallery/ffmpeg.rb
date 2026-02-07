@@ -30,7 +30,7 @@ module MediaGallery
       JSON.parse(stdout)
     end
 
-    # Audio profile (spec): MP3 128 kbps, 44.1kHz, stereo
+    # Audio profile: MP3 128 kbps, 44.1kHz, stereo
     def self.transcode_audio(input_path:, output_path:, bitrate_kbps:)
       cmd = [
         ffmpeg_path,
@@ -53,7 +53,7 @@ module MediaGallery
       raise "ffmpeg_audio_failed: #{stderr.presence || "unknown error"}" unless status.success?
     end
 
-    # Video profile (spec): MP4, H.264 Main@4.1, max 1080p, max 30fps, ~5Mbps, AAC 128kbps
+    # Video profile: MP4, H.264 Main@4.1, max 1080p, max 30fps, ~5Mbps, AAC 128kbps
     def self.transcode_video(input_path:, output_path:, bitrate_kbps:, max_fps:, audio_bitrate_kbps: 128)
       buf_kbps = [bitrate_kbps.to_i * 2, 256].max
 
@@ -97,6 +97,47 @@ module MediaGallery
 
       _stdout, stderr, status = Open3.capture3(*cmd)
       raise "ffmpeg_video_failed: #{stderr.presence || "unknown error"}" unless status.success?
+    end
+
+    # Image standardization: JPG, max 1920x1080 (no upscale), keep aspect.
+    def self.transcode_image_to_jpg(input_path:, output_path:)
+      vf = "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease"
+
+      cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        input_path,
+        "-vf",
+        vf,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "3",
+        output_path,
+      ]
+
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      raise "ffmpeg_image_failed: #{stderr.presence || "unknown error"}" unless status.success?
+    end
+
+    def self.create_jpg_thumbnail(input_path:, output_path:)
+      cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        input_path,
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=640:-2",
+        "-q:v",
+        "4",
+        output_path,
+      ]
+
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      raise "ffmpeg_thumb_failed: #{stderr.presence || "unknown error"}" unless status.success?
     end
 
     def self.extract_video_thumbnail(input_path:, output_path:)

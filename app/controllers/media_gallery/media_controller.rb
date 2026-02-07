@@ -46,7 +46,7 @@ module ::MediaGallery
       )
     end
 
-    # Optional helper endpoint (spec: /user/media) for listing your own items, including queued/failed.
+    # Optional helper endpoint (/user/media): list your own items, including queued/failed.
     def my
       page = (params[:page].presence || 1).to_i
       per_page = [(params[:per_page].presence || 24).to_i, 100].min
@@ -70,7 +70,7 @@ module ::MediaGallery
     end
 
     # POST /media
-    # Input: upload_id, title, description, extra_metadata, (optional) media_type, gender, tags
+    # Input: upload_id, title, description, extra_metadata, (optional) gender, tags
     def create
       upload_id = params[:upload_id].to_i
       if upload_id <= 0
@@ -90,7 +90,7 @@ module ::MediaGallery
         return
       end
 
-      # Ownership check (spec)
+      # Ownership check
       if upload.user_id.present? && upload.user_id != current_user.id && !guardian.is_staff?
         render_json_error("upload_not_owned")
         return
@@ -106,12 +106,14 @@ module ::MediaGallery
         end
       end
 
-      # Caller may pass media_type; otherwise infer from the Upload.
-      media_type = params[:media_type].to_s.downcase.presence
-      media_type ||= infer_media_type(upload)
-
+      media_type = infer_media_type(upload)
       unless MediaGallery::MediaItem::TYPES.include?(media_type)
-        render_json_error("invalid_media_type")
+        render_json_error("unsupported_file_type")
+        return
+      end
+
+      unless allowed_extension_for_type?(upload, media_type)
+        render_json_error("unsupported_file_extension")
         return
       end
 
@@ -121,8 +123,14 @@ module ::MediaGallery
       extra_metadata = params[:extra_metadata]
       extra_metadata = {} if extra_metadata.blank?
 
-      # Images can be served as-is (no ffmpeg pipeline). Video/audio go through processing.
-      status = (media_type == "image" ? "ready" : "queued")
+      transcode_images = SiteSetting.media_gallery_transcode_images_to_jpg
+
+      status =
+        if media_type == "image"
+          transcode_images ? "queued" : "ready"
+        else
+          "queued"
+        end
 
       item = MediaGallery::MediaItem.create!(
         public_id: SecureRandom.uuid,
@@ -275,11 +283,31 @@ module ::MediaGallery
       ext = upload.extension.to_s.downcase
       ctype = upload.content_type.to_s.downcase
 
-      return "image" if ctype.start_with?("image/") || %w[jpg jpeg png gif webp svg].include?(ext)
-      return "audio" if ctype.start_with?("audio/") || %w[mp3 m4a aac ogg opus wav flac].include?(ext)
-      return "video" if ctype.start_with?("video/") || %w[mp4 m4v mov webm mkv avi].include?(ext)
+      # Explicit allowlist (no GIF, no QuickTime/MOV).
+      return "image" if ctype.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
+      return "audio" if ctype.start_with?("audio/") && MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
+      return "video" if ctype.start_with?("video/") && MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
+
+      # Fallback to extension only (some uploads miss content_type)
+      return "image" if MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
+      return "audio" if MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
+      return "video" if MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
 
       nil
+    end
+
+    def allowed_extension_for_type?(upload, media_type)
+      ext = upload.extension.to_s.downcase
+      case media_type
+      when "image"
+        MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
+      when "audio"
+        MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
+      when "video"
+        MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
+      else
+        false
+      end
     end
   end
 end

@@ -2,7 +2,7 @@
 
 # name: Discourse-Media-Plugin
 # about: Media gallery API with tokenized streaming + server-side transcoding (no direct upload URLs)
-# version: 0.2.0
+# version: 0.2.2
 # authors: Chris
 # url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin
 

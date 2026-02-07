@@ -12,6 +12,7 @@ en:
     media_gallery_video_max_fps: "Video max fps"
     media_gallery_audio_bitrate_kbps: "Audio bitrate (kbps)"
     media_gallery_delete_original_on_success: "Delete original upload after successful processing"
+    media_gallery_transcode_images_to_jpg: "Transcode images to JPG (standardize output)"
     media_gallery_stream_token_ttl_minutes: "Stream token TTL (minutes)"
     media_gallery_bind_stream_to_user: "Bind stream tokens to the requesting user when possible"
     media_gallery_bind_stream_to_ip: "Bind stream tokens to the requesting IP when possible"

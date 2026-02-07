@@ -30,6 +30,8 @@ module ::MediaGallery
     end
 
     def thumbnail_url
+      # Stable URL that performs a server-side redirect to a short-lived tokenized stream.
+      # This keeps raw Upload URLs out of HTML/JS.
       "/media/#{object.public_id}/thumbnail"
     end
 

@@ -7,6 +7,7 @@ module ::MediaGallery
     module_function
 
     def verifier
+      # Uses Rails secret_key_base under the hood; scoped by purpose.
       Rails.application.message_verifier("media_gallery_stream")
     end
 

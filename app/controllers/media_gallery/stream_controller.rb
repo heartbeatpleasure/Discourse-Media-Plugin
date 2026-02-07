@@ -8,7 +8,6 @@ module ::MediaGallery
 
     # Members-only: always require a logged-in user.
     before_action :ensure_logged_in
-
     before_action :ensure_can_view
 
     # GET/HEAD /media/stream/:token(.:ext)
@@ -47,6 +46,7 @@ module ::MediaGallery
       filename = "#{filename}.#{filename_ext}" if filename_ext.present?
 
       content_type = upload.content_type.presence || "application/octet-stream"
+      file_size = File.size(local_path)
 
       # Discourage caching / storing.
       response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
@@ -54,19 +54,44 @@ module ::MediaGallery
       response.headers["Expires"] = "0"
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Accept-Ranges"] = "bytes"
+      response.headers["Content-Disposition"] = "inline; filename=\"#{filename}\""
 
       if request.head?
         response.headers["Content-Type"] = content_type
-        response.headers["Content-Length"] = File.size(local_path).to_s
+        response.headers["Content-Length"] = file_size.to_s
         return head :ok
       end
 
-      send_file(
-        local_path,
-        disposition: "inline",
-        filename: filename,
-        type: content_type
-      )
+      range = request.headers["HTTP_RANGE"].to_s
+
+      if range.present? && range.start_with?("bytes=")
+        # Example: bytes=0-1023
+        m = range.match(/bytes=(\d*)-(\d*)/)
+        if m
+          start_s, end_s = m[1], m[2]
+          start_pos = start_s.present? ? start_s.to_i : 0
+          end_pos = end_s.present? ? end_s.to_i : (file_size - 1)
+
+          start_pos = 0 if start_pos.negative?
+          end_pos = file_size - 1 if end_pos >= file_size
+
+          if start_pos <= end_pos
+            length = (end_pos - start_pos) + 1
+
+            response.status = 206
+            response.headers["Content-Type"] = content_type
+            response.headers["Content-Range"] = "bytes #{start_pos}-#{end_pos}/#{file_size}"
+            response.headers["Content-Length"] = length.to_s
+
+            data = IO.binread(local_path, length, start_pos)
+            return send_data(data, type: content_type, disposition: "inline", filename: filename)
+          end
+        end
+      end
+
+      response.headers["Content-Type"] = content_type
+      response.headers["Content-Length"] = file_size.to_s
+      send_file(local_path, disposition: "inline", filename: filename, type: content_type)
     end
 
     private

@@ -29,7 +29,7 @@ plugins:
     type: list
     client: true
 
-  # Transcoding / policy (spec)
+  # Transcoding / policy
   media_gallery_video_max_duration_seconds:
     default: 600
     client: false
@@ -51,6 +51,11 @@ plugins:
     client: false
 
   media_gallery_delete_original_on_success:
+    default: true
+    client: false
+
+  # Images: standardize output to JPG (requested). Turn off to match the original spec.
+  media_gallery_transcode_images_to_jpg:
     default: true
     client: false
 

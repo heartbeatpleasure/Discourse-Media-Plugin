@@ -15,6 +15,16 @@ module ::MediaGallery
     TYPES = %w[video audio image].freeze
     GENDERS = %w[male female non_binary].freeze
 
+    # Allowed INPUT extensions (we transcode to a standard OUTPUT profile)
+    # - images -> JPG (optional setting; default: on)
+    # - audio  -> MP3
+    # - video  -> MP4 (H.264 + AAC)
+    IMAGE_EXTS = %w[jpg jpeg png webp].freeze
+    # Note: QuickTime/MOV intentionally excluded
+    VIDEO_EXTS = %w[mp4 m4v webm mkv].freeze
+    # Wide input support; output is always MP3
+    AUDIO_EXTS = %w[mp3 m4a aac ogg opus wav flac].freeze
+
     validates :public_id, presence: true, uniqueness: true
     validates :status, inclusion: { in: STATUSES }
     validates :media_type, inclusion: { in: TYPES }, allow_nil: true
