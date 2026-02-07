@@ -2,7 +2,7 @@
 
 # name: Discourse-Media-Plugin
 # about: Media gallery API with tokenized streaming + server-side transcoding (no direct upload URLs)
-# version: 0.2.5
+# version: 0.2.6
 # authors: Chris
 # url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin
 
@@ -38,17 +38,19 @@ after_initialize do
     # Gallery
     get "/media" => "media_gallery/media#index"
     get "/media.json" => "media_gallery/media#index", defaults: { format: :json }
-    post "/media" => "media_gallery/media#create"
+
+    # IMPORTANT: default JSON for API-key scripts (curl)
+    post "/media" => "media_gallery/media#create", defaults: { format: :json }
 
     # Item
     get "/media/:public_id" => "media_gallery/media#show"
     get "/media/:public_id.json" => "media_gallery/media#show", defaults: { format: :json }
     get "/media/:public_id/status" => "media_gallery/media#status"
-    post "/media/:public_id/play" => "media_gallery/media#play"
+    post "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
     get "/media/:public_id/thumbnail" => "media_gallery/media#thumbnail"
 
     # Likes (optional)
-    post "/media/:public_id/like" => "media_gallery/media#like"
-    post "/media/:public_id/unlike" => "media_gallery/media#unlike"
+    post "/media/:public_id/like" => "media_gallery/media#like", defaults: { format: :json }
+    post "/media/:public_id/unlike" => "media_gallery/media#unlike", defaults: { format: :json }
   end
 end

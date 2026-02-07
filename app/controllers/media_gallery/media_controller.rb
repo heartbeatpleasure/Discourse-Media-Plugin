@@ -8,6 +8,10 @@ module ::MediaGallery
     # CSRF protection is session-based and not relevant for API-key auth.
     skip_before_action :verify_authenticity_token
 
+    # Discourse can enforce XHR for POSTs; API-key scripts (curl) are not XHR.
+    # raise: false makes this safe across Discourse versions.
+    skip_before_action :check_xhr, raise: false
+
     before_action :ensure_plugin_enabled
 
     # Members-only forum: no anonymous access.
@@ -160,8 +164,6 @@ module ::MediaGallery
         begin
           ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
         rescue => e
-          # If Redis/Sidekiq is temporarily unavailable, keep the record queued.
-          # Admin can retry later by re-enqueueing the job.
           Rails.logger.error("[media_gallery] enqueue failed for item_id=#{item.id}: #{e.class}: #{e.message}")
         end
       end
@@ -214,7 +216,6 @@ module ::MediaGallery
 
       token = MediaGallery::Token.generate(payload)
 
-      # Best-effort view count
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
       ext = item.processed_upload&.extension.to_s.downcase
