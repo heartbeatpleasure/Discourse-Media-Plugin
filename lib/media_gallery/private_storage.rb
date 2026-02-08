@@ -2,8 +2,8 @@
 
 require "fileutils"
 require "json"
-require "time"
 require "securerandom"
+require "time"
 
 module ::MediaGallery
   module PrivateStorage
@@ -16,28 +16,56 @@ module ::MediaGallery
         SiteSetting.media_gallery_private_storage_enabled
     end
 
+    # --- Roots ----------------------------------------------------------------
+
     def private_root
       p = SiteSetting.media_gallery_private_root_path.to_s.strip
       p = "/shared/media_gallery/private" if p.blank?
       p
     end
 
-    # New name used in current code
-    def originals_root
+    # Keep BOTH method names for backwards compatibility.
+    # (We had older code using `originals_root`, newer code using `original_export_root`.)
+    def original_export_root
       p = SiteSetting.media_gallery_original_export_root_path.to_s.strip
       p = "/shared/media_gallery/original_export" if p.blank?
       p
     end
 
-    # Backwards/compat: some codepaths call this older name
-    def original_export_root
-      originals_root
+    def originals_root
+      original_export_root
     end
 
     # 0 => delete immediately (no export)
     def original_retention_hours
-      (SiteSetting.media_gallery_original_retention_hours.to_i rescue 0)
+      SiteSetting.media_gallery_original_retention_hours.to_i
+    rescue
+      0
     end
+
+    # --- Preflight ------------------------------------------------------------
+
+    # Called from controllers. Must exist (some earlier zips accidentally removed it).
+    def ensure_private_root!
+      assert_writable_dir!(private_root)
+      true
+    end
+
+    # Called from controllers. Must exist.
+    def ensure_original_export_root!
+      return false if original_retention_hours <= 0
+      assert_writable_dir!(original_export_root)
+      true
+    end
+
+    # Convenience for jobs/tests.
+    def preflight!
+      ensure_private_root!
+      ensure_original_export_root!
+      true
+    end
+
+    # --- Per-item paths -------------------------------------------------------
 
     def item_private_dir(public_id)
       File.join(private_root, public_id.to_s)
@@ -47,29 +75,19 @@ module ::MediaGallery
       File.join(original_export_root, public_id.to_s)
     end
 
+    # --- Helpers --------------------------------------------------------------
+
+    # Creates the dir if missing.
     def ensure_dir!(path)
       FileUtils.mkdir_p(path)
     end
 
-    def assert_writable_dir!(dir)
-      ensure_dir!(dir)
-      test_file = File.join(dir, ".write_test_#{SecureRandom.hex(6)}")
-      File.write(test_file, "ok")
-      File.delete(test_file)
-      true
-    end
-
-    # Optional: controller/job can call this to fail-fast with better errors
-    def preflight!
-      return true unless enabled?
-
-      assert_writable_dir!(private_root)
-
-      # Only require originals root if we actually intend to export originals
-      if original_retention_hours.to_i > 0
-        assert_writable_dir!(original_export_root)
-      end
-
+    # Creates the dir if missing AND verifies the process can write into it.
+    def assert_writable_dir!(path)
+      ensure_dir!(path)
+      test = File.join(path, ".writable_test_#{SecureRandom.hex(8)}")
+      File.write(test, "ok")
+      FileUtils.rm_f(test)
       true
     end
 
@@ -99,18 +117,19 @@ module ::MediaGallery
       File.join(private_root, thumbnail_rel_path(item))
     end
 
+    # --- Original export / retention -----------------------------------------
+
     def export_original!(item:, source_path:, original_filename:, extension:)
       hours = original_retention_hours
-      return nil if hours.to_i <= 0
+      return nil if hours <= 0
 
       dir = item_original_dir(item.public_id)
       ensure_dir!(dir)
 
       ext = extension.to_s.downcase
       ext = "bin" if ext.blank?
-
-      export_path   = File.join(dir, "original.#{ext}")
-      meta_path     = File.join(dir, "meta.json")
+      export_path = File.join(dir, "original.#{ext}")
+      meta_path = File.join(dir, "meta.json")
       complete_path = File.join(dir, ".complete")
 
       FileUtils.cp(source_path, export_path)
@@ -122,7 +141,6 @@ module ::MediaGallery
         "original_extension" => ext,
         "exported_at" => Time.now.utc.iso8601
       }
-
       File.write(meta_path, JSON.pretty_generate(meta))
       File.write(complete_path, Time.now.utc.iso8601)
 
@@ -131,7 +149,7 @@ module ::MediaGallery
 
     def cleanup_exported_originals!
       hours = original_retention_hours
-      return if hours.to_i <= 0
+      return if hours <= 0
 
       root = original_export_root
       return if root.blank? || !Dir.exist?(root)
@@ -140,16 +158,14 @@ module ::MediaGallery
 
       Dir.glob(File.join(root, "*")).each do |dir|
         next unless File.directory?(dir)
-
         complete = File.join(dir, ".complete")
         next unless File.exist?(complete)
 
-        age =
-          begin
-            File.mtime(complete)
-          rescue
-            File.mtime(dir)
-          end
+        begin
+          age = File.mtime(complete)
+        rescue
+          age = File.mtime(dir)
+        end
 
         next if age > cutoff
         FileUtils.rm_rf(dir)

@@ -9,20 +9,15 @@ module ::MediaGallery
     end
 
     # Discourse list site settings may come back as a String ("a|b") or an Array.
-    # We also accept comma-separated values ("a,b") because admins often paste lists like that.
+    # We also accept commas/newlines because it's easy to paste values like "mp4,webm".
     def list_setting(value)
-      raw =
-        if value.is_a?(Array)
-          value.join("|")
-        else
-          value.to_s
-        end
+      return value.map { |v| v.to_s.strip }.reject(&:blank?) if value.is_a?(Array)
 
-      raw
-        .split(/[|,]/) # support both Discourse list delimiter '|' and commas
+      value
+        .to_s
+        .split(/[|,\n]/)
         .map { |v| v.to_s.strip }
         .reject(&:blank?)
-        .uniq
     end
 
     def viewer_groups

@@ -45,19 +45,19 @@ plugins:
     client: true
 
 
-  # Allowed extensions (comma/space separated, no dots). These are additional restrictions on top of Discourse core upload rules.
+  # Allowed extensions (no dots). These are additional restrictions on top of Discourse core upload rules.
   media_gallery_allowed_image_extensions:
-    default: "jpg,jpeg,png,webp"
+    default: "jpg|jpeg|png|webp"
     type: list
     client: true
 
   media_gallery_allowed_video_extensions:
-    default: "mp4,webm,mkv"
+    default: "mp4|webm|mkv"
     type: list
     client: true
 
   media_gallery_allowed_audio_extensions:
-    default: "mp3,m4a,ogg,wav"
+    default: "mp3|m4a|ogg|wav"
     type: list
     client: true
   # Transcoding / policy
