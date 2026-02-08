@@ -86,10 +86,20 @@ module Jobs
 
         # Export + delete original upload (Option A)
         if SiteSetting.media_gallery_delete_original_on_success
-          maybe_export_original!(item, original_upload, input_path)
-          destroy_upload_safely!(original_upload)
-          item.original_upload_id = nil
-          item.save!
+          export_result = maybe_export_original!(item, original_upload, input_path)
+
+          # If we intended to retain originals (retention_hours > 0) but export failed,
+          # keep the original upload to avoid data loss (fail-open).
+          keep_original =
+            MediaGallery::PrivateStorage.enabled? &&
+              MediaGallery::PrivateStorage.original_retention_hours > 0 &&
+              export_result == :failed
+
+          unless keep_original
+            destroy_upload_safely!(original_upload)
+            item.original_upload_id = nil
+            item.save!
+          end
         end
 
         item.update!(status: "ready", error_message: nil)
@@ -97,26 +107,42 @@ module Jobs
     end
 
     def maybe_export_original!(item, upload, input_path)
-      return unless MediaGallery::PrivateStorage.enabled?
+      return :skipped unless MediaGallery::PrivateStorage.enabled?
 
       hours = MediaGallery::PrivateStorage.original_retention_hours
-      return if hours <= 0
+      return :skipped if hours <= 0
 
       # Export original to a private folder so a NAS can rsync-pull it.
-      MediaGallery::PrivateStorage.export_original!(
-        item: item,
-        source_path: input_path,
-        original_filename: upload.original_filename,
-        extension: upload.extension
-      )
+      begin
+        MediaGallery::PrivateStorage.export_original!(
+          item: item,
+          source_path: input_path,
+          original_filename: upload.original_filename,
+          extension: upload.extension
+        )
+      rescue => e
+        Rails.logger.warn(
+          "[media_gallery] original export failed item_id=#{item.id} public_id=#{item.public_id} error=#{e.class}: #{e.message}"
+        )
+
+        meta = (item.extra_metadata || {}).dup
+        meta["original_export_failed_at"] = Time.now.utc.iso8601
+        meta["original_export_error"] = "#{e.class}: #{e.message}"[0, 500]
+        meta["original_retention_hours"] = hours
+        item.extra_metadata = meta
+        item.save!
+        return :failed
+      end
 
       meta = (item.extra_metadata || {}).dup
       meta["original_exported_at"] = Time.now.utc.iso8601
       meta["original_retention_hours"] = hours
       item.extra_metadata = meta
       item.save!
+      :success
     end
 
+    
     def destroy_upload_safely!(upload)
       return if upload.blank?
 

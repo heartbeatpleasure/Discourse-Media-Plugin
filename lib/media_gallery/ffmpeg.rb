@@ -18,14 +18,24 @@ module MediaGallery
     end
 
     def self.short_err(stderr)
-      s = stderr.to_s.strip
+      s = stderr.to_s
       return "unknown error" if s.blank?
 
-      # keep tail; most relevant error is usually at the end
-      lines = s.lines.map(&:rstrip)
-      out = lines.last(30).join("\n")
-      out = out[0, 2000] if out.length > 2000
-      out
+      # Normalize and strip ffmpeg banners/noise (some builds still print headers on failure).
+      lines = s.lines.map { |l| l.rstrip }
+
+      lines.reject! do |l|
+        l.blank? ||
+          l =~ /^ffmpeg version\b/i ||
+          l =~ /^\s*built with\b/i ||
+          l =~ /^\s*configuration:\b/i ||
+          l =~ /^\s*lib\w+\s+\d+/i
+      end
+
+      # Keep tail; most relevant error is usually at the end.
+      out = lines.last(20).join("\n").strip
+      out = out[0, 800] if out.length > 800
+      out.presence || "unknown error"
     end
 
     def self.probe(input_path)

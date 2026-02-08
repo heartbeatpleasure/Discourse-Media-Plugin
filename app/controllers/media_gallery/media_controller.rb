@@ -99,6 +99,16 @@ module ::MediaGallery
         return render_json_error(err)
       end
 
+      # Ensure private storage roots exist early, so we fail fast with a clear error.
+      begin
+        preflight_private_storage!
+      rescue => e
+        Rails.logger.error(
+          "[media_gallery] private storage preflight failed request_id=#{request.request_id} error=#{e.class}: #{e.message}"
+        )
+        return render_json_error("private_storage_unavailable", status: 500, message: "private_storage_unavailable: #{e.message}"[0, 300])
+      end
+
       tags = params[:tags]
       tags = tags.is_a?(Array) ? tags : tags.to_s.split(",") if tags.present?
 
@@ -153,10 +163,15 @@ module ::MediaGallery
 
       render_json_dump(public_id: item.public_id, status: item.status)
     rescue ActiveRecord::RecordInvalid => e
-      render_json_error(e.record.errors.full_messages.join(", "))
+      Rails.logger.warn(
+        "[media_gallery] create validation failed request_id=#{request.request_id} errors=#{e.record.errors.full_messages.join(", ")}"
+      )
+      render_json_error("validation_error", status: 422, extra: { details: e.record.errors.full_messages })
     rescue => e
-      Rails.logger.error("[media_gallery] create failed request_id=#{request.request_id}: #{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}")
-      render_json_error("internal_error (request_id=#{request.request_id})")
+      Rails.logger.error(
+        "[media_gallery] create failed request_id=#{request.request_id} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}"
+      )
+      render_json_error("internal_error", status: 500)
     end
 
     # POST /media/:public_id/retry
@@ -203,42 +218,58 @@ module ::MediaGallery
     end
 
     def play
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
+      item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
+      return render_json_error("not_found", status: 404) if item.blank?
+
+      unless item.ready?
+        if item.status == "failed"
+          # Keep message short; job already stores a compact error_message.
+          return render_json_error(
+            "processing_failed",
+            status: 422,
+            message: item.error_message.presence || "processing_failed",
+            extra: { status: item.status }
+          )
+        end
+
+        return render_json_error("not_ready", status: 409, extra: { status: item.status })
+      end
 
       upload_id = item.processed_upload_id
 
       if upload_id.blank?
-        # New (private storage) mode stores files on disk outside /uploads.
-        raise Discourse::NotFound unless MediaGallery::PrivateStorage.enabled?
-        # If the processed file doesn't exist, treat as missing.
-        raise Discourse::NotFound unless File.exist?(MediaGallery::PrivateStorage.processed_abs_path(item))
-        upload_id = nil
+        return render_json_error("private_storage_disabled", status: 500) unless MediaGallery::PrivateStorage.enabled?
+
+        processed_path = MediaGallery::PrivateStorage.processed_abs_path(item)
+        return render_json_error("processed_file_missing", status: 404) unless File.exist?(processed_path)
       end
 
-      payload = MediaGallery::Token.build_stream_payload(
-        media_item: item,
-        upload_id: upload_id,
-        kind: "main",
-        user: current_user,
-        request: request
-      )
+      payload = {
+        "item_id" => item.id,
+        "upload_id" => upload_id,
+        "exp" => (Time.now.to_i + SiteSetting.media_gallery_stream_ttl_seconds.to_i)
+      }
 
-      token = MediaGallery::Token.generate(payload)
+      token = MediaGallery::StreamToken.encode(payload)
+      expires_at = payload["exp"]
 
+      # keep this lightweight: avoid callbacks/validations
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
-      ext =
-        if upload_id.present?
-          item.processed_upload&.extension.to_s.downcase
-        else
-          MediaGallery::PrivateStorage.processed_ext_for_type(item.media_type)
-        end
+      ext = (item.media_type == "audio" ? "mp3" : "mp4")
 
-      stream_url = ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}"
-
-      render_json_dump(stream_url: stream_url, expires_at: payload["exp"], playable: true)
+      render_json_dump(
+        stream_url: "/media/stream/#{token}.#{ext}",
+        expires_at: expires_at,
+        playable: true
+      )
+    rescue => e
+      Rails.logger.error(
+        "[media_gallery] play failed request_id=#{request.request_id} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}"
+      )
+      render_json_error("internal_error", status: 500)
     end
+
 
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])
@@ -322,6 +353,27 @@ module ::MediaGallery
       item
     end
 
+    # Consistent JSON errors for API clients.
+    # Always returns at least { errors: [..], error_code: "..", request_id: ".." }.
+    def render_json_error(error_code, status: 422, message: nil, extra: nil)
+      code = error_code.to_s
+      payload = {
+        errors: [message.presence || code],
+        error_type: "media_gallery_error",
+        error_code: code,
+        request_id: request&.request_id
+      }
+      payload.merge!(extra) if extra.is_a?(Hash)
+      render json: payload, status: status
+    end
+
+    def preflight_private_storage!
+      return unless MediaGallery::PrivateStorage.enabled?
+
+      MediaGallery::PrivateStorage.ensure_private_root!
+      MediaGallery::PrivateStorage.ensure_original_export_root!
+    end
+
     # Plugin-level per-type size enforcement (MB).
     # Returns an error key string when too large, or nil when OK.
     def enforce_type_size_limit(upload, media_type)
@@ -380,13 +432,28 @@ module ::MediaGallery
     end
 
     def allowed_extension_for_type?(upload, media_type)
-      ext = upload.extension.to_s.downcase
-      case media_type
-      when "image" then MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
-      when "audio" then MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
-      when "video" then MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
-      else false
+      ext = upload.extension.to_s.downcase.sub(/\A\./, "")
+
+      allowed =
+        case media_type
+        when "image" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_image_extensions)
+        when "audio" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_audio_extensions)
+        when "video" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_video_extensions)
+        else []
+        end
+
+      # Empty setting means "use built-in defaults".
+      if allowed.blank?
+        allowed =
+          case media_type
+          when "image" then MediaGallery::MediaItem::IMAGE_EXTS
+          when "audio" then MediaGallery::MediaItem::AUDIO_EXTS
+          when "video" then MediaGallery::MediaItem::VIDEO_EXTS
+          else []
+          end
       end
+
+      allowed.map { |e| e.to_s.downcase.sub(/\A\./, "") }.include?(ext)
     end
   end
 end

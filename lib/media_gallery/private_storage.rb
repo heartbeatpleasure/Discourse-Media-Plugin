@@ -14,6 +14,18 @@ module ::MediaGallery
       SiteSetting.respond_to?(:media_gallery_private_storage_enabled) && SiteSetting.media_gallery_private_storage_enabled
     end
 
+    # Best-effort preflight checks. These raise if the directory cannot be created/written by the Discourse process.
+    def ensure_private_root!
+      ensure_dir!(private_root)
+      true
+    end
+
+    def ensure_original_export_root!
+      return false if original_retention_hours <= 0
+      ensure_dir!(original_export_root)
+      true
+    end
+
     def private_root
       p = SiteSetting.media_gallery_private_root_path.to_s.strip
       p = "/shared/media_gallery/private" if p.blank?
