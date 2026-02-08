@@ -244,19 +244,29 @@ module ::MediaGallery
         return render_json_error("processed_file_missing", status: 404) unless File.exist?(processed_path)
       end
 
-      payload = {
-        "item_id" => item.id,
-        "upload_id" => upload_id,
-        "exp" => (Time.now.to_i + SiteSetting.media_gallery_stream_ttl_seconds.to_i)
-      }
+      payload = MediaGallery::Token.build_stream_payload(
+        media_item: item,
+        upload_id: upload_id.presence,
+        kind: "main",
+        user: current_user,
+        request: request
+      )
 
-      token = MediaGallery::StreamToken.encode(payload)
+      token = MediaGallery::Token.generate(payload)
       expires_at = payload["exp"]
 
       # keep this lightweight: avoid callbacks/validations
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
-      ext = (item.media_type == "audio" ? "mp3" : "mp4")
+      ext =
+        case item.media_type
+        when "audio"
+          "mp3"
+        when "image"
+          "jpg"
+        else
+          "mp4"
+        end
 
       render_json_dump(
         stream_url: "/media/stream/#{token}.#{ext}",
