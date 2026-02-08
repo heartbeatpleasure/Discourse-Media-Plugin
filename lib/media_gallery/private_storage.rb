@@ -3,6 +3,7 @@
 require "fileutils"
 require "json"
 require "time"
+require "securerandom"
 
 module ::MediaGallery
   module PrivateStorage
@@ -11,19 +12,8 @@ module ::MediaGallery
     # When enabled, processed media + thumbnails are stored outside /uploads (not publicly guessable)
     # and streamed via /media/stream/:token only.
     def enabled?
-      SiteSetting.respond_to?(:media_gallery_private_storage_enabled) && SiteSetting.media_gallery_private_storage_enabled
-    end
-
-    # Best-effort preflight checks. These raise if the directory cannot be created/written by the Discourse process.
-    def ensure_private_root!
-      ensure_dir!(private_root)
-      true
-    end
-
-    def ensure_original_export_root!
-      return false if original_retention_hours <= 0
-      ensure_dir!(original_export_root)
-      true
+      SiteSetting.respond_to?(:media_gallery_private_storage_enabled) &&
+        SiteSetting.media_gallery_private_storage_enabled
     end
 
     def private_root
@@ -32,10 +22,16 @@ module ::MediaGallery
       p
     end
 
+    # New name used in current code
     def originals_root
       p = SiteSetting.media_gallery_original_export_root_path.to_s.strip
       p = "/shared/media_gallery/original_export" if p.blank?
       p
+    end
+
+    # Backwards/compat: some codepaths call this older name
+    def original_export_root
+      originals_root
     end
 
     # 0 => delete immediately (no export)
@@ -48,11 +44,33 @@ module ::MediaGallery
     end
 
     def item_original_dir(public_id)
-      File.join(originals_root, public_id.to_s)
+      File.join(original_export_root, public_id.to_s)
     end
 
     def ensure_dir!(path)
       FileUtils.mkdir_p(path)
+    end
+
+    def assert_writable_dir!(dir)
+      ensure_dir!(dir)
+      test_file = File.join(dir, ".write_test_#{SecureRandom.hex(6)}")
+      File.write(test_file, "ok")
+      File.delete(test_file)
+      true
+    end
+
+    # Optional: controller/job can call this to fail-fast with better errors
+    def preflight!
+      return true unless enabled?
+
+      assert_writable_dir!(private_root)
+
+      # Only require originals root if we actually intend to export originals
+      if original_retention_hours.to_i > 0
+        assert_writable_dir!(original_export_root)
+      end
+
+      true
     end
 
     def processed_ext_for_type(media_type)
@@ -83,15 +101,16 @@ module ::MediaGallery
 
     def export_original!(item:, source_path:, original_filename:, extension:)
       hours = original_retention_hours
-      return nil if hours <= 0
+      return nil if hours.to_i <= 0
 
       dir = item_original_dir(item.public_id)
       ensure_dir!(dir)
 
       ext = extension.to_s.downcase
       ext = "bin" if ext.blank?
-      export_path = File.join(dir, "original.#{ext}")
-      meta_path = File.join(dir, "meta.json")
+
+      export_path   = File.join(dir, "original.#{ext}")
+      meta_path     = File.join(dir, "meta.json")
       complete_path = File.join(dir, ".complete")
 
       FileUtils.cp(source_path, export_path)
@@ -103,6 +122,7 @@ module ::MediaGallery
         "original_extension" => ext,
         "exported_at" => Time.now.utc.iso8601
       }
+
       File.write(meta_path, JSON.pretty_generate(meta))
       File.write(complete_path, Time.now.utc.iso8601)
 
@@ -111,23 +131,25 @@ module ::MediaGallery
 
     def cleanup_exported_originals!
       hours = original_retention_hours
-      return if hours <= 0
+      return if hours.to_i <= 0
 
-      root = originals_root
+      root = original_export_root
       return if root.blank? || !Dir.exist?(root)
 
       cutoff = Time.now - hours.hours
 
       Dir.glob(File.join(root, "*")).each do |dir|
         next unless File.directory?(dir)
+
         complete = File.join(dir, ".complete")
         next unless File.exist?(complete)
 
-        begin
-          age = File.mtime(complete)
-        rescue
-          age = File.mtime(dir)
-        end
+        age =
+          begin
+            File.mtime(complete)
+          rescue
+            File.mtime(dir)
+          end
 
         next if age > cutoff
         FileUtils.rm_rf(dir)
