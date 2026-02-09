@@ -2,7 +2,6 @@
 
 require "digest/sha1"
 require "fileutils"
-require "erb"
 
 module ::MediaGallery
   class MediaController < ::ApplicationController
@@ -219,22 +218,46 @@ module ::MediaGallery
     end
 
     # POST /media/:public_id/retry
+    # Requeues processing after a failure (or if stuck). Owner/staff only.
     def retry_processing
       item = find_item_by_public_id!(params[:public_id])
-
       raise Discourse::NotFound unless can_manage_item?(item)
-      raise Discourse::InvalidAccess if item.ready?
 
-      MediaGallery::MediaItem.where(id: item.id).update_all(status: "queued", error_message: nil)
+      if item.ready?
+        return render_json_error("already_ready")
+      end
 
-      ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
+      item.update!(status: "queued", error_message: nil)
 
-      render_json_dump(success: true)
+      begin
+        ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
+      rescue => e
+        Rails.logger.error("[media_gallery] retry enqueue failed item_id=#{item.id}: #{e.class}: #{e.message}")
+        return render_json_error("enqueue_failed")
+      end
+
+      render_json_dump(public_id: item.public_id, status: item.status)
     rescue => e
-      Rails.logger.error(
-        "[media_gallery] retry_processing failed request_id=#{request.request_id} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(20)&.join("\n")}"
+      Rails.logger.error("[media_gallery] retry failed request_id=#{request.request_id}: #{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}")
+      render_json_error("internal_error (request_id=#{request.request_id})")
+    end
+
+    def show
+      item = find_item_by_public_id!(params[:public_id])
+      raise Discourse::NotFound if !item.ready? && !can_manage_item?(item)
+      render_json_dump(serialize_data(item, MediaGallery::MediaItemSerializer, root: false))
+    end
+
+    def status
+      item = find_item_by_public_id!(params[:public_id])
+      raise Discourse::NotFound unless can_manage_item?(item)
+
+      render_json_dump(
+        public_id: item.public_id,
+        status: item.status,
+        error_message: item.error_message,
+        playable: item.ready?
       )
-      render_json_error("internal_error", status: 500)
     end
 
     def play
@@ -335,14 +358,7 @@ module ::MediaGallery
         return head :ok
       end
 
-      # Hardening: avoid Rack::Sendfile / X-Accel-Redirect edge cases by using send_data.
-      begin
-        bytes = File.binread(local_path)
-      rescue => e
-        Rails.logger.warn("[media_gallery] failed to read thumbnail public_id=#{item.public_id}: #{e.class}: #{e.message}")
-        return render_default_thumbnail(item)
-      end
-      send_data(bytes, disposition: "inline", filename: filename, type: content_type)
+      send_file(local_path, disposition: "inline", filename: filename, type: content_type)
     end
 
     def like
@@ -414,6 +430,34 @@ module ::MediaGallery
 
       MediaGallery::PrivateStorage.ensure_private_root!
       MediaGallery::PrivateStorage.ensure_original_export_root!
+    end
+
+    def delete_private_storage_dirs_safely!(public_id)
+      begin
+        dir = MediaGallery::PrivateStorage.item_private_dir(public_id)
+        FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+      rescue => e
+        Rails.logger.warn("[media_gallery] failed to delete private dir public_id=#{public_id}: #{e.class}: #{e.message}")
+      end
+
+      begin
+        odir = MediaGallery::PrivateStorage.item_original_dir(public_id)
+        FileUtils.rm_rf(odir) if odir.present? && Dir.exist?(odir)
+      rescue => e
+        Rails.logger.warn("[media_gallery] failed to delete original export dir public_id=#{public_id}: #{e.class}: #{e.message}")
+      end
+    end
+
+    def destroy_upload_safely!(upload)
+      return if upload.blank?
+
+      if defined?(::UploadDestroyer)
+        ::UploadDestroyer.new(Discourse.system_user, upload).destroy
+      else
+        upload.destroy!
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] failed to destroy upload id=#{upload&.id}: #{e.class}: #{e.message}")
     end
 
     def resolve_thumbnail_file!(item)
