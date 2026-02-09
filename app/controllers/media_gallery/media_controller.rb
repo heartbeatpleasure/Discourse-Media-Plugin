@@ -37,11 +37,17 @@ module ::MediaGallery
       if params[:tags].present?
         tags = params[:tags].is_a?(Array) ? params[:tags] : params[:tags].to_s.split(",")
         tags = tags.map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
-        # NOTE: Don't use `ARRAY[?]` with a bound Ruby array.
-        # ActiveRecord will bind the array as a single Postgres array literal (e.g. '{a,b}'),
-        # which would yield `ARRAY['{a,b}']` and can raise "malformed array literal" (500).
-        # Casting the bound param directly to `text[]` is safe and works for 1+ tags.
-        items = items.where("tags @> ?::text[]", tags) if tags.present?
+        if tags.present?
+          # Be defensive about the DB column type.
+          # Some installs may have tags as text[]; others as varchar[] (older schema).
+          # Postgres will 500 with "operator does not exist" if the array types differ.
+          col_type = MediaGallery::MediaItem.columns_hash["tags"]&.sql_type.to_s
+          if col_type.include?("character varying") || col_type.include?("varchar")
+            items = items.where("tags @> ARRAY[?]::varchar[]", tags)
+          else
+            items = items.where("tags @> ARRAY[?]::text[]", tags)
+          end
+        end
       end
 
       total = items.count
@@ -62,22 +68,8 @@ module ::MediaGallery
 
       items = MediaGallery::MediaItem.where(user_id: current_user.id).order(created_at: :desc)
 
-      if params[:media_type].present? && MediaGallery::MediaItem::TYPES.include?(params[:media_type].to_s)
-        items = items.where(media_type: params[:media_type].to_s)
-      end
-
-      if params[:gender].present? && MediaGallery::MediaItem::GENDERS.include?(params[:gender].to_s)
-        items = items.where(gender: params[:gender].to_s)
-      end
-
       if params[:status].present? && MediaGallery::MediaItem::STATUSES.include?(params[:status].to_s)
         items = items.where(status: params[:status].to_s)
-      end
-
-      if params[:tags].present?
-        tags = params[:tags].is_a?(Array) ? params[:tags] : params[:tags].to_s.split(",")
-        tags = tags.map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
-        items = items.where("tags @> ?::text[]", tags) if tags.present?
       end
 
       total = items.count
