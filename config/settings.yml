@@ -116,6 +116,15 @@ plugins:
     default: 15
     client: false
 
+  # Thumbnail caching (stable URL). Used for Cache-Control: private, max-age=...
+  # 0 disables browser caching (forces revalidation)
+  media_gallery_thumbnail_cache_max_age_seconds:
+    default: 86400
+    type: integer
+    min: 0
+    max: 31536000
+    client: false
+
   media_gallery_bind_stream_to_user:
     default: true
     client: false

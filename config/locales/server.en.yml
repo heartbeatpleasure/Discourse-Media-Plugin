@@ -30,3 +30,4 @@ en:
     media_gallery_bind_stream_to_ip: "Bind stream tokens to the requesting IP when possible"
     media_gallery_ffmpeg_path: "ffmpeg binary path"
     media_gallery_ffprobe_path: "ffprobe binary path"
+    media_gallery_thumbnail_cache_max_age_seconds: "Thumbnail cache max-age (seconds)"

@@ -52,7 +52,7 @@ after_initialize do
     get "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
     post "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
 
-    # Thumbnail redirect (tokenized)
+    # Thumbnail (stable URL, cacheable; still requires auth)
     get "/media/:public_id/thumbnail" => "media_gallery/media#thumbnail"
 
     # Retry processing for failed/queued items (owner/staff only)

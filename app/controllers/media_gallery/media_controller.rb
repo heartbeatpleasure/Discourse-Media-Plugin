@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest/sha1"
+
 module ::MediaGallery
   class MediaController < ::ApplicationController
     requires_plugin "Discourse-Media-Plugin"
@@ -280,37 +282,42 @@ module ::MediaGallery
       render_json_error("internal_error", status: 500)
     end
 
-
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless item.ready?
 
-      upload_id = item.thumbnail_upload_id
+      # Thumbnails are served via a stable URL so browsers can cache them efficiently.
+      # Streaming URLs remain tokenized (short TTL) for the main media bytes.
+      #
+      # We still require a logged-in user + view permission (before_action), but the response
+      # itself is cacheable in the user's browser (private cache).
 
-      if upload_id.blank?
-        raise Discourse::NotFound unless MediaGallery::PrivateStorage.enabled?
-        raise Discourse::NotFound unless File.exist?(MediaGallery::PrivateStorage.thumbnail_abs_path(item))
-        upload_id = nil
+      local_path, content_type, filename = resolve_thumbnail_file!(item)
+
+      if local_path.blank? || !File.exist?(local_path)
+        return render_default_thumbnail(item)
       end
 
-      payload = MediaGallery::Token.build_stream_payload(
-        media_item: item,
-        upload_id: upload_id,
-        kind: "thumbnail",
-        user: current_user,
-        request: request
-      )
+      file_mtime = File.mtime(local_path).utc
+      file_size = File.size(local_path).to_i
+      etag = Digest::SHA1.hexdigest("thumb|#{item.public_id}|#{file_size}|#{file_mtime.to_i}")
 
-      token = MediaGallery::Token.generate(payload)
+      max_age = thumbnail_cache_max_age_seconds
+      response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age)
+      response.headers["X-Content-Type-Options"] = "nosniff"
 
-      ext =
-        if upload_id.present?
-          item.thumbnail_upload&.extension.to_s.downcase
-        else
-          "jpg"
-        end
+      # Handle conditional GET/HEAD (ETag + Last-Modified)
+      return unless stale?(etag: etag, last_modified: file_mtime, public: false)
 
-      redirect_to(ext.present? ? "/media/stream/#{token}.#{ext}" : "/media/stream/#{token}")
+      response.headers["Content-Disposition"] = "inline; filename=\"#{filename}\""
+      response.headers["Content-Type"] = content_type
+
+      if request.head?
+        response.headers["Content-Length"] = file_size.to_s
+        return head :ok
+      end
+
+      send_file(local_path, disposition: "inline", filename: filename, type: content_type)
     end
 
     def like
@@ -382,6 +389,108 @@ module ::MediaGallery
 
       MediaGallery::PrivateStorage.ensure_private_root!
       MediaGallery::PrivateStorage.ensure_original_export_root!
+    end
+
+    def resolve_thumbnail_file!(item)
+      # Upload-backed thumbnail (private storage off)
+      if item.thumbnail_upload_id.present?
+        upload = item.thumbnail_upload
+        return [nil, nil, nil] if upload.blank?
+
+        local_path = MediaGallery::UploadPath.local_path_for(upload)
+        return [nil, nil, nil] if local_path.blank?
+
+        ext = upload.extension.to_s.downcase
+        filename = "media-#{item.public_id}-thumb"
+        filename = "#{filename}.#{ext}" if ext.present?
+
+        content_type =
+          if upload.respond_to?(:mime_type) && upload.mime_type.present?
+            upload.mime_type.to_s
+          elsif upload.respond_to?(:content_type) && upload.content_type.present?
+            upload.content_type.to_s
+          else
+            (defined?(Rack::Mime) ? Rack::Mime.mime_type(".#{ext}") : "image/jpeg")
+          end
+        content_type = "image/jpeg" if content_type.blank?
+
+        return [local_path, content_type, filename]
+      end
+
+      # Private storage thumbnail (default)
+      return [nil, nil, nil] unless MediaGallery::PrivateStorage.enabled?
+
+      local_path = MediaGallery::PrivateStorage.thumbnail_abs_path(item)
+      filename = "media-#{item.public_id}-thumb.jpg"
+      content_type = "image/jpeg"
+
+      [local_path, content_type, filename]
+    end
+
+    def thumbnail_cache_max_age_seconds
+      # seconds; 0 disables caching in the browser (forces revalidation)
+      v =
+        if SiteSetting.respond_to?(:media_gallery_thumbnail_cache_max_age_seconds)
+          SiteSetting.media_gallery_thumbnail_cache_max_age_seconds.to_i
+        else
+          86_400
+        end
+
+      v = 0 if v.negative?
+      v = 31_536_000 if v > 31_536_000 # clamp to 1 year
+      v
+    end
+
+    def thumbnail_cache_control_header(max_age_seconds)
+      max_age = max_age_seconds.to_i
+      if max_age <= 0
+        "private, max-age=0, must-revalidate"
+      else
+        "private, max-age=#{max_age}"
+      end
+    end
+
+    def render_default_thumbnail(item)
+      svg = default_thumbnail_svg(item)
+
+      # If a real thumbnail appears later (e.g. reprocess), we don't want a long-lived placeholder cache.
+      # Cache placeholders briefly.
+      max_age = [thumbnail_cache_max_age_seconds, 60].min
+      last_modified = (item.updated_at || Time.now).utc
+      etag = Digest::SHA1.hexdigest("thumb-missing|v1|#{item.public_id}|#{last_modified.to_i}")
+
+      response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age)
+      response.headers["X-Content-Type-Options"] = "nosniff"
+
+      return unless stale?(etag: etag, last_modified: last_modified, public: false)
+
+      filename = "media-#{item.public_id}-thumb.svg"
+      response.headers["Content-Disposition"] = "inline; filename=\"#{filename}\""
+      response.headers["Content-Type"] = "image/svg+xml"
+
+      if request.head?
+        response.headers["Content-Length"] = svg.bytesize.to_s
+        return head :ok
+      end
+
+      render plain: svg, content_type: "image/svg+xml"
+    end
+
+    def default_thumbnail_svg(item)
+      title = item.title.to_s
+      title = title[0, 60]
+      safe_title = ERB::Util.html_escape(title)
+
+      <<~SVG
+        <svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180" role="img" aria-label="Thumbnail">
+          <rect width="320" height="180" fill="#f2f2f2"/>
+          <rect x="8" y="8" width="304" height="164" fill="#ffffff" stroke="#d9d9d9"/>
+          <g fill="#666666" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+            <text x="160" y="86" font-size="16" text-anchor="middle">No thumbnail</text>
+            <text x="160" y="112" font-size="12" text-anchor="middle">#{safe_title}</text>
+          </g>
+        </svg>
+      SVG
     end
 
     # Plugin-level per-type size enforcement (MB).
