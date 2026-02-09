@@ -1,647 +1,891 @@
-# frozen_string_literal: true
-
-require "digest/sha1"
-require "fileutils"
-
-module ::MediaGallery
-  class MediaController < ::ApplicationController
-    requires_plugin "Discourse-Media-Plugin"
-
-    skip_before_action :verify_authenticity_token
-    skip_before_action :check_xhr, raise: false
-
-    before_action :ensure_plugin_enabled
-    before_action :ensure_logged_in
-
-    before_action :ensure_can_view,
-                  only: [:index, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing, :destroy]
-
-    before_action :ensure_can_upload, only: [:create]
-
-    def index
-      page = (params[:page].presence || 1).to_i
-      per_page = [(params[:per_page].presence || 24).to_i, 100].min
-      offset = (page - 1) * per_page
-
-      items = MediaGallery::MediaItem.where(status: "ready").order(created_at: :desc)
-
-      if params[:media_type].present? && MediaGallery::MediaItem::TYPES.include?(params[:media_type].to_s)
-        items = items.where(media_type: params[:media_type].to_s)
-      end
-
-      if params[:gender].present? && MediaGallery::MediaItem::GENDERS.include?(params[:gender].to_s)
-        items = items.where(gender: params[:gender].to_s)
-      end
-
-      if params[:tags].present?
-        tags = params[:tags].is_a?(Array) ? params[:tags] : params[:tags].to_s.split(",")
-        tags = tags.map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
-        items = items.where("tags @> ARRAY[?]::varchar[]", tags) if tags.present?
-      end
-
-      total = items.count
-      items = items.offset(offset).limit(per_page)
-
-      render_json_dump(
-        media_items: serialize_data(items, MediaGallery::MediaItemSerializer, root: false),
-        page: page,
-        per_page: per_page,
-        total: total
-      )
-    end
-
-    def my
-      page = (params[:page].presence || 1).to_i
-      per_page = [(params[:per_page].presence || 24).to_i, 100].min
-      offset = (page - 1) * per_page
-
-      items = MediaGallery::MediaItem.where(user_id: current_user.id).order(created_at: :desc)
-
-      if params[:status].present? && MediaGallery::MediaItem::STATUSES.include?(params[:status].to_s)
-        items = items.where(status: params[:status].to_s)
-      end
-
-      total = items.count
-      items = items.offset(offset).limit(per_page)
-
-      render_json_dump(
-        media_items: serialize_data(items, MediaGallery::MediaItemSerializer, root: false),
-        page: page,
-        per_page: per_page,
-        total: total
-      )
-    end
-
-    def create
-      upload_id = params[:upload_id].to_i
-      return render_json_error("invalid_upload_id") if upload_id <= 0
-
-      title = params[:title].to_s.strip
-      return render_json_error("title_required") if title.blank?
-
-      upload = ::Upload.find_by(id: upload_id)
-      return render_json_error("upload_not_found") if upload.blank?
-
-      if upload.user_id.present? && upload.user_id != current_user.id && !(current_user&.staff? || current_user&.admin?)
-        return render_json_error("upload_not_owned")
-      end
-
-      # Optional extra global cap (plugin-level)
-      max_mb = SiteSetting.media_gallery_max_upload_size_mb.to_i
-      if max_mb.positive?
-        max_bytes = max_mb * 1024 * 1024
-        return render_json_error("upload_too_large") if upload.filesize.to_i > max_bytes
-      end
-
-      media_type = infer_media_type(upload)
-      return render_json_error("unsupported_file_type") unless MediaGallery::MediaItem::TYPES.include?(media_type)
-      return render_json_error("unsupported_file_extension") unless allowed_extension_for_type?(upload, media_type)
-
-      # Per-type caps (plugin-level)
-      if (err = enforce_type_size_limit(upload, media_type))
-        return render_json_error(err)
-      end
-
-      # Ensure private storage roots exist early, so we fail fast with a clear error.
-      begin
-        preflight_private_storage!
-      rescue => e
-        Rails.logger.error(
-          "[media_gallery] private storage preflight failed request_id=#{request.request_id} error=#{e.class}: #{e.message}"
-        )
-        return render_json_error("private_storage_unavailable", status: 500, message: "private_storage_unavailable: #{e.message}"[0, 300])
-      end
-
-      tags = params[:tags]
-      tags = tags.is_a?(Array) ? tags : tags.to_s.split(",") if tags.present?
-
-      extra_metadata = params[:extra_metadata]
-      extra_metadata = {} if extra_metadata.blank?
-
-      transcode_images =
-        if SiteSetting.respond_to?(:media_gallery_transcode_images_to_jpg)
-          SiteSetting.media_gallery_transcode_images_to_jpg
-        else
-          false
-        end
-
-      private_storage = MediaGallery::PrivateStorage.enabled?
-
-      status =
-        if private_storage
-          "queued"
-        elsif media_type == "image"
-          transcode_images ? "queued" : "ready"
-        else
-          "queued"
-        end
-
-      item = MediaGallery::MediaItem.create!(
-        public_id: SecureRandom.uuid,
-        user_id: current_user.id,
-        title: title,
-        description: params[:description].to_s,
-        extra_metadata: (extra_metadata.is_a?(Hash) ? extra_metadata : { "raw" => extra_metadata.to_s }),
-        media_type: media_type,
-        gender: params[:gender].to_s.presence,
-        tags: (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq,
-        original_upload_id: upload.id,
-        status: status,
-        processed_upload_id: (status == "ready" && !private_storage ? upload.id : nil),
-        thumbnail_upload_id: (status == "ready" && !private_storage ? upload.id : nil),
-        width: (status == "ready" && !private_storage ? upload.width : nil),
-        height: (status == "ready" && !private_storage ? upload.height : nil),
-        duration_seconds: nil,
-        filesize_original_bytes: upload.filesize,
-        filesize_processed_bytes: (status == "ready" && !private_storage ? upload.filesize : nil)
-      )
-
-      if status == "queued"
-        begin
-          ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
-        rescue => e
-          Rails.logger.error("[media_gallery] enqueue failed item_id=#{item.id}: #{e.class}: #{e.message}")
-        end
-      end
-
-      render_json_dump(public_id: item.public_id, status: item.status)
-    rescue ActiveRecord::RecordInvalid => e
-      Rails.logger.warn(
-        "[media_gallery] create validation failed request_id=#{request.request_id} errors=#{e.record.errors.full_messages.join(", ")}"
-      )
-      render_json_error("validation_error", status: 422, extra: { details: e.record.errors.full_messages })
-    rescue => e
-      Rails.logger.error(
-        "[media_gallery] create failed request_id=#{request.request_id} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}"
-      )
-      render_json_error("internal_error", status: 500)
-    end
-
-    # DELETE /media/:public_id
-    # Permanently deletes a media item and associated files. Owner/staff only.
-    def destroy
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless can_manage_item?(item)
-
-      item.with_lock do
-        public_id = item.public_id.to_s
-
-        upload_ids =
-          [
-            item.original_upload_id,
-            item.processed_upload_id,
-            item.thumbnail_upload_id
-          ].compact.uniq
-
-        uploads = upload_ids.present? ? ::Upload.where(id: upload_ids).to_a : []
-
-        # Remove private-storage outputs (safe no-op if not present)
-        delete_private_storage_dirs_safely!(public_id)
-
-        # Remove uploads (safe no-op if already deleted)
-        uploads.each do |u|
-          destroy_upload_safely!(u)
-        end
-
-        # Finally delete DB record (also deletes likes via dependent: :delete_all)
-        item.destroy!
-      end
-
-      render_json_dump(success: true)
-    rescue Discourse::NotFound
-      raise
-    rescue => e
-      Rails.logger.error(
-        "[media_gallery] destroy failed request_id=#{request.request_id} public_id=#{params[:public_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}"
-      )
-      render_json_error("internal_error", status: 500)
-    end
-
-    # POST /media/:public_id/retry
-    # Requeues processing after a failure (or if stuck). Owner/staff only.
-    def retry_processing
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless can_manage_item?(item)
-
-      if item.ready?
-        return render_json_error("already_ready")
-      end
-
-      item.update!(status: "queued", error_message: nil)
-
-      begin
-        ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id)
-      rescue => e
-        Rails.logger.error("[media_gallery] retry enqueue failed item_id=#{item.id}: #{e.class}: #{e.message}")
-        return render_json_error("enqueue_failed")
-      end
-
-      render_json_dump(public_id: item.public_id, status: item.status)
-    rescue => e
-      Rails.logger.error("[media_gallery] retry failed request_id=#{request.request_id}: #{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}")
-      render_json_error("internal_error (request_id=#{request.request_id})")
-    end
-
-    def show
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound if !item.ready? && !can_manage_item?(item)
-      render_json_dump(serialize_data(item, MediaGallery::MediaItemSerializer, root: false))
-    end
-
-    def status
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless can_manage_item?(item)
-
-      render_json_dump(
-        public_id: item.public_id,
-        status: item.status,
-        error_message: item.error_message,
-        playable: item.ready?
-      )
-    end
-
-    def play
-      item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
-      return render_json_error("not_found", status: 404) if item.blank?
-
-      unless item.ready?
-        if item.status == "failed"
-          # Keep message short; job already stores a compact error_message.
-          return render_json_error(
-            "processing_failed",
-            status: 422,
-            message: item.error_message.presence || "processing_failed",
-            extra: { status: item.status }
-          )
-        end
-
-        return render_json_error("not_ready", status: 409, extra: { status: item.status })
-      end
-
-      upload_id = item.processed_upload_id
-
-      if upload_id.blank?
-        return render_json_error("private_storage_disabled", status: 500) unless MediaGallery::PrivateStorage.enabled?
-
-        processed_path = MediaGallery::PrivateStorage.processed_abs_path(item)
-        return render_json_error("processed_file_missing", status: 404) unless File.exist?(processed_path)
-      end
-
-      payload = MediaGallery::Token.build_stream_payload(
-        media_item: item,
-        upload_id: upload_id.presence,
-        kind: "main",
-        user: current_user,
-        request: request
-      )
-
-      token = MediaGallery::Token.generate(payload)
-      expires_at = payload["exp"]
-
-      # keep this lightweight: avoid callbacks/validations
-      MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
-
-      ext =
-        case item.media_type
-        when "audio"
-          "mp3"
-        when "image"
-          "jpg"
-        else
-          "mp4"
-        end
-
-      render_json_dump(
-        stream_url: "/media/stream/#{token}.#{ext}",
-        expires_at: expires_at,
-        playable: true
-      )
-    rescue => e
-      Rails.logger.error(
-        "[media_gallery] play failed request_id=#{request.request_id} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}"
-      )
-      render_json_error("internal_error", status: 500)
-    end
-
-    def thumbnail
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
-
-      # Thumbnails are served via a stable URL so browsers can cache them efficiently.
-      # Streaming URLs remain tokenized (short TTL) for the main media bytes.
-      #
-      # We still require a logged-in user + view permission (before_action), but the response
-      # itself is cacheable in the user's browser (private cache).
-
-      local_path, content_type, filename = resolve_thumbnail_file!(item)
-
-      if local_path.blank? || !File.exist?(local_path)
-        return render_default_thumbnail(item)
-      end
-
-      file_mtime = File.mtime(local_path).utc
-      file_size = File.size(local_path).to_i
-      etag = Digest::SHA1.hexdigest("thumb|#{item.public_id}|#{file_size}|#{file_mtime.to_i}")
-
-      max_age = thumbnail_cache_max_age_seconds
-      response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age)
-      response.headers["X-Content-Type-Options"] = "nosniff"
-
-      # Handle conditional GET/HEAD (ETag + Last-Modified)
-      return unless stale?(etag: etag, last_modified: file_mtime, public: false)
-
-      response.headers["Content-Disposition"] = "inline; filename=\"#{filename}\""
-      response.headers["Content-Type"] = content_type
-
-      if request.head?
-        response.headers["Content-Length"] = file_size.to_s
-        return head :ok
-      end
-
-      send_file(local_path, disposition: "inline", filename: filename, type: content_type)
-    end
-
-    def like
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
-
-      like = MediaGallery::MediaLike.find_by(media_item_id: item.id, user_id: current_user.id)
-      if like.blank?
-        MediaGallery::MediaLike.create!(media_item_id: item.id, user_id: current_user.id)
-        MediaGallery::MediaItem.where(id: item.id).update_all("likes_count = likes_count + 1")
-      end
-
-      render_json_dump(success: true)
-    end
-
-    def unlike
-      item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
-
-      like = MediaGallery::MediaLike.find_by(media_item_id: item.id, user_id: current_user.id)
-      raise Discourse::NotFound if like.blank?
-
-      like.destroy!
-      MediaGallery::MediaItem.where(id: item.id).update_all("likes_count = GREATEST(likes_count - 1, 0)")
-
-      render_json_dump(success: true)
-    end
-
-    private
-
-    def ensure_plugin_enabled
-      raise Discourse::NotFound unless SiteSetting.media_gallery_enabled
-    end
-
-    def ensure_can_view
-      raise Discourse::NotFound unless MediaGallery::Permissions.can_view?(guardian)
-    end
-
-    def ensure_can_upload
-      raise Discourse::NotFound unless MediaGallery::Permissions.can_upload?(guardian)
-    end
-
-    def can_manage_item?(item)
-      (current_user&.staff? || current_user&.admin?) || (guardian.user&.id == item.user_id)
-    end
-
-    def find_item_by_public_id!(public_id)
-      item = MediaGallery::MediaItem.find_by(public_id: public_id.to_s)
-      raise Discourse::NotFound if item.blank?
-      item
-    end
-
-    # Consistent JSON errors for API clients.
-    # Always returns at least { errors: [..], error_code: "..", request_id: ".." }.
-    def render_json_error(error_code, status: 422, message: nil, extra: nil)
-      code = error_code.to_s
-      payload = {
-        errors: [message.presence || code],
-        error_type: "media_gallery_error",
-        error_code: code,
-        request_id: request&.request_id
+// javascripts/discourse/components/media-gallery-page.js
+import Component from "@glimmer/component";
+import { tracked } from "@glimmer/tracking";
+import { action } from "@ember/object";
+import { ajax } from "discourse/lib/ajax";
+import I18n from "I18n";
+
+const THUMB_ROOT_MARGIN = "400px";
+const THUMB_MAX_CONCURRENCY = 6;
+const THUMB_MAX_RETRIES = 2;
+
+function normalizeListSetting(raw) {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw.map((x) => String(x).trim()).filter(Boolean);
+
+  const str = String(raw);
+  return str
+    .split(/[\|\n,]/g)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+function stripExt(filename) {
+  return filename?.replace(/\.[^/.]+$/, "") || filename;
+}
+
+function uniqStrings(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const v of arr || []) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+function isProcessingStatus(status) {
+  return status === "queued" || status === "processing";
+}
+
+export default class MediaGalleryPage extends Component {
+  // Tabs
+  @tracked activeTab = "all"; // all | mine
+
+  // Loading / messaging
+  @tracked loading = false;
+  @tracked errorMessage = null;
+  @tracked noticeMessage = null;
+
+  // Data
+  @tracked items = [];
+  @tracked page = 1;
+  @tracked perPage = 24;
+  @tracked total = 0;
+
+  // Filters
+  @tracked q = "";
+  @tracked mediaType = "";
+  @tracked gender = "";
+  @tracked status = ""; // only for "mine"
+
+  // Tags (filters) - multi-select UI state
+  @tracked tagsSelected = [];
+  @tracked filterTagsQuery = "";
+  @tracked filterTagsOpen = false;
+
+  // Upload UI
+  @tracked showUpload = false;
+  @tracked uploadBusy = false;
+  @tracked uploadFile = null;
+  @tracked uploadTitle = "";
+  @tracked uploadDescription = "";
+  @tracked uploadGender = "";
+
+  // Tags (upload) - multi-select UI state
+  @tracked uploadTagsSelected = [];
+  @tracked uploadTagsQuery = "";
+  @tracked uploadTagsOpen = false;
+
+  // Preview modal
+  @tracked previewOpen = false;
+  @tracked previewItem = null;
+  @tracked previewStreamUrl = null;
+  @tracked previewLoading = false;
+  @tracked previewRetryCount = 0;
+
+  // Delete confirmation modal
+  @tracked deleteOpen = false;
+  @tracked deleteItem = null;
+  @tracked deleteBusy = false;
+
+  // Polling
+  _pollTimer = null;
+
+  // Document click (close menus)
+  _boundDocClick = null;
+
+  // Thumbnail pipeline (lazy + concurrency)
+  _thumbObserver = null;
+  _thumbElementToItem = null;
+  _thumbQueue = [];
+  _thumbInFlight = 0;
+
+  constructor() {
+    super(...arguments);
+
+    this._boundDocClick = (e) => this.onDocumentClick(e);
+    document.addEventListener("click", this._boundDocClick);
+
+    this._thumbElementToItem = new WeakMap();
+    this._thumbQueue = [];
+    this._thumbInFlight = 0;
+
+    this._thumbObserver = new IntersectionObserver(
+      (entries) => this._onThumbIntersect(entries),
+      { root: null, rootMargin: THUMB_ROOT_MARGIN, threshold: 0.01 }
+    );
+
+    this.refresh();
+  }
+
+  willDestroy() {
+    super.willDestroy(...arguments);
+    this.stopPolling();
+
+    if (this._boundDocClick) {
+      document.removeEventListener("click", this._boundDocClick);
+      this._boundDocClick = null;
+    }
+
+    if (this._thumbObserver) {
+      try {
+        this._thumbObserver.disconnect();
+      } catch {
+        // ignore
       }
-      payload.merge!(extra) if extra.is_a?(Hash)
-      render json: payload, status: status
-    end
+      this._thumbObserver = null;
+    }
 
-    def preflight_private_storage!
-      return unless MediaGallery::PrivateStorage.enabled?
+    this._thumbElementToItem = null;
+    this._thumbQueue = [];
+    this._thumbInFlight = 0;
+  }
 
-      MediaGallery::PrivateStorage.ensure_private_root!
-      MediaGallery::PrivateStorage.ensure_original_export_root!
-    end
+  get isMine() {
+    return this.activeTab === "mine";
+  }
 
-    def delete_private_storage_dirs_safely!(public_id)
-      begin
-        dir = MediaGallery::PrivateStorage.item_private_dir(public_id)
-        FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
-      rescue => e
-        Rails.logger.warn("[media_gallery] failed to delete private dir public_id=#{public_id}: #{e.class}: #{e.message}")
-      end
+  get totalPages() {
+    const pp = this.perPage || 1;
+    return Math.max(1, Math.ceil((this.total || 0) / pp));
+  }
 
-      begin
-        odir = MediaGallery::PrivateStorage.item_original_dir(public_id)
-        FileUtils.rm_rf(odir) if odir.present? && Dir.exist?(odir)
-      rescue => e
-        Rails.logger.warn("[media_gallery] failed to delete original export dir public_id=#{public_id}: #{e.class}: #{e.message}")
-      end
-    end
+  get hasPrev() {
+    return this.page > 1;
+  }
 
-    def destroy_upload_safely!(upload)
-      return if upload.blank?
+  get hasNext() {
+    return this.page < this.totalPages;
+  }
 
-      if defined?(::UploadDestroyer)
-        ::UploadDestroyer.new(Discourse.system_user, upload).destroy
-      else
-        upload.destroy!
-      end
-    rescue => e
-      Rails.logger.warn("[media_gallery] failed to destroy upload id=#{upload&.id}: #{e.class}: #{e.message}")
-    end
+  get allowedTags() {
+    const raw = window?.Discourse?.SiteSettings?.media_gallery_allowed_tags;
+    return normalizeListSetting(raw);
+  }
 
-    def resolve_thumbnail_file!(item)
-      # Upload-backed thumbnail (private storage off)
-      if item.thumbnail_upload_id.present?
-        upload = item.thumbnail_upload
-        return [nil, nil, nil] if upload.blank?
+  // -----------------------
+  // Multi-select suggestions
+  // -----------------------
+  get filterTagSuggestions() {
+    const q = (this.filterTagsQuery || "").trim().toLowerCase();
+    const selected = new Set((this.tagsSelected || []).map((t) => String(t).toLowerCase()));
 
-        local_path = MediaGallery::UploadPath.local_path_for(upload)
-        return [nil, nil, nil] if local_path.blank?
+    if (this.allowedTags.length) {
+      return this.allowedTags
+        .filter((t) => !selected.has(String(t).toLowerCase()))
+        .filter((t) => (q ? String(t).toLowerCase().includes(q) : true))
+        .slice(0, 50);
+    }
 
-        ext = upload.extension.to_s.downcase
-        filename = "media-#{item.public_id}-thumb"
-        filename = "#{filename}.#{ext}" if ext.present?
+    if (!q) return [];
+    if (selected.has(q)) return [];
+    return [this.filterTagsQuery.trim()];
+  }
 
-        content_type =
-          if upload.respond_to?(:mime_type) && upload.mime_type.present?
-            upload.mime_type.to_s
-          elsif upload.respond_to?(:content_type) && upload.content_type.present?
-            upload.content_type.to_s
-          else
-            (defined?(Rack::Mime) ? Rack::Mime.mime_type(".#{ext}") : "image/jpeg")
-          end
-        content_type = "image/jpeg" if content_type.blank?
+  get uploadTagSuggestions() {
+    const q = (this.uploadTagsQuery || "").trim().toLowerCase();
+    const selected = new Set((this.uploadTagsSelected || []).map((t) => String(t).toLowerCase()));
 
-        return [local_path, content_type, filename]
-      end
+    if (this.allowedTags.length) {
+      return this.allowedTags
+        .filter((t) => !selected.has(String(t).toLowerCase()))
+        .filter((t) => (q ? String(t).toLowerCase().includes(q) : true))
+        .slice(0, 50);
+    }
 
-      # Private storage thumbnail (default)
-      return [nil, nil, nil] unless MediaGallery::PrivateStorage.enabled?
+    if (!q) return [];
+    if (selected.has(q)) return [];
+    return [this.uploadTagsQuery.trim()];
+  }
 
-      local_path = MediaGallery::PrivateStorage.thumbnail_abs_path(item)
-      filename = "media-#{item.public_id}-thumb.jpg"
-      content_type = "image/jpeg"
+  // -----------------------
+  // Document click (close menus)
+  // -----------------------
+  onDocumentClick(e) {
+    const el = e?.target;
+    if (!el?.closest) return;
 
-      [local_path, content_type, filename]
-    end
+    const inside = el.closest("[data-hb-ms]");
+    if (!inside) {
+      this.filterTagsOpen = false;
+      this.uploadTagsOpen = false;
+    }
+  }
 
-    def thumbnail_cache_max_age_seconds
-      # seconds; 0 disables caching in the browser (forces revalidation)
-      v =
-        if SiteSetting.respond_to?(:media_gallery_thumbnail_cache_max_age_seconds)
-          SiteSetting.media_gallery_thumbnail_cache_max_age_seconds.to_i
-        else
-          86_400
-        end
+  // -----------------------
+  // Thumbnail lazy-loading pipeline
+  // -----------------------
+  _onThumbIntersect(entries) {
+    for (const entry of entries || []) {
+      if (!entry?.isIntersecting) continue;
 
-      v = 0 if v.negative?
-      v = 31_536_000 if v > 31_536_000 # clamp to 1 year
-      v
-    end
+      const el = entry.target;
+      const item = this._thumbElementToItem?.get(el);
 
-    def thumbnail_cache_control_header(max_age_seconds)
-      max_age = max_age_seconds.to_i
-      if max_age <= 0
-        "private, max-age=0, must-revalidate"
-      else
-        "private, max-age=#{max_age}"
-      end
-    end
+      if (this._thumbObserver && el) {
+        try {
+          this._thumbObserver.unobserve(el);
+        } catch {
+          // ignore
+        }
+      }
 
-    def render_default_thumbnail(item)
-      svg = default_thumbnail_svg(item)
+      if (!item) continue;
+      this._enqueueThumb(item);
+    }
+  }
 
-      # If a real thumbnail appears later (e.g. reprocess), we don't want a long-lived placeholder cache.
-      # Cache placeholders briefly.
-      max_age = [thumbnail_cache_max_age_seconds, 60].min
-      last_modified = (item.updated_at || Time.now).utc
-      etag = Digest::SHA1.hexdigest("thumb-missing|v1|#{item.public_id}|#{last_modified.to_i}")
+  _resetThumbPipeline() {
+    this._thumbQueue = [];
+    this._thumbInFlight = 0;
+  }
 
-      response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age)
-      response.headers["X-Content-Type-Options"] = "nosniff"
+  _enqueueThumb(item) {
+    if (!item) return;
+    if (item.status !== "ready") return;
+    if (item._thumbSrc) return;
+    if (item._thumbFailed) return;
+    if (item._thumbQueued) return;
 
-      return unless stale?(etag: etag, last_modified: last_modified, public: false)
+    item._thumbQueued = true;
+    this._thumbQueue.push(item);
+    this._pumpThumbQueue();
+  }
 
-      filename = "media-#{item.public_id}-thumb.svg"
-      response.headers["Content-Disposition"] = "inline; filename=\"#{filename}\""
-      response.headers["Content-Type"] = "image/svg+xml"
+  _pumpThumbQueue() {
+    while (this._thumbInFlight < THUMB_MAX_CONCURRENCY && this._thumbQueue.length > 0) {
+      const item = this._thumbQueue.shift();
+      if (!item) continue;
 
-      if request.head?
-        response.headers["Content-Length"] = svg.bytesize.to_s
-        return head :ok
-      end
+      // Might have been loaded/failed in the meantime
+      if (item._thumbSrc || item._thumbFailed || item.status !== "ready") {
+        item._thumbQueued = false;
+        continue;
+      }
 
-      render plain: svg, content_type: "image/svg+xml"
-    end
+      this._thumbInFlight += 1;
 
-    def default_thumbnail_svg(item)
-      title = item.title.to_s
-      title = title[0, 60]
-      safe_title = ERB::Util.html_escape(title)
+      this._loadThumb(item)
+        .catch(() => {
+          // errors handled in _loadThumb
+        })
+        .finally(() => {
+          this._thumbInFlight = Math.max(0, this._thumbInFlight - 1);
+          this._pumpThumbQueue();
+        });
+    }
+  }
 
-      <<~SVG
-        <svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180" role="img" aria-label="Thumbnail">
-          <rect width="320" height="180" fill="#f2f2f2"/>
-          <rect x="8" y="8" width="304" height="164" fill="#ffffff" stroke="#d9d9d9"/>
-          <g fill="#666666" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
-            <text x="160" y="86" font-size="16" text-anchor="middle">No thumbnail</text>
-            <text x="160" y="112" font-size="12" text-anchor="middle">#{safe_title}</text>
-          </g>
-        </svg>
-      SVG
-    end
+  _loadThumb(item) {
+    const url = item.thumbnail_url;
+    if (!url) {
+      item._thumbQueued = false;
+      item._thumbFailed = true;
+      this.items = [...this.items];
+      return Promise.resolve();
+    }
 
-    # Plugin-level per-type size enforcement (MB).
-    # Returns an error key string when too large, or nil when OK.
-    def enforce_type_size_limit(upload, media_type)
-      size_bytes = upload.filesize.to_i
+    return new Promise((resolve) => {
+      const img = new Image();
 
-      max_mb =
-        case media_type
-        when "video"
-          SiteSetting.respond_to?(:media_gallery_max_video_size_mb) ? SiteSetting.media_gallery_max_video_size_mb.to_i : 0
-        when "audio"
-          SiteSetting.respond_to?(:media_gallery_max_audio_size_mb) ? SiteSetting.media_gallery_max_audio_size_mb.to_i : 0
-        when "image"
-          SiteSetting.respond_to?(:media_gallery_max_image_size_mb) ? SiteSetting.media_gallery_max_image_size_mb.to_i : 0
-        else
-          0
-        end
+      img.onload = () => {
+        item._thumbSrc = url;
+        item._thumbQueued = false;
+        item._thumbRetries = item._thumbRetries || 0;
+        this.items = [...this.items];
+        resolve();
+      };
 
-      return nil unless max_mb.positive?
+      img.onerror = () => {
+        item._thumbQueued = false;
+        item._thumbRetries = (item._thumbRetries || 0) + 1;
 
-      max_bytes = max_mb * 1024 * 1024
-      return nil if size_bytes <= max_bytes
+        if (item._thumbRetries <= THUMB_MAX_RETRIES) {
+          // Backoff to avoid re-triggering nginx rate limits
+          const delayMs = 800 + Math.floor(Math.random() * 900);
+          setTimeout(() => {
+            // Re-enqueue only if still relevant
+            if (item.status === "ready" && !item._thumbSrc && !item._thumbFailed) {
+              this._enqueueThumb(item);
+            }
+          }, delayMs);
+        } else {
+          item._thumbFailed = true;
+          this.items = [...this.items];
+        }
 
-      case media_type
-      when "video" then "video_too_large"
-      when "audio" then "audio_too_large"
-      when "image" then "image_too_large"
-      else "upload_too_large"
-      end
-    end
+        resolve();
+      };
 
-    # Discourse Upload changed across versions; some have `mime_type`, some had `content_type`.
-    def upload_mime(upload)
-      if upload.respond_to?(:mime_type) && upload.mime_type.present?
-        upload.mime_type.to_s.downcase
-      elsif upload.respond_to?(:content_type) && upload.content_type.present?
-        upload.content_type.to_s.downcase
-      else
-        ""
-      end
-    end
+      img.src = url;
+    });
+  }
 
-    def infer_media_type(upload)
-      ext = upload.extension.to_s.downcase
-      mime = upload_mime(upload)
+  @action
+  registerThumb(item, element) {
+    // called via {{did-insert}}; note argument order: item first, element last
+    if (!element || !item) return;
+    if (!this._thumbObserver || !this._thumbElementToItem) return;
 
-      return "image" if (mime.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)) ||
-                        MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
+    // Only thumbnails for ready items
+    if (item.status !== "ready") return;
 
-      return "audio" if (mime.start_with?("audio/") && MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)) ||
-                        MediaGallery::MediaItem::AUDIO_EXTS.include?(ext)
+    // If already loaded/failed, no observer needed
+    if (item._thumbSrc || item._thumbFailed) return;
 
-      return "video" if (mime.start_with?("video/") && MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)) ||
-                        MediaGallery::MediaItem::VIDEO_EXTS.include?(ext)
+    this._thumbElementToItem.set(element, item);
+    try {
+      this._thumbObserver.observe(element);
+    } catch {
+      // ignore
+    }
+  }
 
-      nil
-    end
+  // -----------------------
+  // Polling
+  // -----------------------
+  stopPolling() {
+    if (this._pollTimer) {
+      clearTimeout(this._pollTimer);
+      this._pollTimer = null;
+    }
+  }
 
-    def allowed_extension_for_type?(upload, media_type)
-      ext = upload.extension.to_s.downcase.sub(/\A\./, "")
+  schedulePollingIfNeeded() {
+    this.stopPolling();
 
-      allowed =
-        case media_type
-        when "image" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_image_extensions)
-        when "audio" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_audio_extensions)
-        when "video" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_video_extensions)
-        else []
-        end
+    if (!this.isMine) return;
 
-      # Empty setting means "use built-in defaults".
-      if allowed.blank?
-        allowed =
-          case media_type
-          when "image" then MediaGallery::MediaItem::IMAGE_EXTS
-          when "audio" then MediaGallery::MediaItem::AUDIO_EXTS
-          when "video" then MediaGallery::MediaItem::VIDEO_EXTS
-          else []
-          end
-      end
+    const hasInFlight = (this.items || []).some((i) => isProcessingStatus(i?.status));
+    if (!hasInFlight) return;
 
-      allowed.map { |e| e.to_s.downcase.sub(/\A\./, "") }.include?(ext)
-    end
-  end
-end
+    this._pollTimer = setTimeout(() => {
+      this.refresh({ silent: true });
+    }, 4000);
+  }
+
+  // -----------------------
+  // Tabs / paging
+  // -----------------------
+  @action
+  switchTab(tab) {
+    if (this.activeTab === tab) return;
+    this.activeTab = tab;
+    this.page = 1;
+    this.refresh();
+  }
+
+  @action
+  goPrev() {
+    if (!this.hasPrev) return;
+    this.page = this.page - 1;
+    this.refresh();
+  }
+
+  @action
+  goNext() {
+    if (!this.hasNext) return;
+    this.page = this.page + 1;
+    this.refresh();
+  }
+
+  // -----------------------
+  // Filters
+  // -----------------------
+  @action setQ(e) { this.q = e.target.value; }
+  @action setMediaType(e) { this.mediaType = e.target.value; }
+  @action setGender(e) { this.gender = e.target.value; }
+  @action setStatus(e) { this.status = e.target.value; }
+
+  @action
+  setPerPage(e) {
+    const v = parseInt(e.target.value, 10);
+    this.perPage = Number.isFinite(v) ? v : 24;
+  }
+
+  @action
+  clearFilters() {
+    this.q = "";
+    this.mediaType = "";
+    this.gender = "";
+    this.tagsSelected = [];
+    this.filterTagsQuery = "";
+    this.filterTagsOpen = false;
+    this.status = "";
+    this.page = 1;
+    this.refresh();
+  }
+
+  @action
+  applyFilters() {
+    this.page = 1;
+    this.refresh();
+  }
+
+  // -----------------------
+  // Filter tags multi-select actions
+  // -----------------------
+  @action
+  openFilterTags() {
+    this.filterTagsOpen = true;
+  }
+
+  @action
+  onFilterTagsQuery(e) {
+    this.filterTagsQuery = e.target.value;
+    this.filterTagsOpen = true;
+  }
+
+  @action
+  addFilterTag(tag) {
+    const t = String(tag || "").trim();
+    if (!t) return;
+
+    this.tagsSelected = uniqStrings([...(this.tagsSelected || []), t]);
+    this.filterTagsQuery = "";
+    this.filterTagsOpen = true;
+  }
+
+  @action
+  removeFilterTag(tag, ev) {
+    ev?.stopPropagation?.();
+    const t = String(tag || "").trim().toLowerCase();
+    this.tagsSelected = (this.tagsSelected || []).filter((x) => String(x).toLowerCase() !== t);
+  }
+
+  @action
+  onFilterTagsKeydown(e) {
+    if (e.key === "Escape") {
+      this.filterTagsOpen = false;
+      return;
+    }
+
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+
+    const candidate = (this.filterTagsQuery || "").trim();
+    if (!candidate) return;
+
+    if (this.allowedTags.length) {
+      const match = this.allowedTags.find((x) => String(x).toLowerCase() === candidate.toLowerCase());
+      if (match) this.addFilterTag(match);
+      return;
+    }
+
+    this.addFilterTag(candidate);
+  }
+
+  // -----------------------
+  // Upload actions
+  // -----------------------
+  @action
+  toggleUpload() {
+    this.showUpload = !this.showUpload;
+  }
+
+  @action
+  onPickFile(e) {
+    const file = e.target.files?.[0];
+    this.uploadFile = file || null;
+    if (file && !this.uploadTitle) {
+      this.uploadTitle = stripExt(file.name);
+    }
+  }
+
+  @action setUploadTitle(e) { this.uploadTitle = e.target.value; }
+  @action setUploadDescription(e) { this.uploadDescription = e.target.value; }
+  @action setUploadGender(e) { this.uploadGender = e.target.value; }
+
+  @action
+  resetUploadForm() {
+    this.uploadFile = null;
+    this.uploadTitle = "";
+    this.uploadDescription = "";
+    this.uploadGender = "";
+    this.uploadTagsSelected = [];
+    this.uploadTagsQuery = "";
+    this.uploadTagsOpen = false;
+  }
+
+  // -----------------------
+  // Upload tags multi-select actions
+  // -----------------------
+  @action
+  openUploadTags() {
+    this.uploadTagsOpen = true;
+  }
+
+  @action
+  onUploadTagsQuery(e) {
+    this.uploadTagsQuery = e.target.value;
+    this.uploadTagsOpen = true;
+  }
+
+  @action
+  addUploadTag(tag) {
+    const t = String(tag || "").trim();
+    if (!t) return;
+
+    this.uploadTagsSelected = uniqStrings([...(this.uploadTagsSelected || []), t]);
+    this.uploadTagsQuery = "";
+    this.uploadTagsOpen = true;
+  }
+
+  @action
+  removeUploadTag(tag, ev) {
+    ev?.stopPropagation?.();
+    const t = String(tag || "").trim().toLowerCase();
+    this.uploadTagsSelected = (this.uploadTagsSelected || []).filter((x) => String(x).toLowerCase() !== t);
+  }
+
+  @action
+  onUploadTagsKeydown(e) {
+    if (e.key === "Escape") {
+      this.uploadTagsOpen = false;
+      return;
+    }
+
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+
+    const candidate = (this.uploadTagsQuery || "").trim();
+    if (!candidate) return;
+
+    if (this.allowedTags.length) {
+      const match = this.allowedTags.find((x) => String(x).toLowerCase() === candidate.toLowerCase());
+      if (match) this.addUploadTag(match);
+      return;
+    }
+
+    this.addUploadTag(candidate);
+  }
+
+  // -----------------------
+  // Upload flow
+  // -----------------------
+  @action
+  async submitUpload() {
+    this.noticeMessage = null;
+    this.errorMessage = null;
+
+    if (!this.uploadFile) {
+      this.errorMessage = I18n.t("media_gallery.errors.missing_file");
+      return;
+    }
+
+    if (!this.uploadTitle?.trim()) {
+      this.errorMessage = I18n.t("media_gallery.errors.missing_title");
+      return;
+    }
+
+    if (!this.uploadGender) {
+      this.errorMessage = "Please select a gender.";
+      return;
+    }
+
+    this.uploadBusy = true;
+
+    try {
+      const fd = new FormData();
+      fd.append("type", "composer");
+      fd.append("synchronous", "true");
+      fd.append("file", this.uploadFile);
+
+      const uploadRes = await ajax("/uploads.json", {
+        type: "POST",
+        data: fd,
+        processData: false,
+        contentType: false,
+      });
+
+      const uploadId = uploadRes?.id;
+      if (!uploadId) {
+        throw new Error(I18n.t("media_gallery.errors.upload_failed"));
+      }
+
+      const payload = {
+        upload_id: uploadId,
+        title: this.uploadTitle.trim(),
+        gender: this.uploadGender,
+      };
+
+      if (this.uploadDescription?.trim()) payload.description = this.uploadDescription.trim();
+
+      const tags = uniqStrings(this.uploadTagsSelected || []);
+      if (tags.length) payload.tags = tags;
+
+      await ajax("/media", { type: "POST", data: payload });
+
+      this.noticeMessage = I18n.t("media_gallery.uploading_notice");
+      this.resetUploadForm();
+
+      this.activeTab = "mine";
+      this.page = 1;
+      await this.refresh();
+
+      this.schedulePollingIfNeeded();
+    } catch (e) {
+      const status = e?.jqXHR?.status;
+      if (status === 404 || status === 403) {
+        this.errorMessage = I18n.t("media_gallery.errors.upload_not_allowed");
+      } else {
+        this.errorMessage =
+          e?.jqXHR?.responseJSON?.errors?.join(", ") ||
+          e?.message ||
+          I18n.t("media_gallery.errors.create_failed");
+      }
+    } finally {
+      this.uploadBusy = false;
+    }
+  }
+
+  // -----------------------
+  // Delete flow (My uploads only)
+  // -----------------------
+  @action
+  openDeleteConfirm(item, ev) {
+    ev?.stopPropagation?.();
+    if (!this.isMine) return;
+    if (!item?.public_id) return;
+
+    if (isProcessingStatus(item.status)) {
+      this.noticeMessage = "You can delete this item after processing is complete.";
+      return;
+    }
+
+    this.errorMessage = null;
+    this.noticeMessage = null;
+
+    this.deleteOpen = true;
+    this.deleteItem = item;
+    this.deleteBusy = false;
+  }
+
+  @action
+  closeDeleteConfirm() {
+    if (this.deleteBusy) return;
+    this.deleteOpen = false;
+    this.deleteItem = null;
+    this.deleteBusy = false;
+  }
+
+  @action
+  async confirmDelete() {
+    if (!this.deleteItem?.public_id) return;
+
+    this.deleteBusy = true;
+    this.errorMessage = null;
+    this.noticeMessage = null;
+
+    try {
+      await ajax(`/media/${this.deleteItem.public_id}`, { type: "DELETE" });
+
+      if (this.previewOpen && this.previewItem?.public_id === this.deleteItem.public_id) {
+        this.closePreview();
+      }
+
+      this.noticeMessage = "Media item deleted.";
+      this.deleteOpen = false;
+      this.deleteItem = null;
+      this.deleteBusy = false;
+
+      await this.refresh();
+
+      if ((this.items?.length || 0) === 0 && this.page > 1) {
+        this.page = this.page - 1;
+        await this.refresh();
+      }
+    } catch (e) {
+      this.deleteBusy = false;
+      this.errorMessage = e?.jqXHR?.responseJSON?.errors?.join(", ") || e?.message || "Delete failed.";
+    }
+  }
+
+  // -----------------------
+  // Thumbnail fallback (client-side)
+  // -----------------------
+  @action
+  onThumbError(item) {
+    if (!item) return;
+    if (item._thumbFailed) return;
+
+    item._thumbFailed = true;
+    item._thumbQueued = false;
+    this.items = [...this.items];
+  }
+
+  // -----------------------
+  // Like / Unlike
+  // -----------------------
+  @action
+  async toggleLike(item, ev) {
+    ev?.stopPropagation?.();
+    if (!item?.public_id) return;
+
+    const wasLiked = !!item.liked;
+    const endpoint = wasLiked ? `/media/${item.public_id}/unlike` : `/media/${item.public_id}/like`;
+
+    try {
+      await ajax(endpoint, { type: "POST" });
+
+      item.liked = !wasLiked;
+      const current = parseInt(item.likes_count || 0, 10) || 0;
+      item.likes_count = Math.max(0, wasLiked ? current - 1 : current + 1);
+      this.items = [...this.items];
+    } catch (e) {
+      this.errorMessage = e?.jqXHR?.responseJSON?.errors?.join(", ") || e?.message || "Error";
+    }
+  }
+
+  // -----------------------
+  // Preview (token refresh on error)
+  // -----------------------
+  async fetchPreviewStreamUrl({ resetRetry } = { resetRetry: false }) {
+    if (!this.previewItem?.public_id) return;
+
+    if (resetRetry) this.previewRetryCount = 0;
+
+    const res = await ajax(`/media/${this.previewItem.public_id}/play`, { type: "GET" });
+    this.previewStreamUrl = res?.stream_url || null;
+  }
+
+  @action
+  async openPreview(item) {
+    if (!item?.public_id) return;
+    if (item.playable === false) return;
+
+    this.previewOpen = true;
+    this.previewItem = item;
+    this.previewStreamUrl = null;
+    this.previewLoading = true;
+    this.previewRetryCount = 0;
+    this.errorMessage = null;
+
+    try {
+      await this.fetchPreviewStreamUrl({ resetRetry: true });
+    } catch (e) {
+      this.errorMessage = e?.jqXHR?.responseJSON?.errors?.join(", ") || e?.message || "Error";
+    } finally {
+      this.previewLoading = false;
+    }
+  }
+
+  @action
+  closePreview() {
+    this.previewOpen = false;
+    this.previewItem = null;
+    this.previewStreamUrl = null;
+    this.previewLoading = false;
+    this.previewRetryCount = 0;
+  }
+
+  @action
+  stopBackdropClick(e) {
+    e?.stopPropagation?.();
+  }
+
+  @action
+  async onPlayerError() {
+    if (!this.previewOpen || !this.previewItem?.public_id) return;
+
+    if (this.previewRetryCount >= 3) return;
+    this.previewRetryCount += 1;
+
+    try {
+      await this.fetchPreviewStreamUrl({ resetRetry: false });
+    } catch {
+      // ignore
+    }
+  }
+
+  @action
+  async retryProcessing(item, ev) {
+    ev?.stopPropagation?.();
+    if (!item?.public_id) return;
+
+    try {
+      await ajax(`/media/${item.public_id}/retry`, { type: "POST" });
+      this.noticeMessage = I18n.t("media_gallery.retry_queued");
+      await this.refresh();
+    } catch (e) {
+      this.errorMessage = e?.jqXHR?.responseJSON?.errors?.join(", ") || e?.message || "Error";
+    }
+  }
+
+  // -----------------------
+  // Data load
+  // -----------------------
+  async refresh({ silent } = { silent: false }) {
+    if (!silent) {
+      this.loading = true;
+    }
+    this.errorMessage = null;
+
+    // preserve thumb state across refreshes (polling)
+    const oldById = new Map((this.items || []).map((i) => [i.public_id, i]));
+
+    try {
+      const data = {
+        page: this.page,
+        per_page: this.perPage,
+      };
+
+      const tags = uniqStrings(this.tagsSelected || []);
+      if (this.mediaType) data.media_type = this.mediaType;
+      if (this.gender) data.gender = this.gender;
+      if (tags.length) data.tags = tags;
+
+      const endpoint = this.isMine ? "/media/my" : "/media";
+      if (this.isMine && this.status) data.status = this.status;
+
+      const res = await ajax(endpoint, { type: "GET", data });
+
+      let media = res?.media_items || [];
+      const total = res?.total ?? media.length;
+
+      if (this.q?.trim()) {
+        const q = this.q.trim().toLowerCase();
+        media = media.filter((m) => {
+          const t = (m.title || "").toLowerCase();
+          const d = (m.description || "").toLowerCase();
+          return t.includes(q) || d.includes(q);
+        });
+      }
+
+      // reset thumb pipeline per refresh
+      this._resetThumbPipeline();
+
+      // attach thumb runtime fields + copy from previous list if available
+      for (const item of media) {
+        const old = oldById.get(item.public_id);
+        item._thumbSrc = old?._thumbSrc || null;
+        item._thumbFailed = old?._thumbFailed || false;
+        item._thumbRetries = old?._thumbRetries || 0;
+        item._thumbQueued = false;
+      }
+
+      this.items = media;
+      this.page = res?.page || this.page;
+      this.perPage = res?.per_page || this.perPage;
+      this.total = total;
+
+      this.schedulePollingIfNeeded();
+    } catch (e) {
+      const status = e?.jqXHR?.status;
+      if (status === 403 || status === 404) {
+        this.errorMessage = I18n.t("media_gallery.errors.not_available");
+      } else {
+        this.errorMessage = e?.jqXHR?.responseJSON?.errors?.join(", ") || e?.message || "Error";
+      }
+    } finally {
+      if (!silent) {
+        this.loading = false;
+      }
+    }
+  }
+}
