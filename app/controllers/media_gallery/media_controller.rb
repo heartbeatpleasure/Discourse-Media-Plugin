@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "digest/sha1"
+require "erb"
 require "fileutils"
 
 module ::MediaGallery
@@ -358,7 +359,13 @@ module ::MediaGallery
         return head :ok
       end
 
-      send_file(local_path, disposition: "inline", filename: filename, type: content_type)
+      # Hardening: prefer send_data over send_file for thumbnails.
+      # Some proxy setups (Rack::Sendfile / X-Accel-Redirect) can behave oddly for
+      # small/private files served through Rails. Reading and sending bytes directly
+      # avoids those edge-cases.
+      data = File.binread(local_path)
+      response.headers["Content-Length"] = data.bytesize.to_s
+      send_data(data, disposition: "inline", filename: filename, type: content_type)
     end
 
     def like
