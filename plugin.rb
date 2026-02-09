@@ -26,10 +26,14 @@ after_initialize do
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/library_controller.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
 
   Discourse::Application.routes.append do
+    # UI page (theme component provides Ember route + template)
+    get "/media-library" => "media_gallery/library#index"
+
     # Stream endpoint (tokenized). Optional extension keeps players happy.
     get "/media/stream/:token(.:ext)" => "media_gallery/stream#show",
         defaults: { format: :json },
@@ -52,13 +56,13 @@ after_initialize do
     get "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
     post "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
 
-    # Thumbnail (stable URL, cacheable; still requires auth)
+    # Thumbnail endpoint
     get "/media/:public_id/thumbnail" => "media_gallery/media#thumbnail"
 
     # Retry processing for failed/queued items (owner/staff only)
     post "/media/:public_id/retry" => "media_gallery/media#retry_processing", defaults: { format: :json }
 
-    # Likes (optional)
+    # Likes
     post "/media/:public_id/like" => "media_gallery/media#like", defaults: { format: :json }
     post "/media/:public_id/unlike" => "media_gallery/media#unlike", defaults: { format: :json }
   end
