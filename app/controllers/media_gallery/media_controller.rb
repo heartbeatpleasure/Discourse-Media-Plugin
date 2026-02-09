@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "digest/sha1"
+require "fileutils"
 
 module ::MediaGallery
   class MediaController < ::ApplicationController
@@ -13,7 +14,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                  only: [:index, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing]
+                  only: [:index, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing, :destroy]
 
     before_action :ensure_can_upload, only: [:create]
 
@@ -172,6 +173,46 @@ module ::MediaGallery
     rescue => e
       Rails.logger.error(
         "[media_gallery] create failed request_id=#{request.request_id} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}"
+      )
+      render_json_error("internal_error", status: 500)
+    end
+
+    # DELETE /media/:public_id
+    # Permanently deletes a media item and associated files. Owner/staff only.
+    def destroy
+      item = find_item_by_public_id!(params[:public_id])
+      raise Discourse::NotFound unless can_manage_item?(item)
+
+      item.with_lock do
+        public_id = item.public_id.to_s
+
+        upload_ids =
+          [
+            item.original_upload_id,
+            item.processed_upload_id,
+            item.thumbnail_upload_id
+          ].compact.uniq
+
+        uploads = upload_ids.present? ? ::Upload.where(id: upload_ids).to_a : []
+
+        # Remove private-storage outputs (safe no-op if not present)
+        delete_private_storage_dirs_safely!(public_id)
+
+        # Remove uploads (safe no-op if already deleted)
+        uploads.each do |u|
+          destroy_upload_safely!(u)
+        end
+
+        # Finally delete DB record (also deletes likes via dependent: :delete_all)
+        item.destroy!
+      end
+
+      render_json_dump(success: true)
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.error(
+        "[media_gallery] destroy failed request_id=#{request.request_id} public_id=#{params[:public_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}"
       )
       render_json_error("internal_error", status: 500)
     end
@@ -389,6 +430,34 @@ module ::MediaGallery
 
       MediaGallery::PrivateStorage.ensure_private_root!
       MediaGallery::PrivateStorage.ensure_original_export_root!
+    end
+
+    def delete_private_storage_dirs_safely!(public_id)
+      begin
+        dir = MediaGallery::PrivateStorage.item_private_dir(public_id)
+        FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+      rescue => e
+        Rails.logger.warn("[media_gallery] failed to delete private dir public_id=#{public_id}: #{e.class}: #{e.message}")
+      end
+
+      begin
+        odir = MediaGallery::PrivateStorage.item_original_dir(public_id)
+        FileUtils.rm_rf(odir) if odir.present? && Dir.exist?(odir)
+      rescue => e
+        Rails.logger.warn("[media_gallery] failed to delete original export dir public_id=#{public_id}: #{e.class}: #{e.message}")
+      end
+    end
+
+    def destroy_upload_safely!(upload)
+      return if upload.blank?
+
+      if defined?(::UploadDestroyer)
+        ::UploadDestroyer.new(Discourse.system_user, upload).destroy
+      else
+        upload.destroy!
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] failed to destroy upload id=#{upload&.id}: #{e.class}: #{e.message}")
     end
 
     def resolve_thumbnail_file!(item)

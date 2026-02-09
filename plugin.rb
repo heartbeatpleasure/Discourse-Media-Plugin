@@ -49,6 +49,8 @@ after_initialize do
 
     # Item
     get "/media/:public_id" => "media_gallery/media#show", defaults: { format: :json }
+    delete "/media/:public_id" => "media_gallery/media#destroy", defaults: { format: :json }
+
     get "/media/:public_id/status" => "media_gallery/media#status", defaults: { format: :json }
     get "/media/:public_id/status.json" => "media_gallery/media#status", defaults: { format: :json }
 
@@ -56,13 +58,13 @@ after_initialize do
     get "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
     post "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
 
-    # Thumbnail endpoint
+    # Thumbnail redirect (tokenized)
     get "/media/:public_id/thumbnail" => "media_gallery/media#thumbnail"
 
     # Retry processing for failed/queued items (owner/staff only)
     post "/media/:public_id/retry" => "media_gallery/media#retry_processing", defaults: { format: :json }
 
-    # Likes
+    # Likes (optional)
     post "/media/:public_id/like" => "media_gallery/media#like", defaults: { format: :json }
     post "/media/:public_id/unlike" => "media_gallery/media#unlike", defaults: { format: :json }
   end
