@@ -184,30 +184,6 @@ module ::MediaGallery
           "queued"
         end
 
-      # Watermark (burned into video outputs) - configured server-side via presets.
-      watermark_enabled = false
-      watermark_preset_id = nil
-
-     if SiteSetting.media_gallery_watermark_enabled && media_type == "video"
-      if SiteSetting.media_gallery_watermark_user_can_toggle
-        watermark_enabled = ActiveModel::Type::Boolean.new.cast(params[:watermark_enabled])
-        watermark_enabled = true if params[:watermark_enabled].nil?
-      else
-        watermark_enabled = true
-      end
-
-      if watermark_enabled && SiteSetting.media_gallery_watermark_user_can_choose_preset
-        candidate = params[:watermark_preset_id].to_s.strip
-        if candidate.present?
-          unless MediaGallery::Watermark.find_preset(candidate).present?
-            return render_json_error("invalid_watermark_preset", status: 422)
-        end
-          watermark_preset_id = candidate
-      end
-    end
-  end
-
-
       item = MediaGallery::MediaItem.create!(
         public_id: SecureRandom.uuid,
         user_id: current_user.id,
