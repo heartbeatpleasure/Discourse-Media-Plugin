@@ -42,3 +42,9 @@ en:
         male: "Male"
         female: "Female"
         non_binary: "Non-binary"
+      watermark:
+        label: "Watermark"
+        apply: "Apply watermark"
+        preset: "Watermark preset"
+        preset_default: "Default"
+  

@@ -90,6 +90,38 @@ plugins:
     default: true
     client: false
 
+  # Visible watermarks (burned into video encodes).
+  media_gallery_watermark_enabled:
+    default: false
+    client: false
+
+  # If false, the watermark toggle is hidden and watermark is always applied on video uploads.
+  media_gallery_watermark_user_can_toggle:
+    default: true
+    client: false
+
+  # If true, users can choose a preset (id) from the list below. Users cannot type custom text.
+  media_gallery_watermark_user_can_choose_preset:
+    default: true
+    client: false
+
+  # JSON array of presets. Example:
+  # [{"id":"brand","label":"Brand","template":"heartbeatpleasure.com","position":"bottom_right","opacity":0.35,"size":0.045,"margin":24}]
+  media_gallery_watermark_presets:
+    default: "[]"
+    client: false
+
+  # Optional default preset id. If blank or invalid, the default text is used.
+  media_gallery_watermark_default_preset_id:
+    default: ""
+    client: false
+
+  # Default watermark text when watermark is enabled and no preset is selected (or available).
+  media_gallery_watermark_default_text:
+    default: "heartbeatpleasure.com"
+    client: false
+
+
   # Storage hardening (Option A): store processed media + thumbs outside /uploads.
   # When enabled, the plugin streams files from /shared via tokenized URLs only.
   media_gallery_private_storage_enabled:

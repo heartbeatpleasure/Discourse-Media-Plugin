@@ -252,15 +252,17 @@ module Jobs
         raise "duration_policy_failed"
       end
 
+      wm_vf = MediaGallery::Watermark.vf_for(item: item, tmpdir: dir)
       MediaGallery::Ffmpeg.transcode_video(
         input_path: tmp_input,
         output_path: out_path,
         bitrate_kbps: video_kbps,
         max_fps: max_fps,
         audio_bitrate_kbps: audio_kbps,
+        extra_vf: wm_vf,
       )
 
-      enforce_max_bytes!(out_path, duration_seconds_f, max_bytes, max_fps, audio_kbps, tmp_input)
+      enforce_max_bytes!(out_path, duration_seconds_f, max_bytes, max_fps, audio_kbps, tmp_input, wm_vf)  # NEW
 
       # Thumbnail (best-effort)
       thumb_path = File.join(dir, "thumb-#{item.public_id}.jpg")
@@ -457,7 +459,7 @@ module Jobs
       [[configured_video, video_budget].min, audio_kbps, max_bytes, duration_seconds_f, width, height]
     end
 
-    def enforce_max_bytes!(out_path, duration_seconds, max_bytes, max_fps, audio_kbps, tmp_input)
+    def enforce_max_bytes!(out_path, duration_seconds, max_bytes, max_fps, audio_kbps, tmp_input, extra_vf = nil)
       return if max_bytes.blank? || max_bytes <= 0
       return if duration_seconds.blank? || duration_seconds.to_f <= 0
 
@@ -474,6 +476,7 @@ module Jobs
         bitrate_kbps: new_video_kbps,
         max_fps: max_fps,
         audio_bitrate_kbps: audio_kbps,
+        extra_vf: extra_vf, 
       )
 
       out_size2 = File.size?(out_path).to_i

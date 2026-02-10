@@ -15,10 +15,24 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                  only: [:index, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing, :destroy]
+                   only: [:index, :config, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing, :destroy]
 
     before_action :ensure_can_upload, only: [:create]
 
+    def config
+      wm_enabled = SiteSetting.media_gallery_watermark_enabled
+      render_json_dump(
+        watermark: {
+          enabled: wm_enabled,
+          user_can_toggle: wm_enabled && SiteSetting.media_gallery_watermark_user_can_toggle,
+          user_can_choose_preset: wm_enabled && SiteSetting.media_gallery_watermark_user_can_choose_preset,
+          default_preset_id: SiteSetting.media_gallery_watermark_default_preset_id.to_s.strip.presence,
+          default_text: SiteSetting.media_gallery_watermark_default_text.to_s.presence,
+          presets: (wm_enabled ? MediaGallery::Watermark.safe_presets_for_client : [])
+        }
+      )
+    end
+    
     def index
       page = (params[:page].presence || 1).to_i
       per_page = [(params[:per_page].presence || 24).to_i, 100].min
@@ -108,6 +122,29 @@ module ::MediaGallery
       return render_json_error("unsupported_file_type") unless MediaGallery::MediaItem::TYPES.include?(media_type)
       return render_json_error("unsupported_file_extension") unless allowed_extension_for_type?(upload, media_type)
 
+            # Watermark (burned into video outputs) - configured server-side via presets.
+      watermark_enabled = false
+      watermark_preset_id = nil
+
+      if SiteSetting.media_gallery_watermark_enabled && media_type == "video"
+        if SiteSetting.media_gallery_watermark_user_can_toggle
+          watermark_enabled = ActiveModel::Type::Boolean.new.cast(params[:watermark_enabled])
+          watermark_enabled = true if params[:watermark_enabled].nil?
+        else
+          watermark_enabled = true
+        end
+
+        if watermark_enabled && SiteSetting.media_gallery_watermark_user_can_choose_preset
+          candidate = params[:watermark_preset_id].to_s.strip
+          if candidate.present?
+            unless MediaGallery::Watermark.find_preset(candidate).present?
+              return render_json_error("invalid_watermark_preset", status: 422)
+            end
+            watermark_preset_id = candidate
+          end
+        end
+      end
+
       # Per-type caps (plugin-level)
       if (err = enforce_type_size_limit(upload, media_type))
         return render_json_error(err)
@@ -147,6 +184,30 @@ module ::MediaGallery
           "queued"
         end
 
+      # Watermark (burned into video outputs) - configured server-side via presets.
+      watermark_enabled = false
+      watermark_preset_id = nil
+
+     if SiteSetting.media_gallery_watermark_enabled && media_type == "video"
+      if SiteSetting.media_gallery_watermark_user_can_toggle
+        watermark_enabled = ActiveModel::Type::Boolean.new.cast(params[:watermark_enabled])
+        watermark_enabled = true if params[:watermark_enabled].nil?
+      else
+        watermark_enabled = true
+      end
+
+      if watermark_enabled && SiteSetting.media_gallery_watermark_user_can_choose_preset
+        candidate = params[:watermark_preset_id].to_s.strip
+        if candidate.present?
+          unless MediaGallery::Watermark.find_preset(candidate).present?
+            return render_json_error("invalid_watermark_preset", status: 422)
+        end
+          watermark_preset_id = candidate
+      end
+    end
+  end
+
+
       item = MediaGallery::MediaItem.create!(
         public_id: SecureRandom.uuid,
         user_id: current_user.id,
@@ -154,6 +215,8 @@ module ::MediaGallery
         description: params[:description].to_s,
         extra_metadata: (extra_metadata.is_a?(Hash) ? extra_metadata : { "raw" => extra_metadata.to_s }),
         media_type: media_type,
+        watermark_enabled: watermark_enabled,
+        watermark_preset_id: watermark_preset_id,
         gender: params[:gender].to_s.presence,
         tags: (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq,
         original_upload_id: upload.id,

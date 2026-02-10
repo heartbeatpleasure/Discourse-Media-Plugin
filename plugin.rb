@@ -9,7 +9,6 @@
 enabled_site_setting :media_gallery_enabled
 
 module ::MediaGallery
-  # Must match the plugin "name:" header above (used by requires_plugin)
   PLUGIN_NAME = "Discourse-Media-Plugin"
 end
 
@@ -20,8 +19,8 @@ after_initialize do
   require_relative "lib/media_gallery/upload_path"
   require_relative "lib/media_gallery/permissions"
   require_relative "lib/media_gallery/private_storage"
+  require_relative "lib/media_gallery/watermark"   # ✅ NEW
 
-  # Ensure constants are available in production (Zeitwerk + plugin codepaths + direct routing).
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
@@ -32,40 +31,34 @@ after_initialize do
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
 
   Discourse::Application.routes.append do
-    # UI page (theme component provides Ember route + template)
     get "/media-library" => "media_gallery/library#index"
 
-    # Stream endpoint (tokenized). Optional extension keeps players happy.
     get "/media/stream/:token(.:ext)" => "media_gallery/stream#show",
         defaults: { format: :json },
         constraints: { token: /[^\/\.]+/ }
 
-    # "My items" must come before :public_id
     get "/media/my" => "media_gallery/media#my", defaults: { format: :json }
     get "/user/media" => "media_gallery/media#my", defaults: { format: :json }
 
-    # Gallery
+    # config endpoint (must be before /media/:public_id)
+    get "/media/config" => "media_gallery/media#config", defaults: { format: :json }
+
     get "/media" => "media_gallery/media#index", defaults: { format: :json }
     post "/media" => "media_gallery/media#create", defaults: { format: :json }
 
-    # Item
     get "/media/:public_id" => "media_gallery/media#show", defaults: { format: :json }
     delete "/media/:public_id" => "media_gallery/media#destroy", defaults: { format: :json }
 
     get "/media/:public_id/status" => "media_gallery/media#status", defaults: { format: :json }
     get "/media/:public_id/status.json" => "media_gallery/media#status", defaults: { format: :json }
 
-    # Tokenized playback URL (GET for curl convenience; keep POST for backwards-compat)
     get "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
     post "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
 
-    # Thumbnail redirect (tokenized)
     get "/media/:public_id/thumbnail" => "media_gallery/media#thumbnail"
 
-    # Retry processing for failed/queued items (owner/staff only)
     post "/media/:public_id/retry" => "media_gallery/media#retry_processing", defaults: { format: :json }
 
-    # Likes (optional)
     post "/media/:public_id/like" => "media_gallery/media#like", defaults: { format: :json }
     post "/media/:public_id/unlike" => "media_gallery/media#unlike", defaults: { format: :json }
   end

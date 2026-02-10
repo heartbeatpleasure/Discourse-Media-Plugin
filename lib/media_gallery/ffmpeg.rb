@@ -85,7 +85,7 @@ module MediaGallery
     end
 
     # Video profile: MP4, H.264 Main@4.1, max 1080p, max 30fps, target bitrate, AAC 128kbps
-    def self.transcode_video(input_path:, output_path:, bitrate_kbps:, max_fps:, audio_bitrate_kbps: 128)
+    def self.transcode_video(input_path:, output_path:, bitrate_kbps:, max_fps:, audio_bitrate_kbps: 128, extra_vf: nil)
       buf_kbps = [bitrate_kbps.to_i * 2, 256].max
 
       # IMPORTANT: enforce even dimensions for yuv420p/x264
@@ -145,6 +145,7 @@ module MediaGallery
     # Image standardization: JPG, max 1920x1080 (no upscale), keep aspect.
     def self.transcode_image_to_jpg(input_path:, output_path:)
       vf = "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease"
+      vf = "#{vf},#{extra_vf}" if extra_vf.present?
 
       cmd = [
         ffmpeg_path,
