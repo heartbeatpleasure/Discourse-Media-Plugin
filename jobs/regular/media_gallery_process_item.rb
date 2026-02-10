@@ -23,7 +23,10 @@ module Jobs
       end
     rescue => e
       if item&.persisted?
-        item.update!(status: "failed", error_message: e.message.to_s.truncate(1000))
+        # Preserve any explicit failure reason set during processing (e.g. duration policy, type mismatch).
+        if item.status != "failed" || item.error_message.blank?
+          item.update!(status: "failed", error_message: e.message.to_s.truncate(1000))
+        end
       end
       raise e
     end
@@ -49,10 +52,12 @@ module Jobs
 
       item.filesize_original_bytes ||= original_upload.filesize
 
-      media_type = item.media_type.presence || infer_media_type_from_upload(original_upload)
-      raise "unsupported_file_type" if media_type.blank?
+      declared_type = item.media_type.presence || infer_media_type_from_upload(original_upload)
+      raise "unsupported_file_type" if declared_type.blank?
 
-      item.media_type = media_type
+      # Persist the declared type (based on ext/mime) first.
+      # We may refine/correct it later using ffprobe once we have a local temp file.
+      item.media_type = declared_type
       item.save!
 
       private_mode = MediaGallery::PrivateStorage.enabled?
@@ -64,6 +69,32 @@ module Jobs
 
         processed_tmp = nil
         thumb_tmp = nil
+
+        # Verify/correct the media type using ffprobe. This catches cases where the
+        # declared type (based on extension/mime) does not match the actual container.
+        media_type = declared_type
+        begin
+          detected_type = MediaGallery::TypeDetector.infer_from_path(tmp_input)
+          if detected_type.present? && detected_type != declared_type
+            ext = original_upload.extension.to_s
+
+            if MediaGallery::TypeDetector.extension_allowed_for_type?(ext, detected_type)
+              Rails.logger.info(
+                "[media_gallery] media type corrected item_id=#{item.id} public_id=#{item.public_id} from=#{declared_type} to=#{detected_type} ext=#{ext}"
+              )
+              media_type = detected_type
+              item.media_type = detected_type
+              item.save!
+            else
+              item.update!(status: "failed", error_message: "file_content_mismatch")
+              raise "file_content_mismatch"
+            end
+          end
+        rescue => e
+          # If detection fails, fall back to declared type.
+          # But if we explicitly flagged mismatch, keep the failure.
+          raise e if e.message.to_s == "file_content_mismatch"
+        end
 
         case media_type
         when "video"
@@ -164,18 +195,31 @@ module Jobs
       bitrate = 128 if bitrate <= 0
 
       # Duration policy
+      max_dur = SiteSetting.media_gallery_audio_max_duration_seconds.to_i
+
+      probe = nil
+      duration = 0.0
+
       begin
         probe = MediaGallery::Ffmpeg.probe(tmp_input)
         duration = probe.dig("format", "duration").to_f
         item.duration_seconds = duration.round if duration.positive?
+      rescue
+        probe = nil
+      end
 
-        max_dur = SiteSetting.media_gallery_audio_max_duration_seconds.to_i
-        if max_dur.positive? && duration.positive? && duration > max_dur
+      if max_dur.positive?
+        # Fail-closed when a max duration policy is enabled.
+        # If we cannot determine duration reliably, we reject the file.
+        if probe.nil? || !duration.positive?
+          item.update!(status: "failed", error_message: "duration_probe_failed")
+          raise "duration_probe_failed"
+        end
+
+        if duration > max_dur
           item.update!(status: "failed", error_message: "duration_exceeds_#{max_dur}_seconds")
           raise "duration_policy_failed"
         end
-      rescue
-        # If probe fails we still try to transcode; ffmpeg will error if unsupported.
       end
 
       MediaGallery::Ffmpeg.transcode_audio(

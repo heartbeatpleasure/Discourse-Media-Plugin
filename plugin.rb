@@ -16,6 +16,7 @@ end
 after_initialize do
   require_relative "lib/media_gallery/token"
   require_relative "lib/media_gallery/ffmpeg"
+  require_relative "lib/media_gallery/type_detector"
   require_relative "lib/media_gallery/upload_path"
   require_relative "lib/media_gallery/permissions"
   require_relative "lib/media_gallery/private_storage"
