@@ -147,7 +147,7 @@ module MediaGallery
     # Image standardization: JPG, max 1920x1080 (no upscale), keep aspect.
     def self.transcode_image_to_jpg(input_path:, output_path:)
       vf = "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease"
-      vf = "#{vf},#{extra_vf}" if extra_vf.present?
+
 
       cmd = [
         ffmpeg_path,
