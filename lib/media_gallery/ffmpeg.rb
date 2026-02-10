@@ -95,6 +95,8 @@ module MediaGallery
         "scale=trunc(iw/2)*2:trunc(ih/2)*2," \
         "fps=fps=#{max_fps}"
 
+      vf = "#{vf},#{extra_vf}" if extra_vf.present?  
+
       cmd = [
         ffmpeg_path,
         *ffmpeg_common_args,
