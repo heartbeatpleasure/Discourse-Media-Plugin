@@ -233,42 +233,131 @@ module MediaGallery
     end
 
     def self.effective_fontsize(item:, text:, size_setting:, margin:)
-      # Legacy path: size can be a fraction (<= 2) or a fixed px (> 2)
-      if !size_setting.nil?
-        n = size_setting.to_f
-        return fontsize_expr(n)
-      end
+      # The configured size is treated as the *desired* size, but we will scale down
+      # if the watermark would not fit inside the frame (with a small safety margin).
+      #
+      # Why this exists:
+      # - Admins may configure very large sizes (or long texts). When the text width
+      #   exceeds the frame width, drawtext can end up partially off-screen (negative x).
+      # - We keep the user's requested size when it fits, and only clamp when needed.
 
-      # New path: use global % of height, but clamp so it cannot exceed the frame.
       w = item.respond_to?(:width) ? item.width.to_i : 0
       h = item.respond_to?(:height) ? item.height.to_i : 0
 
-      frac = global_size_frac
-      return "h*#{frac}" if w <= 0 || h <= 0
+      # Our ffmpeg pipeline scales media before applying drawtext:
+      # - video: scale to <=1920x1080 (preserve aspect), then truncate to even dimensions
+      # - image: scale to <=1920x1080 (preserve aspect)
+      # If we clamp based on *input* dimensions, the watermark can still overflow on the
+      # *output* after downscaling. So we clamp against the expected output dimensions.
+      out_w, out_h = expected_output_dims(media_type: item&.media_type.to_s, in_w: w, in_h: h)
 
-      desired = (h * frac).to_f
+      # If we can't determine dimensions reliably, fall back to legacy behavior.
+      if out_w <= 0 || out_h <= 0
+        n = size_setting.to_f if !size_setting.nil?
+        return size_setting.nil? ? "h*#{global_size_frac}" : fontsize_expr(n)
+      end
 
-      # Rough width estimate: average glyph width ~0.6em for sans fonts.
-      # We count non-space characters to avoid extreme shrink for multi-word texts.
-      chars = text.to_s.gsub(/\s+/, "").length
-      chars = 1 if chars <= 0
+      desired_px = desired_font_px(h: out_h, size_setting: size_setting)
+
+      # Defensive: if desired is unusable, fall back to global fraction.
+      desired_px = (out_h * global_size_frac).to_f if desired_px <= 0
 
       m = margin.to_i
       m = 0 if m.negative?
-      max_w = (w - (2 * m)).to_f
-      max_h = (h - (2 * m)).to_f
+
+      # Leave a small safety margin so we do not hug the edges too tightly.
+      safety = 0.95
+
+      max_w = (out_w - (2 * m)).to_f
+      max_h = (out_h - (2 * m)).to_f
       max_w = 50.0 if max_w < 50.0
       max_h = 50.0 if max_h < 50.0
+      max_w *= safety
+      max_h *= safety
 
-      max_by_w = max_w / (0.60 * chars)
-      max_by_h = max_h
+      lines = text_lines(text)
+      line_count = [lines.length, 1].max
+      longest_units = lines.map { |ln| text_units(ln) }.max
+      longest_units = 1.0 if longest_units <= 0
 
-      px = [desired, max_by_w, max_by_h].min
+      # Rough width estimate:
+      # Average glyph width (sans) is ~0.6em, but we use a more conservative factor
+      # to reduce the chance of overflow with wide glyphs (W, M, uppercase, etc.).
+      avg_glyph_em = 0.72
+
+      # Vertical line height: slightly larger than fontsize.
+      line_height = 1.20
+
+      max_by_w = max_w / (avg_glyph_em * longest_units)
+      max_by_h = max_h / (line_height * line_count)
+
+      px = [desired_px.to_f, max_by_w, max_by_h].min
       px = px.floor
       # Allow small sizes so the watermark can always fit within the frame.
       px = 4 if px < 4
       px = 200 if px > 200
       px.to_s
+    end
+
+    # Predict the output dimensions of our ffmpeg filterchain so sizing clamps are stable.
+    # This mirrors MediaGallery::Ffmpeg.transcode_video/transcode_image_to_jpg.
+    def self.expected_output_dims(media_type:, in_w:, in_h:)
+      w = in_w.to_i
+      h = in_h.to_i
+      return [0, 0] if w <= 0 || h <= 0
+
+      max_w = 1920.0
+      max_h = 1080.0
+      scale = [max_w / w.to_f, max_h / h.to_f, 1.0].min
+
+      out_w = (w.to_f * scale).floor
+      out_h = (h.to_f * scale).floor
+
+      # Video pipeline forces even dimensions (yuv420p/x264 requirement).
+      if media_type.to_s == "video"
+        out_w = (out_w / 2) * 2
+        out_h = (out_h / 2) * 2
+      end
+
+      out_w = 2 if out_w < 2
+      out_h = 2 if out_h < 2
+      [out_w, out_h]
+    end
+
+    def self.desired_font_px(h:, size_setting:)
+      if size_setting.nil?
+        return (h * global_size_frac).to_f
+      end
+
+      n = size_setting.to_f
+      return 0.0 if n <= 0
+
+      # Legacy: fraction of height (<= 2) or fixed px (> 2)
+      if n <= 2
+        n = [[n, 0.01].max, 0.2].min
+        (h * n).to_f
+      else
+        n
+      end
+    end
+
+    # Split watermark text into lines (supports explicit newlines).
+    def self.text_lines(text)
+      text.to_s
+        .split(/\r?\n/)
+        .map { |s| s.to_s.strip }
+        .reject(&:blank?)
+        .presence || ["x"]
+    end
+
+    # Estimate "text length" in units where 1.0 roughly corresponds to one average glyph.
+    # Spaces are counted as partial width, because they render narrower than letters.
+    def self.text_units(line)
+      s = line.to_s
+      spaces = s.count(" \t")
+      non_space = s.gsub(/[\s]/, "").length
+      # Count spaces as ~0.35 glyphs and add a small padding for punctuation/kerning.
+      (non_space + (spaces * 0.35) + 0.5).to_f
     end
 
     def self.escape_filter_path(path)
