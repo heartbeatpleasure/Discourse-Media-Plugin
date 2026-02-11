@@ -208,19 +208,23 @@ module MediaGallery
       text_file = File.join(tmpdir, "watermark-#{item.public_id}.txt")
       File.write(text_file, text + "\n")
 
-      parts = ["drawtext"]
+      # NOTE: ffmpeg filter syntax is "drawtext=<options>", not "drawtext:<options>".
+      # Using a colon directly after the filter name makes ffmpeg interpret it as part of the
+      # filter name, resulting in: "No such filter: 'drawtext:textfile'".
+      opts = []
       fontfile = pick_font_file
-      parts << "fontfile=#{escape_filter_path(fontfile)}" if fontfile.present?
-      parts << "textfile=#{escape_filter_path(text_file)}"
-      parts << "reload=1"
-      parts << "fontcolor=white@#{format("%.2f", opacity)}"
-      parts << "fontsize=#{fontsize}"
-      parts << "x=#{x_expr}"
-      parts << "y=#{y_expr}"
-      parts << "shadowcolor=black@0.4"
-      parts << "shadowx=2"
-      parts << "shadowy=2"
-      parts.join(":")
+      opts << "fontfile=#{escape_filter_path(fontfile)}" if fontfile.present?
+      opts << "textfile=#{escape_filter_path(text_file)}"
+      opts << "reload=1"
+      opts << "fontcolor=white@#{format("%.2f", opacity)}"
+      opts << "fontsize=#{fontsize}"
+      opts << "x=#{x_expr}"
+      opts << "y=#{y_expr}"
+      opts << "shadowcolor=black@0.4"
+      opts << "shadowx=2"
+      opts << "shadowy=2"
+
+      "drawtext=#{opts.join(":")}"
     rescue => e
       Rails.logger.warn("[media_gallery] watermark build failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
       nil
@@ -269,6 +273,8 @@ module MediaGallery
       s = path.to_s
       s = s.gsub("\\", "\\\\")
       s = s.gsub(":", "\\:")
+      # Comma separates filters in a filterchain; keep it safe.
+      s = s.gsub(",", "\\,")
       s = s.gsub("'", "\\\\'")
       s
     end
