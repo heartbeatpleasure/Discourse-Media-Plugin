@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "open3"
 
 module MediaGallery
   class Watermark
@@ -203,18 +204,28 @@ module MediaGallery
       opacity = DEFAULT_OPACITY if opacity <= 0 || opacity > 1
 
       size_setting = use_preset_overrides ? preset[:size] : nil
-      fontsize = effective_fontsize(item: item, text: text, size_setting: size_setting, margin: margin)
-
       x_expr, y_expr = position_expr(pos, margin)
 
       text_file = File.join(tmpdir, "watermark-#{item.public_id}.txt")
-      File.write(text_file, text + "\n")
+      File.write(text_file, text + "
+")
+
+      fontfile = pick_font_file
+      fontsize =
+        effective_fontsize(
+          item: item,
+          text: text,
+          size_setting: size_setting,
+          margin: margin,
+          tmpdir: tmpdir,
+          text_file: text_file,
+          fontfile: fontfile
+        )
 
       # NOTE: ffmpeg filter syntax is "drawtext=<options>", not "drawtext:<options>".
       # Using a colon directly after the filter name makes ffmpeg interpret it as part of the
       # filter name, resulting in: "No such filter: 'drawtext:textfile'".
       opts = []
-      fontfile = pick_font_file
       opts << "fontfile=#{escape_filter_path(fontfile)}" if fontfile.present?
       opts << "textfile=#{escape_filter_path(text_file)}"
       opts << "reload=1"
@@ -232,71 +243,154 @@ module MediaGallery
       nil
     end
 
-    def self.effective_fontsize(item:, text:, size_setting:, margin:)
-      # The configured size is treated as the *desired* size, but we will scale down
-      # if the watermark would not fit inside the frame (with a small safety margin).
+    def self.effective_fontsize(item:, text:, size_setting:, margin:, tmpdir:, text_file:, fontfile:)
+      # The configured size is treated as the *desired* size.
+      # We only scale down if the watermark would not fit inside the processed frame
+      # (respecting the configured margins).
       #
-      # Why this exists:
-      # - Admins may configure very large sizes (or long texts). When the text width
-      #   exceeds the frame width, drawtext can end up partially off-screen (negative x).
-      # - We keep the user's requested size when it fits, and only clamp when needed.
+      # NOTE: We size against the *processed* output dimensions (after our transcode scale),
+      # not the source dimensions, so behavior is stable for large inputs.
 
       w = item.respond_to?(:width) ? item.width.to_i : 0
       h = item.respond_to?(:height) ? item.height.to_i : 0
 
-      # Our ffmpeg pipeline scales media before applying drawtext:
-      # - video: scale to <=1920x1080 (preserve aspect), then truncate to even dimensions
-      # - image: scale to <=1920x1080 (preserve aspect)
-      # If we clamp based on *input* dimensions, the watermark can still overflow on the
-      # *output* after downscaling. So we clamp against the expected output dimensions.
       out_w, out_h = expected_output_dims(media_type: item&.media_type.to_s, in_w: w, in_h: h)
 
-      # If we can't determine dimensions reliably, fall back to legacy behavior.
+      # If we can't determine dimensions reliably, fall back to legacy expression behavior.
       if out_w <= 0 || out_h <= 0
         n = size_setting.to_f if !size_setting.nil?
         return size_setting.nil? ? "h*#{global_size_frac}" : fontsize_expr(n)
       end
 
       desired_px = desired_font_px(h: out_h, size_setting: size_setting)
-
-      # Defensive: if desired is unusable, fall back to global fraction.
       desired_px = (out_h * global_size_frac).to_f if desired_px <= 0
 
       m = margin.to_i
       m = 0 if m.negative?
 
-      # Leave a small safety margin so we do not hug the edges too tightly.
-      safety = 0.95
-
-      max_w = (out_w - (2 * m)).to_f
-      max_h = (out_h - (2 * m)).to_f
-      max_w = 50.0 if max_w < 50.0
-      max_h = 50.0 if max_h < 50.0
-      max_w *= safety
-      max_h *= safety
+      # Available drawing area (leave a tiny slack for rounding so we don't clip by 1px).
+      avail_w = (out_w - (2 * m) - 2).to_f
+      avail_h = (out_h - (2 * m) - 2).to_f
+      avail_w = 10.0 if avail_w < 10.0
+      avail_h = 10.0 if avail_h < 10.0
 
       lines = text_lines(text)
       line_count = [lines.length, 1].max
       longest_units = lines.map { |ln| text_units(ln) }.max
       longest_units = 1.0 if longest_units <= 0
 
-      # Rough width estimate:
-      # Average glyph width (sans) is ~0.6em, but we use a more conservative factor
-      # to reduce the chance of overflow with wide glyphs (W, M, uppercase, etc.).
+      # Fast-path: if even a conservative over-estimate of the rendered bounds fits,
+      # keep the desired size exactly (no unnecessary shrinking).
       avg_glyph_em = 0.72
-
-      # Vertical line height: slightly larger than fontsize.
       line_height = 1.20
+      est_w = desired_px.to_f * avg_glyph_em * longest_units
+      est_h = desired_px.to_f * line_height * line_count
 
-      max_by_w = max_w / (avg_glyph_em * longest_units)
-      max_by_h = max_h / (line_height * line_count)
+      if est_w <= avail_w && est_h <= avail_h
+        return clamp_font_px(desired_px)
+      end
 
-      px = [desired_px.to_f, max_by_w, max_by_h].min
-      px = px.floor
-      # Allow small sizes so the watermark can always fit within the frame.
-      px = 4 if px < 4
-      px = 200 if px > 200
-      px.to_s
+      # Borderline / long-text path: do a tiny ffmpeg preflight to measure the actual
+      # rendered bounding box at the desired size (using the same drawtext engine).
+      measured_w, measured_h =
+        measure_text_box(
+          out_w: out_w,
+          out_h: out_h,
+          text_file: text_file,
+          fontfile: fontfile,
+          fontsize_px: desired_px.to_i
+        )
+
+      px =
+        if measured_w.present? && measured_h.present? && measured_w.to_i > 0 && measured_h.to_i > 0
+          mw = measured_w.to_f
+          mh = measured_h.to_f
+
+          if mw <= avail_w && mh <= avail_h
+            desired_px.to_f
+          else
+            scale = [avail_w / mw, avail_h / mh, 1.0].min
+            desired_px.to_f * scale
+          end
+        else
+          # Fallback (no preflight data): use a conservative clamp.
+          max_by_w = avail_w / (avg_glyph_em * longest_units)
+          max_by_h = avail_h / (line_height * line_count)
+          [desired_px.to_f, max_by_w, max_by_h].min
+        end
+
+      clamp_font_px(px)
+    end
+
+    def self.clamp_font_px(px)
+      n = px.to_f.floor
+      n = 4 if n < 4
+      n = 200 if n > 200
+      n.to_s
+    end
+
+    # Uses a 1-frame ffmpeg run on a blank canvas to measure the rendered text bounding box.
+    # This allows us to keep the desired size whenever it truly fits, and only scale down
+    # when needed (e.g. very long watermark text on portrait outputs).
+    def self.measure_text_box(out_w:, out_h:, text_file:, fontfile:, fontsize_px:)
+      return [nil, nil] if out_w.to_i <= 0 || out_h.to_i <= 0
+      return [nil, nil] if fontsize_px.to_i <= 0
+      return [nil, nil] if text_file.blank? || !File.exist?(text_file)
+
+      ffmpeg =
+        begin
+          MediaGallery::Ffmpeg.ffmpeg_path
+        rescue
+          "ffmpeg"
+        end
+
+      draw_opts = []
+      draw_opts << "fontfile=#{escape_filter_path(fontfile)}" if fontfile.present?
+      draw_opts << "textfile=#{escape_filter_path(text_file)}"
+      draw_opts << "fontsize=#{fontsize_px.to_i}"
+      draw_opts << "x=0"
+      draw_opts << "y=0"
+      draw_opts << "fontcolor=white@1"
+      draw_opts << "shadowcolor=black@0"
+      draw_opts << "shadowx=0"
+      draw_opts << "shadowy=0"
+      # Draw a solid box behind the text so cropdetect can reliably see a contiguous rectangle.
+      draw_opts << "box=1"
+      draw_opts << "boxcolor=white@1"
+      draw_opts << "boxborderw=0"
+
+      vf = "drawtext=#{draw_opts.join(":")},cropdetect=limit=0:round=2:reset=0"
+
+      cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "info",
+        "-nostats",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=#{out_w}x#{out_h}:d=0.1",
+        "-vf",
+        vf,
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+      ]
+
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      return [nil, nil] unless status.success?
+
+      crops = stderr.to_s.scan(/crop=(\d+):(\d+):(\d+):(\d+)/)
+      return [nil, nil] if crops.blank?
+
+      w, h, _x, _y = crops.last.map(&:to_i)
+      [w, h]
+    rescue => e
+      Rails.logger.debug("[media_gallery] watermark preflight failed: #{e.class}: #{e.message}") if defined?(Rails)
+      [nil, nil]
     end
 
     # Predict the output dimensions of our ffmpeg filterchain so sizing clamps are stable.
@@ -306,8 +400,12 @@ module MediaGallery
       h = in_h.to_i
       return [0, 0] if w <= 0 || h <= 0
 
-      max_w = 1920.0
-      max_h = 1080.0
+      # Mirror MediaGallery::Ffmpeg transcode scaling:
+      # - landscape (w >= h): fit within 1920x1080 (no upscale)
+      # - portrait  (w <  h): fit within 1080x1920 (no upscale)
+      max_w = (w >= h) ? 1920.0 : 1080.0
+      max_h = (w >= h) ? 1080.0 : 1920.0
+
       scale = [max_w / w.to_f, max_h / h.to_f, 1.0].min
 
       out_w = (w.to_f * scale).floor
