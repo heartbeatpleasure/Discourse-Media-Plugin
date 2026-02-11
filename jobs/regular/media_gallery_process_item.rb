@@ -276,32 +276,41 @@ module Jobs
 
       [out_path, thumb_path]
     end
-
     def process_image_tmp!(item, dir, tmp_input, force_jpg: false)
+      # Best-effort: capture dimensions early so watermark sizing can clamp safely.
+      begin
+        probe = MediaGallery::Ffmpeg.probe(tmp_input)
+        streams = probe["streams"] || []
+        vs = streams.find { |s| s["codec_type"] == "video" } || streams.first
+        if vs
+          item.width ||= vs["width"] if vs["width"].present?
+          item.height ||= vs["height"] if vs["height"].present?
+        end
+      rescue
+        # ignore
+      end
+
+      # Watermark (burned into the processed image).
+      wm_vf = MediaGallery::Watermark.vf_for(item: item, tmpdir: dir)
+
       # In private mode we always produce a JPG to keep paths deterministic.
-      transcode = force_jpg || SiteSetting.media_gallery_transcode_images_to_jpg
+      # Also, if watermarking is enabled for this item we must re-encode (so force JPG).
+      transcode_setting = force_jpg || SiteSetting.media_gallery_transcode_images_to_jpg
+      transcode = transcode_setting || wm_vf.present?
 
       if !transcode
         # Keep the original bytes, but still try to generate a JPG thumbnail.
         out_path = File.join(dir, "media-#{item.public_id}#{safe_extension(item.original_upload.original_filename)}")
         FileUtils.cp(tmp_input, out_path)
-
-        thumb_path = File.join(dir, "thumb-#{item.public_id}.jpg")
-        begin
-          MediaGallery::Ffmpeg.create_jpg_thumbnail(input_path: tmp_input, output_path: thumb_path)
-        rescue
-          thumb_path = nil
-        end
-        thumb_path = nil if thumb_path.present? && !File.exist?(thumb_path)
-        return [out_path, thumb_path]
+      else
+        out_path = File.join(dir, "media-#{item.public_id}.jpg")
+        MediaGallery::Ffmpeg.transcode_image_to_jpg(input_path: tmp_input, output_path: out_path, extra_vf: wm_vf)
       end
 
-      out_path = File.join(dir, "media-#{item.public_id}.jpg")
-      MediaGallery::Ffmpeg.transcode_image_to_jpg(input_path: tmp_input, output_path: out_path)
-
+      # Thumbnail (best-effort). Keep thumbnails unwatermarked to match the video pipeline.
       thumb_path = File.join(dir, "thumb-#{item.public_id}.jpg")
       begin
-        MediaGallery::Ffmpeg.create_jpg_thumbnail(input_path: out_path, output_path: thumb_path)
+        MediaGallery::Ffmpeg.create_jpg_thumbnail(input_path: tmp_input, output_path: thumb_path)
       rescue
         thumb_path = nil
       end
@@ -501,7 +510,12 @@ module Jobs
 
       file = File.open(path, "rb")
 
-      upload = ::UploadCreator.new(file, filename, type: "composer").create_for(user_id)
+      upload = begin
+        ::UploadCreator.new(file, filename, upload_type: "composer").create_for(user_id)
+      rescue ArgumentError
+        # Older Discourse versions used the "type" keyword.
+        ::UploadCreator.new(file, filename, type: "composer").create_for(user_id)
+      end
 
       unless upload&.persisted?
         errors = (upload&.errors&.full_messages || []).join(", ")

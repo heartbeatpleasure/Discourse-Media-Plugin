@@ -139,11 +139,11 @@ module ::MediaGallery
       return render_json_error("unsupported_file_type") unless MediaGallery::MediaItem::TYPES.include?(media_type)
       return render_json_error("unsupported_file_extension") unless allowed_extension_for_type?(upload, media_type)
 
-            # Watermark (burned into video outputs) - configured server-side via presets.
+            # Watermark (burned into processed video/image outputs) - configured server-side via presets.
       watermark_enabled = false
       watermark_preset_id = nil
 
-      if SiteSetting.media_gallery_watermark_enabled && media_type == "video"
+      if SiteSetting.media_gallery_watermark_enabled && (media_type == "video" || media_type == "image")
         if SiteSetting.media_gallery_watermark_user_can_toggle
           watermark_enabled = ActiveModel::Type::Boolean.new.cast(params[:watermark_enabled])
           watermark_enabled = true if params[:watermark_enabled].nil?
@@ -193,15 +193,16 @@ module ::MediaGallery
         end
 
       private_storage = MediaGallery::PrivateStorage.enabled?
-
-      status =
+      needs_processing =
         if private_storage
-          "queued"
+          true
         elsif media_type == "image"
-          transcode_images ? "queued" : "ready"
+          transcode_images || watermark_enabled
         else
-          "queued"
+          true
         end
+
+      status = needs_processing ? "queued" : "ready"
 
       item = MediaGallery::MediaItem.create!(
         public_id: SecureRandom.uuid,

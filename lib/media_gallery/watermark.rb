@@ -175,7 +175,9 @@ module MediaGallery
     def self.vf_for(item:, tmpdir:)
       return nil unless SiteSetting.media_gallery_watermark_enabled
       return nil if item.blank?
-      return nil unless item.media_type.to_s == "video"
+
+      mt = item.media_type.to_s
+      return nil unless mt == "video" || mt == "image"
 
       enabled = item.respond_to?(:watermark_enabled) ? !!item.watermark_enabled : false
       return nil unless enabled
