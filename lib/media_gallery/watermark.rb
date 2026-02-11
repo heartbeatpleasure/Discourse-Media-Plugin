@@ -307,25 +307,21 @@ module MediaGallery
       m = margin.to_i
       m = 0 if m.negative?
 
-      # Clamp so x/y never go negative even when text is wide.
-      right_x = "max(#{m}, w-tw-#{m})"
-      bottom_y = "max(#{m}, h-th-#{m})"
-
       case pos.to_s
       when "bottom_left"
-        ["#{m}", bottom_y]
+        ["#{m}", "h-th-#{m}"]
       when "top_left"
         ["#{m}", "#{m}"]
       when "top_right"
-        [right_x, "#{m}"]
+        ["w-tw-#{m}", "#{m}"]
       when "top_center"
-        ["max(#{m}, (w-tw)/2)", "#{m}"]
+        ["(w-tw)/2", "#{m}"]
       when "bottom_center"
-        ["max(#{m}, (w-tw)/2)", bottom_y]
+        ["(w-tw)/2", "h-th-#{m}"]
       when "center"
-        ["max(#{m}, (w-tw)/2)", "max(#{m}, (h-th)/2)"]
+        ["(w-tw)/2", "(h-th)/2"]
       else
-        [right_x, bottom_y]
+        ["w-tw-#{m}", "h-th-#{m}"]
       end
     end
 
