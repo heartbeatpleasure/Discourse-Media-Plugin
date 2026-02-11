@@ -41,7 +41,7 @@ after_initialize do
     get "/user/media" => "media_gallery/media#my", defaults: { format: :json }
 
     # config endpoint (must be before /media/:public_id)
-    get "/media/config" => "media_gallery/media#config", defaults: { format: :json }
+    get "/media/config" => "media_gallery/media#plugin_config", defaults: { format: :json }
 
     get "/media" => "media_gallery/media#index", defaults: { format: :json }
     post "/media" => "media_gallery/media#create", defaults: { format: :json }

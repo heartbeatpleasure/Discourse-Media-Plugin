@@ -15,11 +15,15 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                   only: [:index, :config, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing, :destroy]
+                   only: [:index, :plugin_config, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing, :destroy]
 
     before_action :ensure_can_upload, only: [:create]
 
-    def config
+    # NOTE: Do not name this action `config`.
+    # ActionController::Base includes ActiveSupport::Configurable and relies on a `config`
+    # method internally (e.g. logger access). Defining a controller action named `config`
+    # overrides that method and can cause infinite recursion / SystemStackError.
+    def plugin_config
       wm_enabled = SiteSetting.media_gallery_watermark_enabled
       render_json_dump(
         watermark: {
