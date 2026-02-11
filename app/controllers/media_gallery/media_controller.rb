@@ -19,20 +19,33 @@ module ::MediaGallery
 
     before_action :ensure_can_upload, only: [:create]
 
-    # NOTE: Do not name this action `config`.
-    # ActionController::Base includes ActiveSupport::Configurable and relies on a `config`
-    # method internally (e.g. logger access). Defining a controller action named `config`
-    # overrides that method and can cause infinite recursion / SystemStackError.
+    # NOTE: do not name this action `config` (conflicts with ActionController::Base#config)
     def plugin_config
-      wm_enabled = SiteSetting.media_gallery_watermark_enabled
+      wm_enabled = !!SiteSetting.media_gallery_watermark_enabled
+
+      choices = wm_enabled ? MediaGallery::Watermark.safe_choices_for_client(user: current_user) : []
+      default_choice = wm_enabled ? MediaGallery::Watermark.default_choice_for_client(user: current_user) : nil
+
+      # Legacy shape expected by the separate theme component:
+      # presets: [{id,label}] and default_preset_id
+      legacy_presets = choices.map { |c| { id: c[:value], label: c[:label] } }
+      legacy_default_preset_id = default_choice&.dig(:value)
+
       render_json_dump(
         watermark: {
           enabled: wm_enabled,
           user_can_toggle: wm_enabled && SiteSetting.media_gallery_watermark_user_can_toggle,
+          # legacy key name kept for backwards compatibility in the separate theme component
           user_can_choose_preset: wm_enabled && SiteSetting.media_gallery_watermark_user_can_choose_preset,
-          default_preset_id: SiteSetting.media_gallery_watermark_default_preset_id.to_s.strip.presence,
+          default_preset_id: legacy_default_preset_id,
           default_text: SiteSetting.media_gallery_watermark_default_text.to_s.presence,
-          presets: (wm_enabled ? MediaGallery::Watermark.safe_presets_for_client : [])
+          presets: legacy_presets,
+          choices: choices,
+          default_choice: default_choice,
+          position: MediaGallery::Watermark.global_position,
+          opacity_percent: MediaGallery::Watermark.global_opacity_percent,
+          size_percent: MediaGallery::Watermark.global_size_percent,
+          margin_px: MediaGallery::Watermark.global_margin_px
         }
       )
     end
@@ -139,9 +152,11 @@ module ::MediaGallery
         end
 
         if watermark_enabled && SiteSetting.media_gallery_watermark_user_can_choose_preset
-          candidate = params[:watermark_preset_id].to_s.strip
+          # Accept both param names (older clients send watermark_preset_id)
+          candidate = (params[:watermark_choice].presence || params[:watermark_preset_id]).to_s.strip
           if candidate.present?
-            unless MediaGallery::Watermark.find_preset(candidate).present?
+            unless MediaGallery::Watermark.choice_allowed?(candidate)
+              # Keep legacy error key for older clients, but message now means "option".
               return render_json_error("invalid_watermark_preset", status: 422)
             end
             watermark_preset_id = candidate

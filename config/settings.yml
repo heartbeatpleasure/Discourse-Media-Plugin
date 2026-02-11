@@ -100,20 +100,57 @@ plugins:
     default: true
     client: false
 
-  # If true, users can choose a preset (id) from the list below. Users cannot type custom text.
+  # If true, users can choose a watermark option from the list below.
   media_gallery_watermark_user_can_choose_preset:
     default: true
     client: false
 
-  # JSON array of presets. Example:
-  # [{"id":"brand","label":"Brand","template":"heartbeatpleasure.com","position":"bottom_right","opacity":0.35,"size":0.045,"margin":24}]
-  media_gallery_watermark_presets:
-    default: "[]"
+  # Watermark options (tags-like list). Example entries:
+  #  - heartbeatpleasure.com
+  #  - @{{username}}
+  #  - heartbeatpleasure.com • @{{username}}
+  # Default is the FIRST entry in this list.
+  media_gallery_watermark_choices:
+    default: ""
+    type: list
     client: false
 
-  # Optional default preset id. If blank or invalid, the default text is used.
-  media_gallery_watermark_default_preset_id:
-    default: ""
+  # Global watermark position (applies to all options).
+  media_gallery_watermark_position:
+    default: "bottom_right"
+    type: enum
+    choices:
+      - bottom_right
+      - bottom_left
+      - top_right
+      - top_left
+      - top_center
+      - bottom_center
+      - center
+    client: false
+
+  # Global watermark opacity (percentage). 100 = solid, 0 = invisible.
+  media_gallery_watermark_opacity_percent:
+    default: 35
+    type: integer
+    min: 1
+    max: 100
+    client: false
+
+  # Global watermark size (% of video height). Will be clamped so it always fits.
+  media_gallery_watermark_size_percent:
+    default: 4.5
+    type: float
+    min: 0.5
+    max: 30
+    client: false
+
+  # Global margin (px).
+  media_gallery_watermark_margin_px:
+    default: 24
+    type: integer
+    min: 0
+    max: 200
     client: false
 
   # Default watermark text when watermark is enabled and no preset is selected (or available).

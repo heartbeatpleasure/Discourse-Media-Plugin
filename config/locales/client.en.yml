@@ -45,6 +45,6 @@ en:
       watermark:
         label: "Watermark"
         apply: "Apply watermark"
-        preset: "Watermark preset"
+        preset: "Watermark option"
         preset_default: "Default"
   
