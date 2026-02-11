@@ -137,7 +137,8 @@ plugins:
     max: 100
     client: false
 
-  # Global watermark size (% of video height). Will be clamped so it always fits.
+  # Global watermark size (% of the long side). Will be clamped so it always fits.
+  # (Using the long side keeps the watermark visually consistent between landscape and portrait.)
   media_gallery_watermark_size_percent:
     default: 4.5
     type: float

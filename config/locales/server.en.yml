@@ -37,6 +37,6 @@ en:
     media_gallery_watermark_choices: "Watermark options (list)"
     media_gallery_watermark_position: "Watermark position"
     media_gallery_watermark_opacity_percent: "Watermark opacity (%)"
-    media_gallery_watermark_size_percent: "Watermark size (% of video height)"
+    media_gallery_watermark_size_percent: "Watermark size (% of long side)"
     media_gallery_watermark_margin_px: "Watermark margin (px)"
     media_gallery_watermark_default_text: "Fallback watermark text (used when no option is available)"

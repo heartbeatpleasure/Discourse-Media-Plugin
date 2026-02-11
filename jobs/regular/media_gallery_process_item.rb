@@ -450,6 +450,28 @@ module Jobs
           width = vs["width"]
           height = vs["height"]
         end
+
+        # Scale the *target* bitrate down for smaller outputs so we avoid wasting bits on
+        # low-resolution sources. We never scale above the configured target.
+        #
+        # Note: our transcode policy outputs at most Full HD in either orientation:
+        #   - landscape/square: <=1920x1080
+        #   - portrait:         <=1080x1920
+        #
+        # Both 1920x1080 and 1080x1920 have the same pixel count, so portrait is not
+        # penalized compared to landscape.
+        if width.present? && height.present?
+          out_w, out_h = expected_video_output_dims(width.to_i, height.to_i)
+          if out_w > 0 && out_h > 0
+            baseline_px = 1920.0 * 1080.0
+            ratio = ((out_w * out_h).to_f / baseline_px)
+            scaled = (configured_video.to_f * ratio).round
+            # Keep a sane floor so tiny videos don't become unreadable.
+            scaled = 800 if scaled < 800
+            scaled = configured_video if scaled > configured_video
+            configured_video = scaled
+          end
+        end
       rescue
       end
 
@@ -466,6 +488,37 @@ module Jobs
       video_budget = 64 if video_budget < 64
 
       [[configured_video, video_budget].min, audio_kbps, max_bytes, duration_seconds_f, width, height]
+    end
+
+
+    def expected_video_output_dims(in_w, in_h)
+      w = in_w.to_i
+      h = in_h.to_i
+      return [0, 0] if w <= 0 || h <= 0
+
+      # Mirror MediaGallery::Ffmpeg.transcode_video scaling policy
+      # (no upscale, preserve aspect):
+      #  - landscape/square: fit within 1920x1080
+      #  - portrait:         fit within 1080x1920
+      if h > w
+        max_w = 1080.0
+        max_h = 1920.0
+      else
+        max_w = 1920.0
+        max_h = 1080.0
+      end
+
+      scale = [max_w / w.to_f, max_h / h.to_f, 1.0].min
+      out_w = (w.to_f * scale).floor
+      out_h = (h.to_f * scale).floor
+
+      # Video output enforces even dimensions for yuv420p/x264.
+      out_w = (out_w / 2) * 2
+      out_h = (out_h / 2) * 2
+
+      out_w = 2 if out_w < 2
+      out_h = 2 if out_h < 2
+      [out_w, out_h]
     end
 
     def enforce_max_bytes!(out_path, duration_seconds, max_bytes, max_fps, audio_kbps, tmp_input, extra_vf = nil)

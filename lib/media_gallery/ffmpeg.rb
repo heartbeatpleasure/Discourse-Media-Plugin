@@ -84,7 +84,7 @@ module MediaGallery
       raise "ffmpeg_audio_failed: #{short_err(stderr)}" unless status.success?
     end
 
-    # Video profile: MP4, H.264 Main@4.1, up to 1920x1080 (landscape) or 1080x1920 (portrait), max fps, target bitrate, AAC 128kbps
+    # Video profile: MP4, H.264 Main@4.1, max 1080p, max 30fps, target bitrate, AAC 128kbps
     def self.transcode_video(input_path:, output_path:, bitrate_kbps:, max_fps:, audio_bitrate_kbps: 128, extra_vf: nil)
       buf_kbps = [bitrate_kbps.to_i * 2, 256].max
 
@@ -144,7 +144,7 @@ module MediaGallery
       raise "ffmpeg_video_failed: #{short_err(stderr)}" unless status.success?
     end
 
-    # Image standardization: JPG, up to 1920x1080 (landscape) or 1080x1920 (portrait) (no upscale), keep aspect.
+    # Image standardization: JPG, max 1920x1080 (no upscale), keep aspect.
     def self.transcode_image_to_jpg(input_path:, output_path:, extra_vf: nil)
       vf = "scale='if(gte(iw,ih),min(1920,iw),min(1080,iw))':'if(gte(iw,ih),min(1080,ih),min(1920,ih))':force_original_aspect_ratio=decrease"
       vf = "#{vf},#{extra_vf}" if extra_vf.present?
