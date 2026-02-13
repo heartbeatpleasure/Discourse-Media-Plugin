@@ -39,6 +39,7 @@ en:
         missing_title: "Please enter a title."
         missing_gender: "Please choose what the file contains."
         missing_authorization: "Please confirm you are authorized to upload this file."
+        missing_authorization_with_terms: "Please confirm you are authorized to upload this file and agree to the upload terms."
         upload_failed: "Upload failed."
         create_failed: "Creating media item failed."
       genders:
@@ -48,10 +49,14 @@ en:
         both: "⚥ Both male and female hearts"
         non_binary: "⚧ Non-binary hearts"
         objects: "♻ Heart-related objects"
+        other: "❓ Other"
       authorization:
         label: "Copyright / authorization"
         text: "I confirm I own the copyright and/or have permission to upload this file."
-        link: "Upload terms"
+        text_no_terms: "I confirm I own the copyright and/or have permission to upload this file."
+        text_with_terms_prefix: "I confirm I own the copyright and/or have permission to upload this file and agree to the"
+        text_with_terms_suffix: "."
+        link: "upload terms"
       watermark:
         label: "Watermark"
         apply: "Apply watermark"

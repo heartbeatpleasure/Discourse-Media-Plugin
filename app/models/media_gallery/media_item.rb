@@ -17,7 +17,7 @@ module ::MediaGallery
     TYPES = %w[video audio image].freeze
     # NOTE: this field is used as a "file contains" / subject selector in the UI.
     # We keep the column name `gender` for backwards compatibility.
-    GENDERS = %w[male female both non_binary objects].freeze
+    GENDERS = %w[male female both non_binary objects other].freeze
 
     # Allowed INPUT extensions (we transcode to a standard OUTPUT profile)
     # - images -> JPG (optional setting; default: on)
