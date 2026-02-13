@@ -3,6 +3,7 @@ en:
     media_gallery_enabled: "Enable Secure Media Gallery API"
     media_gallery_viewer_groups: "Groups allowed to view media (empty = everyone logged in)"
     media_gallery_allowed_uploader_groups: "Groups allowed to register uploads into the media gallery"
+    media_gallery_upload_terms_url: "Optional URL to an Upload Terms topic/page (shown next to the required authorization checkbox)"
     media_gallery_max_upload_size_mb: "Optional extra max upload size (MB) for media registration (0 = disabled)"
 
     media_gallery_max_video_size_mb: "Max video size for media gallery registration (MB, 0 = disabled)"

@@ -121,6 +121,15 @@ module ::MediaGallery
       title = params[:title].to_s.strip
       return render_json_error("title_required") if title.blank?
 
+      subject = params[:gender].to_s.strip
+      return render_json_error("gender_required") if subject.blank?
+      unless MediaGallery::MediaItem::GENDERS.include?(subject)
+        return render_json_error("invalid_gender")
+      end
+
+      authorized = ActiveModel::Type::Boolean.new.cast(params[:authorized])
+      return render_json_error("authorization_required") unless authorized
+
       upload = ::Upload.find_by(id: upload_id)
       return render_json_error("upload_not_found") if upload.blank?
 
@@ -213,7 +222,7 @@ module ::MediaGallery
         media_type: media_type,
         watermark_enabled: watermark_enabled,
         watermark_preset_id: watermark_preset_id,
-        gender: params[:gender].to_s.presence,
+        gender: subject.presence,
         tags: (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq,
         original_upload_id: upload.id,
         status: status,

@@ -15,6 +15,12 @@ plugins:
     type: list
     client: false
 
+  # Optional URL to an "Upload Terms" topic/page. Shown next to the required authorization checkbox.
+  media_gallery_upload_terms_url:
+    default: ""
+    type: string
+    client: true
+
   # Optional extra size limit (MB) on top of Discourse's max_attachment_size_kb. 0 = disabled.
   media_gallery_max_upload_size_mb:
     default: 0
