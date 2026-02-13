@@ -49,7 +49,7 @@ en:
         both: "⚥ Both male and female hearts"
         non_binary: "⚧ Non-binary hearts"
         objects: "♻ Heart-related objects"
-        other: "❓ Other"
+        other: "? Other"
       authorization:
         label: "Copyright / authorization"
         text: "I confirm I own the copyright and/or have permission to upload this file."
