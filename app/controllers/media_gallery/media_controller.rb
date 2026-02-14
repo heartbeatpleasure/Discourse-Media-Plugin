@@ -340,6 +340,8 @@ module ::MediaGallery
     end
 
     def play
+      return unless enforce_play_rate_limits!
+
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
       return render_json_error("not_found", status: 404) if item.blank?
 
@@ -380,18 +382,14 @@ module ::MediaGallery
       # keep this lightweight: avoid callbacks/validations
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
-      ext =
-        case item.media_type
-        when "audio"
-          "mp3"
-        when "image"
-          "jpg"
-        else
-          "mp4"
-        end
-
       render_json_dump(
-        stream_url: "/media/stream/#{token}.#{ext}",
+        # Do not include a file extension in the URL.
+        #
+        # Rationale:
+        # - Avoids exposing ".mp4" etc in the DOM.
+        # - Keeps the URL less obviously "downloadable".
+        # - StreamController sets the correct Content-Type based on the token payload.
+        stream_url: "/media/stream/#{token}",
         expires_at: expires_at,
         playable: true
       )
@@ -401,6 +399,27 @@ module ::MediaGallery
       )
       render_json_error("internal_error", status: 500)
     end
+
+    # Optional per-IP rate limit for issuing play tokens.
+    #
+    # IMPORTANT: We intentionally rate limit the token issuance endpoint (/media/:id/play)
+    # and not the streaming endpoint (/media/stream/:token), because video playback uses
+    # multiple range requests and seeks.
+    def enforce_play_rate_limits!
+      per_min = SiteSetting.media_gallery_play_tokens_per_ip_per_minute.to_i
+      return true if per_min <= 0
+
+      ip = request.remote_ip.to_s
+      key = "media_gallery_play_tokens_ip_#{ip}"
+
+      RateLimiter.new(nil, key, per_min, 1.minute).performed!
+      true
+    rescue RateLimiter::LimitExceeded
+      render_json_error("rate_limited", status: 429)
+      false
+    end
+
+    private :enforce_play_rate_limits!
 
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])

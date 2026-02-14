@@ -192,6 +192,17 @@ plugins:
     default: 15
     client: false
 
+  # Optional: limit how many play tokens a single IP can request per minute.
+  # This helps reduce automated scraping attempts without breaking video playback
+  # (streaming uses multiple Range requests, so we do NOT rate limit /media/stream).
+  # 0 = disabled.
+  media_gallery_play_tokens_per_ip_per_minute:
+    default: 0
+    type: integer
+    min: 0
+    max: 10000
+    client: false
+
   # Thumbnail caching (stable URL). Used for Cache-Control: private, max-age=...
   # 0 disables browser caching (forces revalidation)
   media_gallery_thumbnail_cache_max_age_seconds:

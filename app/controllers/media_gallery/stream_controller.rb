@@ -43,7 +43,9 @@ module ::MediaGallery
       response.headers["Expires"] = "0"
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Accept-Ranges"] = "bytes"
-      response.headers["Content-Disposition"] = "inline; filename=\"#{filename}\""
+      # Avoid advertising a "downloadable" filename (and extensions like .mp4) in the headers.
+      # The browser can still play inline based on Content-Type.
+      response.headers["Content-Disposition"] = "inline"
 
       if request.head?
         response.headers["Content-Type"] = content_type
@@ -76,14 +78,14 @@ module ::MediaGallery
             response.headers["Content-Range"] = "bytes #{start_pos}-#{end_pos}/#{file_size}"
             response.headers["Content-Length"] = length.to_s
 
-            return send_data(data, type: content_type, disposition: "inline", filename: filename, status: 206)
+            return send_data(data, type: content_type, disposition: "inline", status: 206)
           end
         end
       end
 
       response.headers["Content-Type"] = content_type
       response.headers["Content-Length"] = file_size.to_s
-      send_file(local_path, disposition: "inline", filename: filename, type: content_type)
+      send_file(local_path, disposition: "inline", type: content_type)
     end
 
     private
