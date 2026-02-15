@@ -15,6 +15,9 @@ module ::MediaGallery
 
     # GET/HEAD /media/stream/:token(.:ext)
     def show
+      # If the client revoked this token (overlay closed/ended), deny access.
+      raise Discourse::NotFound if MediaGallery::Security.revoked?(params[:token].to_s)
+
       payload = MediaGallery::Token.verify(params[:token].to_s)
       raise Discourse::NotFound if payload.blank?
 

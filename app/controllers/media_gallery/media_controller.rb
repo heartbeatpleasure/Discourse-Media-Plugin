@@ -15,7 +15,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                   only: [:index, :plugin_config, :show, :status, :thumbnail, :play, :my, :like, :unlike, :retry_processing, :destroy]
+                   only: [:index, :plugin_config, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :retry_processing, :destroy]
 
     before_action :ensure_can_upload, only: [:create]
 
@@ -342,6 +342,10 @@ module ::MediaGallery
     def play
       return unless enforce_play_rate_limits!
 
+      # Best-effort extra hardening (active token + concurrent session limiting).
+      ip = request.remote_ip.to_s
+      user_id = current_user&.id
+
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
       return render_json_error("not_found", status: 404) if item.blank?
 
@@ -368,6 +372,17 @@ module ::MediaGallery
         return render_json_error("processed_file_missing", status: 404) unless File.exist?(processed_path)
       end
 
+      ok, err = MediaGallery::Security.enforce_active_token_limits!(user_id: user_id, ip: ip)
+      return render_json_error(err, status: 429) unless ok
+
+      streaming_session = item.media_type.to_s == "video" || item.media_type.to_s == "audio"
+      heartbeat_enabled = streaming_session && MediaGallery::Security.heartbeat_enabled?
+
+      if heartbeat_enabled
+        ok2, err2 = MediaGallery::Security.enforce_new_session_limits!(user_id: user_id, ip: ip)
+        return render_json_error(err2, status: 429) unless ok2
+      end
+
       payload = MediaGallery::Token.build_stream_payload(
         media_item: item,
         upload_id: upload_id.presence,
@@ -378,6 +393,21 @@ module ::MediaGallery
 
       token = MediaGallery::Token.generate(payload)
       expires_at = payload["exp"]
+
+      # Track active tokens (best effort). This does not affect playback.
+      MediaGallery::Security.track_token!(token: token, exp: expires_at, user_id: user_id, ip: ip)
+
+      # Register an active session immediately (will be refreshed by heartbeat on play).
+      # Useful both today (MP4) and for future HLS.
+      if heartbeat_enabled
+        MediaGallery::Security.open_or_touch_session!(token: token, user_id: user_id, ip: ip)
+
+        ok3, err3 = MediaGallery::Security.enforce_session_limits!(user_id: user_id, ip: ip)
+        if !ok3
+          MediaGallery::Security.revoke!(token: token, exp: expires_at, user_id: user_id, ip: ip)
+          return render_json_error(err3, status: 429)
+        end
+      end
 
       # keep this lightweight: avoid callbacks/validations
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
@@ -391,12 +421,101 @@ module ::MediaGallery
         # - StreamController sets the correct Content-Type based on the token payload.
         stream_url: "/media/stream/#{token}",
         expires_at: expires_at,
-        playable: true
+        playable: true,
+        security: {
+          revoke_enabled: MediaGallery::Security.revoke_enabled?,
+          heartbeat_enabled: heartbeat_enabled,
+          heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
+          heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds
+        }
       )
     rescue => e
       Rails.logger.error(
         "[media_gallery] play failed request_id=#{request.request_id} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}"
       )
+      render_json_error("internal_error", status: 500)
+    end
+
+    # POST /media/heartbeat
+    # Lightweight session keep-alive to support best-effort concurrent playback limits.
+    def heartbeat
+      raise Discourse::NotFound unless SiteSetting.media_gallery_heartbeat_enabled
+
+      token = (params[:token].presence || params[:stream_token].presence).to_s
+      return render_json_error("invalid_token", status: 400) if token.blank?
+      raise Discourse::NotFound if MediaGallery::Security.revoked?(token)
+
+      payload = MediaGallery::Token.verify(token)
+      raise Discourse::NotFound if payload.blank?
+
+      if payload["user_id"].present? && current_user.id != payload["user_id"].to_i
+        raise Discourse::NotFound
+      end
+
+      if payload["ip"].present? && request.remote_ip.to_s != payload["ip"].to_s
+        raise Discourse::NotFound
+      end
+
+      # Only sessions for audio/video are counted.
+      item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
+      raise Discourse::NotFound if item.blank?
+      raise Discourse::NotFound unless item.ready?
+
+      streaming_session = item.media_type.to_s == "video" || item.media_type.to_s == "audio"
+
+      if streaming_session
+        ip = request.remote_ip.to_s
+        user_id = current_user.id
+
+        MediaGallery::Security.open_or_touch_session!(token: token, user_id: user_id, ip: ip)
+
+        ok, err = MediaGallery::Security.enforce_session_limits!(user_id: user_id, ip: ip)
+        if !ok
+          MediaGallery::Security.revoke!(token: token, exp: payload["exp"], user_id: user_id, ip: ip)
+          return render_json_error(err, status: 429)
+        end
+      end
+
+      render_json_dump(ok: true)
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.warn("[media_gallery] heartbeat failed request_id=#{request.request_id} error=#{e.class}: #{e.message}")
+      render_json_error("internal_error", status: 500)
+    end
+
+    # POST /media/revoke
+    # Best-effort early revocation of a stream token.
+    def revoke
+      return render_json_dump(ok: true) unless SiteSetting.media_gallery_revoke_enabled
+
+      token = (params[:token].presence || params[:stream_token].presence).to_s
+      return render_json_dump(ok: true) if token.blank?
+
+      payload = MediaGallery::Token.verify(token)
+      # If it's already expired, there is nothing to revoke.
+      return render_json_dump(ok: true) if payload.blank?
+
+      if payload["user_id"].present? && current_user.id != payload["user_id"].to_i
+        raise Discourse::NotFound
+      end
+
+      if payload["ip"].present? && request.remote_ip.to_s != payload["ip"].to_s
+        raise Discourse::NotFound
+      end
+
+      MediaGallery::Security.revoke!(
+        token: token,
+        exp: payload["exp"],
+        user_id: current_user.id,
+        ip: request.remote_ip.to_s
+      )
+
+      render_json_dump(ok: true)
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.warn("[media_gallery] revoke failed request_id=#{request.request_id} error=#{e.class}: #{e.message}")
       render_json_error("internal_error", status: 500)
     end
 

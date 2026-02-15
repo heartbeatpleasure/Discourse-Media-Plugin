@@ -14,6 +14,7 @@ end
 
 after_initialize do
   require_relative "lib/media_gallery/token"
+  require_relative "lib/media_gallery/security"
   require_relative "lib/media_gallery/ffmpeg"
   require_relative "lib/media_gallery/type_detector"
   require_relative "lib/media_gallery/upload_path"
@@ -55,6 +56,12 @@ after_initialize do
 
     get "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
     post "/media/:public_id/play" => "media_gallery/media#play", defaults: { format: :json }
+
+    # Client heartbeat for best-effort concurrent session limiting
+    post "/media/heartbeat" => "media_gallery/media#heartbeat", defaults: { format: :json }
+
+    # Best-effort early token revocation (on overlay close/ended)
+    post "/media/revoke" => "media_gallery/media#revoke", defaults: { format: :json }
 
     get "/media/:public_id/thumbnail" => "media_gallery/media#thumbnail"
 

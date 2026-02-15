@@ -192,6 +192,61 @@ plugins:
     default: 15
     client: false
 
+  # Playback hardening (best-effort)
+  # Early revocation lets the client invalidate a token when the overlay is closed.
+  media_gallery_revoke_enabled:
+    default: true
+    client: false
+
+  # Heartbeat enables lightweight concurrent session limiting (useful now and for future HLS).
+  media_gallery_heartbeat_enabled:
+    default: true
+    client: false
+
+  media_gallery_heartbeat_interval_seconds:
+    default: 15
+    type: integer
+    min: 5
+    max: 120
+    client: false
+
+  # Session TTL should be larger than interval (interval + 10 minimum is enforced server-side).
+  media_gallery_heartbeat_ttl_seconds:
+    default: 40
+    type: integer
+    min: 10
+    max: 600
+    client: false
+
+  # Limits (0 = disabled)
+  media_gallery_max_concurrent_sessions_per_user:
+    default: 2
+    type: integer
+    min: 0
+    max: 20
+    client: false
+
+  media_gallery_max_concurrent_sessions_per_ip:
+    default: 4
+    type: integer
+    min: 0
+    max: 50
+    client: false
+
+  media_gallery_max_active_tokens_per_user:
+    default: 10
+    type: integer
+    min: 0
+    max: 200
+    client: false
+
+  media_gallery_max_active_tokens_per_ip:
+    default: 50
+    type: integer
+    min: 0
+    max: 500
+    client: false
+
   # Optional: limit how many play tokens a single IP can request per minute.
   # This helps reduce automated scraping attempts without breaking video playback
   # (streaming uses multiple Range requests, so we do NOT rate limit /media/stream).
