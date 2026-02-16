@@ -373,14 +373,14 @@ module ::MediaGallery
       end
 
       ok, err = MediaGallery::Security.enforce_active_token_limits!(user_id: user_id, ip: ip)
-      return render_json_error(err, status: 429) unless ok
+      return render_json_error(err, status: 429, message: playback_limit_message(err)) unless ok
 
       streaming_session = item.media_type.to_s == "video" || item.media_type.to_s == "audio"
       heartbeat_enabled = streaming_session && MediaGallery::Security.heartbeat_enabled?
 
       if heartbeat_enabled
         ok2, err2 = MediaGallery::Security.enforce_new_session_limits!(user_id: user_id, ip: ip)
-        return render_json_error(err2, status: 429) unless ok2
+        return render_json_error(err2, status: 429, message: playback_limit_message(err2)) unless ok2
       end
 
       payload = MediaGallery::Token.build_stream_payload(
@@ -405,7 +405,7 @@ module ::MediaGallery
         ok3, err3 = MediaGallery::Security.enforce_session_limits!(user_id: user_id, ip: ip)
         if !ok3
           MediaGallery::Security.revoke!(token: token, exp: expires_at, user_id: user_id, ip: ip)
-          return render_json_error(err3, status: 429)
+          return render_json_error(err3, status: 429, message: playback_limit_message(err3))
         end
       end
 
@@ -472,7 +472,7 @@ module ::MediaGallery
         ok, err = MediaGallery::Security.enforce_session_limits!(user_id: user_id, ip: ip)
         if !ok
           MediaGallery::Security.revoke!(token: token, exp: payload["exp"], user_id: user_id, ip: ip)
-          return render_json_error(err, status: 429)
+          return render_json_error(err, status: 429, message: playback_limit_message(err))
         end
       end
 
@@ -534,7 +534,7 @@ module ::MediaGallery
       RateLimiter.new(nil, key, per_min, 1.minute).performed!
       true
     rescue RateLimiter::LimitExceeded
-      render_json_error("rate_limited", status: 429)
+      render_json_error("rate_limited", status: 429, message: playback_limit_message("rate_limited"))
       false
     end
 
@@ -634,7 +634,20 @@ module ::MediaGallery
       item
     end
 
-    # Consistent JSON errors for API clients.
+        def playback_limit_message(code)
+      case code.to_s
+      when "rate_limited"
+        "Playback rate limited. Please wait and try again."
+      when "too_many_concurrent_sessions_user", "too_many_concurrent_sessions_ip"
+        "Playback blocked: too many active sessions. Close another player and try again."
+      when "too_many_active_tokens_user", "too_many_active_tokens_ip"
+        "Playback blocked: too many active playback links. Please close other sessions and try again."
+      else
+        "Playback blocked. Please try again."
+      end
+    end
+
+# Consistent JSON errors for API clients.
     # Always returns at least { errors: [..], error_code: "..", request_id: ".." }.
     def render_json_error(error_code, status: 422, message: nil, extra: nil)
       code = error_code.to_s
