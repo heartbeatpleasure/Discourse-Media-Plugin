@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "open3"
+require "fileutils"
 
 module MediaGallery
   class Ffmpeg
@@ -85,7 +86,18 @@ module MediaGallery
     end
 
     # Video profile: MP4, H.264 Main@4.1, max 1080p, max 30fps, target bitrate, AAC 128kbps
-    def self.transcode_video(input_path:, output_path:, bitrate_kbps:, max_fps:, audio_bitrate_kbps: 128, extra_vf: nil)
+    #
+    # When hls_segment_seconds is provided, keyframes are forced on segment boundaries.
+    # This enables clean HLS packaging via stream copy.
+    def self.transcode_video(
+      input_path:,
+      output_path:,
+      bitrate_kbps:,
+      max_fps:,
+      audio_bitrate_kbps: 128,
+      extra_vf: nil,
+      hls_segment_seconds: nil
+    )
       buf_kbps = [bitrate_kbps.to_i * 2, 256].max
 
       # IMPORTANT: enforce even dimensions for yuv420p/x264
@@ -129,6 +141,27 @@ module MediaGallery
         "#{bitrate_kbps}k",
         "-bufsize",
         "#{buf_kbps}k",
+      ]
+
+      # Force GOP alignment for HLS packaging (milestone 1).
+      seg = hls_segment_seconds.to_i
+      if seg > 0
+        fps_i = [max_fps.to_i, 1].max
+        gop = fps_i * seg
+
+        cmd += [
+          "-g",
+          gop.to_s,
+          "-keyint_min",
+          gop.to_s,
+          "-sc_threshold",
+          "0",
+          "-force_key_frames",
+          "expr:gte(t,n_forced*#{seg})",
+        ]
+      end
+
+      cmd += [
         "-c:a",
         "aac",
         "-b:a",
@@ -142,6 +175,47 @@ module MediaGallery
 
       _stdout, stderr, status = Open3.capture3(*cmd)
       raise "ffmpeg_video_failed: #{short_err(stderr)}" unless status.success?
+    end
+
+    # Milestone 1: package a processed MP4 into a single HLS variant.
+    # Produces: output_dir/index.m3u8 + output_dir/seg_XXXXX.ts
+    def self.package_hls_single_variant(input_path:, output_dir:, segment_seconds:)
+      FileUtils.mkdir_p(output_dir)
+      seg = segment_seconds.to_i
+      seg = 6 if seg <= 0
+
+      playlist_path = File.join(output_dir, "index.m3u8")
+      segment_pattern = File.join(output_dir, "seg_%05d.ts")
+
+      cmd = [
+        ffmpeg_path,
+        *ffmpeg_common_args,
+        "-y",
+        "-i",
+        input_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c",
+        "copy",
+        "-f",
+        "hls",
+        "-hls_time",
+        seg.to_s,
+        "-hls_playlist_type",
+        "vod",
+        "-hls_flags",
+        "independent_segments",
+        "-hls_list_size",
+        "0",
+        "-hls_segment_filename",
+        segment_pattern,
+        playlist_path,
+      ]
+
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      raise "ffmpeg_hls_failed: #{short_err(stderr)}" unless status.success?
     end
 
     # Image standardization: JPG, max 1920x1080 (no upscale), keep aspect.

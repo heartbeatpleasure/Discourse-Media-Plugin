@@ -6,25 +6,36 @@ module ::MediaGallery
   module Token
     module_function
 
-    def verifier
-      # Uses Rails secret_key_base under the hood; scoped by purpose.
-      Rails.application.message_verifier("media_gallery_stream")
+    # Uses Rails secret_key_base under the hood; scoped by purpose.
+    #
+    # We keep the historical verifier name "media_gallery_stream" for backwards compatibility,
+    # and introduce a separate verifier for HLS so an HLS token cannot be reused against
+    # /media/stream/:token.
+    def verifier(purpose: "stream")
+      case purpose.to_s
+      when "stream"
+        Rails.application.message_verifier("media_gallery_stream")
+      when "hls"
+        Rails.application.message_verifier("media_gallery_hls")
+      else
+        Rails.application.message_verifier("media_gallery_stream")
+      end
     end
 
     def ttl_seconds
       SiteSetting.media_gallery_stream_token_ttl_minutes.to_i * 60
     end
 
-    def generate(payload)
-      signed = verifier.generate(payload)
+    def generate(payload, purpose: "stream")
+      signed = verifier(purpose: purpose).generate(payload)
       Base64.urlsafe_encode64(signed, padding: false)
     end
 
     # Returns the decoded payload Hash if valid, otherwise nil.
     # Enforces signature + expiration.
-    def verify(token)
+    def verify(token, purpose: "stream")
       signed = Base64.urlsafe_decode64(token.to_s)
-      payload = verifier.verify(signed)
+      payload = verifier(purpose: purpose).verify(signed)
 
       return nil unless payload.is_a?(Hash)
 
@@ -34,6 +45,16 @@ module ::MediaGallery
 
       payload
     rescue ArgumentError, ActiveSupport::MessageVerifier::InvalidSignature
+      nil
+    end
+
+    # Tries all known purposes and returns the first valid payload.
+    # Adds "_purpose" so callers can optionally branch.
+    def verify_any(token, purposes: %w[stream hls])
+      Array(purposes).each do |p|
+        payload = verify(token, purpose: p)
+        return payload.merge("_purpose" => p.to_s) if payload.present?
+      end
       nil
     end
 

@@ -117,6 +117,48 @@ module ::MediaGallery
       File.join(private_root, thumbnail_rel_path(item))
     end
 
+    # --- HLS (milestone 1) ---------------------------------------------------
+
+    def hls_root_rel_dir(public_id)
+      File.join(public_id.to_s, "hls")
+    end
+
+    def hls_root_abs_dir(public_id)
+      File.join(private_root, hls_root_rel_dir(public_id))
+    end
+
+    def hls_master_rel_path(item)
+      File.join(hls_root_rel_dir(item.public_id), "master.m3u8")
+    end
+
+    def hls_master_abs_path(item)
+      File.join(private_root, hls_master_rel_path(item))
+    end
+
+    def hls_complete_abs_path(public_id)
+      File.join(hls_root_abs_dir(public_id), ".complete")
+    end
+
+    def hls_variant_rel_dir(public_id, variant)
+      File.join(hls_root_rel_dir(public_id), variant.to_s)
+    end
+
+    def hls_variant_abs_dir(public_id, variant)
+      File.join(private_root, hls_variant_rel_dir(public_id, variant))
+    end
+
+    def hls_variant_playlist_abs_path(public_id, variant)
+      File.join(hls_variant_abs_dir(public_id, variant), "index.m3u8")
+    end
+
+    def hls_segment_rel_path(public_id, variant, segment)
+      File.join(hls_variant_rel_dir(public_id, variant), segment.to_s)
+    end
+
+    def hls_segment_abs_path(public_id, variant, segment)
+      File.join(private_root, hls_segment_rel_path(public_id, variant, segment))
+    end
+
     # --- Original export / retention -----------------------------------------
 
     def export_original!(item:, source_path:, original_filename:, extension:)

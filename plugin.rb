@@ -16,6 +16,7 @@ after_initialize do
   require_relative "lib/media_gallery/token"
   require_relative "lib/media_gallery/security"
   require_relative "lib/media_gallery/ffmpeg"
+  require_relative "lib/media_gallery/hls"
   require_relative "lib/media_gallery/type_detector"
   require_relative "lib/media_gallery/upload_path"
   require_relative "lib/media_gallery/permissions"
@@ -27,6 +28,7 @@ after_initialize do
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/hls_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/library_controller.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
@@ -37,6 +39,12 @@ after_initialize do
     get "/media/stream/:token(.:ext)" => "media_gallery/stream#show",
         defaults: { format: :json },
         constraints: { token: /[^\/\.]+/ }
+
+    # HLS (milestone 1)
+    get "/media/hls/:public_id/master.m3u8" => "media_gallery/hls#master"
+    get "/media/hls/:public_id/v/:variant/index.m3u8" => "media_gallery/hls#variant"
+    get "/media/hls/:public_id/seg/:variant/:segment" => "media_gallery/hls#segment",
+        constraints: { segment: /[^\/]+/ }
 
     get "/media/my" => "media_gallery/media#my", defaults: { format: :json }
     get "/user/media" => "media_gallery/media#my", defaults: { format: :json }

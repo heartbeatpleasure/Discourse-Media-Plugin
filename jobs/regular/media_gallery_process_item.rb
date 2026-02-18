@@ -115,6 +115,25 @@ module Jobs
           store_as_uploads!(item, processed_tmp: processed_tmp, thumb_tmp: thumb_tmp)
         end
 
+        # Optional: package video into HLS (milestone 1). Best-effort.
+        if private_mode &&
+             item.media_type.to_s == "video" &&
+             SiteSetting.respond_to?(:media_gallery_hls_enabled) &&
+             SiteSetting.media_gallery_hls_enabled
+          begin
+            input_for_hls = MediaGallery::PrivateStorage.processed_abs_path(item)
+            hls_meta = MediaGallery::Hls.package_video!(item, input_path: input_for_hls)
+            if hls_meta.present?
+              meta = (item.extra_metadata || {}).dup
+              meta["hls"] = hls_meta
+              item.extra_metadata = meta
+              item.save!
+            end
+          rescue => e
+            Rails.logger.warn("[media_gallery] HLS post-process failed public_id=#{item.public_id} error=#{e.class}: #{e.message}")
+          end
+        end
+
         # Export + delete original upload (Option A)
         if SiteSetting.media_gallery_delete_original_on_success
           export_result = maybe_export_original!(item, original_upload, input_path)
@@ -260,6 +279,7 @@ module Jobs
         max_fps: max_fps,
         audio_bitrate_kbps: audio_kbps,
         extra_vf: wm_vf,
+        hls_segment_seconds: (SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled ? MediaGallery::Hls.segment_duration_seconds : nil),
       )
 
       enforce_max_bytes!(out_path, duration_seconds_f, max_bytes, max_fps, audio_kbps, tmp_input, wm_vf)  # NEW
@@ -538,7 +558,8 @@ module Jobs
         bitrate_kbps: new_video_kbps,
         max_fps: max_fps,
         audio_bitrate_kbps: audio_kbps,
-        extra_vf: extra_vf, 
+        extra_vf: extra_vf,
+        hls_segment_seconds: (SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled ? MediaGallery::Hls.segment_duration_seconds : nil),
       )
 
       out_size2 = File.size?(out_path).to_i
