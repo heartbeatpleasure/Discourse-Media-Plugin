@@ -59,7 +59,7 @@ module ::MediaGallery
     end
 
     # upload_id is optional. When omitted, StreamController will resolve the file from MediaItem + kind.
-    def build_stream_payload(media_item:, kind:, user:, request:, upload_id: nil)
+    def build_stream_payload(media_item:, kind:, user:, request:, upload_id: nil, fingerprint_id: nil)
       exp = Time.now.to_i + ttl_seconds
 
       payload = {
@@ -69,6 +69,8 @@ module ::MediaGallery
       }
 
       payload["upload_id"] = upload_id if upload_id.present?
+
+      payload["fingerprint_id"] = fingerprint_id if fingerprint_id.present?
 
       if SiteSetting.media_gallery_bind_stream_to_user && user&.id
         payload["user_id"] = user.id

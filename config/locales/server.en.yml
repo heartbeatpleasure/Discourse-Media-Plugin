@@ -34,6 +34,8 @@ en:
     media_gallery_log_hls_denials: "Log HLS token denials (can be noisy)"
     media_gallery_hls_x_accel_enabled: "Offload HLS segments via Nginx X-Accel-Redirect"
     media_gallery_hls_x_accel_internal_location: "Nginx internal location for HLS segments"
+    media_gallery_fingerprint_enabled: "Enable segment-level A/B fingerprinting for HLS playlists"
+    media_gallery_fingerprint_secret: "Fingerprint secret (leave empty to use Rails secret_key_base)"
     media_gallery_revoke_enabled: "Allow the client to revoke a stream token early when the overlay is closed"
     media_gallery_heartbeat_enabled: "Enable client heartbeat (used for concurrent session limiting)"
     media_gallery_heartbeat_interval_seconds: "Heartbeat interval (seconds)"

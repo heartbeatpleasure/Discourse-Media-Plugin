@@ -17,6 +17,7 @@ after_initialize do
   require_relative "lib/media_gallery/security"
   require_relative "lib/media_gallery/ffmpeg"
   require_relative "lib/media_gallery/hls"
+  require_relative "lib/media_gallery/fingerprinting"
   require_relative "lib/media_gallery/type_detector"
   require_relative "lib/media_gallery/upload_path"
   require_relative "lib/media_gallery/permissions"
@@ -25,6 +26,7 @@ after_initialize do
 
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/media_fingerprint.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
@@ -43,6 +45,10 @@ after_initialize do
     # HLS (milestone 1)
     get "/media/hls/:public_id/master.m3u8" => "media_gallery/hls#master"
     get "/media/hls/:public_id/v/:variant/index.m3u8" => "media_gallery/hls#variant"
+    # Segment requests can include a per-segment fingerprint variant (a|b).
+    get "/media/hls/:public_id/seg/:variant/:ab/:segment" => "media_gallery/hls#segment",
+        constraints: { ab: /a|b/i, segment: /[^\/]+/ }
+    # Backwards-compatible (no a|b in path)
     get "/media/hls/:public_id/seg/:variant/:segment" => "media_gallery/hls#segment",
         constraints: { segment: /[^\/]+/ }
 

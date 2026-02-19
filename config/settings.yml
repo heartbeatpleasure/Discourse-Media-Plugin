@@ -236,6 +236,19 @@ plugins:
   media_gallery_hls_x_accel_internal_location:
     default: "/internal/media-hls/"
     client: false
+  # HLS A/B fingerprinting (segment-level) - scaffold
+  # When enabled, variant playlists are assembled per user token and point to /seg/.../(a|b)/... paths.
+  # Note: A and B segments may still be identical until the transcoding pipeline generates real A/B media.
+  media_gallery_fingerprint_enabled:
+    default: false
+    client: false
+
+  # Optional secret to derive stable per-user fingerprint ids. Leave empty to use Rails secret_key_base.
+  media_gallery_fingerprint_secret:
+    default: ""
+    type: string
+    client: false
+
 
   # Playback hardening (best-effort)
   # Early revocation lets the client invalidate a token when the overlay is closed.

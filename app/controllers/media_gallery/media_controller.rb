@@ -380,6 +380,16 @@ module ::MediaGallery
           MediaGallery::Hls.ready?(item) &&
           !force_stream
 
+      fingerprint_id = nil
+      if use_hls && MediaGallery::Fingerprinting.enabled?
+        # Deterministic fingerprint id per user+media (cannot be re-rolled by requesting new tokens).
+        fingerprint_id = MediaGallery::Fingerprinting.touch_fingerprint_record!(
+          user_id: current_user.id,
+          media_item_id: item.id,
+          ip: ip
+        )
+      end
+
       if upload_id.blank?
         return render_json_error("private_storage_disabled", status: 500) unless MediaGallery::PrivateStorage.enabled?
 
@@ -407,7 +417,8 @@ module ::MediaGallery
         upload_id: (use_hls ? nil : upload_id.presence),
         kind: (use_hls ? "hls" : "main"),
         user: current_user,
-        request: request
+        request: request,
+        fingerprint_id: fingerprint_id
       )
 
       token = MediaGallery::Token.generate(payload, purpose: (use_hls ? "hls" : "stream"))
@@ -503,6 +514,10 @@ module ::MediaGallery
       if streaming_session
         ip = request.remote_ip.to_s
         user_id = current_user.id
+
+        if MediaGallery::Fingerprinting.enabled? && payload["fingerprint_id"].present?
+          MediaGallery::Fingerprinting.touch_fingerprint_record!(user_id: user_id, media_item_id: item.id, ip: ip)
+        end
 
         MediaGallery::Security.open_or_touch_session!(token: token, user_id: user_id, ip: ip)
 

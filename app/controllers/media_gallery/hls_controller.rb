@@ -51,7 +51,7 @@ module ::MediaGallery
       raise Discourse::NotFound unless path.present? && File.exist?(path)
 
       data = File.read(path)
-      data = rewrite_variant_playlist(data, public_id: item.public_id, variant: variant, token: token)
+      data = rewrite_variant_playlist(data, public_id: item.public_id, variant: variant, token: token, fingerprint_id: payload["fingerprint_id"], media_item_id: item.id)
 
       set_playlist_headers!
       send_data(data, type: m3u8_content_type, disposition: "inline")
@@ -70,11 +70,35 @@ module ::MediaGallery
       variant = params[:variant].to_s
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
 
+      ab = params[:ab].to_s.downcase.presence
+      if ab.present? && !%w[a b].include?(ab)
+        deny!(:ab_not_allowed, token: token)
+      end
+
+      # If fingerprinting is enabled for this token, require an explicit a|b in the path.
+      if MediaGallery::Fingerprinting.enabled? && payload["fingerprint_id"].present? && ab.blank?
+        deny!(:missing_ab_variant, token: token)
+      end
+
       segment = params[:segment].to_s
       segment = File.basename(segment)
       deny!(:invalid_segment_name, token: token) unless segment =~ /\A[\w\-.]+\.(ts|m4s)\z/i
 
-      abs = MediaGallery::PrivateStorage.hls_segment_abs_path(item.public_id, variant, segment)
+      # Enforce that users cannot request the "other" segment variant (A/B) for their fingerprint.
+      if MediaGallery::Fingerprinting.enabled? && payload["fingerprint_id"].present? && ab.present?
+        seg_idx = MediaGallery::Fingerprinting.segment_index_from_filename(segment)
+        if seg_idx.present?
+          expected = MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: payload["fingerprint_id"],
+            media_item_id: item.id,
+            segment_index: seg_idx
+          )
+          deny!(:ab_mismatch, token: token) if expected.to_s != ab.to_s
+        end
+      end
+
+      # Prefer A/B-specific files when they exist, otherwise fallback to legacy single-set packaging.
+      abs = resolve_segment_abs_path(item.public_id, variant, segment, ab: ab)
       raise Discourse::NotFound unless abs.present? && File.exist?(abs)
 
       set_segment_headers!
@@ -85,7 +109,7 @@ module ::MediaGallery
         internal = "/#{internal}" unless internal.start_with?("/")
         internal = "#{internal}/" unless internal.end_with?("/")
 
-        rel = MediaGallery::PrivateStorage.hls_segment_rel_path(item.public_id, variant, segment)
+        rel = segment_rel_from_abs(abs)
         response.headers["X-Accel-Redirect"] = internal + rel
         return head :ok
       end
@@ -113,6 +137,7 @@ module ::MediaGallery
 
       payload = MediaGallery::Token.verify(token, purpose: "hls")
       deny!(:invalid_or_expired_token, token: token) if payload.blank?
+      deny!(:invalid_token_kind, token: token) if payload["kind"].to_s != "hls"
 
       if payload["user_id"].present? && current_user.id != payload["user_id"].to_i
         deny!(:user_mismatch, token: token)
@@ -178,7 +203,35 @@ module ::MediaGallery
       # ignore
     end
 
-    def set_playlist_headers!
+    def segment_rel_from_abs(abs_path)
+      root = MediaGallery::PrivateStorage.private_root.to_s
+      root = root.chomp("/")
+      p = abs_path.to_s
+      return p if root.blank?
+      p = p.sub(/\A#{Regexp.escape(root)}\/?/, "")
+      p
+    end
+
+def resolve_segment_rel_path(public_id, variant, segment, ab: nil)
+      seg = segment.to_s
+      if ab.present?
+        File.join(public_id.to_s, "hls", ab.to_s, variant.to_s, seg)
+      else
+        MediaGallery::PrivateStorage.hls_segment_rel_path(public_id, variant, seg)
+      end
+    end
+
+    def resolve_segment_abs_path(public_id, variant, segment, ab: nil)
+      # Try A/B path first (future), then fallback to the legacy single folder (today).
+      if ab.present?
+        ab_abs = File.join(MediaGallery::PrivateStorage.private_root, resolve_segment_rel_path(public_id, variant, segment, ab: ab))
+        return ab_abs if File.exist?(ab_abs)
+      end
+
+      MediaGallery::PrivateStorage.hls_segment_abs_path(public_id, variant, segment)
+    end
+
+def set_playlist_headers!
       response.headers["Cache-Control"] = "no-store"
       response.headers["X-Content-Type-Options"] = "nosniff"
     end
@@ -201,6 +254,7 @@ module ::MediaGallery
     # We rewrite those lines to point at our authenticated variant endpoint.
     def rewrite_master_playlist(raw, public_id:, token:)
       out = []
+      seg_counter = 0
       raw.to_s.each_line do |line|
         l = line.rstrip
         if l.blank? || l.start_with?("#")
@@ -221,8 +275,9 @@ module ::MediaGallery
 
     # Variant playlists reference segments as relative paths.
     # We rewrite those lines to point at our authenticated segment endpoint.
-    def rewrite_variant_playlist(raw, public_id:, variant:, token:)
+    def rewrite_variant_playlist(raw, public_id:, variant:, token:, fingerprint_id: nil, media_item_id: nil)
       out = []
+      seg_counter = 0
       raw.to_s.each_line do |line|
         l = line.rstrip
         if l.blank? || l.start_with?("#")
@@ -245,7 +300,25 @@ module ::MediaGallery
 
         seg = File.basename(l)
         if seg =~ /\A[\w\-.]+\.(ts|m4s)\z/i
-          out << "/media/hls/#{public_id}/seg/#{variant}/#{seg}?token=#{token}"
+          # Segment-level A/B fingerprinting (pattern derived from token -> fingerprint_id).
+          ab = nil
+          if MediaGallery::Fingerprinting.enabled? && fingerprint_id.present? && media_item_id.present?
+            idx = MediaGallery::Fingerprinting.segment_index_from_filename(seg)
+            idx ||= seg_counter
+            ab = MediaGallery::Fingerprinting.expected_variant_for_segment(
+              fingerprint_id: fingerprint_id,
+              media_item_id: media_item_id,
+              segment_index: idx
+            )
+          end
+
+          seg_counter += 1
+
+          if ab.present?
+            out << "/media/hls/#{public_id}/seg/#{variant}/#{ab}/#{seg}?token=#{token}"
+          else
+            out << "/media/hls/#{public_id}/seg/#{variant}/#{seg}?token=#{token}"
+          end
         else
           out << l
         end
