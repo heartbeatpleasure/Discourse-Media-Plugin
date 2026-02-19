@@ -2,6 +2,7 @@
 
 require "openssl"
 require "securerandom"
+require "digest/sha2"
 
 module ::MediaGallery
   # Segment-level A/B fingerprinting (forensic watermark scaffolding).
@@ -89,5 +90,37 @@ module ::MediaGallery
       Rails.logger.warn("[media_gallery] fingerprint touch failed user_id=#{user_id} media_item_id=#{media_item_id} error=#{e.class}: #{e.message}")
       fingerprint_id_for(user_id: user_id, media_item_id: media_item_id)
     end
+
+    # Best-effort per-play session record. This is useful for investigations:
+    # "who actually played this media and received which fingerprint_id".
+    #
+    # We intentionally store only a SHA256 of the token (not the raw token).
+    def log_playback_session!(user_id:, media_item_id:, fingerprint_id:, token:, ip: nil, user_agent: nil)
+      return if user_id.blank? || media_item_id.blank? || fingerprint_id.blank?
+
+      token_sha256 =
+        begin
+          Digest::SHA256.hexdigest(token.to_s)
+        rescue
+          nil
+        end
+
+      MediaGallery::MediaPlaybackSession.create!(
+        user_id: user_id.to_i,
+        media_item_id: media_item_id.to_i,
+        fingerprint_id: fingerprint_id.to_s,
+        token_sha256: token_sha256,
+        ip: ip.to_s.presence,
+        user_agent: user_agent.to_s.presence,
+        played_at: Time.now
+      )
+      true
+    rescue => e
+      Rails.logger.warn(
+        "[media_gallery] playback session log failed user_id=#{user_id} media_item_id=#{media_item_id} error=#{e.class}: #{e.message}"
+      )
+      false
+    end
+
   end
 end

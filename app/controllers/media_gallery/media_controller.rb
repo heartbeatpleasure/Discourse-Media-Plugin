@@ -427,6 +427,19 @@ module ::MediaGallery
       # Track active tokens (best effort). This does not affect playback.
       MediaGallery::Security.track_token!(token: token, exp: expires_at, user_id: user_id, ip: ip)
 
+      # Best-effort forensic logging (who received which fingerprint_id + token hash).
+      if fingerprint_id.present? && MediaGallery::Fingerprinting.enabled?
+        MediaGallery::Fingerprinting.log_playback_session!(
+          user_id: user_id,
+          media_item_id: item.id,
+          fingerprint_id: fingerprint_id,
+          token: token,
+          ip: ip,
+          user_agent: request.user_agent
+        )
+      end
+
+
       # Register an active session immediately (will be refreshed by heartbeat on play).
       # Useful both today (MP4) and for future HLS.
       if heartbeat_enabled
