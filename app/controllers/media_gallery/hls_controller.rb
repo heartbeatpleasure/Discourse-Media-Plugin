@@ -147,7 +147,7 @@ module ::MediaGallery
       RateLimiter.new(nil, key, per_min, 1.minute).performed!
       true
     rescue RateLimiter::LimitExceeded
-      log_denial!(:rate_limited_#{kind}, token: token)
+      log_denial!("rate_limited_#{kind}", token: token)
       response.headers["Cache-Control"] = "no-store"
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Retry-After"] = "60"
