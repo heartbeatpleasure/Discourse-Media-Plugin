@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "securerandom"
 require "time"
 
 module ::MediaGallery
@@ -50,7 +51,20 @@ module ::MediaGallery
       master = MediaGallery::PrivateStorage.hls_master_abs_path(item)
       complete = MediaGallery::PrivateStorage.hls_complete_abs_path(item.public_id)
 
-      master.present? && File.exist?(master) && complete.present? && File.exist?(complete)
+      return false if master.blank? || complete.blank?
+      return false unless File.exist?(master) && File.exist?(complete)
+
+      # Extra safety checks (prevents advertising HLS when only the marker exists).
+      variants.all? do |v|
+        pl = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, v)
+        next false if pl.blank? || !File.exist?(pl)
+
+        vdir = MediaGallery::PrivateStorage.hls_variant_abs_dir(item.public_id, v)
+        next false if vdir.blank? || !Dir.exist?(vdir)
+
+        # At least one segment must exist.
+        Dir.glob(File.join(vdir, "*.ts")).any? || Dir.glob(File.join(vdir, "*.m4s")).any?
+      end
     end
 
     # Generates HLS files for a processed MP4.
@@ -64,22 +78,37 @@ module ::MediaGallery
       public_id = item.public_id.to_s
       variant = DEFAULT_VARIANT
 
-      hls_root = MediaGallery::PrivateStorage.hls_root_abs_dir(public_id)
-      variant_dir = MediaGallery::PrivateStorage.hls_variant_abs_dir(public_id, variant)
+      final_root = MediaGallery::PrivateStorage.hls_root_abs_dir(public_id)
+      item_root = MediaGallery::PrivateStorage.item_private_dir(public_id)
 
-      # Clean old outputs to avoid stale segments.
-      FileUtils.rm_rf(hls_root) if hls_root.present? && Dir.exist?(hls_root)
-      MediaGallery::PrivateStorage.ensure_dir!(variant_dir)
+      # Build into a temp folder first. This avoids destroying a previously valid HLS
+      # set when repackaging fails (e.g. ffmpeg error, disk full).
+      MediaGallery::PrivateStorage.ensure_dir!(item_root)
+      tmp_root = File.join(item_root, "hls__tmp_#{SecureRandom.hex(8)}")
+      tmp_variant_dir = File.join(tmp_root, variant)
+
+      FileUtils.rm_rf(tmp_root) if Dir.exist?(tmp_root)
+      MediaGallery::PrivateStorage.ensure_dir!(tmp_variant_dir)
 
       MediaGallery::Ffmpeg.package_hls_single_variant(
         input_path: input_path,
-        output_dir: variant_dir,
+        output_dir: tmp_variant_dir,
         segment_seconds: segment_duration_seconds
       )
 
-      write_master_playlist!(item: item, variant: variant)
+      tmp_master = File.join(tmp_root, "master.m3u8")
+      File.write(tmp_master, master_playlist_content(item: item, variant: variant))
 
-      File.write(MediaGallery::PrivateStorage.hls_complete_abs_path(public_id), Time.now.utc.iso8601)
+      tmp_complete = File.join(tmp_root, ".complete")
+      File.write(tmp_complete, Time.now.utc.iso8601)
+
+      # Sanity check before swapping into place.
+      tmp_variant_pl = File.join(tmp_variant_dir, "index.m3u8")
+      unless File.exist?(tmp_master) && File.exist?(tmp_variant_pl) && File.exist?(tmp_complete)
+        raise "hls_outputs_incomplete"
+      end
+
+      swap_in_packaged_hls!(final_root: final_root, tmp_root: tmp_root, item_root: item_root)
 
       {
         "ready" => true,
@@ -89,15 +118,85 @@ module ::MediaGallery
       }
     rescue => e
       Rails.logger.warn("[media_gallery] HLS packaging failed public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
+
+      # Best-effort cleanup of temp folders (if any).
+      begin
+        if item&.public_id.present?
+          item_root = MediaGallery::PrivateStorage.item_private_dir(item.public_id)
+          Dir.glob(File.join(item_root.to_s, "hls__tmp_*")) do |p|
+            FileUtils.rm_rf(p) if p.to_s.include?("hls__tmp_")
+          end
+        end
+      rescue
+        # ignore
+      end
+
       nil
     end
 
-    def write_master_playlist!(item:, variant:)
-      public_id = item.public_id.to_s
-      path = MediaGallery::PrivateStorage.hls_master_abs_path(item)
-      dir = File.dirname(path)
-      MediaGallery::PrivateStorage.ensure_dir!(dir)
+    # Cleanup temp/old build artifacts left behind by repackaging.
+    # Called by a scheduled job (hourly).
+    def cleanup_build_artifacts!
+      return unless MediaGallery::PrivateStorage.enabled?
 
+      root = MediaGallery::PrivateStorage.private_root.to_s
+      return if root.blank? || !Dir.exist?(root)
+
+      # Keep old HLS folders around long enough for in-flight tokens to finish.
+      ttl = SiteSetting.media_gallery_stream_token_ttl_minutes.to_i * 60
+      keep_seconds = [ttl + 300, 30.minutes.to_i].max
+      cutoff = Time.now - keep_seconds
+
+      patterns = [
+        File.join(root, "*", "hls__tmp_*"),
+        File.join(root, "*", "hls__old_*"),
+      ]
+
+      patterns.each do |glob|
+        Dir.glob(glob).each do |path|
+          next unless File.directory?(path)
+
+          begin
+            m = File.mtime(path)
+          rescue
+            next
+          end
+
+          next if m > cutoff
+          FileUtils.rm_rf(path)
+        end
+      end
+
+      true
+    rescue => e
+      Rails.logger.warn("[media_gallery] HLS cleanup_build_artifacts failed: #{e.class}: #{e.message}")
+      false
+    end
+
+    def swap_in_packaged_hls!(final_root:, tmp_root:, item_root:)
+      return if final_root.blank? || tmp_root.blank? || item_root.blank?
+
+      old_root = nil
+      if Dir.exist?(final_root)
+        old_root = File.join(item_root, "hls__old_#{Time.now.utc.strftime('%Y%m%d%H%M%S')}_#{SecureRandom.hex(4)}")
+        FileUtils.mv(final_root, old_root)
+      end
+
+      FileUtils.mv(tmp_root, final_root)
+      true
+    rescue => e
+      # If the swap fails, try to restore the previous HLS folder.
+      begin
+        FileUtils.rm_rf(final_root) if final_root.present? && Dir.exist?(final_root)
+        FileUtils.mv(old_root, final_root) if old_root.present? && Dir.exist?(old_root)
+      rescue
+        # ignore
+      end
+      raise e
+    end
+    private_class_method :swap_in_packaged_hls!
+
+    def master_playlist_content(item:, variant:)
       # Best-effort bandwidth estimation.
       dur = item.duration_seconds.to_i
       bytes = item.filesize_processed_bytes.to_i
@@ -110,16 +209,14 @@ module ::MediaGallery
 
       # Master playlist references the variant playlist via a relative path.
       # Our controller rewrites that URI into an authenticated endpoint.
-      content = <<~M3U
+      <<~M3U
         #EXTM3U
         #EXT-X-VERSION:3
         #EXT-X-INDEPENDENT-SEGMENTS
         #EXT-X-STREAM-INF:#{res}BANDWIDTH=#{bps},AVERAGE-BANDWIDTH=#{bps}
         #{variant}/index.m3u8
       M3U
-
-      File.write(path, content)
     end
-    private_class_method :write_master_playlist!
+    private_class_method :master_playlist_content
   end
 end

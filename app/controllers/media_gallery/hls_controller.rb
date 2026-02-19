@@ -17,11 +17,12 @@ module ::MediaGallery
     def master
       token = params[:token].to_s
       payload = verify_hls_token!(token)
+      return unless enforce_hls_rate_limit!(kind: :playlist, token: token)
 
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
-      raise Discourse::NotFound if item.blank? || !item.ready?
-      raise Discourse::NotFound if payload["media_item_id"].to_i != item.id
-      raise Discourse::NotFound unless MediaGallery::Hls.ready?(item)
+      deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
+      deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
+      deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
 
       path = MediaGallery::PrivateStorage.hls_master_abs_path(item)
       raise Discourse::NotFound unless path.present? && File.exist?(path)
@@ -36,14 +37,15 @@ module ::MediaGallery
     def variant
       token = params[:token].to_s
       payload = verify_hls_token!(token)
+      return unless enforce_hls_rate_limit!(kind: :playlist, token: token)
 
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
-      raise Discourse::NotFound if item.blank? || !item.ready?
-      raise Discourse::NotFound if payload["media_item_id"].to_i != item.id
-      raise Discourse::NotFound unless MediaGallery::Hls.ready?(item)
+      deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
+      deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
+      deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
 
       variant = params[:variant].to_s
-      raise Discourse::NotFound unless MediaGallery::Hls.variant_allowed?(variant)
+      deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
 
       path = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
       raise Discourse::NotFound unless path.present? && File.exist?(path)
@@ -58,18 +60,19 @@ module ::MediaGallery
     def segment
       token = params[:token].to_s
       payload = verify_hls_token!(token)
+      return unless enforce_hls_rate_limit!(kind: :segment, token: token)
 
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
-      raise Discourse::NotFound if item.blank? || !item.ready?
-      raise Discourse::NotFound if payload["media_item_id"].to_i != item.id
-      raise Discourse::NotFound unless MediaGallery::Hls.ready?(item)
+      deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
+      deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
+      deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
 
       variant = params[:variant].to_s
-      raise Discourse::NotFound unless MediaGallery::Hls.variant_allowed?(variant)
+      deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
 
       segment = params[:segment].to_s
       segment = File.basename(segment)
-      raise Discourse::NotFound unless segment =~ /\A[\w\-.]+\.(ts|m4s)\z/i
+      deny!(:invalid_segment_name, token: token) unless segment =~ /\A[\w\-.]+\.(ts|m4s)\z/i
 
       abs = MediaGallery::PrivateStorage.hls_segment_abs_path(item.public_id, variant, segment)
       raise Discourse::NotFound unless abs.present? && File.exist?(abs)
@@ -105,21 +108,74 @@ module ::MediaGallery
     end
 
     def verify_hls_token!(token)
-      raise Discourse::NotFound if token.blank?
-      raise Discourse::NotFound if MediaGallery::Security.revoked?(token)
+      deny!(:missing_token, token: token) if token.blank?
+      deny!(:token_revoked, token: token) if MediaGallery::Security.revoked?(token)
 
       payload = MediaGallery::Token.verify(token, purpose: "hls")
-      raise Discourse::NotFound if payload.blank?
+      deny!(:invalid_or_expired_token, token: token) if payload.blank?
 
       if payload["user_id"].present? && current_user.id != payload["user_id"].to_i
-        raise Discourse::NotFound
+        deny!(:user_mismatch, token: token)
       end
 
       if payload["ip"].present? && request.remote_ip.to_s != payload["ip"].to_s
-        raise Discourse::NotFound
+        deny!(:ip_mismatch, token: token)
       end
 
       payload
+    end
+
+    def enforce_hls_rate_limit!(kind:, token:)
+      per_min =
+        case kind.to_s
+        when "playlist"
+          SiteSetting.respond_to?(:media_gallery_hls_playlist_requests_per_token_per_minute) ?
+            SiteSetting.media_gallery_hls_playlist_requests_per_token_per_minute.to_i :
+            0
+        else
+          SiteSetting.respond_to?(:media_gallery_hls_segment_requests_per_token_per_minute) ?
+            SiteSetting.media_gallery_hls_segment_requests_per_token_per_minute.to_i :
+            0
+        end
+
+      return true if per_min <= 0
+
+      ip = request.remote_ip.to_s
+      digest = Digest::SHA1.hexdigest("#{token}|#{ip}")
+      key = "media_gallery:hls:#{kind}:#{digest}"
+
+      RateLimiter.new(nil, key, per_min, 1.minute).performed!
+      true
+    rescue RateLimiter::LimitExceeded
+      log_denial!(:rate_limited_#{kind}, token: token)
+      response.headers["Cache-Control"] = "no-store"
+      response.headers["X-Content-Type-Options"] = "nosniff"
+      response.headers["Retry-After"] = "60"
+      render plain: "rate_limited", status: 429
+      false
+    end
+
+    def deny!(reason, token: nil)
+      log_denial!(reason, token: token)
+      raise Discourse::NotFound
+    end
+
+    def denial_logging_enabled?
+      SiteSetting.respond_to?(:media_gallery_log_hls_denials) && SiteSetting.media_gallery_log_hls_denials
+    end
+
+    def token_fingerprint(token)
+      return "-" if token.blank?
+      Digest::SHA1.hexdigest(token.to_s)[0, 12]
+    end
+
+    def log_denial!(reason, token: nil)
+      return unless denial_logging_enabled?
+      Rails.logger.warn(
+        "[media_gallery] HLS denied reason=#{reason} token=#{token_fingerprint(token)} ip=#{request.remote_ip} user_id=#{current_user&.id} request_id=#{request.request_id}"
+      )
+    rescue
+      # ignore
     end
 
     def set_playlist_headers!

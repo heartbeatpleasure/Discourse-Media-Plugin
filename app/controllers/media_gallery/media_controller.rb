@@ -365,12 +365,20 @@ module ::MediaGallery
 
       upload_id = item.processed_upload_id
 
+      force_stream =
+        begin
+          ActiveModel::Type::Boolean.new.cast(params[:force_stream])
+        rescue
+          %w[1 true yes on].include?(params[:force_stream].to_s.downcase)
+        end
+
       use_hls =
         item.media_type.to_s == "video" &&
           SiteSetting.respond_to?(:media_gallery_hls_enabled) &&
           SiteSetting.media_gallery_hls_enabled &&
           MediaGallery::PrivateStorage.enabled? &&
-          MediaGallery::Hls.ready?(item)
+          MediaGallery::Hls.ready?(item) &&
+          !force_stream
 
       if upload_id.blank?
         return render_json_error("private_storage_disabled", status: 500) unless MediaGallery::PrivateStorage.enabled?
