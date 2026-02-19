@@ -24,11 +24,17 @@ module ::MediaGallery
       user_ids = (fingerprints.pluck(:user_id) + sessions.pluck(:user_id)).uniq
       users_by_id = ::User.where(id: user_ids).pluck(:id, :username).to_h
 
-      render_json_dump(
+      filename =
+        item.original_upload&.original_filename.presence ||
+        item.processed_upload&.original_filename.presence ||
+        item.title
+
+      render_json_dump({
         media_item: {
           id: item.id,
           public_id: item.public_id,
-          filename: item.original_filename
+          title: item.title,
+          filename: filename
         },
         fingerprints: fingerprints.map { |f|
           {
@@ -52,7 +58,7 @@ module ::MediaGallery
             created_at: s.created_at
           }
         }
-      )
+      })
     end
   end
 end
