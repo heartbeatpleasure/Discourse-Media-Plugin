@@ -28,20 +28,25 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_fingerprint.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_playback_session.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/media_forensics_export.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_fingerprints_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/hls_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/library_controller.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
+  require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
 
   Discourse::Application.routes.append do
     get "/media-library" => "media_gallery/library#index"
 
     # Admin-only forensic helpers
     get "/admin/plugins/media-gallery/fingerprints/:public_id" => "media_gallery/admin_fingerprints#show", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/forensics-exports" => "media_gallery/admin_forensics_exports#index", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/forensics-exports/:id.csv" => "media_gallery/admin_forensics_exports#download"
 
     get "/media/stream/:token(.:ext)" => "media_gallery/stream#show",
         defaults: { format: :json },

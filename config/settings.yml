@@ -251,7 +251,42 @@ plugins:
 
 
   # Playback hardening (best-effort)
+
+
   # Early revocation lets the client invalidate a token when the overlay is closed.
+
+
+  # Forensics retention / export (playback sessions)
+  # Playback session logs can grow quickly and contain IP/User-Agent. Retain only as long as needed.
+  # Set to 0 to disable automatic purging.
+  media_gallery_forensics_playback_session_retention_days:
+    default: 0
+    type: integer
+    min: 0
+    max: 3650
+    client: false
+
+  # If enabled, a CSV export is stored (gzipped) in the database before purging sessions.
+  # This makes it part of Discourse backups. Export is admin-downloadable.
+  media_gallery_forensics_export_enabled:
+    default: false
+    client: false
+
+  # Optional: automatically delete stored exports older than N days. 0 = keep forever.
+  media_gallery_forensics_export_retention_days:
+    default: 0
+    type: integer
+    min: 0
+    max: 3650
+    client: false
+
+  # Optional: keep at most N exports (newest first). 0 = keep all.
+  media_gallery_forensics_export_max_keep:
+    default: 0
+    type: integer
+    min: 0
+    max: 10000
+    client: false
   media_gallery_revoke_enabled:
     default: true
     client: false
