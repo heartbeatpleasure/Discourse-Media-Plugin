@@ -218,6 +218,142 @@ module MediaGallery
       raise "ffmpeg_hls_failed: #{short_err(stderr)}" unless status.success?
     end
 
+    # Packages TWO HLS variant sets (A and B) by re-encoding video with a subtle watermark filter.
+    #
+    # Important:
+    # - We force keyframes at exact segment boundaries so A/B segment indexes stay aligned.
+    # - Audio is copied when possible (processed MP4 should already be AAC).
+    #
+    # This enables segment-level A/B fingerprinting (playlists can mix A/B per user).
+    def self.package_hls_ab_variants(
+      input_path:,
+      output_dir_a:,
+      output_dir_b:,
+      segment_seconds:,
+      vf_a:,
+      vf_b:,
+      video_bitrate_kbps:,
+      audio_bitrate_kbps: 128,
+      max_fps: nil
+    )
+      seg = segment_seconds.to_i
+      seg = 6 if seg <= 0
+
+      fps = max_fps.to_i
+      fps = SiteSetting.media_gallery_video_max_fps.to_i if fps <= 0
+      fps = 30 if fps <= 0
+
+      gop = [fps * seg, 1].max
+
+      package_hls_reencode_variant(
+        input_path: input_path,
+        output_dir: output_dir_a,
+        segment_seconds: seg,
+        gop: gop,
+        vf: vf_a,
+        video_bitrate_kbps: video_bitrate_kbps,
+        audio_bitrate_kbps: audio_bitrate_kbps,
+      )
+
+      package_hls_reencode_variant(
+        input_path: input_path,
+        output_dir: output_dir_b,
+        segment_seconds: seg,
+        gop: gop,
+        vf: vf_b,
+        video_bitrate_kbps: video_bitrate_kbps,
+        audio_bitrate_kbps: audio_bitrate_kbps,
+      )
+    end
+
+    def self.package_hls_reencode_variant(
+      input_path:,
+      output_dir:,
+      segment_seconds:,
+      gop:,
+      vf:,
+      video_bitrate_kbps:,
+      audio_bitrate_kbps:
+    )
+      FileUtils.mkdir_p(output_dir)
+
+      playlist_path = File.join(output_dir, "index.m3u8")
+      segment_pattern = File.join(output_dir, "seg_%05d.ts")
+
+      # Try audio copy first (fast + avoids generation loss). Fallback to AAC if needed.
+      try_audio = ["copy", "aac"]
+
+      last_err = nil
+      try_audio.each do |audio_codec|
+        cmd = [
+          ffmpeg_path,
+          *ffmpeg_common_args,
+          "-y",
+          "-i",
+          input_path,
+          "-map",
+          "0:v:0",
+          "-map",
+          "0:a:0?",
+          "-vf",
+          vf.to_s,
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-profile:v",
+          "main",
+          "-pix_fmt",
+          "yuv420p",
+          "-g",
+          gop.to_s,
+          "-keyint_min",
+          gop.to_s,
+          "-sc_threshold",
+          "0",
+          "-force_key_frames",
+          "expr:gte(t,n_forced*#{segment_seconds})",
+          "-b:v",
+          "#{video_bitrate_kbps.to_i}k",
+          "-maxrate",
+          "#{video_bitrate_kbps.to_i}k",
+          "-bufsize",
+          "#{(video_bitrate_kbps.to_i * 2)}k",
+          "-c:a",
+          audio_codec,
+        ]
+
+        if audio_codec == "aac"
+          cmd += ["-b:a", "#{audio_bitrate_kbps.to_i}k"]
+        end
+
+        cmd += [
+          "-f",
+          "hls",
+          "-hls_time",
+          segment_seconds.to_s,
+          "-hls_playlist_type",
+          "vod",
+          "-hls_flags",
+          "independent_segments",
+          "-hls_list_size",
+          "0",
+          "-hls_segment_filename",
+          segment_pattern,
+          playlist_path,
+        ]
+
+        _stdout, stderr, status = Open3.capture3(*cmd)
+        if status.success?
+          return true
+        end
+
+        last_err = stderr
+      end
+
+      raise "ffmpeg_hls_ab_failed: #{short_err(last_err)}"
+    end
+
     # Image standardization: JPG, max 1920x1080 (no upscale), keep aspect.
     def self.transcode_image_to_jpg(input_path:, output_path:, extra_vf: nil)
       vf = "scale='if(gte(iw,ih),min(1920,iw),min(1080,iw))':'if(gte(iw,ih),min(1080,ih),min(1920,ih))':force_original_aspect_ratio=decrease"

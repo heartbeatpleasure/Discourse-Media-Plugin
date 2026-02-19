@@ -4,6 +4,8 @@ require "fileutils"
 require "securerandom"
 require "time"
 
+require_relative "fingerprint_watermark"
+
 module ::MediaGallery
   # HLS packaging + simple readiness helpers.
   #
@@ -13,6 +15,12 @@ module ::MediaGallery
     module_function
 
     DEFAULT_VARIANT = "v0"
+
+    def fingerprinting_enabled?
+      defined?(::MediaGallery::Fingerprinting) && ::MediaGallery::Fingerprinting.enabled?
+    rescue
+      false
+    end
 
     def enabled?
       SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled
@@ -62,11 +70,26 @@ module ::MediaGallery
         vdir = MediaGallery::PrivateStorage.hls_variant_abs_dir(item.public_id, v)
         next false if vdir.blank? || !Dir.exist?(vdir)
 
-        # At least one segment must exist.
-        Dir.glob(File.join(vdir, "*.ts")).any? || Dir.glob(File.join(vdir, "*.m4s")).any?
+        if fingerprinting_enabled?
+          # When fingerprinting is enabled, segments live under: /hls/a/<variant>/ and /hls/b/<variant>/
+          hls_root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+          a_dir = File.join(hls_root, "a", v.to_s)
+          b_dir = File.join(hls_root, "b", v.to_s)
+
+          next false unless a_dir.present? && b_dir.present?
+          next false unless Dir.exist?(a_dir) && Dir.exist?(b_dir)
+
+          a_has = Dir.glob(File.join(a_dir, "*.ts")).any? || Dir.glob(File.join(a_dir, "*.m4s")).any?
+          b_has = Dir.glob(File.join(b_dir, "*.ts")).any? || Dir.glob(File.join(b_dir, "*.m4s")).any?
+          a_has && b_has
+        else
+          # Legacy single-set packaging (segments live directly under /hls/<variant>/)
+          Dir.glob(File.join(vdir, "*.ts")).any? || Dir.glob(File.join(vdir, "*.m4s")).any?
+        end
       end
     end
 
+    # Generates HLS files
     # Generates HLS files for a processed MP4.
     # Returns metadata Hash on success, nil on failure.
     def package_video!(item, input_path:)
@@ -85,16 +108,51 @@ module ::MediaGallery
       # set when repackaging fails (e.g. ffmpeg error, disk full).
       MediaGallery::PrivateStorage.ensure_dir!(item_root)
       tmp_root = File.join(item_root, "hls__tmp_#{SecureRandom.hex(8)}")
-      tmp_variant_dir = File.join(tmp_root, variant)
 
       FileUtils.rm_rf(tmp_root) if Dir.exist?(tmp_root)
-      MediaGallery::PrivateStorage.ensure_dir!(tmp_variant_dir)
 
-      MediaGallery::Ffmpeg.package_hls_single_variant(
-        input_path: input_path,
-        output_dir: tmp_variant_dir,
-        segment_seconds: segment_duration_seconds
-      )
+      if fingerprinting_enabled?
+        # Template playlist lives in /hls/<variant>/index.m3u8
+        tmp_variant_dir = File.join(tmp_root, variant)
+        MediaGallery::PrivateStorage.ensure_dir!(tmp_variant_dir)
+
+        # Actual segment sets live in /hls/a/<variant>/ and /hls/b/<variant>/
+        tmp_a_dir = File.join(tmp_root, "a", variant)
+        tmp_b_dir = File.join(tmp_root, "b", variant)
+        MediaGallery::PrivateStorage.ensure_dir!(tmp_a_dir)
+        MediaGallery::PrivateStorage.ensure_dir!(tmp_b_dir)
+
+        v_kbps = estimate_video_bitrate_kbps(item)
+
+        vf_a = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "a")
+        vf_b = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "b")
+
+        MediaGallery::Ffmpeg.package_hls_ab_variants(
+          input_path: input_path,
+          output_dir_a: tmp_a_dir,
+          output_dir_b: tmp_b_dir,
+          segment_seconds: segment_duration_seconds,
+          vf_a: vf_a,
+          vf_b: vf_b,
+          video_bitrate_kbps: v_kbps,
+          audio_bitrate_kbps: SiteSetting.media_gallery_audio_bitrate_kbps.to_i
+        )
+
+        # Use the A playlist as the template (segment names + durations).
+        a_pl = File.join(tmp_a_dir, "index.m3u8")
+        tmp_variant_pl = File.join(tmp_variant_dir, "index.m3u8")
+        raise "hls_ab_playlist_missing" unless File.exist?(a_pl)
+        FileUtils.cp(a_pl, tmp_variant_pl)
+      else
+        tmp_variant_dir = File.join(tmp_root, variant)
+        MediaGallery::PrivateStorage.ensure_dir!(tmp_variant_dir)
+
+        MediaGallery::Ffmpeg.package_hls_single_variant(
+          input_path: input_path,
+          output_dir: tmp_variant_dir,
+          segment_seconds: segment_duration_seconds
+        )
+      end
 
       tmp_master = File.join(tmp_root, "master.m3u8")
       File.write(tmp_master, master_playlist_content(item: item, variant: variant))
@@ -103,19 +161,27 @@ module ::MediaGallery
       File.write(tmp_complete, Time.now.utc.iso8601)
 
       # Sanity check before swapping into place.
-      tmp_variant_pl = File.join(tmp_variant_dir, "index.m3u8")
+      tmp_variant_pl = File.join(tmp_root, variant, "index.m3u8")
       unless File.exist?(tmp_master) && File.exist?(tmp_variant_pl) && File.exist?(tmp_complete)
         raise "hls_outputs_incomplete"
       end
 
       swap_in_packaged_hls!(final_root: final_root, tmp_root: tmp_root, item_root: item_root)
 
-      {
+      meta = {
         "ready" => true,
         "variant" => variant,
         "segment_duration_seconds" => segment_duration_seconds,
         "generated_at" => Time.now.utc.iso8601
       }
+
+      if fingerprinting_enabled?
+        meta["ab_fingerprint"] = true
+        meta["ab_layout"] = "hls/{a|b}/#{variant}/seg_XXXXX.ts"
+        meta["watermark"] = { "type" => "drawbox_tiles", "opacity" => MediaGallery::FingerprintWatermark::OPACITY }
+      end
+
+      meta
     rescue => e
       Rails.logger.warn("[media_gallery] HLS packaging failed public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
 
@@ -172,6 +238,23 @@ module ::MediaGallery
       Rails.logger.warn("[media_gallery] HLS cleanup_build_artifacts failed: #{e.class}: #{e.message}")
       false
     end
+
+    
+    # Rough estimate from the already-processed MP4 size + duration, to avoid extreme re-encodes.
+    def estimate_video_bitrate_kbps(item)
+      dur = item&.duration_seconds.to_f
+      bytes = item&.filesize_processed_bytes.to_i
+      return 5000 if dur <= 0 || bytes <= 0
+
+      kbps = ((bytes * 8.0) / dur) / 1000.0
+      kbps = kbps.round
+      kbps = 800 if kbps < 800
+      kbps = 12_000 if kbps > 12_000
+      kbps
+    rescue
+      5000
+    end
+
 
     def swap_in_packaged_hls!(final_root:, tmp_root:, item_root:)
       return if final_root.blank? || tmp_root.blank? || item_root.blank?
