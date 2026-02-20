@@ -68,7 +68,7 @@ module ::MediaGallery
     private
 
     def ensure_admin
-      guardian.ensure_admin!
+      raise Discourse::InvalidAccess.new unless guardian.is_admin?
     end
 
     def ensure_export_path_allowed!(path)
