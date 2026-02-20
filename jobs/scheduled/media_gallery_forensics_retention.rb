@@ -3,6 +3,7 @@
 require "csv"
 require "zlib"
 require "digest"
+require "fileutils"
 
 module ::Jobs
   class MediaGalleryForensicsRetention < ::Jobs::Scheduled
@@ -13,8 +14,9 @@ module ::Jobs
     def execute(args)
       return unless SiteSetting.media_gallery_enabled
 
-      days = SiteSetting.respond_to?(:media_gallery_forensics_playback_session_retention_days) ?
-        SiteSetting.media_gallery_forensics_playback_session_retention_days.to_i : 0
+      days =
+        SiteSetting.respond_to?(:media_gallery_forensics_playback_session_retention_days) ?
+          SiteSetting.media_gallery_forensics_playback_session_retention_days.to_i : 0
 
       return if days <= 0
 
@@ -24,7 +26,7 @@ module ::Jobs
       total = scope.count
       return if total <= 0
 
-      # Export BEFORE purge (stored in DB to be included in backups)
+      # Export BEFORE purge
       if SiteSetting.respond_to?(:media_gallery_forensics_export_enabled) &&
          SiteSetting.media_gallery_forensics_export_enabled
         create_export!(scope, cutoff_at: cutoff, total: total)
@@ -44,31 +46,75 @@ module ::Jobs
     def create_export!(scope, cutoff_at:, total:)
       mutex_key = "media_gallery_forensics_export_#{cutoff_at.to_i}"
       DistributedMutex.synchronize(mutex_key, validity: 10.minutes) do
-        # Re-check to avoid double export when multiple workers race
         already =
           ::MediaGallery::MediaForensicsExport.where(cutoff_at: cutoff_at).where("rows_count > 0").exists?
         return if already
 
         csv = build_csv(scope)
-
         gzip_bytes = Zlib.gzip(csv)
         sha256 = Digest::SHA256.hexdigest(csv)
+
         now = Time.zone.now
-        filename = "media_gallery_playback_sessions_#{now.strftime("%Y%m%d_%H%M%S")}_cutoff_#{cutoff_at.strftime("%Y%m%d")}.csv"
+        base = "media_gallery_playback_sessions_#{now.strftime("%Y%m%d_%H%M%S")}_cutoff_#{cutoff_at.strftime("%Y%m%d")}".freeze
+        download_filename = "#{base}.csv"
+
+        store_in_db =
+          SiteSetting.respond_to?(:media_gallery_forensics_export_store_in_db) &&
+            SiteSetting.media_gallery_forensics_export_store_in_db
+
+        storage = store_in_db ? "db" : "file"
+        file_path = nil
+        file_bytes = nil
+
+        unless store_in_db
+          root = export_root_path
+          FileUtils.mkdir_p(root)
+
+          file_path = File.join(root, "#{base}.csv.gz")
+          tmp_path = file_path + ".tmp"
+
+          File.open(tmp_path, "wb") { |f| f.write(gzip_bytes) }
+          FileUtils.mv(tmp_path, file_path)
+
+          file_bytes = File.size(file_path) rescue nil
+        end
 
         ::MediaGallery::MediaForensicsExport.create!(
           cutoff_at: cutoff_at,
           rows_count: total,
-          filename: filename,
+          filename: download_filename,
           sha256: sha256,
-          csv_gzip: gzip_bytes
+          storage: storage,
+          file_path: file_path,
+          file_bytes: file_bytes,
+          csv_gzip: store_in_db ? gzip_bytes : nil
         )
       end
     end
 
+    def export_root_path
+      # Prefer explicit setting. Otherwise default under existing shared export root.
+      explicit =
+        SiteSetting.respond_to?(:media_gallery_forensics_export_root_path) ?
+          SiteSetting.media_gallery_forensics_export_root_path.to_s.strip : ""
+
+      return explicit if explicit.present?
+
+      if SiteSetting.respond_to?(:media_gallery_original_export_root_path) &&
+         SiteSetting.media_gallery_original_export_root_path.present?
+        return File.join(SiteSetting.media_gallery_original_export_root_path, "forensics_exports")
+      end
+
+      # Last resort: keep it in private root so it is never public.
+      if SiteSetting.respond_to?(:media_gallery_private_root_path) &&
+         SiteSetting.media_gallery_private_root_path.present?
+        return File.join(SiteSetting.media_gallery_private_root_path, "forensics_exports")
+      end
+
+      "/shared/media_gallery/forensics_exports"
+    end
+
     def build_csv(scope)
-      # We do minimal joins to keep it fast and avoid N+1.
-      # Include public_id and username for easier later investigation.
       header = [
         "session_id",
         "played_at",
@@ -110,16 +156,21 @@ module ::Jobs
     end
 
     def prune_exports_if_needed!
-      # Optional retention for stored exports. Defaults keep forever.
-      keep_days = SiteSetting.respond_to?(:media_gallery_forensics_export_retention_days) ?
-        SiteSetting.media_gallery_forensics_export_retention_days.to_i : 0
+      keep_days =
+        SiteSetting.respond_to?(:media_gallery_forensics_export_retention_days) ?
+          SiteSetting.media_gallery_forensics_export_retention_days.to_i : 0
 
-      max_keep = SiteSetting.respond_to?(:media_gallery_forensics_export_max_keep) ?
-        SiteSetting.media_gallery_forensics_export_max_keep.to_i : 0
+      max_keep =
+        SiteSetting.respond_to?(:media_gallery_forensics_export_max_keep) ?
+          SiteSetting.media_gallery_forensics_export_max_keep.to_i : 0
+
+      return if keep_days <= 0 && max_keep <= 0
+
+      delete_scope = ::MediaGallery::MediaForensicsExport.none
 
       if keep_days > 0
         cutoff = Time.zone.now - keep_days.days
-        ::MediaGallery::MediaForensicsExport.where("created_at < ?", cutoff).delete_all
+        delete_scope = delete_scope.or(::MediaGallery::MediaForensicsExport.where("created_at < ?", cutoff))
       end
 
       if max_keep > 0
@@ -128,7 +179,19 @@ module ::Jobs
             .order(created_at: :desc)
             .offset(max_keep)
             .pluck(:id)
-        ::MediaGallery::MediaForensicsExport.where(id: ids).delete_all if ids.present?
+        delete_scope = delete_scope.or(::MediaGallery::MediaForensicsExport.where(id: ids)) if ids.present?
+      end
+
+      return if delete_scope.blank?
+
+      delete_scope.find_each do |e|
+        if e.csv_gzip.blank? && e.file_path.present?
+          ::File.delete(e.file_path) if ::File.exist?(e.file_path)
+        end
+      rescue => err
+        Rails.logger.warn("[media_gallery] failed to delete export file #{e.file_path}: #{err.class}: #{err.message}")
+      ensure
+        e.destroy!
       end
     end
   end

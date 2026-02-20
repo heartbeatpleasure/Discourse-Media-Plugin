@@ -266,9 +266,25 @@ plugins:
     max: 3650
     client: false
 
-  # If enabled, a CSV export is stored (gzipped) in the database before purging sessions.
-  # This makes it part of Discourse backups. Export is admin-downloadable.
+  # If enabled, a CSV export is generated before purging sessions.
+  # By default it is stored as a gzipped file on the filesystem (see export root path setting).
+  # Optional: also store gzipped CSV in the database (not recommended for large instances).
+  # Export is admin-downloadable.
   media_gallery_forensics_export_enabled:
+    default: false
+    client: false
+
+  # Where to store export files (gzipped). Leave blank to use:
+  #   <media_gallery_original_export_root_path>/forensics_exports
+  # If that is blank too, we fall back to:
+  #   <media_gallery_private_root_path>/forensics_exports
+  media_gallery_forensics_export_root_path:
+    default: ""
+    type: text
+    client: false
+
+  # Store exports in the database as well (gzipped). Not recommended: this can grow the DB quickly.
+  media_gallery_forensics_export_store_in_db:
     default: false
     client: false
 

@@ -38,7 +38,9 @@ en:
     media_gallery_fingerprint_secret: "Fingerprint secret (leave empty to use Rails secret_key_base)"
 
     media_gallery_forensics_playback_session_retention_days: "Playback session retention (days). 0 disables automatic purge."
-    media_gallery_forensics_export_enabled: "Export playback sessions to CSV (stored in DB) before purge"
+    media_gallery_forensics_export_enabled: "Export playback sessions to CSV before purge"
+    media_gallery_forensics_export_root_path: "Forensics export root path (filesystem). Leave blank to use original export root path /forensics_exports"
+    media_gallery_forensics_export_store_in_db: "Also store gzipped exports in the database (not recommended)"
     media_gallery_forensics_export_retention_days: "Export retention (days). 0 keeps exports forever."
     media_gallery_forensics_export_max_keep: "Max number of exports to keep (0 keeps all)"
     media_gallery_revoke_enabled: "Allow the client to revoke a stream token early when the overlay is closed"
