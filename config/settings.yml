@@ -249,6 +249,17 @@ plugins:
     type: string
     client: false
 
+  # Watermark layout used when generating A/B HLS variants.
+  # v1_tiles = legacy 6 independent tiles (subtle but harder to decode later)
+  # v2_pairs = 3 adjacent pairs (still subtle, but much easier to extract from a leaked copy)
+  media_gallery_fingerprint_watermark_layout:
+    default: "v2_pairs"
+    type: enum
+    choices:
+      - v1_tiles
+      - v2_pairs
+    client: false
+
 
   # Playback hardening (best-effort)
 

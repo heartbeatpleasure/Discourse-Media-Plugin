@@ -36,6 +36,7 @@ en:
     media_gallery_hls_x_accel_internal_location: "Nginx internal location for HLS segments"
     media_gallery_fingerprint_enabled: "Enable segment-level A/B fingerprinting for HLS playlists"
     media_gallery_fingerprint_secret: "Fingerprint secret (leave empty to use Rails secret_key_base)"
+    media_gallery_fingerprint_watermark_layout: "Fingerprint watermark layout (affects A/B segment generation)"
 
     media_gallery_forensics_playback_session_retention_days: "Playback session retention (days). 0 disables automatic purge."
     media_gallery_forensics_export_enabled: "Export playback sessions to CSV before purge"

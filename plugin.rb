@@ -23,6 +23,7 @@ after_initialize do
   require_relative "lib/media_gallery/permissions"
   require_relative "lib/media_gallery/private_storage"
   require_relative "lib/media_gallery/watermark"   # ✅ NEW
+  require_relative "lib/media_gallery/forensics_identify"
 
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
@@ -32,6 +33,7 @@ after_initialize do
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_fingerprints_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/hls_controller.rb", __dir__)
@@ -46,7 +48,13 @@ after_initialize do
     # Admin-only forensic helpers
     get "/admin/plugins/media-gallery/fingerprints/:public_id" => "media_gallery/admin_fingerprints#show", defaults: { format: :json }
     get "/admin/plugins/media-gallery/forensics-exports" => "media_gallery/admin_forensics_exports#index", defaults: { format: :json }
-    get "/admin/plugins/media-gallery/forensics-exports/:id.csv" => "media_gallery/admin_forensics_exports#download"
+    # Download (admin-only). Support both /:id and /:id.csv.
+    get "/admin/plugins/media-gallery/forensics-exports/:id" => "media_gallery/admin_forensics_exports#download", constraints: { id: /\d+/ }
+    get "/admin/plugins/media-gallery/forensics-exports/:id.csv" => "media_gallery/admin_forensics_exports#download", constraints: { id: /\d+/ }
+
+    # Admin-only: upload a leaked copy to identify likely user/fingerprint.
+    get "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#show"
+    post "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#identify", defaults: { format: :json }
 
     get "/media/stream/:token(.:ext)" => "media_gallery/stream#show",
         defaults: { format: :json },

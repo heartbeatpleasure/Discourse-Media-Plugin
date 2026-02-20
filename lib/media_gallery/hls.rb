@@ -3,6 +3,7 @@
 require "fileutils"
 require "securerandom"
 require "time"
+require "json"
 
 require_relative "fingerprint_watermark"
 
@@ -178,7 +179,25 @@ module ::MediaGallery
       if fingerprinting_enabled?
         meta["ab_fingerprint"] = true
         meta["ab_layout"] = "hls/{a|b}/#{variant}/seg_XXXXX.ts"
-        meta["watermark"] = { "type" => "drawbox_tiles", "opacity" => MediaGallery::FingerprintWatermark::OPACITY }
+        wm_layout = MediaGallery::FingerprintWatermark.layout_mode
+        meta["watermark"] = { "type" => wm_layout, "opacity" => MediaGallery::FingerprintWatermark::OPACITY }
+
+        # Persist minimal metadata in the HLS folder so later forensic tooling can
+        # decode the correct watermark layout even if the SiteSetting changes.
+        begin
+          File.write(
+            File.join(final_root, "fingerprint_meta.json"),
+            JSON.pretty_generate({
+              "layout" => wm_layout,
+              "opacity" => MediaGallery::FingerprintWatermark::OPACITY,
+              "generated_at" => Time.now.utc.iso8601,
+              "media_item_id" => item.id,
+              "public_id" => item.public_id
+            })
+          )
+        rescue => e
+          Rails.logger.warn("[media_gallery] failed to write fingerprint_meta.json public_id=#{item.public_id} error=#{e.class}: #{e.message}")
+        end
       end
 
       meta

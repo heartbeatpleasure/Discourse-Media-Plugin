@@ -75,20 +75,17 @@ module ::MediaGallery
       rp = ::File.realpath(path) rescue nil
       raise Discourse::NotFound if rp.blank?
 
-      roots = []
-      if SiteSetting.respond_to?(:media_gallery_forensics_export_root_path) &&
-         SiteSetting.media_gallery_forensics_export_root_path.present?
-        roots << SiteSetting.media_gallery_forensics_export_root_path
-      end
+      # Always include the effective export root (mirrors the scheduled job).
+      roots = [computed_export_root_path]
 
-      if SiteSetting.respond_to?(:media_gallery_original_export_root_path) &&
-         SiteSetting.media_gallery_original_export_root_path.present?
-        roots << SiteSetting.media_gallery_original_export_root_path
-      end
-
-      if SiteSetting.respond_to?(:media_gallery_private_root_path) &&
-         SiteSetting.media_gallery_private_root_path.present?
+      # Also allow the private root itself (exports commonly live under <private_root>/forensics_exports)
+      if SiteSetting.respond_to?(:media_gallery_private_root_path) && SiteSetting.media_gallery_private_root_path.present?
         roots << SiteSetting.media_gallery_private_root_path
+      end
+
+      # Keep these for backward compatibility (older installs).
+      if SiteSetting.respond_to?(:media_gallery_original_export_root_path) && SiteSetting.media_gallery_original_export_root_path.present?
+        roots << SiteSetting.media_gallery_original_export_root_path
       end
 
       allowed = roots.compact.uniq.any? do |root|
@@ -98,5 +95,26 @@ module ::MediaGallery
 
       raise Discourse::NotFound unless allowed
     end
+
+    def computed_export_root_path
+      # Must mirror the logic in Jobs::MediaGalleryForensicsRetention.
+      if SiteSetting.respond_to?(:media_gallery_forensics_export_root_path)
+        v = SiteSetting.media_gallery_forensics_export_root_path.to_s.presence
+        return v if v
+      end
+
+      if SiteSetting.respond_to?(:media_gallery_original_export_root_path)
+        v = SiteSetting.media_gallery_original_export_root_path.to_s.presence
+        return ::File.join(v, "forensics_exports") if v
+      end
+
+      if SiteSetting.respond_to?(:media_gallery_private_root_path)
+        v = SiteSetting.media_gallery_private_root_path.to_s.presence
+        return ::File.join(v, "forensics_exports") if v
+      end
+
+      "/shared/media_gallery/forensics_exports"
+    end
+    private :computed_export_root_path
   end
 end
