@@ -6,6 +6,11 @@
 # authors: Chris
 # url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin
 
+# Admin UI entry (shown under /admin/plugins)
+# Route must be a single slug (no slashes). We keep the backend export endpoints under
+# /admin/plugins/media-gallery/forensics-exports(.json)
+add_admin_route "media_gallery.forensics_exports_title", "media-gallery-forensics-exports"
+
 enabled_site_setting :media_gallery_enabled
 
 module ::MediaGallery
@@ -44,6 +49,9 @@ after_initialize do
 
   Discourse::Application.routes.append do
     get "/media-library" => "media_gallery/library#index"
+
+    # Ember admin page shell (prevents 404 when visiting directly)
+    get "/admin/plugins/media-gallery-forensics-exports" => "admin/plugins#index", constraints: StaffConstraint.new
 
     # Admin-only forensic helpers
     get "/admin/plugins/media-gallery/fingerprints/:public_id" => "media_gallery/admin_fingerprints#show", defaults: { format: :json }

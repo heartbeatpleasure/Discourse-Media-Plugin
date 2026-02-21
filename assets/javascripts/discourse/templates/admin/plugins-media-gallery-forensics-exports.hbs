@@ -1,0 +1,58 @@
+<div class="media-gallery-forensics-exports-admin">
+  <h1>{{i18n "media_gallery.forensics_exports_heading"}}</h1>
+  <p>{{i18n "media_gallery.forensics_exports_description"}}</p>
+
+  {{#if @model.load_error}}
+    <div class="alert alert-error">{{i18n "media_gallery.forensics_exports_load_error"}}</div>
+  {{/if}}
+
+  {{#if @model.exports.length}}
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>{{i18n "media_gallery.forensics_exports_filename"}}</th>
+          <th>{{i18n "media_gallery.forensics_exports_created_at"}}</th>
+          <th>{{i18n "media_gallery.forensics_exports_cutoff_at"}}</th>
+          <th>{{i18n "media_gallery.forensics_exports_rows"}}</th>
+          <th>{{i18n "media_gallery.forensics_exports_bytes"}}</th>
+          <th>{{i18n "media_gallery.forensics_exports_storage"}}</th>
+          <th>{{i18n "media_gallery.forensics_exports_exists"}}</th>
+          <th>{{i18n "media_gallery.forensics_exports_download"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each @model.exports as |e|}}
+          <tr>
+            <td>
+              <code>{{e.filename}}</code>
+            </td>
+            <td><code>{{e.created_at}}</code></td>
+            <td><code>{{e.cutoff_at}}</code></td>
+            <td><code>{{e.rows_count}}</code></td>
+            <td><code>{{e.file_bytes}}</code></td>
+            <td><code>{{e.storage}}</code></td>
+            <td>
+              {{#if e.file_exists}}
+                ✅
+              {{else}}
+                ❌
+              {{/if}}
+            </td>
+            <td>
+              <a
+                href="/admin/plugins/media-gallery/forensics-exports/{{e.id}}.csv?gz=1"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-auto-route="false"
+              >
+                {{i18n "media_gallery.forensics_exports_download_gz"}}
+              </a>
+            </td>
+          </tr>
+        {{/each}}
+      </tbody>
+    </table>
+  {{else}}
+    <p>{{i18n "media_gallery.forensics_exports_empty"}}</p>
+  {{/if}}
+</div>

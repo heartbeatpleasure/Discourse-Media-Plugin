@@ -2,6 +2,22 @@ en:
   js:
     media_gallery:
       title: "Media Library"
+
+      # Admin: forensic exports download page (Admin → Plugins)
+      forensics_exports_title: "Forensic exports"
+      forensics_exports_heading: "Forensic exports"
+      forensics_exports_description: "Download generated forensic export files (gzipped CSV)."
+      forensics_exports_load_error: "Could not load the export list. Please refresh the page."
+      forensics_exports_empty: "No forensic export files found."
+      forensics_exports_filename: "Filename"
+      forensics_exports_created_at: "Created"
+      forensics_exports_cutoff_at: "Cutoff"
+      forensics_exports_rows: "Rows"
+      forensics_exports_bytes: "Bytes"
+      forensics_exports_storage: "Storage"
+      forensics_exports_exists: "Exists"
+      forensics_exports_download: "Download"
+      forensics_exports_download_gz: "Download .csv.gz"
       all: "All"
       mine: "My uploads"
       upload: "Upload"

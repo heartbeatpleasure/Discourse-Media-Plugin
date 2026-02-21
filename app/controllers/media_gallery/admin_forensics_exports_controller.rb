@@ -47,6 +47,19 @@ module ::MediaGallery
       response.headers["Cache-Control"] = "no-store"
 
       if wants_gz
+        # Prefer streaming from disk when possible to avoid loading large files into memory.
+        if export.csv_gzip.blank? && export.file_path.present? && ::File.exist?(export.file_path)
+          ensure_export_path_allowed!(export.file_path)
+
+          filename = export.download_filename
+          filename += ".gz" unless filename.end_with?(".gz")
+
+          return send_file export.file_path,
+                           filename: filename,
+                           type: "application/gzip",
+                           disposition: "attachment"
+        end
+
         gz_bytes = export.csv_gzip.presence || ::File.binread(export.file_path)
         filename = export.download_filename
         filename += ".gz" unless filename.end_with?(".gz")
