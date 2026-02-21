@@ -10,8 +10,40 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked maxOffsetSegments = 30;
   @tracked layout = "";
   @tracked isRunning = false;
+
+  // Raw + parsed result
+  @tracked result = null;
   @tracked resultJson = "";
   @tracked error = "";
+
+  get hasResult() {
+    return !!this.result;
+  }
+
+  get meta() {
+    return this.result?.meta;
+  }
+
+  get candidates() {
+    return this.result?.candidates || [];
+  }
+
+  get observedVariants() {
+    return this.result?.observed?.variants || "";
+  }
+
+  get samples() {
+    return this.meta?.samples ?? 0;
+  }
+
+  get usableSamples() {
+    return this.meta?.usable_samples ?? 0;
+  }
+
+  get weakSignal() {
+    // Heuristic: if we have almost no usable samples, matching will be unreliable.
+    return this.usableSamples === 0 || this.usableSamples < 5;
+  }
 
   @action
   onPublicIdInput(event) {
@@ -42,8 +74,43 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   @action
+  clear() {
+    this.error = "";
+    this.result = null;
+    this.resultJson = "";
+  }
+
+  async _extractError(response) {
+    // Try JSON error first, then fall back to text.
+    try {
+      const json = await response.clone().json();
+      if (Array.isArray(json?.errors) && json.errors.length) {
+        return json.errors.join(" ");
+      }
+      if (json?.error) {
+        return String(json.error);
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const text = await response.text();
+      if (text) {
+        // Keep it short-ish.
+        return text.length > 500 ? `${text.slice(0, 500)}…` : text;
+      }
+    } catch {
+      // ignore
+    }
+
+    return `HTTP ${response.status}`;
+  }
+
+  @action
   async identify() {
     this.error = "";
+    this.result = null;
     this.resultJson = "";
 
     if (!this.publicId) {
@@ -85,12 +152,13 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       });
 
       if (!response.ok) {
-        const text = await response.text();
-        this.error = `HTTP ${response.status}: ${text}`;
+        const err = await this._extractError(response);
+        this.error = `HTTP ${response.status}: ${err}`;
         return;
       }
 
       const json = await response.json();
+      this.result = json;
       this.resultJson = JSON.stringify(json, null, 2);
     } catch (e) {
       this.error = e?.message || String(e);
