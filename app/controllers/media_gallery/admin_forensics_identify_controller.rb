@@ -100,14 +100,17 @@ module ::MediaGallery
           temp = download_source_url_to_tempfile!(source_url, max_samples: max_samples, segment_seconds: seg)
           path = temp.path
         rescue => e
-          return render_json_error("invalid_source_url", status: 422, message: e.message.to_s[0, 300])
+          # Include the reason in the error payload so the admin UI can display it.
+          msg = e.message.to_s.strip
+          msg = msg[0, 400] if msg.length > 400
+          return render json: { errors: ["invalid_source_url", msg].compact }, status: 422
         end
       else
         file = params[:file]
-        return render_json_error("missing_file_or_url", status: 422) if file.blank?
+        return render json: { errors: ["missing_file_or_url"] }, status: 422 if file.blank?
 
         path = file.respond_to?(:tempfile) ? file.tempfile&.path : nil
-        return render_json_error("missing_file_or_url", status: 422) if path.blank? || !File.exist?(path)
+        return render json: { errors: ["missing_file_or_url"] }, status: 422 if path.blank? || !File.exist?(path)
       end
 
       result = ::MediaGallery::ForensicsIdentify.identify_from_file(
@@ -129,10 +132,13 @@ module ::MediaGallery
     # a playlist URL from your own site. Large external downloads are intentionally not supported.
     MAX_URL_SAMPLE_SECONDS = 1800
 
+    # Some installs use long signed tokens in query strings. 2k is often too small.
+    MAX_SOURCE_URL_LENGTH = 10_000
+
     def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:)
       url = source_url.to_s.strip
       raise "source_url is blank" if url.blank?
-      raise "source_url is too long" if url.length > 2000
+      raise "source_url is too long" if url.length > MAX_SOURCE_URL_LENGTH
 
       uri = URI.parse(url) rescue nil
       raise "source_url is not a valid http(s) URL" if uri.blank? || uri.host.blank? || !%w[http https].include?(uri.scheme)
@@ -144,7 +150,7 @@ module ::MediaGallery
       allowed_hosts = [base_host, req_host].compact.uniq
 
       unless allowed_hosts.include?(uri.host)
-        raise "Only URLs on this site are allowed (#{allowed_hosts.join(", ")})."
+        raise "Only URLs on this site are allowed (#{allowed_hosts.join(', ')})."
       end
 
       seg = segment_seconds.to_i
@@ -174,6 +180,8 @@ module ::MediaGallery
         target_seconds.to_s,
         "-c",
         "copy",
+        # Only needed when remuxing AAC-in-TS into MP4. Safe to keep, but if it fails
+        # on odd inputs, we can later add a re-encode fallback.
         "-bsf:a",
         "aac_adtstoasc",
         tmp.path,
@@ -181,7 +189,7 @@ module ::MediaGallery
 
       _stdout, stderr, status = Open3.capture3(*cmd)
       unless status.success? && File.size?(tmp.path)
-        raise "ffmpeg download failed: #{::MediaGallery::Ffmpeg.short_err(stderr)}"
+        raise "ffmpeg download failed (tip: try the *index.m3u8* variant playlist, not master.m3u8): #{::MediaGallery::Ffmpeg.short_err(stderr)}"
       end
 
       tmp
