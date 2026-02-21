@@ -32,10 +32,30 @@ export default RouteTemplate(
 
             <div class="control-group">
               <label class="control-label">
+                {{i18n "admin.media_gallery.forensics_identify.source_url_label"}}
+              </label>
+              <div class="controls">
+                <input
+                  type="text"
+                  value={{@controller.sourceUrl}}
+                  placeholder={{i18n "admin.media_gallery.forensics_identify.source_url_placeholder"}}
+                  {{on "input" @controller.onSourceUrlInput}}
+                />
+                <div style="opacity:0.8; margin-top: 0.35rem;">
+                  {{i18n "admin.media_gallery.forensics_identify.source_url_help"}}
+                </div>
+              </div>
+            </div>
+
+            <div class="control-group">
+              <label class="control-label">
                 {{i18n "admin.media_gallery.forensics_identify.file_label"}}
               </label>
               <div class="controls">
                 <input type="file" {{on "change" @controller.onFileChange}} />
+                <div style="opacity:0.8; margin-top: 0.35rem;">
+                  {{i18n "admin.media_gallery.forensics_identify.file_help"}}
+                </div>
               </div>
             </div>
 
@@ -129,7 +149,7 @@ export default RouteTemplate(
                 <div style="margin-top: 0.75rem;">
                   <strong>Tip:</strong>
                   Single segments often contain too little signal. Try a longer file that is closer to the original HLS download
-                  (less re-encoded/cropped). The best test is downloading the variant playlist with ffmpeg.
+                  (less re-encoded/cropped). The best test is pasting the variant playlist URL (.m3u8).
                 </div>
               {{/if}}
             </div>
@@ -188,15 +208,15 @@ export default RouteTemplate(
 
         <div style="flex: 0 1 420px; min-width: 280px;">
           <div class="admin-detail-panel">
-            <h3>How to get a better test file</h3>
+            <h3>Best test method</h3>
             <ol>
               <li>Log in as a normal test user and play the video (so you definitely get a personalized stream).</li>
               <li>Open DevTools → Network and find the <strong>variant playlist</strong> URL (.m3u8).</li>
-              <li>Download it with ffmpeg (below), then upload the resulting mp4 here.</li>
+              <li>Paste that URL into the field on the left (no need to download manually).</li>
             </ol>
-            <pre style="white-space: pre-wrap;">ffmpeg -i "&lt;variant-playlist.m3u8&gt;" -c copy leaked.mp4</pre>
             <p style="opacity:0.85;">
-              If you only have segments, concatenate multiple consecutive segments first; 1 segment often yields 0 usable samples.
+              This URL mode is intentionally restricted to your own site for safety.
+              For external leaks (mp4 re-uploads), upload the file instead.
             </p>
           </div>
         </div>

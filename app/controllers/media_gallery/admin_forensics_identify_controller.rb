@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 
 require "cgi"
+require "tempfile"
+require "uri"
+require "open3"
 
 module ::MediaGallery
   class AdminForensicsIdentifyController < ::Admin::AdminController
@@ -65,16 +68,14 @@ module ::MediaGallery
       render html: html.html_safe, layout: "no_ember"
     end
 
+    # POST /admin/plugins/media-gallery/forensics-identify/:public_id(.json)
+    # Accepts either:
+    # - file: uploaded leak copy
+    # - source_url: URL to a variant playlist (.m3u8) or direct media URL (admin-only helper)
     def identify
       public_id = params[:public_id].to_s
       item = MediaGallery::MediaItem.find_by(public_id: public_id)
       raise Discourse::NotFound if item.blank?
-
-      file = params[:file]
-      raise Discourse::InvalidParameters.new(:file) if file.blank?
-
-      path = file.respond_to?(:tempfile) ? file.tempfile&.path : nil
-      raise Discourse::InvalidParameters.new(:file) if path.blank? || !File.exist?(path)
 
       max_samples = params[:max_samples].to_i
       max_samples = 60 if max_samples <= 0
@@ -86,6 +87,29 @@ module ::MediaGallery
 
       layout = params[:layout].to_s.presence
 
+      seg = SiteSetting.media_gallery_hls_segment_duration_seconds.to_i
+      seg = 6 if seg <= 0
+
+      source_url = params[:source_url].to_s.strip.presence
+
+      temp = nil
+      path = nil
+
+      if source_url.present?
+        begin
+          temp = download_source_url_to_tempfile!(source_url, max_samples: max_samples, segment_seconds: seg)
+          path = temp.path
+        rescue => e
+          return render_json_error("invalid_source_url", status: 422, message: e.message.to_s[0, 300])
+        end
+      else
+        file = params[:file]
+        return render_json_error("missing_file_or_url", status: 422) if file.blank?
+
+        path = file.respond_to?(:tempfile) ? file.tempfile&.path : nil
+        return render_json_error("missing_file_or_url", status: 422) if path.blank? || !File.exist?(path)
+      end
+
       result = ::MediaGallery::ForensicsIdentify.identify_from_file(
         media_item: item,
         file_path: path,
@@ -95,6 +119,75 @@ module ::MediaGallery
       )
 
       render_json_dump(result)
+    ensure
+      temp&.close! rescue nil
+    end
+
+    private
+
+    # Keep this conservative. This feature is mainly for quickly reproducing issues by pasting
+    # a playlist URL from your own site. Large external downloads are intentionally not supported.
+    MAX_URL_SAMPLE_SECONDS = 1800
+
+    def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:)
+      url = source_url.to_s.strip
+      raise "source_url is blank" if url.blank?
+      raise "source_url is too long" if url.length > 2000
+
+      uri = URI.parse(url) rescue nil
+      raise "source_url is not a valid http(s) URL" if uri.blank? || uri.host.blank? || !%w[http https].include?(uri.scheme)
+
+      # Security: only allow URLs on this Discourse host for now.
+      # (If you later need CDN support, we can add an allowlist site setting.)
+      base_host = (URI.parse(Discourse.base_url).host rescue nil)
+      req_host = request&.host
+      allowed_hosts = [base_host, req_host].compact.uniq
+
+      unless allowed_hosts.include?(uri.host)
+        raise "Only URLs on this site are allowed (#{allowed_hosts.join(", ")})."
+      end
+
+      seg = segment_seconds.to_i
+      seg = 6 if seg <= 0
+
+      ms = max_samples.to_i
+      ms = 60 if ms <= 0
+      ms = [ms, 200].min
+
+      # Download just enough to cover the requested samples.
+      target_seconds = (ms * seg) + seg
+      target_seconds = 30 if target_seconds < 30
+      target_seconds = [target_seconds, MAX_URL_SAMPLE_SECONDS].min
+
+      tmp = Tempfile.new(["media_gallery_identify_", ".mp4"])
+      tmp.binmode
+
+      cmd = [
+        ::MediaGallery::Ffmpeg.ffmpeg_path,
+        *::MediaGallery::Ffmpeg.ffmpeg_common_args,
+        "-y",
+        "-protocol_whitelist",
+        "file,http,https,tcp,tls,crypto",
+        "-i",
+        url,
+        "-t",
+        target_seconds.to_s,
+        "-c",
+        "copy",
+        "-bsf:a",
+        "aac_adtstoasc",
+        tmp.path,
+      ]
+
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      unless status.success? && File.size?(tmp.path)
+        raise "ffmpeg download failed: #{::MediaGallery::Ffmpeg.short_err(stderr)}"
+      end
+
+      tmp
+    rescue => e
+      tmp&.close! rescue nil
+      raise e
     end
   end
 end

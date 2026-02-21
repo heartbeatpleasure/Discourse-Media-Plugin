@@ -6,6 +6,7 @@ import { i18n } from "discourse-i18n";
 export default class AdminPluginsMediaGalleryForensicsIdentifyController extends Controller {
   @tracked publicId = "";
   @tracked file = null;
+  @tracked sourceUrl = "";
   @tracked maxSamples = 60;
   @tracked maxOffsetSegments = 30;
   @tracked layout = "";
@@ -54,6 +55,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   onFileChange(event) {
     const files = event?.target?.files;
     this.file = files && files.length ? files[0] : null;
+  }
+
+  @action
+  onSourceUrlInput(event) {
+    this.sourceUrl = (event?.target?.value || "").trim();
   }
 
   @action
@@ -118,8 +124,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       return;
     }
 
-    if (!this.file) {
-      this.error = i18n("admin.media_gallery.forensics_identify.error_missing_file");
+    const hasUrl = !!this.sourceUrl;
+    const hasFile = !!this.file;
+
+    if (!hasUrl && !hasFile) {
+      this.error = i18n("admin.media_gallery.forensics_identify.error_missing_file_or_url");
       return;
     }
 
@@ -128,7 +137,13 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       ?.getAttribute("content");
 
     const form = new FormData();
-    form.append("file", this.file);
+    if (hasFile) {
+      form.append("file", this.file);
+    }
+    if (hasUrl) {
+      form.append("source_url", this.sourceUrl);
+    }
+
     form.append("max_samples", String(this.maxSamples || 60));
     form.append("max_offset_segments", String(this.maxOffsetSegments || 30));
     if (this.layout) {

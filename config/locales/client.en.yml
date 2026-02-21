@@ -75,10 +75,14 @@ en:
 
         forensics_identify:
           title: "Forensics identify"
-          description: "Upload a leaked copy to attempt identifying the originating user/fingerprint."
+          description: "Upload a leaked copy (or paste a variant playlist URL) to attempt identifying the originating user/fingerprint."
           public_id_label: "public_id"
           public_id_placeholder: "Enter the media public_id"
+          source_url_label: "HLS / video URL (optional)"
+          source_url_placeholder: "Paste a .m3u8 variant playlist URL (recommended), or a direct mp4/ts URL"
+          source_url_help: "If provided, the server will download a short sample and run identify. For safety, only URLs on this site are accepted."
           file_label: "Leaked file"
+          file_help: "Upload a leaked copy (mp4/ts/etc). If you paste a URL above, uploading a file is optional."
           max_samples_label: "Max samples (frames)"
           max_offset_label: "Max offset segments"
           layout_label: "Layout override"
@@ -90,3 +94,4 @@ en:
           result: "Result"
           error_missing_public_id: "Please enter a public_id."
           error_missing_file: "Please choose a file."
+          error_missing_file_or_url: "Please choose a file or provide a URL."
