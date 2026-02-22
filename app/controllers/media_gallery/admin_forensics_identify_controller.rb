@@ -4,6 +4,7 @@ require "cgi"
 require "tempfile"
 require "uri"
 require "open3"
+require "net/http"
 
 module ::MediaGallery
   class AdminForensicsIdentifyController < ::Admin::AdminController
@@ -165,6 +166,18 @@ module ::MediaGallery
       target_seconds = 30 if target_seconds < 30
       target_seconds = [target_seconds, MAX_URL_SAMPLE_SECONDS].min
 
+      playlist_tmp = nil
+      input = url
+
+      # Many HLS setups use a token on the playlist URL only, and the playlist contains
+      # relative segment URLs without any query params. ffmpeg will then request segments
+      # without the auth token and fail (often with 403). Rewriting the playlist into a
+      # local file with absolute, tokenized URLs makes ffmpeg reliably fetch the segments.
+      if uri.path.to_s.downcase.end_with?(".m3u8")
+        playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri)
+        input = playlist_tmp.path
+      end
+
       tmp = Tempfile.new(["media_gallery_identify_", ".mp4"])
       tmp.binmode
 
@@ -174,8 +187,10 @@ module ::MediaGallery
         "-y",
         "-protocol_whitelist",
         "file,http,https,tcp,tls,crypto",
+        "-allowed_extensions",
+        "ALL",
         "-i",
-        url,
+        input,
         "-t",
         target_seconds.to_s,
         "-c",
@@ -189,13 +204,112 @@ module ::MediaGallery
 
       _stdout, stderr, status = Open3.capture3(*cmd)
       unless status.success? && File.size?(tmp.path)
-        raise "ffmpeg download failed (tip: try the *index.m3u8* variant playlist, not master.m3u8): #{::MediaGallery::Ffmpeg.short_err(stderr)}"
+        tip = "tip: try the *index.m3u8* variant playlist (not master.m3u8)"
+        tip << "; if it still fails, the auth token may not be applied to segment URLs" if uri.path.to_s.downcase.end_with?(".m3u8")
+        raise "ffmpeg download failed (#{tip}): #{::MediaGallery::Ffmpeg.short_err(stderr)}"
       end
 
       tmp
     rescue => e
+      playlist_tmp&.close! rescue nil
       tmp&.close! rescue nil
       raise e
+    end
+
+    # Downloads the playlist text and rewrites all referenced URIs to absolute URLs.
+    # If the incoming playlist URL has a `token=...` query param, it will be appended
+    # to any referenced URIs that don't already have it.
+    def rewrite_hls_playlist_to_tempfile!(playlist_uri)
+      token = extract_token_param(playlist_uri)
+
+      body = http_get_text!(playlist_uri)
+      raise "playlist did not look like M3U8" unless body.lstrip.start_with?("#EXTM3U")
+
+      base = playlist_uri.dup
+      base.fragment = nil
+      base.query = nil
+      base.path = base.path.to_s.sub(%r{[^/]+\z}, "")
+
+      rewritten = body.each_line.map do |line|
+        raw = line.to_s.strip
+        next "" if raw.blank?
+
+        if raw.start_with?("#")
+          rewrite_quoted_uris_in_tag_line(raw, base, token)
+        else
+          rewrite_uri_line(raw, base, token)
+        end
+      end.join("\n")
+
+      tmp = Tempfile.new(["media_gallery_identify_playlist_", ".m3u8"])
+      tmp.binmode
+      tmp.write(rewritten)
+      tmp.write("\n") unless rewritten.end_with?("\n")
+      tmp.flush
+      tmp
+    end
+
+    def http_get_text!(uri)
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = (uri.scheme == "https")
+      http.open_timeout = 10
+      http.read_timeout = 20
+
+      req = Net::HTTP::Get.new(uri.request_uri)
+      req["User-Agent"] = "DiscourseMediaGalleryForensicsIdentify/1.0"
+
+      res = http.request(req)
+      unless res.is_a?(Net::HTTPSuccess)
+        raise "playlist HTTP #{res.code}"
+      end
+
+      res.body.to_s
+    end
+
+    def extract_token_param(uri)
+      qs = CGI.parse(uri.query.to_s)
+      qs["token"]&.first.presence
+    end
+
+    def rewrite_uri_line(value, base_uri, token)
+      abs = absolutize_uri(value, base_uri)
+      add_token(abs, token)
+    end
+
+    # Rewrites URI="..." occurrences in HLS tag lines like EXT-X-KEY, EXT-X-MAP, EXT-X-MEDIA.
+    def rewrite_quoted_uris_in_tag_line(line, base_uri, token)
+      line.gsub(/URI="([^"]+)"/) do
+        original = Regexp.last_match(1)
+        abs = absolutize_uri(original, base_uri)
+        rewritten = add_token(abs, token)
+        "URI=\"#{rewritten}\""
+      end
+    end
+
+    def absolutize_uri(value, base_uri)
+      v = value.to_s
+      begin
+        u = URI.parse(v)
+        if u.scheme.present? && u.host.present?
+          u
+        else
+          URI.join(base_uri.to_s, v)
+        end
+      rescue
+        URI.join(base_uri.to_s, v)
+      end
+    end
+
+    def add_token(uri, token)
+      return uri.to_s if token.blank?
+
+      u = uri.is_a?(URI) ? uri.dup : URI.parse(uri.to_s)
+      q = CGI.parse(u.query.to_s)
+      q["token"] ||= [token]
+      u.query = URI.encode_www_form(q.flat_map { |k, vs| vs.map { |v| [k, v] } })
+      u.to_s
+    rescue
+      uri.to_s
     end
   end
 end
