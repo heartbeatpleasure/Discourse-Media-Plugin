@@ -98,7 +98,12 @@ module ::MediaGallery
 
       if source_url.present?
         begin
-          temp = download_source_url_to_tempfile!(source_url, max_samples: max_samples, segment_seconds: seg)
+          temp = download_source_url_to_tempfile!(
+            source_url,
+            max_samples: max_samples,
+            segment_seconds: seg,
+            media_item: item
+          )
           path = temp.path
         rescue => e
           # Include the reason in the error payload so the admin UI can display it.
@@ -136,7 +141,7 @@ module ::MediaGallery
     # Some installs use long signed tokens in query strings. 2k is often too small.
     MAX_SOURCE_URL_LENGTH = 10_000
 
-    def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:)
+    def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:, media_item:)
       url = source_url.to_s.strip
       raise "source_url is blank" if url.blank?
       raise "source_url is too long" if url.length > MAX_SOURCE_URL_LENGTH
@@ -169,12 +174,24 @@ module ::MediaGallery
       playlist_tmp = nil
       input = url
 
-      # Many HLS setups use a token on the playlist URL only, and the playlist contains
-      # relative segment URLs without any query params. ffmpeg will then request segments
-      # without the auth token and fail (often with 403). Rewriting the playlist into a
-      # local file with absolute, tokenized URLs makes ffmpeg reliably fetch the segments.
+      # If the URL points at our own authenticated HLS endpoints, avoid making an HTTP
+      # request entirely. Those endpoints require a logged-in user session *and* validate
+      # the token against current_user (and sometimes IP). When an admin pastes a playback
+      # URL, the server-side fetch won't have the member's browser session cookies, which
+      # results in redirects/login HTML and ffmpeg failures.
+      #
+      # Instead, we build a local playlist directly from the packaged files on disk.
+      # If the URL isn't one of our HLS endpoints, fall back to a conservative HTTP playlist rewrite.
       if uri.path.to_s.downcase.end_with?(".m3u8")
-        playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri, allowed_hosts: allowed_hosts)
+        begin
+          playlist_tmp = localize_hls_playlist_to_tempfile!(uri, media_item: media_item)
+        rescue => e
+          if e.message.to_s == "unsupported_hls_url"
+            playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri)
+          else
+            raise e
+          end
+        end
         input = playlist_tmp.path
       end
 
@@ -219,14 +236,13 @@ module ::MediaGallery
     # Downloads the playlist text and rewrites all referenced URIs to absolute URLs.
     # If the incoming playlist URL has a `token=...` query param, it will be appended
     # to any referenced URIs that don't already have it.
-    def rewrite_hls_playlist_to_tempfile!(playlist_uri, allowed_hosts:)
+    def rewrite_hls_playlist_to_tempfile!(playlist_uri)
       token = extract_token_param(playlist_uri)
 
-      body, final_uri = http_get_text!(playlist_uri, allowed_hosts: allowed_hosts)
+      body = http_get_text!(playlist_uri)
       raise "playlist did not look like M3U8" unless body.lstrip.start_with?("#EXTM3U")
 
-      # Use the final URI (after redirects) as the base for resolving relative segment URLs.
-      base = (final_uri || playlist_uri).dup
+      base = playlist_uri.dup
       base.fragment = nil
       base.query = nil
       base.path = base.path.to_s.sub(%r{[^/]+\z}, "")
@@ -236,9 +252,9 @@ module ::MediaGallery
         next "" if raw.blank?
 
         if raw.start_with?("#")
-          rewrite_quoted_uris_in_tag_line(raw, base, token, allowed_hosts)
+          rewrite_quoted_uris_in_tag_line(raw, base, token)
         else
-          rewrite_uri_line(raw, base, token, allowed_hosts)
+          rewrite_uri_line(raw, base, token)
         end
       end.join("\n")
 
@@ -250,9 +266,136 @@ module ::MediaGallery
       tmp
     end
 
-    def http_get_text!(uri, allowed_hosts:, limit: 5)
-      raise "playlist redirect loop" if limit <= 0
+    # Build a local M3U8 that points at absolute files on disk.
+    # Supports Discourse-Media-Plugin's HLS URLs, e.g.:
+    #   /media/hls/:public_id/v/:variant/index.m3u8?token=...
+    #
+    # Why this exists:
+    # - /media/hls/* endpoints require ensure_logged_in and also validate token vs current_user.
+    # - Server-side fetching the URL (Net::HTTP / ffmpeg) does not carry the member's cookies.
+    # - So the request often redirects to login HTML, and the playlist "doesn't look like M3U8".
+    #
+    # Admin-only identify can safely read the packaged HLS files from private storage.
+    def localize_hls_playlist_to_tempfile!(playlist_uri, media_item:)
+      path = playlist_uri.path.to_s
 
+      # Variant playlist URL
+      m = path.match(%r{\A/media/hls/(?<public_id>[\w\-]+)/v/(?<variant>[^/]+)/index\.m3u8\z}i)
+
+      # Master playlist URL (we'll pick a variant from disk)
+      master = path.match(%r{\A/media/hls/(?<public_id>[\w\-]+)/master\.m3u8\z}i)
+
+      if m.blank? && master.blank?
+        raise "unsupported_hls_url"
+      end
+
+      public_id = (m ? m[:public_id] : master[:public_id]).to_s
+      variant = m ? m[:variant].to_s : nil
+
+      if public_id != media_item.public_id.to_s
+        raise "public_id_mismatch"
+      end
+
+      token = extract_token_param(playlist_uri)
+      payload = token.present? ? (MediaGallery::Token.verify(token, purpose: "hls") rescue nil) : nil
+      fingerprint_id = payload.is_a?(Hash) ? payload["fingerprint_id"].presence : nil
+      token_media_item_id = payload.is_a?(Hash) ? payload["media_item_id"].presence : nil
+
+      if token_media_item_id.present? && token_media_item_id.to_i != media_item.id
+        raise "token_item_mismatch"
+      end
+
+      if variant.blank?
+        master_abs = MediaGallery::PrivateStorage.hls_master_abs_path(media_item)
+        raise "master_playlist_not_found" if master_abs.blank? || !File.exist?(master_abs)
+
+        master_raw = File.read(master_abs)
+        picked = nil
+        master_raw.to_s.each_line do |line|
+          l = line.to_s.strip
+          next if l.blank? || l.start_with?("#")
+          v = l.split("/").first.to_s
+          if MediaGallery::Hls.variant_allowed?(v)
+            picked = v
+            break
+          end
+        end
+        raise "no_variant_found_in_master" if picked.blank?
+        variant = picked
+      end
+
+      abs = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(public_id, variant)
+      raise "variant_playlist_not_found" if abs.blank? || !File.exist?(abs)
+
+      raw = File.read(abs)
+
+      rewritten = []
+      seg_counter = 0
+
+      raw.to_s.each_line do |line|
+        l = line.to_s.rstrip
+        if l.blank? || l.start_with?("#")
+          # Handle EXT-X-MAP URI for fMP4
+          if l.include?("URI=\"")
+            rewritten << l.gsub(/URI=\"([^\"]+)\"/) do
+              uri_str = Regexp.last_match(1).to_s
+              file = File.basename(uri_str)
+              local = resolve_segment_abs_path(public_id, variant, file, fingerprint_id: fingerprint_id, media_item_id: media_item.id)
+              "URI=\"#{local}\""
+            end
+          else
+            rewritten << l
+          end
+          next
+        end
+
+        seg = File.basename(l)
+        if seg =~ /\A[\w\-.]+\.(ts|m4s)\z/i
+          local = resolve_segment_abs_path(public_id, variant, seg, fingerprint_id: fingerprint_id, media_item_id: media_item.id, seg_counter: seg_counter)
+          seg_counter += 1
+          rewritten << local
+        else
+          # Unknown line type; keep as-is.
+          rewritten << l
+        end
+      end
+
+      out = rewritten.join("\n") + "\n"
+      raise "playlist did not look like M3U8" unless out.lstrip.start_with?("#EXTM3U")
+
+      tmp = Tempfile.new(["media_gallery_identify_local_", ".m3u8"])
+      tmp.binmode
+      tmp.write(out)
+      tmp.flush
+      tmp
+    end
+
+    def resolve_segment_abs_path(public_id, variant, segment, fingerprint_id: nil, media_item_id: nil, seg_counter: nil)
+      seg = segment.to_s
+
+      # Prefer A/B-specific files when fingerprinting is enabled and the token contains a fingerprint_id.
+      if MediaGallery::Fingerprinting.enabled? && fingerprint_id.present? && media_item_id.present?
+        idx = MediaGallery::Fingerprinting.segment_index_from_filename(seg)
+        idx ||= seg_counter
+        if idx.present?
+          ab = MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: fingerprint_id,
+            media_item_id: media_item_id,
+            segment_index: idx
+          )
+
+          if ab.present?
+            ab_abs = File.join(MediaGallery::PrivateStorage.private_root, public_id.to_s, "hls", ab.to_s, variant.to_s, seg)
+            return ab_abs if File.exist?(ab_abs)
+          end
+        end
+      end
+
+      # Fallback to legacy packaging.
+      MediaGallery::PrivateStorage.hls_segment_abs_path(public_id, variant, seg)
+    end
+
+    def http_get_text!(uri)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = (uri.scheme == "https")
       http.open_timeout = 10
@@ -260,40 +403,19 @@ module ::MediaGallery
 
       req = Net::HTTP::Get.new(uri.request_uri)
       req["User-Agent"] = "DiscourseMediaGalleryForensicsIdentify/1.0"
-      req["Accept"] = "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain, */*"
+
+      # If the URL requires authentication (e.g. ensure_logged_in), forward cookies from
+      # the admin's browser session. This makes URL-mode usable for protected endpoints.
+      cookie = request&.headers&.[]("Cookie").to_s
+      req["Cookie"] = cookie if cookie.present?
+      req["Accept"] = "application/vnd.apple.mpegurl, */*"
 
       res = http.request(req)
-
-      if res.is_a?(Net::HTTPRedirection)
-        location = res["location"].to_s
-        raise "playlist HTTP #{res.code}" if location.blank?
-
-        next_uri = begin
-          URI.join(uri.to_s, location)
-        rescue
-          URI.parse(location)
-        end
-
-        # If the redirect drops the token query param, preserve it.
-        old_q = CGI.parse(uri.query.to_s)
-        new_q = CGI.parse(next_uri.query.to_s)
-        if old_q["token"].present? && new_q["token"].blank?
-          new_q["token"] = old_q["token"]
-          next_uri.query = URI.encode_www_form(new_q.flat_map { |k, vs| vs.map { |v| [k, v] } })
-        end
-
-        if next_uri.host.blank? || !allowed_hosts.include?(next_uri.host)
-          raise "playlist redirect to disallowed host #{next_uri.host.inspect}"
-        end
-
-        return http_get_text!(next_uri, allowed_hosts: allowed_hosts, limit: limit - 1)
-      end
-
       unless res.is_a?(Net::HTTPSuccess)
         raise "playlist HTTP #{res.code}"
       end
 
-      [res.body.to_s, uri]
+      res.body.to_s
     end
 
     def extract_token_param(uri)
@@ -301,29 +423,19 @@ module ::MediaGallery
       qs["token"]&.first.presence
     end
 
-    def rewrite_uri_line(value, base_uri, token, allowed_hosts)
+    def rewrite_uri_line(value, base_uri, token)
       abs = absolutize_uri(value, base_uri)
-      ensure_allowed_uri!(abs, allowed_hosts)
       add_token(abs, token)
     end
 
     # Rewrites URI="..." occurrences in HLS tag lines like EXT-X-KEY, EXT-X-MAP, EXT-X-MEDIA.
-    def rewrite_quoted_uris_in_tag_line(line, base_uri, token, allowed_hosts)
+    def rewrite_quoted_uris_in_tag_line(line, base_uri, token)
       line.gsub(/URI="([^"]+)"/) do
         original = Regexp.last_match(1)
         abs = absolutize_uri(original, base_uri)
-        ensure_allowed_uri!(abs, allowed_hosts)
         rewritten = add_token(abs, token)
         "URI=\"#{rewritten}\""
       end
-    end
-
-    def ensure_allowed_uri!(uri, allowed_hosts)
-      u = uri.is_a?(URI) ? uri : (URI.parse(uri.to_s) rescue nil)
-      return if u.blank? || u.host.blank?
-      return if allowed_hosts.include?(u.host)
-
-      raise "playlist contains URI on disallowed host #{u.host.inspect}"
     end
 
     def absolutize_uri(value, base_uri)
