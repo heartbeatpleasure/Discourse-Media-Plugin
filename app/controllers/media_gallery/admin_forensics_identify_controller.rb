@@ -174,7 +174,7 @@ module ::MediaGallery
       # without the auth token and fail (often with 403). Rewriting the playlist into a
       # local file with absolute, tokenized URLs makes ffmpeg reliably fetch the segments.
       if uri.path.to_s.downcase.end_with?(".m3u8")
-        playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri)
+        playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri, allowed_hosts: allowed_hosts)
         input = playlist_tmp.path
       end
 
@@ -219,13 +219,14 @@ module ::MediaGallery
     # Downloads the playlist text and rewrites all referenced URIs to absolute URLs.
     # If the incoming playlist URL has a `token=...` query param, it will be appended
     # to any referenced URIs that don't already have it.
-    def rewrite_hls_playlist_to_tempfile!(playlist_uri)
+    def rewrite_hls_playlist_to_tempfile!(playlist_uri, allowed_hosts:)
       token = extract_token_param(playlist_uri)
 
-      body = http_get_text!(playlist_uri)
+      body, final_uri = http_get_text!(playlist_uri, allowed_hosts: allowed_hosts)
       raise "playlist did not look like M3U8" unless body.lstrip.start_with?("#EXTM3U")
 
-      base = playlist_uri.dup
+      # Use the final URI (after redirects) as the base for resolving relative segment URLs.
+      base = (final_uri || playlist_uri).dup
       base.fragment = nil
       base.query = nil
       base.path = base.path.to_s.sub(%r{[^/]+\z}, "")
@@ -235,9 +236,9 @@ module ::MediaGallery
         next "" if raw.blank?
 
         if raw.start_with?("#")
-          rewrite_quoted_uris_in_tag_line(raw, base, token)
+          rewrite_quoted_uris_in_tag_line(raw, base, token, allowed_hosts)
         else
-          rewrite_uri_line(raw, base, token)
+          rewrite_uri_line(raw, base, token, allowed_hosts)
         end
       end.join("\n")
 
@@ -249,7 +250,9 @@ module ::MediaGallery
       tmp
     end
 
-    def http_get_text!(uri)
+    def http_get_text!(uri, allowed_hosts:, limit: 5)
+      raise "playlist redirect loop" if limit <= 0
+
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = (uri.scheme == "https")
       http.open_timeout = 10
@@ -257,13 +260,40 @@ module ::MediaGallery
 
       req = Net::HTTP::Get.new(uri.request_uri)
       req["User-Agent"] = "DiscourseMediaGalleryForensicsIdentify/1.0"
+      req["Accept"] = "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain, */*"
 
       res = http.request(req)
+
+      if res.is_a?(Net::HTTPRedirection)
+        location = res["location"].to_s
+        raise "playlist HTTP #{res.code}" if location.blank?
+
+        next_uri = begin
+          URI.join(uri.to_s, location)
+        rescue
+          URI.parse(location)
+        end
+
+        # If the redirect drops the token query param, preserve it.
+        old_q = CGI.parse(uri.query.to_s)
+        new_q = CGI.parse(next_uri.query.to_s)
+        if old_q["token"].present? && new_q["token"].blank?
+          new_q["token"] = old_q["token"]
+          next_uri.query = URI.encode_www_form(new_q.flat_map { |k, vs| vs.map { |v| [k, v] } })
+        end
+
+        if next_uri.host.blank? || !allowed_hosts.include?(next_uri.host)
+          raise "playlist redirect to disallowed host #{next_uri.host.inspect}"
+        end
+
+        return http_get_text!(next_uri, allowed_hosts: allowed_hosts, limit: limit - 1)
+      end
+
       unless res.is_a?(Net::HTTPSuccess)
         raise "playlist HTTP #{res.code}"
       end
 
-      res.body.to_s
+      [res.body.to_s, uri]
     end
 
     def extract_token_param(uri)
@@ -271,19 +301,29 @@ module ::MediaGallery
       qs["token"]&.first.presence
     end
 
-    def rewrite_uri_line(value, base_uri, token)
+    def rewrite_uri_line(value, base_uri, token, allowed_hosts)
       abs = absolutize_uri(value, base_uri)
+      ensure_allowed_uri!(abs, allowed_hosts)
       add_token(abs, token)
     end
 
     # Rewrites URI="..." occurrences in HLS tag lines like EXT-X-KEY, EXT-X-MAP, EXT-X-MEDIA.
-    def rewrite_quoted_uris_in_tag_line(line, base_uri, token)
+    def rewrite_quoted_uris_in_tag_line(line, base_uri, token, allowed_hosts)
       line.gsub(/URI="([^"]+)"/) do
         original = Regexp.last_match(1)
         abs = absolutize_uri(original, base_uri)
+        ensure_allowed_uri!(abs, allowed_hosts)
         rewritten = add_token(abs, token)
         "URI=\"#{rewritten}\""
       end
+    end
+
+    def ensure_allowed_uri!(uri, allowed_hosts)
+      u = uri.is_a?(URI) ? uri : (URI.parse(uri.to_s) rescue nil)
+      return if u.blank? || u.host.blank?
+      return if allowed_hosts.include?(u.host)
+
+      raise "playlist contains URI on disallowed host #{u.host.inspect}"
     end
 
     def absolutize_uri(value, base_uri)
