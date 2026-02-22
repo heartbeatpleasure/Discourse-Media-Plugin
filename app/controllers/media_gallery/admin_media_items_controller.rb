@@ -1,48 +1,44 @@
 # frozen_string_literal: true
 
 module ::MediaGallery
-  # Admin helper endpoint used by the forensics identify UI.
-  # Provides a simple search to find the correct public_id.
+  # Admin-only helper endpoints.
   class AdminMediaItemsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
+    # Returns a small list for quickly selecting a public_id in the admin UI.
     def search
       q = params[:q].to_s.strip
-      limit = params[:limit].to_i
-      limit = 20 if limit <= 0
-      limit = 50 if limit > 50
+      limit = 20
 
-      scope = MediaGallery::MediaItem.all
+      scope = ::MediaGallery::MediaItem.includes(:user).order(created_at: :desc)
 
       if q.present?
-        if q.match?(/\A\d+\z/)
+        if q =~ /\A\d+\z/
+          # Numeric input: treat as media_item id.
           scope = scope.where(id: q.to_i)
         else
-          like = "%#{::ActiveRecord::Base.sanitize_sql_like(q)}%"
-          scope = scope.where("public_id ILIKE ? OR title ILIKE ?", like, like)
+          like = "%#{q}%"
+          scope = scope.where(
+            "public_id ILIKE :q OR title ILIKE :q",
+            q: like
+          )
         end
       end
 
-      items = scope.order(created_at: :desc).limit(limit)
-
-      user_ids = items.pluck(:user_id).uniq
-      users_by_id = ::User.where(id: user_ids).pluck(:id, :username).to_h
-
-      render_json_dump({
-        results: items.map { |item|
-          {
-            id: item.id,
-            public_id: item.public_id,
-            title: item.title,
-            status: item.status,
-            media_type: item.media_type,
-            duration_seconds: item.duration_seconds,
-            created_at: item.created_at,
-            uploader_username: users_by_id[item.user_id]
-          }
+      items = scope.limit(limit).map do |item|
+        {
+          id: item.id,
+          public_id: item.public_id,
+          title: item.title,
+          status: item.status,
+          created_at: item.created_at,
+          user_id: item.user_id,
+          username: item.user&.username,
         }
-      })
+      end
+
+      render_json_dump(items: items)
     end
   end
 end

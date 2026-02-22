@@ -88,23 +88,36 @@ module ::MediaGallery
 
       layout = params[:layout].to_s.presence
 
+      # Admin convenience: if URL mode is used and the initial result is weak,
+      # we can automatically retry with a longer sample / more samples.
+      auto_extend = params[:auto_extend].to_s
+      auto_extend = (auto_extend == "1" || auto_extend.casecmp("true").zero?)
+
       seg = SiteSetting.media_gallery_hls_segment_duration_seconds.to_i
       seg = 6 if seg <= 0
 
       source_url = params[:source_url].to_s.strip.presence
 
-      temp = nil
-      path = nil
+      temps = []
+      result = nil
+      base_meta = {
+        requested_max_samples: max_samples,
+        max_offset_segments: max_offset,
+      }
 
       if source_url.present?
         begin
-          temp = download_source_url_to_tempfile!(
+          result, meta_patch, temps = identify_from_source_url(
             source_url,
+            media_item: item,
             max_samples: max_samples,
+            max_offset_segments: max_offset,
+            layout: layout,
             segment_seconds: seg,
-            media_item: item
+            auto_extend: auto_extend
           )
-          path = temp.path
+
+          meta_patch = base_meta.merge(meta_patch || {})
         rescue => e
           # Include the reason in the error payload so the admin UI can display it.
           msg = e.message.to_s.strip
@@ -117,19 +130,27 @@ module ::MediaGallery
 
         path = file.respond_to?(:tempfile) ? file.tempfile&.path : nil
         return render json: { errors: ["missing_file_or_url"] }, status: 422 if path.blank? || !File.exist?(path)
+
+        result = ::MediaGallery::ForensicsIdentify.identify_from_file(
+          media_item: item,
+          file_path: path,
+          max_samples: max_samples,
+          max_offset_segments: max_offset,
+          layout: layout
+        )
+        meta_patch = base_meta.merge(
+          attempts: 1,
+          auto_extended: false,
+          max_samples_used: max_samples
+        )
       end
 
-      result = ::MediaGallery::ForensicsIdentify.identify_from_file(
-        media_item: item,
-        file_path: path,
-        max_samples: max_samples,
-        max_offset_segments: max_offset,
-        layout: layout
-      )
+      result["meta"] ||= {}
+      meta_patch.each { |k, v| result["meta"][k.to_s] = v }
 
       render_json_dump(result)
     ensure
-      temp&.close! rescue nil
+      temps&.each { |t| t&.close! rescue nil }
     end
 
     private
@@ -138,8 +159,111 @@ module ::MediaGallery
     # a playlist URL from your own site. Large external downloads are intentionally not supported.
     MAX_URL_SAMPLE_SECONDS = 1800
 
+    # Auto-extend: cap the maximum samples we'll try.
+    MAX_AUTO_EXTEND_SAMPLES = 200
+
+    # Auto-extend if the initial result is below these heuristics.
+    AUTO_EXTEND_MIN_USABLE = 12
+    AUTO_EXTEND_MIN_MATCH = 0.85
+    AUTO_EXTEND_MIN_DELTA = 0.15
+
     # Some installs use long signed tokens in query strings. 2k is often too small.
     MAX_SOURCE_URL_LENGTH = 10_000
+
+    def identify_from_source_url(source_url, media_item:, max_samples:, max_offset_segments:, layout:, segment_seconds:, auto_extend:)
+      ms1 = [max_samples.to_i, MAX_AUTO_EXTEND_SAMPLES].min
+      temps = []
+
+      tmp1 = download_source_url_to_tempfile!(
+        source_url,
+        max_samples: ms1,
+        segment_seconds: segment_seconds,
+        media_item: media_item
+      )
+      temps << tmp1
+
+      res1 = ::MediaGallery::ForensicsIdentify.identify_from_file(
+        media_item: media_item,
+        file_path: tmp1.path,
+        max_samples: ms1,
+        max_offset_segments: max_offset_segments,
+        layout: layout
+      )
+
+      attempts = 1
+      best = res1
+      best_ms = ms1
+      best_score = score_result(res1)
+
+      if auto_extend && ms1 < MAX_AUTO_EXTEND_SAMPLES && should_auto_extend?(res1)
+        ms2 = [ms1 * 2, MAX_AUTO_EXTEND_SAMPLES].min
+        begin
+          tmp2 = download_source_url_to_tempfile!(
+            source_url,
+            max_samples: ms2,
+            segment_seconds: segment_seconds,
+            media_item: media_item
+          )
+          temps << tmp2
+
+          res2 = ::MediaGallery::ForensicsIdentify.identify_from_file(
+            media_item: media_item,
+            file_path: tmp2.path,
+            max_samples: ms2,
+            max_offset_segments: max_offset_segments,
+            layout: layout
+          )
+
+          attempts = 2
+          score2 = score_result(res2)
+          if score2 > best_score
+            best = res2
+            best_ms = ms2
+            best_score = score2
+          end
+        rescue => _e
+          # If the retry fails, keep the original attempt result.
+        end
+      end
+
+      meta_patch = {
+        attempts: attempts,
+        auto_extended: (attempts > 1 && best_ms != ms1),
+        max_samples_used: best_ms,
+      }
+
+      [best, meta_patch, temps]
+    end
+
+    def score_result(result)
+      usable = result.dig("meta", "usable_samples").to_i
+      top, second = top_two_match_ratios(result)
+      delta = top - second
+
+      # Heuristic score: prioritize higher match ratio, then clearer separation,
+      # then more usable samples.
+      (top * 100.0) + (delta * 40.0) + (usable * 1.0)
+    end
+
+    def should_auto_extend?(result)
+      usable = result.dig("meta", "usable_samples").to_i
+      top, second = top_two_match_ratios(result)
+      delta = top - second
+
+      return true if usable < AUTO_EXTEND_MIN_USABLE
+      return true if top < AUTO_EXTEND_MIN_MATCH
+      return true if delta < AUTO_EXTEND_MIN_DELTA
+      false
+    end
+
+    def top_two_match_ratios(result)
+      cands = result["candidates"]
+      return [0.0, 0.0] unless cands.is_a?(Array) && cands.present?
+
+      top = cands[0].is_a?(Hash) ? cands[0]["match_ratio"].to_f : 0.0
+      second = cands[1].is_a?(Hash) ? cands[1]["match_ratio"].to_f : 0.0
+      [top, second]
+    end
 
     def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:, media_item:)
       url = source_url.to_s.strip

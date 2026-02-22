@@ -103,6 +103,24 @@ export default RouteTemplate(
             </div>
 
             <div class="control-group">
+              <label class="control-label">
+                {{i18n "admin.media_gallery.forensics_identify.auto_extend_label"}}
+              </label>
+              <div class="controls">
+                <label style="display:flex; gap:0.5rem; align-items:center;">
+                  <input
+                    type="checkbox"
+                    checked={{@controller.autoExtend}}
+                    {{on "change" @controller.onAutoExtendChange}}
+                  />
+                  <span style="opacity:0.9;">
+                    {{i18n "admin.media_gallery.forensics_identify.auto_extend_help"}}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div class="control-group">
               <div class="controls">
                 <button
                   type="button"
@@ -132,17 +150,16 @@ export default RouteTemplate(
           {{#if @controller.hasResult}}
             <h2 style="margin-top: 2rem;">{{i18n "admin.media_gallery.forensics_identify.result"}}</h2>
 
-            <div class="alert {{@controller.summaryAlertClass}}" style="margin-top: 0.75rem;">
+            <div class="alert {{@controller.confidenceClass}}" style="margin-top: 0.75rem;">
               <strong>Summary</strong>
               <div style="margin-top: 0.5rem;">
                 <div><strong>samples:</strong> {{@controller.samples}}</div>
                 <div><strong>usable_samples:</strong> {{@controller.usableSamples}}</div>
-                {{#if @controller.topCandidate}}
+                <div><strong>confidence:</strong> {{@controller.confidence}}</div>
+                {{#if @controller.candidates.length}}
                   <div>
-                    <strong>confidence:</strong>
-                    {{@controller.confidenceLabel}}
-                    &nbsp;—&nbsp;
-                    <strong>top_match:</strong> {{@controller.topCandidate.match_ratio}}
+                    <strong>top_match:</strong> {{@controller.topMatchRatio}}
+                    <span style="opacity:0.85;">(Δ vs #2: {{@controller.matchDelta}})</span>
                   </div>
                 {{/if}}
                 {{#if @controller.meta.duration_seconds}}
@@ -151,13 +168,33 @@ export default RouteTemplate(
                 {{#if @controller.meta.layout}}
                   <div><strong>layout:</strong> {{@controller.meta.layout}}</div>
                 {{/if}}
+
+                {{#if @controller.attempts}}
+                  <div>
+                    <strong>attempts:</strong> {{@controller.attempts}}
+                    {{#if @controller.autoExtended}}
+                      <span style="opacity:0.85;">(auto-extended)</span>
+                    {{/if}}
+                    {{#if @controller.maxSamplesUsed}}
+                      <span style="opacity:0.85;">(max_samples_used: {{@controller.maxSamplesUsed}})</span>
+                    {{/if}}
+                  </div>
+                {{/if}}
               </div>
 
-              {{#if @controller.weakSignal}}
+              {{#if @controller.showWeakTip}}
                 <div style="margin-top: 0.75rem;">
                   <strong>Tip:</strong>
-                  Single segments often contain too little signal. Try a longer file that is closer to the original HLS download
-                  (less re-encoded/cropped). The best test is pasting the variant playlist URL (.m3u8).
+                  Matching is weakest when the leak is short, heavily re-encoded, cropped, or includes overlays.
+                  If possible, use a longer sample that is closer to the original HLS stream.
+                  URL mode + auto-extend helps, but confidence still depends on usable samples.
+                </div>
+              {{/if}}
+
+              {{#if @controller.isAmbiguous}}
+                <div style="margin-top: 0.75rem;">
+                  <strong>Note:</strong>
+                  The top two candidates are close. Treat this as ambiguous and gather a longer sample.
                 </div>
               {{/if}}
             </div>
@@ -179,12 +216,13 @@ export default RouteTemplate(
                     <th>User</th>
                     <th>Fingerprint</th>
                     <th>Match</th>
+                    <th>Δ vs #1</th>
                     <th>Mismatches</th>
                     <th>Best offset</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {{#each @controller.candidates as |c|}}
+                  {{#each @controller.topCandidates as |c|}}
                     <tr>
                       <td>
                         {{#if c.username}}
@@ -195,12 +233,20 @@ export default RouteTemplate(
                       </td>
                       <td><code>{{c.fingerprint_id}}</code></td>
                       <td>{{c.match_ratio}}</td>
+                      <td>{{c.delta_from_top}}</td>
                       <td>{{c.mismatches}} / {{c.compared}}</td>
                       <td>{{c.best_offset_segments}}</td>
                     </tr>
                   {{/each}}
                 </tbody>
               </table>
+
+              {{#if @controller.hasMoreCandidates}}
+                <details style="margin-top: 0.5rem;">
+                  <summary>Show all candidates ({{@controller.candidates.length}})</summary>
+                  <pre style="margin-top: 0.5rem; white-space: pre-wrap;">{{@controller.resultJson}}</pre>
+                </details>
+              {{/if}}
             {{else}}
               <p style="margin-top: 1rem;">
                 <em>No candidates matched the observed pattern.</em>
@@ -215,89 +261,60 @@ export default RouteTemplate(
         </div>
 
         <div style="flex: 0 1 420px; min-width: 280px;">
-          <div class="admin-detail-panel" style="margin-bottom: 1rem;">
+          <div class="admin-detail-panel">
             <h3>{{i18n "admin.media_gallery.forensics_identify.find_media_title"}}</h3>
-            <div style="display:flex; gap: 0.5rem; align-items:center;">
+            <div style="margin-top: 0.5rem;">
               <input
                 type="text"
-                value={{@controller.mediaQuery}}
+                value={{@controller.searchQuery}}
                 placeholder={{i18n "admin.media_gallery.forensics_identify.find_media_placeholder"}}
-                {{on "input" @controller.onMediaQueryInput}}
+                {{on "input" @controller.onSearchInput}}
               />
-              <button
-                type="button"
-                class="btn"
-                disabled={{@controller.mediaIsSearching}}
-                {{on "click" @controller.searchMedia}}
-              >
-                {{#if @controller.mediaIsSearching}}
-                  {{i18n "admin.media_gallery.forensics_identify.find_media_searching"}}
-                {{else}}
-                  {{i18n "admin.media_gallery.forensics_identify.find_media_search"}}
-                {{/if}}
-              </button>
-            </div>
-
-            <div style="opacity:0.8; margin-top: 0.35rem;">
-              {{i18n "admin.media_gallery.forensics_identify.find_media_help"}}
-            </div>
-
-            {{#if @controller.mediaSearchError}}
-              <div class="alert alert-error" style="margin-top: 0.75rem;">
-                {{@controller.mediaSearchError}}
+              <div style="opacity:0.8; margin-top: 0.35rem;">
+                {{i18n "admin.media_gallery.forensics_identify.find_media_help"}}
               </div>
+            </div>
+
+            {{#if @controller.searchError}}
+              <div class="alert alert-error" style="margin-top: 0.75rem;">{{@controller.searchError}}</div>
             {{/if}}
 
-            {{#if @controller.mediaResults.length}}
-              <div style="margin-top: 0.75rem; max-height: 320px; overflow:auto;">
-                <table class="table" style="margin: 0;">
-                  <thead>
-                    <tr>
-                      <th>Title</th>
-                      <th>public_id</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {{#each @controller.mediaResults as |m|}}
-                      <tr>
-                        <td style="max-width: 200px;">
-                          <button
-                            type="button"
-                            class="btn-link"
-                            style="padding:0; text-align:left;"
-                            data-public-id={{m.public_id}}
-                            {{on "click" @controller.onSelectMediaResult}}
-                          >
-                            {{m.title}}
-                          </button>
-                          <div style="opacity:0.7; font-size: 0.85em;">
-                            {{#if m.uploader_username}}
-                              {{m.uploader_username}} ·
-                            {{/if}}
-                            {{m.status}}
-                            {{#if m.media_type}}
-                              · {{m.media_type}}
-                            {{/if}}
-                          </div>
-                        </td>
-                        <td style="max-width: 190px;">
-                          <code style="word-break: break-word;">{{m.public_id}}</code>
-                        </td>
-                      </tr>
-                    {{/each}}
-                  </tbody>
-                </table>
-              </div>
+            {{#if @controller.isSearching}}
+              <p style="margin-top: 0.75rem; opacity:0.8;">Searching…</p>
+            {{/if}}
+
+            {{#if @controller.searchResults.length}}
+              <ul style="margin-top: 0.75rem;">
+                {{#each @controller.searchResults as |it|}}
+                  <li style="margin-bottom: 0.35rem;">
+                    <button
+                      type="button"
+                      class="btn btn-small"
+                      {{on "click" (fn @controller.pickPublicId it)}}
+                    >
+                      Use
+                    </button>
+                    <span style="margin-left: 0.5rem;">
+                      <strong>{{it.title}}</strong>
+                      <span style="opacity:0.8;">(#{{it.id}})</span>
+                    </span>
+                    <div style="opacity:0.8; margin-left: 3.2rem;">
+                      <code>{{it.public_id}}</code>
+                      {{#if it.username}}
+                        <span style="margin-left: 0.5rem;">by {{it.username}}</span>
+                      {{/if}}
+                    </div>
+                  </li>
+                {{/each}}
+              </ul>
             {{else}}
-              {{#if @controller.mediaQuery}}
-                <div style="margin-top: 0.75rem; opacity: 0.8;">
-                  {{i18n "admin.media_gallery.forensics_identify.find_media_no_results"}}
-                </div>
+              {{#if @controller.showNoSearchMatches}}
+                <p style="margin-top: 0.75rem; opacity:0.8;">No matches.</p>
               {{/if}}
             {{/if}}
-          </div>
 
-          <div class="admin-detail-panel">
+            <hr />
+
             <h3>Best test method</h3>
             <ol>
               <li>Log in as a normal test user and play the video (so you definitely get a personalized stream).</li>
@@ -305,8 +322,7 @@ export default RouteTemplate(
               <li>Paste that URL into the field on the left (no need to download manually).</li>
             </ol>
             <p style="opacity:0.85;">
-              This URL mode is intentionally restricted to your own site for safety.
-              For external leaks (mp4 re-uploads), upload the file instead.
+              URL mode is restricted to your own site for safety. For external leaks (mp4 re-uploads), upload the file.
             </p>
           </div>
         </div>

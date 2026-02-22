@@ -10,14 +10,15 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked maxSamples = 60;
   @tracked maxOffsetSegments = 30;
   @tracked layout = "";
+  @tracked autoExtend = true;
   @tracked isRunning = false;
 
-  // Helper: find public_id
-  @tracked mediaQuery = "";
-  @tracked mediaResults = [];
-  @tracked mediaIsSearching = false;
-  @tracked mediaSearchError = "";
-  _mediaSearchTimer = null;
+  // public_id finder
+  @tracked searchQuery = "";
+  @tracked searchResults = [];
+  @tracked isSearching = false;
+  @tracked searchError = "";
+  _searchTimer = null;
 
   // Raw + parsed result
   @tracked result = null;
@@ -34,6 +35,84 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get candidates() {
     return this.result?.candidates || [];
+  }
+
+  get topCandidates() {
+    const cands = this.candidates || [];
+    const top = this.topMatchRatio;
+    return cands.slice(0, 3).map((c, idx) => {
+      const v = c?.match_ratio;
+      const mr = typeof v === "number" ? v : parseFloat(v);
+      const matchRatio = Number.isFinite(mr) ? mr : 0;
+      return {
+        ...c,
+        _idx: idx,
+        delta_from_top: idx === 0 ? 0 : Math.max(0, top - matchRatio),
+      };
+    });
+  }
+
+  get topCandidate() {
+    return this.candidates?.[0] || null;
+  }
+
+  get secondCandidate() {
+    return this.candidates?.[1] || null;
+  }
+
+  get topMatchRatio() {
+    const v = this.topCandidate?.match_ratio;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : 0;
+  }
+
+  get secondMatchRatio() {
+    const v = this.secondCandidate?.match_ratio;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : 0;
+  }
+
+  get matchDelta() {
+    return Math.max(0, this.topMatchRatio - this.secondMatchRatio);
+  }
+
+  get confidence() {
+    const usable = this.usableSamples;
+    const top = this.topMatchRatio;
+    const delta = this.matchDelta;
+
+    if (!this.candidates?.length || usable < 5 || top <= 0) {
+      return "none";
+    }
+
+    // Heuristics: we care about (1) enough usable samples, (2) a high match ratio,
+    // and (3) clear separation from #2.
+    if (usable >= 12 && top >= 0.85 && delta >= 0.2) {
+      return "strong";
+    }
+
+    if (usable >= 8 && top >= 0.7 && delta >= 0.15) {
+      return "medium";
+    }
+
+    if (usable >= 5 && top >= 0.55 && delta >= 0.1) {
+      return "weak";
+    }
+
+    return "none";
+  }
+
+  get confidenceClass() {
+    switch (this.confidence) {
+      case "strong":
+        return "alert-success";
+      case "medium":
+        return "alert-info";
+      case "weak":
+        return "alert-warning";
+      default:
+        return "alert-error";
+    }
   }
 
   get observedVariants() {
@@ -53,46 +132,106 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return this.usableSamples === 0 || this.usableSamples < 5;
   }
 
-  get topCandidate() {
-    return this.candidates?.length ? this.candidates[0] : null;
+  get showWeakTip() {
+    return this.weakSignal || this.confidence === "weak" || this.confidence === "none";
   }
 
-  get confidenceLabel() {
-    const top = this.topCandidate;
-    if (!top) {
-      return "none";
-    }
-
-    const ratio = Number(top.match_ratio || 0);
-    const usable = Number(this.usableSamples || 0);
-    const second = this.candidates?.length > 1 ? this.candidates[1] : null;
-    const delta = second ? ratio - Number(second.match_ratio || 0) : ratio;
-
-    if (usable >= 12 && ratio >= 0.9 && delta >= 0.1) {
-      return "strong";
-    }
-    if (usable >= 8 && ratio >= 0.8) {
-      return "medium";
-    }
-    return "weak";
+  get isAmbiguous() {
+    return (this.candidates?.length || 0) > 1 && this.matchDelta < 0.1;
   }
 
-  get summaryAlertClass() {
-    switch (this.confidenceLabel) {
-      case "strong":
-        return "alert-success";
-      case "medium":
-        return "alert-info";
-      case "weak":
-        return "alert-warning";
-      default:
-        return "alert-info";
-    }
+  get attempts() {
+    return this.meta?.attempts ?? 1;
+  }
+
+  get autoExtended() {
+    return !!this.meta?.auto_extended;
+  }
+
+  get maxSamplesUsed() {
+    return this.meta?.max_samples_used ?? null;
+  }
+
+  get hasMoreCandidates() {
+    return (this.candidates?.length || 0) > 3;
+  }
+
+  get showNoSearchMatches() {
+    const q = this.searchQuery || "";
+    return (
+      !this.isSearching &&
+      q.length >= 3 &&
+      (this.searchResults?.length || 0) === 0 &&
+      !this.searchError
+    );
   }
 
   @action
   onPublicIdInput(event) {
     this.publicId = (event?.target?.value || "").trim();
+  }
+
+  @action
+  onSearchInput(event) {
+    this.searchQuery = (event?.target?.value || "").trim();
+    this._debouncedSearch();
+  }
+
+  _debouncedSearch() {
+    if (this._searchTimer) {
+      clearTimeout(this._searchTimer);
+    }
+
+    this._searchTimer = setTimeout(() => {
+      this._searchTimer = null;
+      this.search();
+    }, 300);
+  }
+
+  async search() {
+    this.searchError = "";
+    this.isSearching = true;
+    try {
+      const q = this.searchQuery;
+      // If user typed something very short, don't spam the server.
+      // Empty query is allowed: it returns recent items.
+      if (q && q.length < 3) {
+        this.searchResults = [];
+        return;
+      }
+
+      const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(
+        q || ""
+      )}`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        const err = await this._extractError(response);
+        this.searchError = `HTTP ${response.status}: ${err}`;
+        this.searchResults = [];
+        return;
+      }
+
+      const json = await response.json();
+      this.searchResults = Array.isArray(json?.items) ? json.items : [];
+    } catch (e) {
+      this.searchError = e?.message || String(e);
+      this.searchResults = [];
+    } finally {
+      this.isSearching = false;
+    }
+  }
+
+  @action
+  pickPublicId(item) {
+    const pid = item?.public_id;
+    if (pid) {
+      this.publicId = pid;
+    }
   }
 
   @action
@@ -124,65 +263,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   @action
-  onMediaQueryInput(event) {
-    this.mediaQuery = (event?.target?.value || "").trim();
-    this.mediaSearchError = "";
-
-    // Simple debounce: if query is long enough, auto-search.
-    clearTimeout(this._mediaSearchTimer);
-    if (this.mediaQuery.length >= 3) {
-      this._mediaSearchTimer = setTimeout(() => this.searchMedia(), 350);
-    } else if (!this.mediaQuery) {
-      // Empty query -> show recent items.
-      this._mediaSearchTimer = setTimeout(() => this.searchMedia(true), 0);
-    }
-  }
-
-  @action
-  onSelectMediaResult(event) {
-    const publicId = event?.currentTarget?.dataset?.publicId;
-    if (publicId) {
-      this.publicId = String(publicId).trim();
-    }
-  }
-
-  async _fetchMediaResults(query) {
-    const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(
-      query || ""
-    )}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      credentials: "same-origin",
-    });
-
-    if (!response.ok) {
-      const err = await this._extractError(response);
-      throw new Error(`HTTP ${response.status}: ${err}`);
-    }
-
-    const json = await response.json();
-    return Array.isArray(json?.results) ? json.results : [];
-  }
-
-  @action
-  async searchMedia(loadRecent = false) {
-    const query = loadRecent ? "" : this.mediaQuery;
-    if (!query && !loadRecent) {
-      this.mediaResults = [];
-      return;
-    }
-
-    this.mediaIsSearching = true;
-    this.mediaSearchError = "";
-    try {
-      this.mediaResults = await this._fetchMediaResults(query);
-    } catch (e) {
-      this.mediaSearchError = e?.message || String(e);
-      this.mediaResults = [];
-    } finally {
-      this.mediaIsSearching = false;
-    }
+  onAutoExtendChange(event) {
+    this.autoExtend = !!event?.target?.checked;
   }
 
   @action
@@ -255,6 +337,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     if (this.layout) {
       form.append("layout", this.layout);
     }
+    form.append("auto_extend", this.autoExtend ? "1" : "0");
 
     const url = `/admin/plugins/media-gallery/forensics-identify/${encodeURIComponent(
       this.publicId
