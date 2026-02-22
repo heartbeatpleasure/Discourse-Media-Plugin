@@ -12,6 +12,13 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked layout = "";
   @tracked isRunning = false;
 
+  // Helper: find public_id
+  @tracked mediaQuery = "";
+  @tracked mediaResults = [];
+  @tracked mediaIsSearching = false;
+  @tracked mediaSearchError = "";
+  _mediaSearchTimer = null;
+
   // Raw + parsed result
   @tracked result = null;
   @tracked resultJson = "";
@@ -46,6 +53,43 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return this.usableSamples === 0 || this.usableSamples < 5;
   }
 
+  get topCandidate() {
+    return this.candidates?.length ? this.candidates[0] : null;
+  }
+
+  get confidenceLabel() {
+    const top = this.topCandidate;
+    if (!top) {
+      return "none";
+    }
+
+    const ratio = Number(top.match_ratio || 0);
+    const usable = Number(this.usableSamples || 0);
+    const second = this.candidates?.length > 1 ? this.candidates[1] : null;
+    const delta = second ? ratio - Number(second.match_ratio || 0) : ratio;
+
+    if (usable >= 12 && ratio >= 0.9 && delta >= 0.1) {
+      return "strong";
+    }
+    if (usable >= 8 && ratio >= 0.8) {
+      return "medium";
+    }
+    return "weak";
+  }
+
+  get summaryAlertClass() {
+    switch (this.confidenceLabel) {
+      case "strong":
+        return "alert-success";
+      case "medium":
+        return "alert-info";
+      case "weak":
+        return "alert-warning";
+      default:
+        return "alert-info";
+    }
+  }
+
   @action
   onPublicIdInput(event) {
     this.publicId = (event?.target?.value || "").trim();
@@ -77,6 +121,68 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @action
   onLayoutChange(event) {
     this.layout = event?.target?.value || "";
+  }
+
+  @action
+  onMediaQueryInput(event) {
+    this.mediaQuery = (event?.target?.value || "").trim();
+    this.mediaSearchError = "";
+
+    // Simple debounce: if query is long enough, auto-search.
+    clearTimeout(this._mediaSearchTimer);
+    if (this.mediaQuery.length >= 3) {
+      this._mediaSearchTimer = setTimeout(() => this.searchMedia(), 350);
+    } else if (!this.mediaQuery) {
+      // Empty query -> show recent items.
+      this._mediaSearchTimer = setTimeout(() => this.searchMedia(true), 0);
+    }
+  }
+
+  @action
+  onSelectMediaResult(event) {
+    const publicId = event?.currentTarget?.dataset?.publicId;
+    if (publicId) {
+      this.publicId = String(publicId).trim();
+    }
+  }
+
+  async _fetchMediaResults(query) {
+    const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(
+      query || ""
+    )}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+    });
+
+    if (!response.ok) {
+      const err = await this._extractError(response);
+      throw new Error(`HTTP ${response.status}: ${err}`);
+    }
+
+    const json = await response.json();
+    return Array.isArray(json?.results) ? json.results : [];
+  }
+
+  @action
+  async searchMedia(loadRecent = false) {
+    const query = loadRecent ? "" : this.mediaQuery;
+    if (!query && !loadRecent) {
+      this.mediaResults = [];
+      return;
+    }
+
+    this.mediaIsSearching = true;
+    this.mediaSearchError = "";
+    try {
+      this.mediaResults = await this._fetchMediaResults(query);
+    } catch (e) {
+      this.mediaSearchError = e?.message || String(e);
+      this.mediaResults = [];
+    } finally {
+      this.mediaIsSearching = false;
+    }
   }
 
   @action

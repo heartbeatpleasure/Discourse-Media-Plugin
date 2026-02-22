@@ -132,11 +132,19 @@ export default RouteTemplate(
           {{#if @controller.hasResult}}
             <h2 style="margin-top: 2rem;">{{i18n "admin.media_gallery.forensics_identify.result"}}</h2>
 
-            <div class="alert {{if @controller.weakSignal "alert-warning" "alert-info"}}" style="margin-top: 0.75rem;">
+            <div class="alert {{@controller.summaryAlertClass}}" style="margin-top: 0.75rem;">
               <strong>Summary</strong>
               <div style="margin-top: 0.5rem;">
                 <div><strong>samples:</strong> {{@controller.samples}}</div>
                 <div><strong>usable_samples:</strong> {{@controller.usableSamples}}</div>
+                {{#if @controller.topCandidate}}
+                  <div>
+                    <strong>confidence:</strong>
+                    {{@controller.confidenceLabel}}
+                    &nbsp;—&nbsp;
+                    <strong>top_match:</strong> {{@controller.topCandidate.match_ratio}}
+                  </div>
+                {{/if}}
                 {{#if @controller.meta.duration_seconds}}
                   <div><strong>duration_seconds:</strong> {{@controller.meta.duration_seconds}}</div>
                 {{/if}}
@@ -207,6 +215,88 @@ export default RouteTemplate(
         </div>
 
         <div style="flex: 0 1 420px; min-width: 280px;">
+          <div class="admin-detail-panel" style="margin-bottom: 1rem;">
+            <h3>{{i18n "admin.media_gallery.forensics_identify.find_media_title"}}</h3>
+            <div style="display:flex; gap: 0.5rem; align-items:center;">
+              <input
+                type="text"
+                value={{@controller.mediaQuery}}
+                placeholder={{i18n "admin.media_gallery.forensics_identify.find_media_placeholder"}}
+                {{on "input" @controller.onMediaQueryInput}}
+              />
+              <button
+                type="button"
+                class="btn"
+                disabled={{@controller.mediaIsSearching}}
+                {{on "click" @controller.searchMedia}}
+              >
+                {{#if @controller.mediaIsSearching}}
+                  {{i18n "admin.media_gallery.forensics_identify.find_media_searching"}}
+                {{else}}
+                  {{i18n "admin.media_gallery.forensics_identify.find_media_search"}}
+                {{/if}}
+              </button>
+            </div>
+
+            <div style="opacity:0.8; margin-top: 0.35rem;">
+              {{i18n "admin.media_gallery.forensics_identify.find_media_help"}}
+            </div>
+
+            {{#if @controller.mediaSearchError}}
+              <div class="alert alert-error" style="margin-top: 0.75rem;">
+                {{@controller.mediaSearchError}}
+              </div>
+            {{/if}}
+
+            {{#if @controller.mediaResults.length}}
+              <div style="margin-top: 0.75rem; max-height: 320px; overflow:auto;">
+                <table class="table" style="margin: 0;">
+                  <thead>
+                    <tr>
+                      <th>Title</th>
+                      <th>public_id</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {{#each @controller.mediaResults as |m|}}
+                      <tr>
+                        <td style="max-width: 200px;">
+                          <button
+                            type="button"
+                            class="btn-link"
+                            style="padding:0; text-align:left;"
+                            data-public-id={{m.public_id}}
+                            {{on "click" @controller.onSelectMediaResult}}
+                          >
+                            {{m.title}}
+                          </button>
+                          <div style="opacity:0.7; font-size: 0.85em;">
+                            {{#if m.uploader_username}}
+                              {{m.uploader_username}} ·
+                            {{/if}}
+                            {{m.status}}
+                            {{#if m.media_type}}
+                              · {{m.media_type}}
+                            {{/if}}
+                          </div>
+                        </td>
+                        <td style="max-width: 190px;">
+                          <code style="word-break: break-word;">{{m.public_id}}</code>
+                        </td>
+                      </tr>
+                    {{/each}}
+                  </tbody>
+                </table>
+              </div>
+            {{else}}
+              {{#if @controller.mediaQuery}}
+                <div style="margin-top: 0.75rem; opacity: 0.8;">
+                  {{i18n "admin.media_gallery.forensics_identify.find_media_no_results"}}
+                </div>
+              {{/if}}
+            {{/if}}
+          </div>
+
           <div class="admin-detail-panel">
             <h3>Best test method</h3>
             <ol>

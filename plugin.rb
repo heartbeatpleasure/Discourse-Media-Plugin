@@ -35,6 +35,7 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/media_forensics_export.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_fingerprints_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_media_items_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
@@ -54,6 +55,7 @@ after_initialize do
 
     # Admin-only forensic helpers
     get "/admin/plugins/media-gallery/fingerprints/:public_id" => "media_gallery/admin_fingerprints#show", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
     get "/admin/plugins/media-gallery/forensics-exports" => "media_gallery/admin_forensics_exports#index", defaults: { format: :json }
     # Download (admin-only). Support both /:id and /:id.csv.
     get "/admin/plugins/media-gallery/forensics-exports/:id" => "media_gallery/admin_forensics_exports#download", constraints: { id: /\d+/ }
