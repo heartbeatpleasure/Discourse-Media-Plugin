@@ -356,6 +356,14 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       });
 
       if (!response.ok) {
+        if (response.status === 413) {
+          // Nginx (or a reverse proxy) rejected the request body before Discourse/Rails
+          // could handle it. This typically means client_max_body_size is too low.
+          this.error = i18n(
+            "admin.media_gallery.forensics_identify.error_upload_too_large"
+          );
+          return;
+        }
         const err = await this._extractError(response);
         this.error = `HTTP ${response.status}: ${err}`;
         return;

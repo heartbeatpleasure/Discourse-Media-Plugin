@@ -100,3 +100,4 @@ en:
           error_missing_public_id: "Please enter a public_id."
           error_missing_file: "Please choose a file."
           error_missing_file_or_url: "Please choose a file or provide a URL."
+          error_upload_too_large: "HTTP 413: Upload too large. This request was rejected by Nginx (or a reverse proxy) before Discourse could process it. Use the URL mode for identify, or increase the proxy/nginx upload limit (client_max_body_size / upload_size in app.yml)."
