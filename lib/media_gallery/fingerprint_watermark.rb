@@ -19,23 +19,37 @@ module ::MediaGallery
     # Layout modes:
     # - v1_tiles: 6 independent tiles spread across the frame (legacy)
     # - v2_pairs: 3 adjacent tile-pairs (one light, one dark) for easier forensic extraction
+    # - v3_pairs: more (smaller) pairs for higher SNR / robustness on short clips
     LAYOUT_V1 = "v1_tiles"
     LAYOUT_V2 = "v2_pairs"
+    LAYOUT_V3 = "v3_pairs"
 
     # Conservative defaults; intentionally subtle.
     V1_BOX_COUNT = 6
     V1_BOX_SIZE_FRAC = 0.12 # 12% of width/height
     V2_PAIR_COUNT = 3
     V2_BOX_SIZE_FRAC = 0.12
-    OPACITY = 0.006 # 0.6% alpha
+    # v3 uses more redundancy + a slightly stronger alpha, but smaller boxes.
+    V3_PAIR_COUNT = 8
+    V3_BOX_SIZE_FRAC = 0.085
+
+    V2_OPACITY = 0.006 # 0.6% alpha
+    V3_OPACITY = 0.010 # 1.0% alpha
 
     # Keep away from the borders so mild crops don't remove everything.
-    MARGIN = 0.06
+    V1_MARGIN = 0.06
+    V2_MARGIN = 0.06
+    V3_MARGIN = 0.08
+
+    def allowed_layouts
+      [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3]
+    end
+    private_class_method :allowed_layouts
 
     def layout_mode
       if SiteSetting.respond_to?(:media_gallery_fingerprint_watermark_layout)
         v = SiteSetting.media_gallery_fingerprint_watermark_layout.to_s
-        return v if [LAYOUT_V1, LAYOUT_V2].include?(v)
+        return v if allowed_layouts.include?(v)
       end
 
       LAYOUT_V1
@@ -48,8 +62,8 @@ module ::MediaGallery
       v = "a" unless %w[a b].include?(v)
 
       mode = layout_mode
-      if mode == LAYOUT_V2
-        vf_pairs(media_item_id: media_item_id, variant: v)
+      if mode == LAYOUT_V2 || mode == LAYOUT_V3
+        vf_pairs(media_item_id: media_item_id, variant: v, layout: mode)
       else
         vf_tiles(media_item_id: media_item_id, variant: v)
       end
@@ -57,12 +71,38 @@ module ::MediaGallery
 
     # Exposed for forensic extraction (server-side).
     # Returns a Hash with layout + normalized coordinates.
-    def spec_for(media_item_id:)
-      mode = layout_mode
-      if mode == LAYOUT_V2
-        { layout: mode, pairs: v2_pairs_for(media_item_id: media_item_id) }
+    def spec_for(media_item_id:, layout: nil)
+      mode = layout.to_s.presence || layout_mode
+      mode = layout_mode unless allowed_layouts.include?(mode)
+
+      case mode
+      when LAYOUT_V2
+        {
+          layout: mode,
+          kind: "pairs",
+          opacity: V2_OPACITY,
+          box_size_frac: V2_BOX_SIZE_FRAC,
+          margin: V2_MARGIN,
+          pairs: v2_pairs_for(media_item_id: media_item_id)
+        }
+      when LAYOUT_V3
+        {
+          layout: mode,
+          kind: "pairs",
+          opacity: V3_OPACITY,
+          box_size_frac: V3_BOX_SIZE_FRAC,
+          margin: V3_MARGIN,
+          pairs: v3_pairs_for(media_item_id: media_item_id)
+        }
       else
-        { layout: mode, tiles: v1_tiles_for(media_item_id: media_item_id) }
+        {
+          layout: mode,
+          kind: "tiles",
+          opacity: V2_OPACITY,
+          box_size_frac: V1_BOX_SIZE_FRAC,
+          margin: V1_MARGIN,
+          tiles: v1_tiles_for(media_item_id: media_item_id)
+        }
       end
     end
 
@@ -73,7 +113,7 @@ module ::MediaGallery
       seed_bytes = prng_bytes(secret, "wm|#{SALT}|#{media_item_id}", V1_BOX_COUNT * 8)
 
       color = (variant == "a") ? "white" : "black"
-      alpha = OPACITY
+      alpha = V2_OPACITY
 
       tiles = v1_tiles_for(media_item_id: media_item_id, seed_bytes: seed_bytes)
       tiles.map do |t|
@@ -86,18 +126,18 @@ module ::MediaGallery
       secret = fingerprint_secret
       seed_bytes ||= prng_bytes(secret, "wm|#{SALT}|#{media_item_id}", V1_BOX_COUNT * 8)
 
-      max_x = 1.0 - MARGIN - V1_BOX_SIZE_FRAC
-      max_y = 1.0 - MARGIN - V1_BOX_SIZE_FRAC
-      span_x = [max_x - MARGIN, 0.001].max
-      span_y = [max_y - MARGIN, 0.001].max
+      max_x = 1.0 - V1_MARGIN - V1_BOX_SIZE_FRAC
+      max_y = 1.0 - V1_MARGIN - V1_BOX_SIZE_FRAC
+      span_x = [max_x - V1_MARGIN, 0.001].max
+      span_y = [max_y - V1_MARGIN, 0.001].max
 
       out = []
       V1_BOX_COUNT.times do |i|
         x_r = u32_to_unit(seed_bytes, i * 8)
         y_r = u32_to_unit(seed_bytes, i * 8 + 4)
 
-        x = (MARGIN + span_x * x_r).round(6)
-        y = (MARGIN + span_y * y_r).round(6)
+        x = (V1_MARGIN + span_x * x_r).round(6)
+        y = (V1_MARGIN + span_y * y_r).round(6)
 
         out << { x: x, y: y }
       end
@@ -107,9 +147,13 @@ module ::MediaGallery
 
     # ---- v2 ---------------------------------------------------------------
 
-    def vf_pairs(media_item_id:, variant:)
-      alpha = OPACITY
-      pairs = v2_pairs_for(media_item_id: media_item_id)
+    def vf_pairs(media_item_id:, variant:, layout:)
+      layout = layout.to_s
+      layout = LAYOUT_V2 unless [LAYOUT_V2, LAYOUT_V3].include?(layout)
+
+      alpha = (layout == LAYOUT_V3) ? V3_OPACITY : V2_OPACITY
+      box = (layout == LAYOUT_V3) ? V3_BOX_SIZE_FRAC : V2_BOX_SIZE_FRAC
+      pairs = (layout == LAYOUT_V3) ? v3_pairs_for(media_item_id: media_item_id) : v2_pairs_for(media_item_id: media_item_id)
 
       # v2: each pair is two adjacent boxes; variant decides which side is light/dark.
       light = "white"
@@ -122,8 +166,8 @@ module ::MediaGallery
 
         x = p[:x]
         y = p[:y]
-        w = V2_BOX_SIZE_FRAC
-        h = V2_BOX_SIZE_FRAC
+        w = box
+        h = box
 
         # left box
         filters << "drawbox=x=iw*#{x}:y=ih*#{y}:w=iw*#{w}:h=ih*#{h}:color=#{left_color}@#{alpha}:t=fill"
@@ -141,24 +185,49 @@ module ::MediaGallery
       seed_bytes = prng_bytes(secret, "wm|#{SALT}|#{media_item_id}|v2", V2_PAIR_COUNT * 8)
 
       pair_w = (V2_BOX_SIZE_FRAC * 2.0)
-      max_x = 1.0 - MARGIN - pair_w
-      max_y = 1.0 - MARGIN - V2_BOX_SIZE_FRAC
-      span_x = [max_x - MARGIN, 0.001].max
-      span_y = [max_y - MARGIN, 0.001].max
+      max_x = 1.0 - V2_MARGIN - pair_w
+      max_y = 1.0 - V2_MARGIN - V2_BOX_SIZE_FRAC
+      span_x = [max_x - V2_MARGIN, 0.001].max
+      span_y = [max_y - V2_MARGIN, 0.001].max
 
       out = []
       V2_PAIR_COUNT.times do |i|
         x_r = u32_to_unit(seed_bytes, i * 8)
         y_r = u32_to_unit(seed_bytes, i * 8 + 4)
 
-        x = (MARGIN + span_x * x_r).round(6)
-        y = (MARGIN + span_y * y_r).round(6)
+        x = (V2_MARGIN + span_x * x_r).round(6)
+        y = (V2_MARGIN + span_y * y_r).round(6)
 
         out << { x: x, y: y }
       end
       out
     end
     private_class_method :v2_pairs_for
+
+    def v3_pairs_for(media_item_id:)
+      # Like v2, but with more (smaller) pairs and a slightly larger margin.
+      secret = fingerprint_secret
+      seed_bytes = prng_bytes(secret, "wm|#{SALT}|#{media_item_id}|v3", V3_PAIR_COUNT * 8)
+
+      pair_w = (V3_BOX_SIZE_FRAC * 2.0)
+      max_x = 1.0 - V3_MARGIN - pair_w
+      max_y = 1.0 - V3_MARGIN - V3_BOX_SIZE_FRAC
+      span_x = [max_x - V3_MARGIN, 0.001].max
+      span_y = [max_y - V3_MARGIN, 0.001].max
+
+      out = []
+      V3_PAIR_COUNT.times do |i|
+        x_r = u32_to_unit(seed_bytes, i * 8)
+        y_r = u32_to_unit(seed_bytes, i * 8 + 4)
+
+        x = (V3_MARGIN + span_x * x_r).round(6)
+        y = (V3_MARGIN + span_y * y_r).round(6)
+
+        out << { x: x, y: y }
+      end
+      out
+    end
+    private_class_method :v3_pairs_for
 
     # ---- helpers -----------------------------------------------------------
 

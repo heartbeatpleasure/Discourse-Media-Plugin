@@ -22,6 +22,10 @@ module ::MediaGallery
     # If the signal is too weak, we return nil bits for that sample.
     MIN_CONFIDENCE = 0.005
 
+    # If a single-frame sample is weak, we automatically resample nearby frames
+    # (still within the same segment) and aggregate.
+    RESAMPLE_MIN_CONFIDENCE = 0.012
+
     def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil)
       raise ArgumentError, "missing media_item" if media_item.blank?
       raise ArgumentError, "missing file" if file_path.blank? || !File.exist?(file_path)
@@ -29,13 +33,26 @@ module ::MediaGallery
       seg = SiteSetting.media_gallery_hls_segment_duration_seconds.to_i
       seg = 6 if seg <= 0
 
+      packaged = packaged_fingerprint_spec_for(media_item: media_item)
+      if packaged
+        # Prefer packaged metadata so identify keeps working even if SiteSettings change.
+        seg = packaged[:segment_seconds].to_i if packaged[:segment_seconds].to_i > 0
+        layout ||= packaged[:layout].to_s.presence
+      end
+
       layout ||= detect_layout_for(media_item: media_item)
+
+      spec =
+        if packaged && packaged[:spec].is_a?(Hash) && packaged[:layout].to_s == layout.to_s
+          packaged[:spec]
+        else
+          ::MediaGallery::FingerprintWatermark.spec_for(media_item_id: media_item.id, layout: layout)
+        end
 
       obs = extract_observed_variants(
         file_path: file_path,
-        media_item: media_item,
         segment_seconds: seg,
-        layout: layout,
+        spec: spec,
         max_samples: max_samples
       )
 
@@ -50,7 +67,7 @@ module ::MediaGallery
           public_id: media_item.public_id,
           media_item_id: media_item.id,
           segment_seconds: seg,
-          layout: layout,
+          layout: spec[:layout].to_s.presence || layout,
           duration_seconds: obs[:duration_seconds],
           samples: obs[:variants].length,
           usable_samples: obs[:variants].count { |v| v.present? },
@@ -82,7 +99,45 @@ module ::MediaGallery
       ::MediaGallery::FingerprintWatermark.layout_mode
     end
 
-    def extract_observed_variants(file_path:, media_item:, segment_seconds:, layout:, max_samples:)
+    def packaged_fingerprint_spec_for(media_item:)
+      root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
+      meta_path = File.join(root, "fingerprint_meta.json")
+      return nil unless File.exist?(meta_path)
+
+      j = JSON.parse(File.read(meta_path)) rescue nil
+      return nil unless j.is_a?(Hash)
+
+      spec = j["watermark_spec"]
+      spec = symbolize_spec(spec) if spec.is_a?(Hash)
+      return nil unless spec.is_a?(Hash) && spec[:layout].to_s.present?
+
+      {
+        layout: j["layout"].to_s.presence || spec[:layout].to_s,
+        segment_seconds: j["segment_seconds"],
+        spec: spec,
+      }
+    rescue
+      nil
+    end
+    private_class_method :packaged_fingerprint_spec_for
+
+    def symbolize_spec(h)
+      out = {}
+      h.each { |k, v| out[k.to_sym] = v }
+
+      if out[:pairs].is_a?(Array)
+        out[:pairs] = out[:pairs].map { |p| p.is_a?(Hash) ? p.transform_keys(&:to_sym) : p }
+      end
+
+      if out[:tiles].is_a?(Array)
+        out[:tiles] = out[:tiles].map { |p| p.is_a?(Hash) ? p.transform_keys(&:to_sym) : p }
+      end
+
+      out
+    end
+    private_class_method :symbolize_spec
+
+    def extract_observed_variants(file_path:, segment_seconds:, spec:, max_samples:)
       duration = probe_duration_seconds(file_path)
       duration = 0.0 if duration.nan? || duration.infinite? || duration.negative?
 
@@ -97,17 +152,13 @@ module ::MediaGallery
       variants = []
       confidences = []
 
-      spec = ::MediaGallery::FingerprintWatermark.spec_for(media_item_id: media_item.id)
-      effective_layout = layout.to_s
-      effective_layout = spec[:layout].to_s if effective_layout.blank?
-
       sample_count.times do |i|
         t = (i + 0.5) * seg
-        res = sample_variant_at(
+        res = sample_variant_robust(
           file_path: file_path,
-          t: t,
-          media_item_id: media_item.id,
-          layout: effective_layout,
+          t_mid: t,
+          segment_seconds: seg,
+          duration_seconds: duration,
           spec: spec
         )
 
@@ -115,7 +166,7 @@ module ::MediaGallery
         confidences << res[:confidence]
       end
 
-      { duration_seconds: duration, variants: variants, confidences: confidences, layout: effective_layout }
+      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s }
     end
 
     def match_fingerprints(media_item:, observed_variants:, max_offset_segments:)
@@ -182,57 +233,85 @@ module ::MediaGallery
     end
     private_class_method :probe_duration_seconds
 
-    def sample_variant_at(file_path:, t:, media_item_id:, layout:, spec:)
-      layout = layout.to_s
+    def sample_variant_robust(file_path:, t_mid:, segment_seconds:, duration_seconds:, spec:)
+      # Fast path: sample once at the midpoint.
+      first = sample_variant_single(file_path: file_path, t: t_mid, spec: spec)
+      return first if first[:variant].present? && first[:confidence].to_f >= RESAMPLE_MIN_CONFIDENCE
 
-      # Spec is based on current SiteSetting. If caller passed a different layout,
-      # recompute the spec in that mode.
-      if layout.present? && spec[:layout].to_s != layout
-        # Temporarily emulate mode selection by swapping the SiteSetting value.
-        # We avoid writing settings; this is runtime-only.
-        spec = compute_spec_for_layout(media_item_id: media_item_id, layout: layout)
+      # Resample nearby points within the segment and aggregate.
+      seg = segment_seconds.to_f
+      offset = (seg * 0.25).to_f
+      offset = 0.25 if offset < 0.25
+
+      times = [t_mid - offset, t_mid, t_mid + offset]
+      times = times.map { |t| clamp_time(t, duration_seconds: duration_seconds) }.uniq
+
+      samples = times.map { |t| sample_variant_single(file_path: file_path, t: t, spec: spec) }
+
+      scores = samples.map { |s| s[:score].to_i }
+      confs = samples.map { |s| s[:confidence].to_f }
+
+      med_score = median(scores)
+      med_conf = median(confs).round(4)
+
+      variant = med_score >= 0 ? "a" : "b"
+      variant = nil if med_conf < MIN_CONFIDENCE
+
+      { variant: variant, confidence: med_conf, score: med_score }
+    rescue
+      { variant: nil, confidence: 0.0, score: 0 }
+    end
+    private_class_method :sample_variant_robust
+
+    def clamp_time(t, duration_seconds:)
+      tt = t.to_f
+      tt = 0.0 if tt.negative?
+      if duration_seconds.to_f > 0
+        max_t = [duration_seconds.to_f - 0.05, 0.0].max
+        tt = max_t if tt > max_t
       end
+      tt
+    end
+    private_class_method :clamp_time
 
-      case spec[:layout].to_s
-      when ::MediaGallery::FingerprintWatermark::LAYOUT_V2
-        sample_v2_pair_score(file_path: file_path, t: t, pairs: spec[:pairs])
+    def median(arr)
+      a = arr.compact.sort
+      return 0 if a.empty?
+      a[a.length / 2]
+    end
+    private_class_method :median
+
+    def sample_variant_single(file_path:, t:, spec:)
+      kind = spec[:kind].to_s
+      kind = "pairs" if kind.blank? && spec[:pairs].present?
+      kind = "tiles" if kind.blank? && spec[:tiles].present?
+
+      if kind == "pairs"
+        sample_pair_score(
+          file_path: file_path,
+          t: t,
+          pairs: spec[:pairs] || [],
+          box: spec[:box_size_frac].to_f
+        )
       else
-        sample_v1_tile_score(file_path: file_path, t: t, tiles: spec[:tiles])
+        sample_tile_score(
+          file_path: file_path,
+          t: t,
+          tiles: spec[:tiles] || [],
+          box: spec[:box_size_frac].to_f
+        )
       end
     end
-    private_class_method :sample_variant_at
-
-    def compute_spec_for_layout(media_item_id:, layout:)
-      # Minimal re-implementation of FingerprintWatermark.spec_for, but for an explicit layout.
-      # We do not want to mutate SiteSetting in-process.
-      if layout.to_s == ::MediaGallery::FingerprintWatermark::LAYOUT_V2
-        { layout: ::MediaGallery::FingerprintWatermark::LAYOUT_V2, pairs: v2_pairs_for(media_item_id) }
-      else
-        { layout: ::MediaGallery::FingerprintWatermark::LAYOUT_V1, tiles: v1_tiles_for(media_item_id) }
-      end
-    end
-    private_class_method :compute_spec_for_layout
-
-    # Mirror the deterministic positioning from FingerprintWatermark.
-    def v1_tiles_for(media_item_id)
-      wm = ::MediaGallery::FingerprintWatermark
-      wm.send(:v1_tiles_for, media_item_id: media_item_id)
-    end
-    private_class_method :v1_tiles_for
-
-    def v2_pairs_for(media_item_id)
-      wm = ::MediaGallery::FingerprintWatermark
-      wm.send(:v2_pairs_for, media_item_id: media_item_id)
-    end
-    private_class_method :v2_pairs_for
+    private_class_method :sample_variant_single
 
     # --------------------- v2 (pairs) --------------------------------------
 
-    def sample_v2_pair_score(file_path:, t:, pairs:)
+    def sample_pair_score(file_path:, t:, pairs:, box:)
       pair_count = pairs.length
-      return { variant: nil, confidence: 0.0 } if pair_count == 0
+      return { variant: nil, confidence: 0.0, score: 0 } if pair_count == 0
 
-      box = ::MediaGallery::FingerprintWatermark::V2_BOX_SIZE_FRAC
+      box = box.to_f
+      box = 0.12 if box <= 0
       pair_w = (box * 2.0).round(6)
 
       filters = []
@@ -249,7 +328,7 @@ module ::MediaGallery
       bytes = raw&.bytes || []
 
       expected = pair_count * 2
-      return { variant: nil, confidence: 0.0 } if bytes.length < expected
+      return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
 
       score = 0
       pair_count.times do |i|
@@ -263,19 +342,20 @@ module ::MediaGallery
       conf = (score.abs.to_f / (pair_count * 255.0)).round(4)
       variant = nil if conf < MIN_CONFIDENCE
 
-      { variant: variant, confidence: conf }
+      { variant: variant, confidence: conf, score: score }
     rescue
-      { variant: nil, confidence: 0.0 }
+      { variant: nil, confidence: 0.0, score: 0 }
     end
-    private_class_method :sample_v2_pair_score
+    private_class_method :sample_pair_score
 
     # --------------------- v1 (tiles) --------------------------------------
 
-    def sample_v1_tile_score(file_path:, t:, tiles:)
+    def sample_tile_score(file_path:, t:, tiles:, box:)
       tile_count = tiles.length
-      return { variant: nil, confidence: 0.0 } if tile_count == 0
+      return { variant: nil, confidence: 0.0, score: 0 } if tile_count == 0
 
-      box = ::MediaGallery::FingerprintWatermark::V1_BOX_SIZE_FRAC
+      box = box.to_f
+      box = 0.12 if box <= 0
       outer = (box * 1.5).round(6)
       pad = ((outer - box) / 2.0).round(6)
 
@@ -306,7 +386,7 @@ module ::MediaGallery
       bytes = raw&.bytes || []
 
       expected = tile_count * 2
-      return { variant: nil, confidence: 0.0 } if bytes.length < expected
+      return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
 
       score = 0
       tile_count.times do |i|
@@ -319,11 +399,11 @@ module ::MediaGallery
       conf = (score.abs.to_f / (tile_count * 255.0)).round(4)
       variant = nil if conf < MIN_CONFIDENCE
 
-      { variant: variant, confidence: conf }
+      { variant: variant, confidence: conf, score: score }
     rescue
-      { variant: nil, confidence: 0.0 }
+      { variant: nil, confidence: 0.0, score: 0 }
     end
-    private_class_method :sample_v1_tile_score
+    private_class_method :sample_tile_score
 
     # --------------------- ffmpeg runner -----------------------------------
 

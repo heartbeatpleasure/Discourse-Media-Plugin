@@ -51,6 +51,7 @@ module ::MediaGallery
                   <option value="">auto</option>
                   <option value="v1_tiles">v1_tiles</option>
                   <option value="v2_pairs">v2_pairs</option>
+                  <option value="v3_pairs">v3_pairs</option>
                 </select>
               </label>
             </p>

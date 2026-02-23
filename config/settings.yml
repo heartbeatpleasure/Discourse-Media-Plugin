@@ -258,6 +258,7 @@ plugins:
     choices:
       - v1_tiles
       - v2_pairs
+      - v3_pairs
     client: false
 
 

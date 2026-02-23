@@ -179,8 +179,15 @@ module ::MediaGallery
       if fingerprinting_enabled?
         meta["ab_fingerprint"] = true
         meta["ab_layout"] = "hls/{a|b}/#{variant}/seg_XXXXX.ts"
-        wm_layout = MediaGallery::FingerprintWatermark.layout_mode
-        meta["watermark"] = { "type" => wm_layout, "opacity" => MediaGallery::FingerprintWatermark::OPACITY }
+        wm_spec = MediaGallery::FingerprintWatermark.spec_for(media_item_id: item.id)
+        wm_layout = wm_spec[:layout].to_s
+        meta["watermark"] = {
+          "type" => wm_layout,
+          "opacity" => wm_spec[:opacity],
+          "box_size_frac" => wm_spec[:box_size_frac],
+          "margin" => wm_spec[:margin],
+          "count" => (wm_spec[:pairs] || wm_spec[:tiles] || []).length,
+        }
 
         # Persist minimal metadata in the HLS folder so later forensic tooling can
         # decode the correct watermark layout even if the SiteSetting changes.
@@ -189,7 +196,16 @@ module ::MediaGallery
             File.join(final_root, "fingerprint_meta.json"),
             JSON.pretty_generate({
               "layout" => wm_layout,
-              "opacity" => MediaGallery::FingerprintWatermark::OPACITY,
+              "segment_seconds" => segment_duration_seconds,
+              "watermark_spec" => {
+                "layout" => wm_layout,
+                "kind" => wm_spec[:kind].to_s,
+                "opacity" => wm_spec[:opacity],
+                "box_size_frac" => wm_spec[:box_size_frac],
+                "margin" => wm_spec[:margin],
+                "pairs" => wm_spec[:pairs],
+                "tiles" => wm_spec[:tiles],
+              },
               "generated_at" => Time.now.utc.iso8601,
               "media_item_id" => item.id,
               "public_id" => item.public_id

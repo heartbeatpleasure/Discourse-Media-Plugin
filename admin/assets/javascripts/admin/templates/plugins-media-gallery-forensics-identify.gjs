@@ -99,6 +99,7 @@ export default RouteTemplate(
                   <option value="">{{i18n "admin.media_gallery.forensics_identify.layout_auto"}}</option>
                   <option value="v1_tiles">{{i18n "admin.media_gallery.forensics_identify.layout_v1_tiles"}}</option>
                   <option value="v2_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v2_pairs"}}</option>
+                  <option value="v3_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v3_pairs"}}</option>
                 </select>
               </div>
             </div>
