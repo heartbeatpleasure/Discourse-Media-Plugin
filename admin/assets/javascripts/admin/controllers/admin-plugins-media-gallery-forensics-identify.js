@@ -77,6 +77,21 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get confidence() {
+    // Prefer the server-side decision policy when present.
+    const decision = this.decision;
+    if (decision) {
+      switch (decision) {
+        case "conclusive_match":
+          return "strong";
+        case "likely_match":
+          return "medium";
+        case "ambiguous":
+          return "weak";
+        default:
+          return "none";
+      }
+    }
+
     const usable = this.usableSamples;
     const top = this.topMatchRatio;
     const delta = this.matchDelta;
@@ -115,6 +130,35 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     }
   }
 
+  get decision() {
+    return this.meta?.decision || "";
+  }
+
+  get conclusive() {
+    return !!this.meta?.conclusive;
+  }
+
+  get recommendation() {
+    return this.meta?.recommendation || "";
+  }
+
+  get decisionText() {
+    switch (this.decision) {
+      case "conclusive_match":
+        return "Conclusive match";
+      case "likely_match":
+        return "Likely match (not conclusive)";
+      case "ambiguous":
+        return "Ambiguous";
+      case "insufficient_samples":
+        return "Insufficient usable samples";
+      case "no_match":
+        return "No match";
+      default:
+        return "";
+    }
+  }
+
   get observedVariants() {
     return this.result?.observed?.variants || "";
   }
@@ -133,10 +177,18 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get showWeakTip() {
-    return this.weakSignal || this.confidence === "weak" || this.confidence === "none";
+    return (
+      this.weakSignal ||
+      this.confidence === "weak" ||
+      this.confidence === "none" ||
+      (this.decision && !this.conclusive)
+    );
   }
 
   get isAmbiguous() {
+    if (this.decision === "ambiguous") {
+      return true;
+    }
     return (this.candidates?.length || 0) > 1 && this.matchDelta < 0.1;
   }
 
@@ -356,14 +408,6 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       });
 
       if (!response.ok) {
-        if (response.status === 413) {
-          // Nginx (or a reverse proxy) rejected the request body before Discourse/Rails
-          // could handle it. This typically means client_max_body_size is too low.
-          this.error = i18n(
-            "admin.media_gallery.forensics_identify.error_upload_too_large"
-          );
-          return;
-        }
         const err = await this._extractError(response);
         this.error = `HTTP ${response.status}: ${err}`;
         return;

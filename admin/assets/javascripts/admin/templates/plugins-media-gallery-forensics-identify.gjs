@@ -156,6 +156,9 @@ export default RouteTemplate(
               <div style="margin-top: 0.5rem;">
                 <div><strong>samples:</strong> {{@controller.samples}}</div>
                 <div><strong>usable_samples:</strong> {{@controller.usableSamples}}</div>
+                {{#if @controller.decisionText}}
+                  <div><strong>decision:</strong> {{@controller.decisionText}}</div>
+                {{/if}}
                 <div><strong>confidence:</strong> {{@controller.confidence}}</div>
                 {{#if @controller.candidates.length}}
                   <div>
@@ -189,6 +192,11 @@ export default RouteTemplate(
                   Matching is weakest when the leak is short, heavily re-encoded, cropped, or includes overlays.
                   If possible, use a longer sample that is closer to the original HLS stream.
                   URL mode + auto-extend helps, but confidence still depends on usable samples.
+                  {{#if @controller.recommendation}}
+                    <div style="margin-top: 0.35rem; opacity:0.9;">
+                      <strong>Recommendation:</strong> {{@controller.recommendation}}
+                    </div>
+                  {{/if}}
                 </div>
               {{/if}}
 
@@ -210,37 +218,48 @@ export default RouteTemplate(
             {{/if}}
 
             {{#if @controller.candidates.length}}
-              <h3 style="margin-top: 1.5rem;">Top candidates</h3>
-              <table class="table" style="margin-top: 0.5rem;">
-                <thead>
-                  <tr>
-                    <th>User</th>
-                    <th>Fingerprint</th>
-                    <th>Match</th>
-                    <th>Δ vs #1</th>
-                    <th>Mismatches</th>
-                    <th>Best offset</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{#each @controller.topCandidates as |c|}}
+              {{#if @controller.conclusive}}
+                <h3 style="margin-top: 1.5rem;">Top candidates</h3>
+              {{else}}
+                <h3 style="margin-top: 1.5rem;">Candidates (not conclusive)</h3>
+                <div class="alert alert-warning" style="margin-top: 0.5rem;">
+                  Do not treat this as definitive. Gather a longer sample to increase usable_samples and separation from #2.
+                </div>
+              {{/if}}
+
+              <details style="margin-top: 0.5rem;" open={{@controller.conclusive}}>
+                <summary>Show candidates</summary>
+                <table class="table" style="margin-top: 0.5rem;">
+                  <thead>
                     <tr>
-                      <td>
-                        {{#if c.username}}
-                          {{c.username}} (#{{c.user_id}})
-                        {{else}}
-                          #{{c.user_id}}
-                        {{/if}}
-                      </td>
-                      <td><code>{{c.fingerprint_id}}</code></td>
-                      <td>{{c.match_ratio}}</td>
-                      <td>{{c.delta_from_top}}</td>
-                      <td>{{c.mismatches}} / {{c.compared}}</td>
-                      <td>{{c.best_offset_segments}}</td>
+                      <th>User</th>
+                      <th>Fingerprint</th>
+                      <th>Match</th>
+                      <th>Δ vs #1</th>
+                      <th>Mismatches</th>
+                      <th>Best offset</th>
                     </tr>
-                  {{/each}}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {{#each @controller.topCandidates as |c|}}
+                      <tr>
+                        <td>
+                          {{#if c.username}}
+                            {{c.username}} (#{{c.user_id}})
+                          {{else}}
+                            #{{c.user_id}}
+                          {{/if}}
+                        </td>
+                        <td><code>{{c.fingerprint_id}}</code></td>
+                        <td>{{c.match_ratio}}</td>
+                        <td>{{c.delta_from_top}}</td>
+                        <td>{{c.mismatches}} / {{c.compared}}</td>
+                        <td>{{c.best_offset_segments}}</td>
+                      </tr>
+                    {{/each}}
+                  </tbody>
+                </table>
+              </details>
 
               {{#if @controller.hasMoreCandidates}}
                 <details style="margin-top: 0.5rem;">

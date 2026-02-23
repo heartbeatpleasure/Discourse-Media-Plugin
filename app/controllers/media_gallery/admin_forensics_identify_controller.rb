@@ -148,6 +148,8 @@ module ::MediaGallery
       result["meta"] ||= {}
       meta_patch.each { |k, v| result["meta"][k.to_s] = v }
 
+      apply_decision_policy!(result)
+
       render_json_dump(result)
     ensure
       temps&.each { |t| t&.close! rescue nil }
@@ -167,68 +169,85 @@ module ::MediaGallery
     AUTO_EXTEND_MIN_MATCH = 0.85
     AUTO_EXTEND_MIN_DELTA = 0.15
 
+    # Decision policy (admin UI): be conservative about declaring a match.
+    #
+    # - conclusive_match: high match ratio + enough usable samples + clear separation from #2
+    # - likely_match: useful hint, but should not be treated as definitive
+    # - ambiguous / insufficient_samples / no_match
+    POLICY_MIN_USABLE_STRONG = 12
+    POLICY_MIN_MATCH_STRONG = 0.85
+    POLICY_MIN_DELTA_STRONG = 0.15
+    POLICY_MAX_MISMATCH_RATE_STRONG = 0.20
+
+    POLICY_MIN_USABLE_LIKELY = 8
+    POLICY_MIN_MATCH_LIKELY = 0.75
+    POLICY_MIN_DELTA_LIKELY = 0.10
+
+    POLICY_MIN_USABLE_ANY = 5
+
     # Some installs use long signed tokens in query strings. 2k is often too small.
     MAX_SOURCE_URL_LENGTH = 10_000
 
     def identify_from_source_url(source_url, media_item:, max_samples:, max_offset_segments:, layout:, segment_seconds:, auto_extend:)
-      ms1 = [max_samples.to_i, MAX_AUTO_EXTEND_SAMPLES].min
+      ms = [max_samples.to_i, MAX_AUTO_EXTEND_SAMPLES].min
+      ms = 60 if ms <= 0
+
       temps = []
+      attempts = 0
+      best = nil
+      best_ms = ms
+      started_ms = ms
+      best_score = -Float::INFINITY
 
-      tmp1 = download_source_url_to_tempfile!(
-        source_url,
-        max_samples: ms1,
-        segment_seconds: segment_seconds,
-        media_item: media_item
-      )
-      temps << tmp1
+      # Up to 3 attempts: requested, doubled, then capped.
+      while attempts < 3
+        attempts += 1
 
-      res1 = ::MediaGallery::ForensicsIdentify.identify_from_file(
-        media_item: media_item,
-        file_path: tmp1.path,
-        max_samples: ms1,
-        max_offset_segments: max_offset_segments,
-        layout: layout
-      )
-
-      attempts = 1
-      best = res1
-      best_ms = ms1
-      best_score = score_result(res1)
-
-      if auto_extend && ms1 < MAX_AUTO_EXTEND_SAMPLES && should_auto_extend?(res1)
-        ms2 = [ms1 * 2, MAX_AUTO_EXTEND_SAMPLES].min
         begin
-          tmp2 = download_source_url_to_tempfile!(
+          tmp = download_source_url_to_tempfile!(
             source_url,
-            max_samples: ms2,
+            max_samples: ms,
             segment_seconds: segment_seconds,
             media_item: media_item
           )
-          temps << tmp2
+          temps << tmp
 
-          res2 = ::MediaGallery::ForensicsIdentify.identify_from_file(
+          res = ::MediaGallery::ForensicsIdentify.identify_from_file(
             media_item: media_item,
-            file_path: tmp2.path,
-            max_samples: ms2,
+            file_path: tmp.path,
+            max_samples: ms,
             max_offset_segments: max_offset_segments,
             layout: layout
           )
 
-          attempts = 2
-          score2 = score_result(res2)
-          if score2 > best_score
-            best = res2
-            best_ms = ms2
-            best_score = score2
+          score = score_result(res)
+          if score > best_score
+            best = res
+            best_score = score
+            best_ms = ms
           end
-        rescue => _e
-          # If the retry fails, keep the original attempt result.
+
+          # Stop early if we already have a conclusive match.
+          break if conclusive_match?(res)
+
+          # Decide whether to retry with more samples.
+          break unless auto_extend
+          break if ms >= MAX_AUTO_EXTEND_SAMPLES
+          break unless should_auto_extend?(res)
+
+          ms = [ms * 2, MAX_AUTO_EXTEND_SAMPLES].min
+        rescue => e
+          # If the first attempt fails, surface the error (so the UI gets a 422 with a reason).
+          raise e if best.nil?
+
+          # Otherwise, keep the best we have so far.
+          break
         end
       end
 
       meta_patch = {
         attempts: attempts,
-        auto_extended: (attempts > 1 && best_ms != ms1),
+        auto_extended: (attempts > 1 && best_ms != started_ms),
         max_samples_used: best_ms,
       }
 
@@ -246,6 +265,9 @@ module ::MediaGallery
     end
 
     def should_auto_extend?(result)
+      # If we already have a conclusive match, do not extend.
+      return false if conclusive_match?(result)
+
       usable = result.dig("meta", "usable_samples").to_i
       top, second = top_two_match_ratios(result)
       delta = top - second
@@ -254,6 +276,88 @@ module ::MediaGallery
       return true if top < AUTO_EXTEND_MIN_MATCH
       return true if delta < AUTO_EXTEND_MIN_DELTA
       false
+    end
+
+    def conclusive_match?(result)
+      classify_decision(result) == "conclusive_match"
+    end
+
+    def apply_decision_policy!(result)
+      result["meta"] ||= {}
+
+      decision = classify_decision(result)
+      top = result.dig("candidates", 0, "match_ratio").to_f
+      second = result.dig("candidates", 1, "match_ratio").to_f
+      delta = top - second
+      mismatches = result.dig("candidates", 0, "mismatches").to_i
+      compared = result.dig("candidates", 0, "compared").to_i
+      mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
+
+      result["meta"]["decision"] = decision
+      result["meta"]["conclusive"] = (decision == "conclusive_match")
+      result["meta"]["top_match_ratio"] = top
+      result["meta"]["second_match_ratio"] = second
+      result["meta"]["match_delta"] = delta
+      result["meta"]["top_mismatches"] = mismatches
+      result["meta"]["top_compared"] = compared
+      result["meta"]["top_mismatch_rate"] = mismatch_rate
+
+      result["meta"]["policy"] = {
+        "min_usable_any" => POLICY_MIN_USABLE_ANY,
+        "min_usable_strong" => POLICY_MIN_USABLE_STRONG,
+        "min_match_strong" => POLICY_MIN_MATCH_STRONG,
+        "min_delta_strong" => POLICY_MIN_DELTA_STRONG,
+        "max_mismatch_rate_strong" => POLICY_MAX_MISMATCH_RATE_STRONG,
+        "min_usable_likely" => POLICY_MIN_USABLE_LIKELY,
+        "min_match_likely" => POLICY_MIN_MATCH_LIKELY,
+        "min_delta_likely" => POLICY_MIN_DELTA_LIKELY,
+      }
+
+      result["meta"]["recommendation"] =
+        case decision
+        when "conclusive_match"
+          "ok"
+        when "likely_match"
+          "gather_longer_sample_to_confirm"
+        when "ambiguous"
+          "gather_longer_sample_or_try_url_mode"
+        when "insufficient_samples"
+          "gather_longer_sample"
+        when "no_match"
+          "try_longer_or_closer_to_original"
+        else
+          "try_longer_or_closer_to_original"
+        end
+    end
+
+    def classify_decision(result)
+      usable = result.dig("meta", "usable_samples").to_i
+      cands = result["candidates"]
+      has_cands = cands.is_a?(Array) && cands.present?
+
+      return "insufficient_samples" if usable < POLICY_MIN_USABLE_ANY
+      return "no_match" unless has_cands
+
+      top = cands[0].is_a?(Hash) ? cands[0]["match_ratio"].to_f : 0.0
+      second = cands[1].is_a?(Hash) ? cands[1]["match_ratio"].to_f : 0.0
+      delta = top - second
+
+      mismatches = cands[0].is_a?(Hash) ? cands[0]["mismatches"].to_i : 0
+      compared = cands[0].is_a?(Hash) ? cands[0]["compared"].to_i : 0
+      mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
+
+      if usable >= POLICY_MIN_USABLE_STRONG &&
+           top >= POLICY_MIN_MATCH_STRONG &&
+           delta >= POLICY_MIN_DELTA_STRONG &&
+           mismatch_rate <= POLICY_MAX_MISMATCH_RATE_STRONG
+        return "conclusive_match"
+      end
+
+      if usable >= POLICY_MIN_USABLE_LIKELY && top >= POLICY_MIN_MATCH_LIKELY && delta >= POLICY_MIN_DELTA_LIKELY
+        return "likely_match"
+      end
+
+      "ambiguous"
     end
 
     def top_two_match_ratios(result)
