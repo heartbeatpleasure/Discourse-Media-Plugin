@@ -403,3 +403,109 @@ plugins:
   media_gallery_ffprobe_path:
     default: "ffprobe"
     client: false
+
+  # Forensics Identify (admin tool)
+  # These settings control how the admin-only identify helper behaves, especially when using
+  # URL-mode (HLS playlist) with optional auto-extend.
+  media_gallery_forensics_identify_max_source_url_length:
+    default: 10000
+    type: integer
+    min: 100
+    max: 200000
+    client: false
+
+  # When URL-mode is used, we remux only a short sample locally before running identify.
+  media_gallery_forensics_identify_max_url_sample_seconds:
+    default: 1800
+    type: integer
+    min: 30
+    max: 43200
+    client: false
+
+  # Auto-extend caps and heuristics (URL-mode only)
+  media_gallery_forensics_identify_max_auto_extend_samples:
+    default: 200
+    type: integer
+    min: 10
+    max: 2000
+    client: false
+
+  media_gallery_forensics_identify_auto_extend_min_usable_samples:
+    default: 12
+    type: integer
+    min: 0
+    max: 1000
+    client: false
+
+  # Percent values are used instead of floats for site settings.
+  media_gallery_forensics_identify_auto_extend_min_match_percent:
+    default: 85
+    type: integer
+    min: 0
+    max: 100
+    client: false
+
+  media_gallery_forensics_identify_auto_extend_min_delta_percent:
+    default: 15
+    type: integer
+    min: 0
+    max: 100
+    client: false
+
+  # Identify decision policy (admin tool)
+  # These thresholds determine when the UI should treat a match as conclusive vs likely/ambiguous.
+  media_gallery_forensics_identify_policy_min_usable_any:
+    default: 5
+    type: integer
+    min: 1
+    max: 1000
+    client: false
+
+  media_gallery_forensics_identify_policy_min_usable_strong:
+    default: 12
+    type: integer
+    min: 1
+    max: 1000
+    client: false
+
+  media_gallery_forensics_identify_policy_min_match_strong_percent:
+    default: 85
+    type: integer
+    min: 0
+    max: 100
+    client: false
+
+  media_gallery_forensics_identify_policy_min_delta_strong_percent:
+    default: 15
+    type: integer
+    min: 0
+    max: 100
+    client: false
+
+  media_gallery_forensics_identify_policy_max_mismatch_rate_strong_percent:
+    default: 20
+    type: integer
+    min: 0
+    max: 100
+    client: false
+
+  media_gallery_forensics_identify_policy_min_usable_likely:
+    default: 8
+    type: integer
+    min: 1
+    max: 1000
+    client: false
+
+  media_gallery_forensics_identify_policy_min_match_likely_percent:
+    default: 75
+    type: integer
+    min: 0
+    max: 100
+    client: false
+
+  media_gallery_forensics_identify_policy_min_delta_likely_percent:
+    default: 10
+    type: integer
+    min: 0
+    max: 100
+    client: false

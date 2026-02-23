@@ -157,39 +157,113 @@ module ::MediaGallery
 
     private
 
-    # Keep this conservative. This feature is mainly for quickly reproducing issues by pasting
-    # a playlist URL from your own site. Large external downloads are intentionally not supported.
-    MAX_URL_SAMPLE_SECONDS = 1800
+    # Defaults used if site settings are unset/invalid.
+    DEFAULT_MAX_URL_SAMPLE_SECONDS = 1800
+    DEFAULT_MAX_AUTO_EXTEND_SAMPLES = 200
+    DEFAULT_AUTO_EXTEND_MIN_USABLE = 12
+    DEFAULT_AUTO_EXTEND_MIN_MATCH = 0.85
+    DEFAULT_AUTO_EXTEND_MIN_DELTA = 0.15
 
-    # Auto-extend: cap the maximum samples we'll try.
-    MAX_AUTO_EXTEND_SAMPLES = 200
-
-    # Auto-extend if the initial result is below these heuristics.
-    AUTO_EXTEND_MIN_USABLE = 12
-    AUTO_EXTEND_MIN_MATCH = 0.85
-    AUTO_EXTEND_MIN_DELTA = 0.15
-
-    # Decision policy (admin UI): be conservative about declaring a match.
-    #
-    # - conclusive_match: high match ratio + enough usable samples + clear separation from #2
-    # - likely_match: useful hint, but should not be treated as definitive
-    # - ambiguous / insufficient_samples / no_match
-    POLICY_MIN_USABLE_STRONG = 12
-    POLICY_MIN_MATCH_STRONG = 0.85
-    POLICY_MIN_DELTA_STRONG = 0.15
-    POLICY_MAX_MISMATCH_RATE_STRONG = 0.20
-
-    POLICY_MIN_USABLE_LIKELY = 8
-    POLICY_MIN_MATCH_LIKELY = 0.75
-    POLICY_MIN_DELTA_LIKELY = 0.10
-
-    POLICY_MIN_USABLE_ANY = 5
+    DEFAULT_POLICY_MIN_USABLE_STRONG = 12
+    DEFAULT_POLICY_MIN_MATCH_STRONG = 0.85
+    DEFAULT_POLICY_MIN_DELTA_STRONG = 0.15
+    DEFAULT_POLICY_MAX_MISMATCH_RATE_STRONG = 0.20
+    DEFAULT_POLICY_MIN_USABLE_LIKELY = 8
+    DEFAULT_POLICY_MIN_MATCH_LIKELY = 0.75
+    DEFAULT_POLICY_MIN_DELTA_LIKELY = 0.10
+    DEFAULT_POLICY_MIN_USABLE_ANY = 5
 
     # Some installs use long signed tokens in query strings. 2k is often too small.
-    MAX_SOURCE_URL_LENGTH = 10_000
+    DEFAULT_MAX_SOURCE_URL_LENGTH = 10_000
+
+    def setting_max_source_url_length
+      v = SiteSetting.media_gallery_forensics_identify_max_source_url_length.to_i
+      v = DEFAULT_MAX_SOURCE_URL_LENGTH if v <= 0
+      v
+    end
+
+    def setting_max_url_sample_seconds
+      v = SiteSetting.media_gallery_forensics_identify_max_url_sample_seconds.to_i
+      v = DEFAULT_MAX_URL_SAMPLE_SECONDS if v <= 0
+      v
+    end
+
+    def setting_max_auto_extend_samples
+      v = SiteSetting.media_gallery_forensics_identify_max_auto_extend_samples.to_i
+      v = DEFAULT_MAX_AUTO_EXTEND_SAMPLES if v <= 0
+      v
+    end
+
+    def setting_auto_extend_min_usable_samples
+      v = SiteSetting.media_gallery_forensics_identify_auto_extend_min_usable_samples.to_i
+      v = DEFAULT_AUTO_EXTEND_MIN_USABLE if v.negative?
+      v
+    end
+
+    def setting_auto_extend_min_match_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_auto_extend_min_match_percent.to_i
+      pct = (DEFAULT_AUTO_EXTEND_MIN_MATCH * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_auto_extend_min_delta_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_auto_extend_min_delta_percent.to_i
+      pct = (DEFAULT_AUTO_EXTEND_MIN_DELTA * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_min_usable_any
+      v = SiteSetting.media_gallery_forensics_identify_policy_min_usable_any.to_i
+      v = DEFAULT_POLICY_MIN_USABLE_ANY if v <= 0
+      v
+    end
+
+    def setting_policy_min_usable_strong
+      v = SiteSetting.media_gallery_forensics_identify_policy_min_usable_strong.to_i
+      v = DEFAULT_POLICY_MIN_USABLE_STRONG if v <= 0
+      v
+    end
+
+    def setting_policy_min_match_strong_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_min_match_strong_percent.to_i
+      pct = (DEFAULT_POLICY_MIN_MATCH_STRONG * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_min_delta_strong_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_min_delta_strong_percent.to_i
+      pct = (DEFAULT_POLICY_MIN_DELTA_STRONG * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_max_mismatch_rate_strong_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_max_mismatch_rate_strong_percent.to_i
+      pct = (DEFAULT_POLICY_MAX_MISMATCH_RATE_STRONG * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_min_usable_likely
+      v = SiteSetting.media_gallery_forensics_identify_policy_min_usable_likely.to_i
+      v = DEFAULT_POLICY_MIN_USABLE_LIKELY if v <= 0
+      v
+    end
+
+    def setting_policy_min_match_likely_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_min_match_likely_percent.to_i
+      pct = (DEFAULT_POLICY_MIN_MATCH_LIKELY * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_min_delta_likely_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_min_delta_likely_percent.to_i
+      pct = (DEFAULT_POLICY_MIN_DELTA_LIKELY * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
 
     def identify_from_source_url(source_url, media_item:, max_samples:, max_offset_segments:, layout:, segment_seconds:, auto_extend:)
-      ms = [max_samples.to_i, MAX_AUTO_EXTEND_SAMPLES].min
+      max_ext = setting_max_auto_extend_samples
+
+      ms = [max_samples.to_i, max_ext].min
       ms = 60 if ms <= 0
 
       temps = []
@@ -232,10 +306,10 @@ module ::MediaGallery
 
           # Decide whether to retry with more samples.
           break unless auto_extend
-          break if ms >= MAX_AUTO_EXTEND_SAMPLES
+          break if ms >= max_ext
           break unless should_auto_extend?(res)
 
-          ms = [ms * 2, MAX_AUTO_EXTEND_SAMPLES].min
+          ms = [ms * 2, max_ext].min
         rescue => e
           # If the first attempt fails, surface the error (so the UI gets a 422 with a reason).
           raise e if best.nil?
@@ -272,9 +346,9 @@ module ::MediaGallery
       top, second = top_two_match_ratios(result)
       delta = top - second
 
-      return true if usable < AUTO_EXTEND_MIN_USABLE
-      return true if top < AUTO_EXTEND_MIN_MATCH
-      return true if delta < AUTO_EXTEND_MIN_DELTA
+      return true if usable < setting_auto_extend_min_usable_samples
+      return true if top < setting_auto_extend_min_match_ratio
+      return true if delta < setting_auto_extend_min_delta_ratio
       false
     end
 
@@ -303,14 +377,14 @@ module ::MediaGallery
       result["meta"]["top_mismatch_rate"] = mismatch_rate
 
       result["meta"]["policy"] = {
-        "min_usable_any" => POLICY_MIN_USABLE_ANY,
-        "min_usable_strong" => POLICY_MIN_USABLE_STRONG,
-        "min_match_strong" => POLICY_MIN_MATCH_STRONG,
-        "min_delta_strong" => POLICY_MIN_DELTA_STRONG,
-        "max_mismatch_rate_strong" => POLICY_MAX_MISMATCH_RATE_STRONG,
-        "min_usable_likely" => POLICY_MIN_USABLE_LIKELY,
-        "min_match_likely" => POLICY_MIN_MATCH_LIKELY,
-        "min_delta_likely" => POLICY_MIN_DELTA_LIKELY,
+        "min_usable_any" => setting_policy_min_usable_any,
+        "min_usable_strong" => setting_policy_min_usable_strong,
+        "min_match_strong" => setting_policy_min_match_strong_ratio,
+        "min_delta_strong" => setting_policy_min_delta_strong_ratio,
+        "max_mismatch_rate_strong" => setting_policy_max_mismatch_rate_strong_ratio,
+        "min_usable_likely" => setting_policy_min_usable_likely,
+        "min_match_likely" => setting_policy_min_match_likely_ratio,
+        "min_delta_likely" => setting_policy_min_delta_likely_ratio,
       }
 
       result["meta"]["recommendation"] =
@@ -335,7 +409,7 @@ module ::MediaGallery
       cands = result["candidates"]
       has_cands = cands.is_a?(Array) && cands.present?
 
-      return "insufficient_samples" if usable < POLICY_MIN_USABLE_ANY
+      return "insufficient_samples" if usable < setting_policy_min_usable_any
       return "no_match" unless has_cands
 
       top = cands[0].is_a?(Hash) ? cands[0]["match_ratio"].to_f : 0.0
@@ -346,14 +420,16 @@ module ::MediaGallery
       compared = cands[0].is_a?(Hash) ? cands[0]["compared"].to_i : 0
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
 
-      if usable >= POLICY_MIN_USABLE_STRONG &&
-           top >= POLICY_MIN_MATCH_STRONG &&
-           delta >= POLICY_MIN_DELTA_STRONG &&
-           mismatch_rate <= POLICY_MAX_MISMATCH_RATE_STRONG
+      if usable >= setting_policy_min_usable_strong &&
+           top >= setting_policy_min_match_strong_ratio &&
+           delta >= setting_policy_min_delta_strong_ratio &&
+           mismatch_rate <= setting_policy_max_mismatch_rate_strong_ratio
         return "conclusive_match"
       end
 
-      if usable >= POLICY_MIN_USABLE_LIKELY && top >= POLICY_MIN_MATCH_LIKELY && delta >= POLICY_MIN_DELTA_LIKELY
+      if usable >= setting_policy_min_usable_likely &&
+           top >= setting_policy_min_match_likely_ratio &&
+           delta >= setting_policy_min_delta_likely_ratio
         return "likely_match"
       end
 
@@ -372,7 +448,7 @@ module ::MediaGallery
     def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:, media_item:)
       url = source_url.to_s.strip
       raise "source_url is blank" if url.blank?
-      raise "source_url is too long" if url.length > MAX_SOURCE_URL_LENGTH
+      raise "source_url is too long" if url.length > setting_max_source_url_length
 
       uri = URI.parse(url) rescue nil
       raise "source_url is not a valid http(s) URL" if uri.blank? || uri.host.blank? || !%w[http https].include?(uri.scheme)
@@ -397,7 +473,7 @@ module ::MediaGallery
       # Download just enough to cover the requested samples.
       target_seconds = (ms * seg) + seg
       target_seconds = 30 if target_seconds < 30
-      target_seconds = [target_seconds, MAX_URL_SAMPLE_SECONDS].min
+      target_seconds = [target_seconds, setting_max_url_sample_seconds].min
 
       playlist_tmp = nil
       input = url
