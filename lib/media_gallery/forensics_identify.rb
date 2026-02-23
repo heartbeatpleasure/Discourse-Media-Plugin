@@ -126,20 +126,30 @@ module ::MediaGallery
     private_class_method :packaged_fingerprint_spec_for
 
     def symbolize_spec(h)
-      out = {}
-      h.each { |k, v| out[k.to_sym] = v }
+      out = symbolize_hash_keys(h)
 
       if out[:pairs].is_a?(Array)
-        out[:pairs] = out[:pairs].map { |p| p.is_a?(Hash) ? p.transform_keys(&:to_sym) : p }
+        out[:pairs] = out[:pairs].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
       end
 
       if out[:tiles].is_a?(Array)
-        out[:tiles] = out[:tiles].map { |p| p.is_a?(Hash) ? p.transform_keys(&:to_sym) : p }
+        out[:tiles] = out[:tiles].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
       end
 
       out
     end
     private_class_method :symbolize_spec
+
+    def symbolize_hash_keys(h)
+      out = {}
+      h.each do |k, v|
+        kk = k.respond_to?(:to_sym) ? k.to_sym : k
+        out[kk] = v
+      end
+      out
+    end
+    private_class_method :symbolize_hash_keys
+
 
     def extract_observed_variants(file_path:, segment_seconds:, spec:, max_samples:)
       duration = probe_duration_seconds(file_path)
@@ -210,7 +220,7 @@ module ::MediaGallery
 
       return { candidates: [], meta: { offset_strategy: "global", chosen_offset_segments: 0, effective_samples: 0.0 } } if samples.empty?
 
-      total_weight = samples.sum { |s| s[2].to_f }.to_f
+      total_weight = samples.reduce(0.0) { |acc, s| acc + s[2].to_f }.to_f
 
       chosen_offset = 0
       best_score = nil

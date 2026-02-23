@@ -132,13 +132,30 @@ module ::MediaGallery
         path = file.respond_to?(:tempfile) ? file.tempfile&.path : nil
         return render json: { errors: ["missing_file_or_url"] }, status: 422 if path.blank? || !File.exist?(path)
 
-        result = ::MediaGallery::ForensicsIdentify.identify_from_file(
-          media_item: item,
-          file_path: path,
-          max_samples: max_samples,
-          max_offset_segments: max_offset,
-          layout: layout
-        )
+        begin
+          result = ::MediaGallery::ForensicsIdentify.identify_from_file(
+            media_item: item,
+            file_path: path,
+            max_samples: max_samples,
+            max_offset_segments: max_offset,
+            layout: layout
+          )
+        rescue => e
+          begin
+            Rails.logger.error(
+              "[media_gallery] forensics identify failed (public_id=#{public_id}): #{e.class}: #{e.message}
+"               "#{Array(e.backtrace).first(15).join("
+")}"
+            )
+          rescue
+            # ignore logging failures
+          end
+
+          msg = "#{e.class}: #{e.message}".to_s.strip
+          msg = msg[0, 400] if msg.length > 400
+          return render json: { errors: ["identify_failed", msg].compact }, status: 422
+        end
+
         meta_patch = base_meta.merge(
           attempts: 1,
           auto_extended: false,
