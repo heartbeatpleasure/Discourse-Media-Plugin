@@ -330,7 +330,8 @@ module ::MediaGallery
     end
 
     def score_result(result)
-      usable = result.dig("meta", "usable_samples").to_i
+      usable = result.dig("meta", "effective_samples").to_f
+      usable = result.dig("meta", "usable_samples").to_i if usable <= 0
       top, second = top_two_match_ratios(result)
       delta = top - second
 

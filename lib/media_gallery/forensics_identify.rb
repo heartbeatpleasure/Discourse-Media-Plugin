@@ -56,11 +56,15 @@ module ::MediaGallery
         max_samples: max_samples
       )
 
-      matches = match_fingerprints(
+      match = match_fingerprints(
         media_item: media_item,
         observed_variants: obs[:variants],
+        observed_confidences: obs[:confidences],
         max_offset_segments: max_offset_segments
       )
+
+      matches = match[:candidates] || []
+      match_meta = match[:meta] || {}
 
       {
         meta: {
@@ -71,7 +75,7 @@ module ::MediaGallery
           duration_seconds: obs[:duration_seconds],
           samples: obs[:variants].length,
           usable_samples: obs[:variants].count { |v| v.present? },
-        },
+        }.merge(match_meta),
         observed: {
           variants: obs[:variants].join(""),
           confidences: obs[:confidences],
@@ -169,59 +173,226 @@ module ::MediaGallery
       { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s }
     end
 
-    def match_fingerprints(media_item:, observed_variants:, max_offset_segments:)
+    
+    def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, max_offset_segments:)
       fps = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).includes(:user).to_a
-      return [] if fps.empty?
+      return { candidates: [], meta: { offset_strategy: "global" } } if fps.empty?
 
       max_off = max_offset_segments.to_i
       max_off = 0 if max_off.negative?
 
-      results = []
+      obs = observed_variants.is_a?(Array) ? observed_variants : []
+      confs = observed_confidences.is_a?(Array) ? observed_confidences : []
 
-      fps.each do |rec|
-        best = nil
+      # Build a compact list of usable samples:
+      # [observed_index, "a"/"b", weight, confidence]
+      #
+      # Weighting:
+      # - we always skip nil/blank bits
+      # - higher confidence samples contribute more to mismatch scoring
+      # - use confidence^2 to more strongly down-weight marginal readings
+      samples = []
+      obs.each_with_index do |v, i|
+        next if v.blank?
 
-        (0..max_off).each do |offset|
-          mismatches = 0
-          compared = 0
+        c = confs[i].to_f rescue 0.0
+        c = 0.0 if c.nan? || c.infinite? || c.negative?
 
-          observed_variants.each_with_index do |obs, i|
-            next if obs.blank?
+        if c > 0 && c < MIN_CONFIDENCE
+          next
+        end
 
+        w = c > 0 ? (c * c) : 1.0
+        next if w <= 0.0
+
+        samples << [i, v.to_s, w.to_f, c.to_f]
+      end
+
+      return { candidates: [], meta: { offset_strategy: "global", chosen_offset_segments: 0, effective_samples: 0.0 } } if samples.empty?
+
+      total_weight = samples.sum { |s| s[2].to_f }.to_f
+
+      chosen_offset = 0
+      best_score = nil
+      best_diag = nil
+
+      # Global offset selection:
+      # We choose ONE offset for the leak clip and score all candidates using that.
+      #
+      # Why: letting each user pick their own best offset can overfit noise and
+      # produce false positives with short clips.
+      (0..max_off).each do |offset|
+        top = nil
+        second = nil
+
+        fps.each do |rec|
+          mism_w = 0.0
+          comp_w = 0.0
+
+          samples.each do |(i, ov, w, _c)|
             exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
               fingerprint_id: rec.fingerprint_id,
               media_item_id: media_item.id,
               segment_index: i + offset
             )
 
-            compared += 1
-            mismatches += 1 if exp != obs
+            comp_w += w
+            mism_w += w if exp != ov
           end
 
-          next if compared == 0
+          next if comp_w <= 0.0
 
-          ratio = mismatches.to_f / compared
-          candidate = {
-            user_id: rec.user_id,
-            username: rec.user&.username,
-            fingerprint_id: rec.fingerprint_id,
-            best_offset_segments: offset,
-            mismatches: mismatches,
-            compared: compared,
-            match_ratio: (1.0 - ratio).round(4),
-          }
+          ratio_w = 1.0 - (mism_w / comp_w)
 
-          if best.nil? || candidate[:mismatches] < best[:mismatches] ||
-               (candidate[:mismatches] == best[:mismatches] && candidate[:compared] > best[:compared])
-            best = candidate
+          entry = { ratio_w: ratio_w, comp_w: comp_w, rec: rec }
+
+          if top.nil? || entry[:ratio_w] > top[:ratio_w] || (entry[:ratio_w] == top[:ratio_w] && entry[:comp_w] > top[:comp_w])
+            second = top
+            top = entry
+          elsif second.nil? || entry[:ratio_w] > second[:ratio_w] || (entry[:ratio_w] == second[:ratio_w] && entry[:comp_w] > second[:comp_w])
+            second = entry
           end
         end
 
-        results << best if best
+        next unless top
+
+        second_ratio = second ? second[:ratio_w].to_f : 0.0
+        delta = top[:ratio_w].to_f - second_ratio
+
+        coverage = total_weight > 0 ? (top[:comp_w].to_f / total_weight.to_f) : 0.0
+
+        # Score prioritizes separation, then overall fit, then (slightly) prefers smaller offsets.
+        score = delta + (top[:ratio_w].to_f * 0.02) + (coverage.to_f * 0.01) - (offset.to_f * 0.0002)
+
+        if best_score.nil? || score > best_score ||
+             (score == best_score && top[:ratio_w] > best_diag[:top_ratio_w])
+          best_score = score
+          chosen_offset = offset
+          best_diag = {
+            top_ratio_w: top[:ratio_w].to_f,
+            second_ratio_w: second_ratio,
+            delta: delta,
+          }
+        end
       end
 
-      results.sort_by { |r| [r[:mismatches], -r[:compared]] }.first(10)
+      # Compute candidates at the chosen global offset.
+      candidates = []
+      fps.each do |rec|
+        mism_w = 0.0
+        comp_w = 0.0
+        mism = 0
+        comp = 0
+
+        samples.each do |(i, ov, w, _c)|
+          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: rec.fingerprint_id,
+            media_item_id: media_item.id,
+            segment_index: i + chosen_offset
+          )
+
+          comp += 1
+          comp_w += w
+          if exp != ov
+            mism += 1
+            mism_w += w
+          end
+        end
+
+        next if comp == 0 || comp_w <= 0.0
+
+        raw_ratio = 1.0 - (mism.to_f / comp.to_f)
+        w_ratio = 1.0 - (mism_w / comp_w)
+
+        candidates << {
+          user_id: rec.user_id,
+          username: rec.user&.username,
+          fingerprint_id: rec.fingerprint_id,
+          best_offset_segments: chosen_offset,
+          mismatches: mism,
+          compared: comp,
+          mismatches_weighted: mism_w.round(6),
+          compared_weighted: comp_w.round(6),
+          match_ratio: w_ratio.round(4),
+          match_ratio_raw: raw_ratio.round(4),
+        }
+      end
+
+      candidates.sort_by! { |r| [r[:mismatches_weighted].to_f, -r[:compared_weighted].to_f] }
+      candidates = candidates.first(10)
+
+      # Add diagnostics: local best offset per candidate (not used for ranking).
+      if max_off > 0 && candidates.present?
+        rec_by_user = fps.index_by(&:user_id)
+        candidates.each do |cand|
+          rec = rec_by_user[cand[:user_id]]
+          next unless rec
+
+          local = best_local_offset(rec: rec, samples: samples, max_off: max_off, media_item_id: media_item.id)
+          cand[:local_best_offset_segments] = local[:offset]
+          cand[:local_match_ratio] = local[:match_ratio].round(4)
+        end
+      end
+
+      # Estimate "effective sample count" by normalizing the weighted sum using the median confidence^2.
+      conf_list = samples.map { |s| s[3].to_f }.select { |c| c > 0.0 }
+      med_c = median(conf_list)
+      med_c = 0.03 if med_c <= 0.0
+      norm = med_c * med_c
+      effective = norm > 0 ? (total_weight / norm) : samples.length.to_f
+      effective = effective.round(2)
+
+      meta = {
+        offset_strategy: "global",
+        chosen_offset_segments: chosen_offset,
+        effective_samples: effective,
+      }
+
+      if best_diag
+        meta[:offset_top_match_ratio] = best_diag[:top_ratio_w].round(4)
+        meta[:offset_second_match_ratio] = best_diag[:second_ratio_w].round(4)
+        meta[:offset_delta] = best_diag[:delta].round(4)
+      end
+
+      { candidates: candidates, meta: meta }
     end
+
+    def best_local_offset(rec:, samples:, max_off:, media_item_id:)
+      best = { offset: 0, mism_w: nil, comp_w: 0.0, match_ratio: 0.0 }
+
+      (0..max_off).each do |offset|
+        mism_w = 0.0
+        comp_w = 0.0
+
+        samples.each do |(i, ov, w, _c)|
+          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: rec.fingerprint_id,
+            media_item_id: media_item_id,
+            segment_index: i + offset
+          )
+
+          comp_w += w
+          mism_w += w if exp != ov
+        end
+
+        next if comp_w <= 0.0
+
+        if best[:mism_w].nil? || mism_w < best[:mism_w] || (mism_w == best[:mism_w] && comp_w > best[:comp_w])
+          best = {
+            offset: offset,
+            mism_w: mism_w,
+            comp_w: comp_w,
+            match_ratio: 1.0 - (mism_w / comp_w),
+          }
+        end
+      end
+
+      { offset: best[:offset].to_i, match_ratio: best[:match_ratio].to_f }
+    rescue
+      { offset: 0, match_ratio: 0.0 }
+    end
+    private_class_method :best_local_offset
+
 
     # ----------------------------------------------------------------------
 
