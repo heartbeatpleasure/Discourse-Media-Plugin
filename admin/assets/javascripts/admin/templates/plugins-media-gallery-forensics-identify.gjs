@@ -167,22 +167,27 @@ export default RouteTemplate(
                     <span style="opacity:0.85;">(Δ vs #2: {{@controller.matchDelta}})</span>
                   </div>
 
-                  <div>
-                    <strong>signal_z:</strong> {{@controller.topSignalZ}}
-                    <span style="opacity:0.85;">(Δ vs #2: {{@controller.signalDeltaZ}})</span>
-                  </div>
-
-                  {{#if @controller.candidatePoolSize}}
-                    <div><strong>candidate_pool_size:</strong> {{@controller.candidatePoolSize}}</div>
+                  {{#if @controller.poolSize}}
+                    <div style="margin-top: 0.25rem; opacity:0.95;">
+                      <strong>pool_size:</strong> {{@controller.poolSize}}
+                      <span style="opacity:0.85;">(reference: {{@controller.referencePoolSize}})</span>
+                    </div>
                   {{/if}}
 
-                  {{#if @controller.topExpectedFalsePositives}}
-                    <div>
-                      <strong>expected_false_positives:</strong>
-                      {{@controller.topExpectedFalsePositives}}
-                      <span style="opacity:0.85;">
-                        (pool) / {{@controller.topExpectedFalsePositives2000}} (@2000)
-                      </span>
+                  {{#if @controller.topSignalZ}}
+                    <div style="opacity:0.95;">
+                      <strong>signal_z:</strong> {{@controller.topSignalZ}}
+                      {{#if @controller.topPValue}}
+                        <span style="opacity:0.85;">(p≈{{@controller.topPValue}})</span>
+                      {{/if}}
+                    </div>
+                  {{/if}}
+
+                  {{#if @controller.topExpectedFalsePositivesPool}}
+                    <div style="opacity:0.95;">
+                      <strong>E[false positives]:</strong>
+                      {{@controller.topExpectedFalsePositivesPool}} (pool)
+                      <span style="opacity:0.85;">/ {{@controller.topExpectedFalsePositives2000}} (at {{@controller.referencePoolSize}})</span>
                     </div>
                   {{/if}}
                 {{/if}}
@@ -256,9 +261,10 @@ export default RouteTemplate(
                       <th>Fingerprint</th>
                       <th>Match</th>
                       <th>Z</th>
-                      <th>E[FP@2000]</th>
+                      <th>p</th>
+                      <th>E[FP] pool</th>
+                      <th>E[FP] 2000</th>
                       <th>Δ vs #1</th>
-                      <th>ΔZ vs #1</th>
                       <th>Mismatches</th>
                       <th>Best offset</th>
                     </tr>
@@ -276,9 +282,10 @@ export default RouteTemplate(
                         <td><code>{{c.fingerprint_id}}</code></td>
                         <td>{{c.match_ratio}}</td>
                         <td>{{c.signal_z}}</td>
+                        <td>{{c.p_value}}</td>
+                        <td>{{c.expected_false_positives_pool}}</td>
                         <td>{{c.expected_false_positives_2000}}</td>
                         <td>{{c.delta_from_top}}</td>
-                        <td>{{c.delta_z_from_top}}</td>
                         <td>{{c.mismatches}} / {{c.compared}}</td>
                         <td>{{c.best_offset_segments}}</td>
                       </tr>

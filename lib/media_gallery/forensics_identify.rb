@@ -19,15 +19,6 @@ module ::MediaGallery
     DEFAULT_MAX_SAMPLES = 60
     DEFAULT_MAX_OFFSET_SEGMENTS = 30
 
-    # Multi-frame sampling: sample a few frames per segment and aggregate.
-    # This reduces bit flips on re-encoded/screen-recorded copies without
-    # requiring shorter HLS segments.
-    DEFAULT_FRAMES_PER_SAMPLE = 3
-
-    # Perf safety: our batch sampler uses one ffmpeg process but opens the input
-    # once per timestamp. Cap the total number of timestamps per batch.
-    MAX_BATCH_INPUTS = 240
-
     # If the signal is too weak, we return nil bits for that sample.
     MIN_CONFIDENCE = 0.005
 
@@ -39,6 +30,14 @@ module ::MediaGallery
     # With batch sampling we can handle many samples, but we still want to avoid
     # runaway work on very heavy encodes.
     MAX_RESAMPLED_SEGMENTS = 30
+
+    # Heuristic: visible (burned-in) watermarks can overlap our subtle A/B tiles.
+    # When that happens (especially with screen-recordings), those regions add structured noise
+    # and can flip bits. For forensics extraction only, we optionally ignore tiles/pairs that
+    # overlap the visible watermark area when the watermark is placed centrally.
+    #
+    # NOTE: This does NOT change how HLS variants are generated; it only changes sampling.
+    VISIBLE_WATERMARK_EXCLUSION_POSITIONS = %w[center top_center bottom_center].freeze
 
     def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil)
       raise ArgumentError, "missing media_item" if media_item.blank?
@@ -63,10 +62,12 @@ module ::MediaGallery
           ::MediaGallery::FingerprintWatermark.spec_for(media_item_id: media_item.id, layout: layout)
         end
 
+      forensics_spec = filtered_spec_for_forensics(spec)
+
       obs = extract_observed_variants(
         file_path: file_path,
         segment_seconds: seg,
-        spec: spec,
+        spec: forensics_spec,
         max_samples: max_samples
       )
 
@@ -86,9 +87,10 @@ module ::MediaGallery
           media_item_id: media_item.id,
           segment_seconds: seg,
           layout: spec[:layout].to_s.presence || layout,
+          forensics_spec_kind: forensics_spec[:kind].to_s,
+          forensics_spec_points: (forensics_spec[:kind].to_s == "pairs" ? (forensics_spec[:pairs]&.length || 0) : (forensics_spec[:tiles]&.length || 0)),
           duration_seconds: obs[:duration_seconds],
           samples: obs[:variants].length,
-          frames_per_sample: obs[:frames_per_sample],
           usable_samples: obs[:variants].count { |v| v.present? },
         }.merge(match_meta),
         observed: {
@@ -103,6 +105,107 @@ module ::MediaGallery
       result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
       result
     end
+
+    # ----------------------------------------------------------------------
+
+    def filtered_spec_for_forensics(spec)
+      return spec unless spec.is_a?(Hash)
+
+      # Only attempt this heuristic when a visible watermark exists and is placed centrally.
+      begin
+        return spec unless SiteSetting.respond_to?(:media_gallery_watermark_enabled)
+        return spec unless SiteSetting.media_gallery_watermark_enabled
+      rescue
+        return spec
+      end
+
+      pos = nil
+      begin
+        pos = ::MediaGallery::Watermark.global_position.to_s
+      rescue
+        pos = nil
+      end
+
+      return spec unless pos.present? && VISIBLE_WATERMARK_EXCLUSION_POSITIONS.include?(pos)
+
+      rect = visible_watermark_exclusion_rect(pos)
+      return spec if rect.blank?
+
+      kind = spec[:kind].to_s
+      box = spec[:box_size_frac].to_f
+      box = 0.12 if box <= 0
+
+      if kind == "pairs" && spec[:pairs].is_a?(Array)
+        pairs = spec[:pairs]
+        kept = []
+        pairs.each do |p|
+          x = p[:x].to_f
+          y = p[:y].to_f
+          w = box * 2.0
+          h = box
+          kept << p unless rects_intersect?(x1: x, y1: y, w1: w, h1: h, x2: rect[:x], y2: rect[:y], w2: rect[:w], h2: rect[:h])
+        end
+
+        # Avoid filtering everything.
+        return spec if kept.length < 2
+
+        out = spec.dup
+        out[:pairs] = kept
+        out[:forensics_excluded_points] = pairs.length - kept.length
+        return out
+      end
+
+      if kind == "tiles" && spec[:tiles].is_a?(Array)
+        tiles = spec[:tiles]
+        kept = []
+        tiles.each do |p|
+          x = p[:x].to_f
+          y = p[:y].to_f
+          w = box
+          h = box
+          kept << p unless rects_intersect?(x1: x, y1: y, w1: w, h1: h, x2: rect[:x], y2: rect[:y], w2: rect[:w], h2: rect[:h])
+        end
+
+        return spec if kept.length < 2
+
+        out = spec.dup
+        out[:tiles] = kept
+        out[:forensics_excluded_points] = tiles.length - kept.length
+        return out
+      end
+
+      spec
+    rescue
+      spec
+    end
+    private_class_method :filtered_spec_for_forensics
+
+    def visible_watermark_exclusion_rect(pos)
+      # Rough normalized rectangles that cover common central watermark positions.
+      # We intentionally overshoot a bit; losing 1-2 sampling points is preferable to
+      # including corrupted ones.
+      case pos.to_s
+      when "center"
+        { x: 0.12, y: 0.34, w: 0.76, h: 0.32 }
+      when "top_center"
+        { x: 0.12, y: 0.00, w: 0.76, h: 0.26 }
+      when "bottom_center"
+        { x: 0.12, y: 0.70, w: 0.76, h: 0.30 }
+      else
+        nil
+      end
+    end
+    private_class_method :visible_watermark_exclusion_rect
+
+    def rects_intersect?(x1:, y1:, w1:, h1:, x2:, y2:, w2:, h2:)
+      return false if w1 <= 0 || h1 <= 0 || w2 <= 0 || h2 <= 0
+      x1b = x1 + w1
+      y1b = y1 + h1
+      x2b = x2 + w2
+      y2b = y2 + h2
+      (x1 < x2b) && (x1b > x2) && (y1 < y2b) && (y1b > y2)
+    end
+    private_class_method :rects_intersect?
 
     # ----------------------------------------------------------------------
 
@@ -185,60 +288,8 @@ module ::MediaGallery
 
       times_mid = sample_count.times.map { |i| (i + 0.5) * seg }
 
-      # Pass 1: sample each segment multiple times and aggregate.
-      # This reduces bit flips on re-encodes (screen recordings, transcodes, etc).
-      frames_per_sample = DEFAULT_FRAMES_PER_SAMPLE
-      if sample_count > 0
-        max_per = (MAX_BATCH_INPUTS.to_f / sample_count.to_f).floor
-        max_per = 1 if max_per < 1
-        frames_per_sample = [frames_per_sample, max_per].min
-      end
-
-      seg_f = seg.to_f
-      delta = (seg_f * 0.18).to_f
-      delta = 0.25 if delta < 0.25
-      delta = (seg_f * 0.45).to_f if delta > (seg_f * 0.45).to_f
-
-      times_groups =
-        times_mid.map do |t_mid|
-          if frames_per_sample <= 1
-            [clamp_time(t_mid, duration_seconds: duration)]
-          elsif frames_per_sample == 2
-            [
-              clamp_time(t_mid - delta, duration_seconds: duration),
-              clamp_time(t_mid + delta, duration_seconds: duration),
-            ]
-          else
-            [
-              clamp_time(t_mid - delta, duration_seconds: duration),
-              clamp_time(t_mid, duration_seconds: duration),
-              clamp_time(t_mid + delta, duration_seconds: duration),
-            ]
-          end
-        end
-
-      flat_times = times_groups.flatten
-      pass1_flat = sample_variants_batch_single(file_path: file_path, times: flat_times, spec: spec)
-
-      # Aggregate per-segment using median(score/confidence).
-      pass1 = []
-      idx = 0
-      times_groups.each do |grp|
-        sub = pass1_flat[idx, grp.length] || []
-        idx += grp.length
-
-        scores_sub = sub.map { |r| r[:score].to_i }
-        confs_sub = sub.map { |r| r[:confidence].to_f }
-
-        med_score = median(scores_sub)
-        med_conf = median(confs_sub).to_f.round(4)
-
-        v = med_score >= 0 ? "a" : "b"
-        v = nil if med_conf < MIN_CONFIDENCE
-
-        pass1 << { variant: v, confidence: med_conf, score: med_score }
-      end
-
+      # Pass 1: sample midpoints in a single ffmpeg run.
+      pass1 = sample_variants_batch_single(file_path: file_path, times: times_mid, spec: spec)
       variants = pass1.map { |r| r[:variant] }
       confidences = pass1.map { |r| r[:confidence] }
       scores = pass1.map { |r| r[:score] }
@@ -305,7 +356,7 @@ module ::MediaGallery
         end
       end
 
-      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s, frames_per_sample: frames_per_sample }
+      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s }
     end
 
     
@@ -356,16 +407,11 @@ module ::MediaGallery
       #
       # Why: letting each user pick their own best offset can overfit noise and
       # produce false positives with short clips.
-      #
-      # We score offsets primarily by "above-chance" signal (z-score under p=0.5),
-      # because a wrong user will naturally hover around ~50% match.
       (0..max_off).each do |offset|
         top = nil
         second = nil
 
         fps.each do |rec|
-          mism = 0
-          comp = 0
           mism_w = 0.0
           comp_w = 0.0
 
@@ -376,54 +422,47 @@ module ::MediaGallery
               segment_index: i + offset
             )
 
-            comp += 1
             comp_w += w
-            if exp != ov
-              mism += 1
-              mism_w += w
-            end
+            mism_w += w if exp != ov
           end
 
-          next if comp <= 0
+          next if comp_w <= 0.0
 
-          matches = comp - mism
-          z = z_score(comp, matches)
+          ratio_w = 1.0 - (mism_w / comp_w)
 
-          raw_ratio = 1.0 - (mism.to_f / comp.to_f)
-          w_ratio = comp_w > 0.0 ? (1.0 - (mism_w / comp_w)) : raw_ratio
+          entry = { ratio_w: ratio_w, comp_w: comp_w, rec: rec }
 
-          entry = { z: z, raw_ratio: raw_ratio, w_ratio: w_ratio, comp: comp, rec: rec }
-
-          if top.nil? || entry[:z] > top[:z] || (entry[:z] == top[:z] && entry[:raw_ratio] > top[:raw_ratio])
+          if top.nil? || entry[:ratio_w] > top[:ratio_w] || (entry[:ratio_w] == top[:ratio_w] && entry[:comp_w] > top[:comp_w])
             second = top
             top = entry
-          elsif second.nil? || entry[:z] > second[:z] || (entry[:z] == second[:z] && entry[:raw_ratio] > second[:raw_ratio])
+          elsif second.nil? || entry[:ratio_w] > second[:ratio_w] || (entry[:ratio_w] == second[:ratio_w] && entry[:comp_w] > second[:comp_w])
             second = entry
           end
         end
 
         next unless top
 
-        second_z = second ? second[:z].to_f : 0.0
-        delta_z = top[:z].to_f - second_z
+        second_ratio = second ? second[:ratio_w].to_f : 0.0
+        delta = top[:ratio_w].to_f - second_ratio
 
-        # Score prioritizes separation in z-score, then overall z-score, then (slightly) prefers smaller offsets.
-        score = delta_z + (top[:z].to_f * 0.05) + (top[:raw_ratio].to_f * 0.5) - (offset.to_f * 0.0002)
+        coverage = total_weight > 0 ? (top[:comp_w].to_f / total_weight.to_f) : 0.0
 
-        if best_score.nil? || score > best_score || (score == best_score && top[:z] > (best_diag ? best_diag[:top_z].to_f : -Float::INFINITY))
+        # Score prioritizes separation, then overall fit, then (slightly) prefers smaller offsets.
+        score = delta + (top[:ratio_w].to_f * 0.02) + (coverage.to_f * 0.01) - (offset.to_f * 0.0002)
+
+        if best_score.nil? || score > best_score ||
+             (score == best_score && top[:ratio_w] > best_diag[:top_ratio_w])
           best_score = score
           chosen_offset = offset
           best_diag = {
-            top_z: top[:z].to_f,
-            second_z: second_z,
-            delta_z: delta_z,
-            top_match_ratio: top[:raw_ratio].to_f,
-            top_match_ratio_weighted: top[:w_ratio].to_f,
+            top_ratio_w: top[:ratio_w].to_f,
+            second_ratio_w: second_ratio,
+            delta: delta,
           }
         end
       end
 
-# Compute candidates at the chosen global offset.
+      # Compute candidates at the chosen global offset.
       candidates = []
       fps.each do |rec|
         mism_w = 0.0
@@ -451,13 +490,6 @@ module ::MediaGallery
         raw_ratio = 1.0 - (mism.to_f / comp.to_f)
         w_ratio = 1.0 - (mism_w / comp_w)
 
-        matches = comp - mism
-        z = z_score(comp, matches)
-        p_one = normal_tail_one_sided(z)
-        pool = fps.length.to_i
-        expected_fp = (p_one.to_f * pool.to_f)
-        expected_fp_2000 = (p_one.to_f * 2000.0)
-
         candidates << {
           user_id: rec.user_id,
           username: rec.user&.username,
@@ -471,27 +503,10 @@ module ::MediaGallery
           # the weighted score separately for diagnostics.
           match_ratio: raw_ratio.round(4),
           match_ratio_weighted: w_ratio.round(4),
-          matches: matches,
-          signal_z: z.round(3),
-          signal_p_one_sided: p_one.round(8),
-          expected_false_positives: expected_fp.round(3),
-          expected_false_positives_2000: expected_fp_2000.round(3),
         }
       end
 
-      candidates.sort! do |a, b|
-        zb = b[:signal_z].to_f <=> a[:signal_z].to_f
-        if zb != 0
-          zb
-        else
-          mm = a[:mismatches].to_i <=> b[:mismatches].to_i
-          if mm != 0
-            mm
-          else
-            (-a[:compared].to_i) <=> (-b[:compared].to_i)
-          end
-        end
-      end
+      candidates.sort_by! { |r| [r[:mismatches].to_i, -r[:compared].to_i, r[:mismatches_weighted].to_f] }
       candidates = candidates.first(10)
 
       # Add diagnostics: local best offset per candidate (not used for ranking).
@@ -504,7 +519,6 @@ module ::MediaGallery
           local = best_local_offset(rec: rec, samples: samples, max_off: max_off, media_item_id: media_item.id)
           cand[:local_best_offset_segments] = local[:offset]
           cand[:local_match_ratio] = local[:match_ratio].round(4)
-          cand[:local_signal_z] = local[:z].to_f.round(3)
         end
       end
 
@@ -520,27 +534,42 @@ module ::MediaGallery
         offset_strategy: "global",
         chosen_offset_segments: chosen_offset,
         effective_samples: effective,
+        pool_size: fps.length,
+        reference_pool_size: 2000,
       }
 
-      meta[:candidate_pool_size] = fps.length.to_i
-
       if best_diag
-        meta[:offset_top_signal_z] = best_diag[:top_z].to_f.round(3)
-        meta[:offset_second_signal_z] = best_diag[:second_z].to_f.round(3)
-        meta[:offset_delta_z] = best_diag[:delta_z].to_f.round(3)
-        meta[:offset_top_match_ratio] = best_diag[:top_match_ratio].to_f.round(4)
-        meta[:offset_top_match_ratio_weighted] = best_diag[:top_match_ratio_weighted].to_f.round(4)
+        meta[:offset_top_match_ratio] = best_diag[:top_ratio_w].round(4)
+        meta[:offset_second_match_ratio] = best_diag[:second_ratio_w].round(4)
+        meta[:offset_delta] = best_diag[:delta].round(4)
+      end
+
+      # Add statistical diagnostics so admins can judge how risky a "match" is when
+      # the candidate pool is large (e.g. 2000+ members).
+      pool_n = fps.length.to_i
+      ref_n = 2000
+      candidates.each do |cand|
+        n = cand[:compared].to_i
+        next if n <= 0
+
+        mr = cand[:match_ratio].to_f
+        # Chance baseline for a wrong candidate is ~0.5.
+        z = (mr - 0.5) / Math.sqrt(0.25 / n.to_f)
+        p = z.positive? ? (1.0 - normal_cdf(z)) : 1.0
+
+        cand[:signal_z] = z.round(3)
+        cand[:p_value] = p.round(10)
+        cand[:expected_false_positives_pool] = (pool_n * p).round(3)
+        cand[:expected_false_positives_2000] = (ref_n * p).round(3)
       end
 
       { candidates: candidates, meta: meta }
     end
 
     def best_local_offset(rec:, samples:, max_off:, media_item_id:)
-      best = { offset: 0, mism_w: nil, comp_w: 0.0, match_ratio: 0.0, z: 0.0 }
+      best = { offset: 0, mism_w: nil, comp_w: 0.0, match_ratio: 0.0 }
 
       (0..max_off).each do |offset|
-        mism = 0
-        comp = 0
         mism_w = 0.0
         comp_w = 0.0
 
@@ -551,36 +580,35 @@ module ::MediaGallery
             segment_index: i + offset
           )
 
-          comp += 1
           comp_w += w
-          if exp != ov
-            mism += 1
-            mism_w += w
-          end
+          mism_w += w if exp != ov
         end
 
-        next if comp <= 0 || comp_w <= 0.0
-
-        raw_ratio = 1.0 - (mism.to_f / comp.to_f)
-        z = z_score(comp, comp - mism)
+        next if comp_w <= 0.0
 
         if best[:mism_w].nil? || mism_w < best[:mism_w] || (mism_w == best[:mism_w] && comp_w > best[:comp_w])
           best = {
             offset: offset,
             mism_w: mism_w,
             comp_w: comp_w,
-            match_ratio: raw_ratio,
-            z: z,
+            match_ratio: 1.0 - (mism_w / comp_w),
           }
         end
       end
 
-      { offset: best[:offset].to_i, match_ratio: best[:match_ratio].to_f, z: best[:z].to_f }
+      { offset: best[:offset].to_i, match_ratio: best[:match_ratio].to_f }
     rescue
-      { offset: 0, match_ratio: 0.0, z: 0.0 }
+      { offset: 0, match_ratio: 0.0 }
     end
     private_class_method :best_local_offset
 
+    def normal_cdf(z)
+      # Standard normal CDF using erf.
+      0.5 * (1.0 + Math.erf(z.to_f / Math.sqrt(2.0)))
+    rescue
+      0.5
+    end
+    private_class_method :normal_cdf
 
 
     # ----------------------------------------------------------------------
@@ -647,14 +675,18 @@ module ::MediaGallery
         )
 
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          score = 0
+          diffs = []
           pairs.length.times do |i|
             left = bytes[i * 2]
             right = bytes[i * 2 + 1]
-            score += (left - right)
+            diffs << (left - right)
           end
-          conf = (score.abs.to_f / (pairs.length * 255.0)).round(4)
-          variant = score >= 0 ? "a" : "b"
+
+          # Robust aggregation: use the median difference to avoid outliers
+          # (e.g. visible watermark overlap, player overlays, etc.).
+          score = median(diffs)
+          conf = (median(diffs.map { |d| d.abs }).to_f / 255.0).round(4)
+          variant = score.to_i >= 0 ? "a" : "b"
           variant = nil if conf < MIN_CONFIDENCE
           { variant: variant, confidence: conf, score: score }
         end
@@ -672,14 +704,16 @@ module ::MediaGallery
         )
 
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          score = 0
+          diffs = []
           tiles.length.times do |i|
             inner = bytes[i * 2]
             outer_m = bytes[i * 2 + 1]
-            score += (inner - outer_m)
+            diffs << (inner - outer_m)
           end
-          conf = (score.abs.to_f / (tiles.length * 255.0)).round(4)
-          variant = score >= 0 ? "a" : "b"
+
+          score = median(diffs)
+          conf = (median(diffs.map { |d| d.abs }).to_f / 255.0).round(4)
+          variant = score.to_i >= 0 ? "a" : "b"
           variant = nil if conf < MIN_CONFIDENCE
           { variant: variant, confidence: conf, score: score }
         end
@@ -772,38 +806,6 @@ module ::MediaGallery
     end
     private_class_method :median
 
-    def z_score(n, matches)
-      nn = n.to_i
-      return 0.0 if nn <= 0
-      mm = matches.to_i
-      ((2.0 * mm) - nn.to_f) / Math.sqrt(nn.to_f)
-    rescue
-      0.0
-    end
-    private_class_method :z_score
-
-    def normal_tail_one_sided(z)
-      zz = z.to_f
-      return 1.0 if zz <= 0.0
-      rt2 = Math.sqrt(2.0)
-      if Math.respond_to?(:erfc)
-        p = 0.5 * Math.erfc(zz / rt2)
-      elsif Math.respond_to?(:erf)
-        p = 0.5 * (1.0 - Math.erf(zz / rt2))
-      else
-        # Fallback approximation (Abramowitz-Stegun 7.1.26)
-        t = 1.0 / (1.0 + 0.2316419 * zz)
-        d = 0.3989423 * Math.exp(-zz * zz / 2.0)
-        p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
-      end
-      p = 0.0 if p.nan? || p.negative?
-      p = 1.0 if p > 1.0
-      p
-    rescue
-      1.0
-    end
-    private_class_method :normal_tail_one_sided
-
     def sample_variant_single(file_path:, t:, spec:)
       kind = spec[:kind].to_s
       kind = "pairs" if kind.blank? && spec[:pairs].present?
@@ -853,16 +855,18 @@ module ::MediaGallery
       expected = pair_count * 2
       return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
 
-      score = 0
+      diffs = []
       pair_count.times do |i|
         left = bytes[i * 2]
         right = bytes[i * 2 + 1]
-        score += (left - right)
+        diffs << (left - right)
       end
 
+      score = median(diffs)
+
       # Positive means left brighter than right (variant A in v2 by construction).
-      variant = score >= 0 ? "a" : "b"
-      conf = (score.abs.to_f / (pair_count * 255.0)).round(4)
+      variant = score.to_i >= 0 ? "a" : "b"
+      conf = (median(diffs.map { |d| d.abs }).to_f / 255.0).round(4)
       variant = nil if conf < MIN_CONFIDENCE
 
       { variant: variant, confidence: conf, score: score }
@@ -911,15 +915,17 @@ module ::MediaGallery
       expected = tile_count * 2
       return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
 
-      score = 0
+      diffs = []
       tile_count.times do |i|
         inner = bytes[i * 2]
         outer_m = bytes[i * 2 + 1]
-        score += (inner - outer_m)
+        diffs << (inner - outer_m)
       end
 
-      variant = score >= 0 ? "a" : "b"
-      conf = (score.abs.to_f / (tile_count * 255.0)).round(4)
+      score = median(diffs)
+
+      variant = score.to_i >= 0 ? "a" : "b"
+      conf = (median(diffs.map { |d| d.abs }).to_f / 255.0).round(4)
       variant = nil if conf < MIN_CONFIDENCE
 
       { variant: variant, confidence: conf, score: score }
