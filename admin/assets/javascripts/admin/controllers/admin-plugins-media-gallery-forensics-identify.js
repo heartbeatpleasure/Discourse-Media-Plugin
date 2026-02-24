@@ -40,14 +40,21 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   get topCandidates() {
     const cands = this.candidates || [];
     const top = this.topMatchRatio;
+    const topZ = this.topSignalZ;
     return cands.slice(0, 3).map((c, idx) => {
       const v = c?.match_ratio;
       const mr = typeof v === "number" ? v : parseFloat(v);
       const matchRatio = Number.isFinite(mr) ? mr : 0;
+
+      const zv = c?.signal_z;
+      const zf = typeof zv === "number" ? zv : parseFloat(zv);
+      const signalZ = Number.isFinite(zf) ? zf : 0;
+
       return {
         ...c,
         _idx: idx,
         delta_from_top: idx === 0 ? 0 : Math.max(0, top - matchRatio),
+        delta_z_from_top: idx === 0 ? 0 : Math.max(0, topZ - signalZ),
       };
     });
   }
@@ -74,6 +81,41 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get matchDelta() {
     return Math.max(0, this.topMatchRatio - this.secondMatchRatio);
+  }
+
+
+  get topSignalZ() {
+    const v = this.topCandidate?.signal_z;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : 0;
+  }
+
+  get secondSignalZ() {
+    const v = this.secondCandidate?.signal_z;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : 0;
+  }
+
+  get signalDeltaZ() {
+    return this.topSignalZ - this.secondSignalZ;
+  }
+
+  get topExpectedFalsePositives() {
+    const v = this.topCandidate?.expected_false_positives;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get topExpectedFalsePositives2000() {
+    const v = this.topCandidate?.expected_false_positives_2000;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get candidatePoolSize() {
+    const v = this.meta?.candidate_pool_size;
+    const n = typeof v === "number" ? v : parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
   }
 
   get confidence() {

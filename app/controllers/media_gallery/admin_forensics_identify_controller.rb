@@ -361,7 +361,9 @@ module ::MediaGallery
       # If we already have a conclusive match, do not extend.
       return false if conclusive_match?(result)
 
-      usable = result.dig("meta", "usable_samples").to_i
+      usable_raw = result.dig("meta", "usable_samples").to_i
+      effective = result.dig("meta", "effective_samples").to_f
+      usable = effective > 0 ? effective : usable_raw
       top, second = top_two_match_ratios(result)
       delta = top - second
 
@@ -382,6 +384,11 @@ module ::MediaGallery
       top = result.dig("candidates", 0, "match_ratio").to_f
       second = result.dig("candidates", 1, "match_ratio").to_f
       delta = top - second
+      top_z = result.dig("candidates", 0, "signal_z").to_f
+      second_z = result.dig("candidates", 1, "signal_z").to_f
+      delta_z = top_z - second_z
+      top_expected_fp = result.dig("candidates", 0, "expected_false_positives").to_f
+      top_expected_fp_2000 = result.dig("candidates", 0, "expected_false_positives_2000").to_f
       mismatches = result.dig("candidates", 0, "mismatches").to_i
       compared = result.dig("candidates", 0, "compared").to_i
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
@@ -391,6 +398,11 @@ module ::MediaGallery
       result["meta"]["top_match_ratio"] = top
       result["meta"]["second_match_ratio"] = second
       result["meta"]["match_delta"] = delta
+      result["meta"]["top_signal_z"] = top_z
+      result["meta"]["second_signal_z"] = second_z
+      result["meta"]["signal_delta_z"] = delta_z
+      result["meta"]["top_expected_false_positives"] = top_expected_fp
+      result["meta"]["top_expected_false_positives_2000"] = top_expected_fp_2000
       result["meta"]["top_mismatches"] = mismatches
       result["meta"]["top_compared"] = compared
       result["meta"]["top_mismatch_rate"] = mismatch_rate
@@ -424,7 +436,9 @@ module ::MediaGallery
     end
 
     def classify_decision(result)
-      usable = result.dig("meta", "usable_samples").to_i
+      usable_raw = result.dig("meta", "usable_samples").to_i
+      effective = result.dig("meta", "effective_samples").to_f
+      usable = effective > 0 ? effective : usable_raw
       cands = result["candidates"]
       has_cands = cands.is_a?(Array) && cands.present?
 
@@ -439,18 +453,41 @@ module ::MediaGallery
       compared = cands[0].is_a?(Hash) ? cands[0]["compared"].to_i : 0
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
 
-      if usable >= setting_policy_min_usable_strong &&
-           top >= setting_policy_min_match_strong_ratio &&
-           delta >= setting_policy_min_delta_strong_ratio &&
-           mismatch_rate <= setting_policy_max_mismatch_rate_strong_ratio
-        return "conclusive_match"
-      end
+      top_z = cands[0].is_a?(Hash) ? cands[0]["signal_z"].to_f : 0.0
+      second_z = cands[1].is_a?(Hash) ? cands[1]["signal_z"].to_f : 0.0
+      delta_z = top_z - second_z
+      expected_fp = cands[0].is_a?(Hash) ? cands[0]["expected_false_positives"].to_f : 0.0
 
-      if usable >= setting_policy_min_usable_likely &&
-           top >= setting_policy_min_match_likely_ratio &&
-           delta >= setting_policy_min_delta_likely_ratio
-        return "likely_match"
-      end
+      strong_by_ratio =
+        usable >= setting_policy_min_usable_strong &&
+          top >= setting_policy_min_match_strong_ratio &&
+          delta >= setting_policy_min_delta_strong_ratio &&
+          mismatch_rate <= setting_policy_max_mismatch_rate_strong_ratio
+
+      strong_by_z =
+        usable >= setting_policy_min_usable_strong &&
+          compared >= setting_policy_min_usable_strong &&
+          top >= 0.60 &&
+          top_z >= 3.5 &&
+          delta_z >= 1.0 &&
+          expected_fp > 0.0 && expected_fp <= 0.25
+
+      return "conclusive_match" if strong_by_ratio || strong_by_z
+
+      likely_by_ratio =
+        usable >= setting_policy_min_usable_likely &&
+          top >= setting_policy_min_match_likely_ratio &&
+          delta >= setting_policy_min_delta_likely_ratio
+
+      likely_by_z =
+        usable >= setting_policy_min_usable_likely &&
+          compared >= setting_policy_min_usable_likely &&
+          top >= 0.55 &&
+          top_z >= 2.8 &&
+          delta_z >= 0.6 &&
+          expected_fp > 0.0 && expected_fp <= 2.0
+
+      return "likely_match" if likely_by_ratio || likely_by_z
 
       "ambiguous"
     end

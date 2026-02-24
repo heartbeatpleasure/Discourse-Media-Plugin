@@ -166,6 +166,25 @@ export default RouteTemplate(
                     <strong>top_match:</strong> {{@controller.topMatchRatio}}
                     <span style="opacity:0.85;">(Δ vs #2: {{@controller.matchDelta}})</span>
                   </div>
+
+                  <div>
+                    <strong>signal_z:</strong> {{@controller.topSignalZ}}
+                    <span style="opacity:0.85;">(Δ vs #2: {{@controller.signalDeltaZ}})</span>
+                  </div>
+
+                  {{#if @controller.candidatePoolSize}}
+                    <div><strong>candidate_pool_size:</strong> {{@controller.candidatePoolSize}}</div>
+                  {{/if}}
+
+                  {{#if @controller.topExpectedFalsePositives}}
+                    <div>
+                      <strong>expected_false_positives:</strong>
+                      {{@controller.topExpectedFalsePositives}}
+                      <span style="opacity:0.85;">
+                        (pool) / {{@controller.topExpectedFalsePositives2000}} (@2000)
+                      </span>
+                    </div>
+                  {{/if}}
                 {{/if}}
                 {{#if @controller.meta.duration_seconds}}
                   <div><strong>duration_seconds:</strong> {{@controller.meta.duration_seconds}}</div>
@@ -236,7 +255,10 @@ export default RouteTemplate(
                       <th>User</th>
                       <th>Fingerprint</th>
                       <th>Match</th>
+                      <th>Z</th>
+                      <th>E[FP@2000]</th>
                       <th>Δ vs #1</th>
+                      <th>ΔZ vs #1</th>
                       <th>Mismatches</th>
                       <th>Best offset</th>
                     </tr>
@@ -253,7 +275,10 @@ export default RouteTemplate(
                         </td>
                         <td><code>{{c.fingerprint_id}}</code></td>
                         <td>{{c.match_ratio}}</td>
+                        <td>{{c.signal_z}}</td>
+                        <td>{{c.expected_false_positives_2000}}</td>
                         <td>{{c.delta_from_top}}</td>
+                        <td>{{c.delta_z_from_top}}</td>
                         <td>{{c.mismatches}} / {{c.compared}}</td>
                         <td>{{c.best_offset_segments}}</td>
                       </tr>
