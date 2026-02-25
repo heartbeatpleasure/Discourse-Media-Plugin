@@ -95,6 +95,8 @@ module ::MediaGallery
           usable_samples: obs[:variants].count { |v| v.present? },
           variant_extraction: obs[:extraction_strategy],
           variant_threshold_score: obs[:threshold_score],
+          variant_adaptive_mad: obs[:adaptive_mad],
+          variant_adaptive_skew: obs[:adaptive_skew],
         }.merge(match_meta),
         observed: {
           variants: obs[:variants].join(""),
@@ -366,15 +368,20 @@ module ::MediaGallery
       # means the raw score is dominated by scene brightness/gradients rather
       # than the watermark sign. In that case, classify variants relative to an
       # adaptive threshold (median score) instead of using score sign.
+      #
+      # Important: this must NOT erase usable samples. It should only change
+      # the A/B decision boundary when we have evidence of bias.
       extraction_strategy = "sign"
       threshold_score = nil
+      adaptive_mad = nil
+      adaptive_skew = nil
 
       usable_scores = []
       variants.each_with_index do |v, i|
         next if v.blank?
         s = scores[i]
         next if s.nil?
-        usable_scores << s.to_i
+        usable_scores << s.to_f
       end
 
       if usable_scores.length >= 8
@@ -385,32 +392,32 @@ module ::MediaGallery
         if total_v > 0
           frac = [a_count.to_f / total_v.to_f, b_count.to_f / total_v.to_f].max
           if frac >= 0.9
-            threshold_score = median(usable_scores).to_i
-            extraction_strategy = "adaptive_threshold"
+            threshold_score = median(usable_scores).to_f
+            abs_devs = usable_scores.map { |s| (s - threshold_score).abs }
+            mad = median(abs_devs).to_f
+            adaptive_mad = mad.round(4)
+            adaptive_skew = frac.round(4)
 
-            points =
-              if spec[:kind].to_s == "pairs"
-                (spec[:pairs] || []).length
-              else
-                (spec[:tiles] || []).length
-              end
-            denom = [points.to_i, 1].max * 255.0
+            # Only apply adaptive thresholding when there is enough spread in
+            # the scores. If the scores are essentially constant, switching
+            # thresholds cannot recover information and would only add noise.
+            if mad >= 1.0
+              extraction_strategy = "adaptive_threshold"
 
-            variants.each_with_index do |_v, i|
-              c0 = confidences[i].to_f
-              next if c0 < MIN_CONFIDENCE
-              s = scores[i]
-              next if s.nil?
+              variants.each_with_index do |_v, i|
+                c0 = confidences[i].to_f
+                next if c0 < MIN_CONFIDENCE
+                s = scores[i]
+                next if s.nil?
 
-              centered = s.to_f - threshold_score.to_f
-              v2 = centered >= 0 ? "a" : "b"
-              c2 = (centered.abs.to_f / denom).round(4)
+                centered = s.to_f - threshold_score
+                next if centered == 0.0
 
-              if c2 < MIN_CONFIDENCE
-                variants[i] = nil
-                confidences[i] = c2
-              else
-                variants[i] = v2
+                variants[i] = centered >= 0 ? "a" : "b"
+
+                # Keep original confidence (derived from per-tile/pair contrast),
+                # but allow a small bump when centered distance is strong.
+                c2 = (centered.abs.to_f / (mad.to_f * 6.0)).round(4)
                 confidences[i] = [c0, c2].max.round(4)
               end
             end
@@ -418,7 +425,7 @@ module ::MediaGallery
         end
       end
 
-      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s, extraction_strategy: extraction_strategy, threshold_score: threshold_score }
+      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s, extraction_strategy: extraction_strategy, threshold_score: threshold_score, adaptive_mad: adaptive_mad, adaptive_skew: adaptive_skew }
     end
 
     
