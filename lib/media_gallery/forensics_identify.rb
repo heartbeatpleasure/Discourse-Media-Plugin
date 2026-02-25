@@ -89,9 +89,12 @@ module ::MediaGallery
           layout: spec[:layout].to_s.presence || layout,
           forensics_spec_kind: forensics_spec[:kind].to_s,
           forensics_spec_points: (forensics_spec[:kind].to_s == "pairs" ? (forensics_spec[:pairs]&.length || 0) : (forensics_spec[:tiles]&.length || 0)),
+          forensics_excluded_points: (forensics_spec[:forensics_excluded_points] || 0),
           duration_seconds: obs[:duration_seconds],
           samples: obs[:variants].length,
           usable_samples: obs[:variants].count { |v| v.present? },
+          variant_extraction: obs[:extraction_strategy],
+          variant_threshold_score: obs[:threshold_score],
         }.merge(match_meta),
         observed: {
           variants: obs[:variants].join(""),
@@ -146,8 +149,10 @@ module ::MediaGallery
           kept << p unless rects_intersect?(x1: x, y1: y, w1: w, h1: h, x2: rect[:x], y2: rect[:y], w2: rect[:w], h2: rect[:h])
         end
 
-        # Avoid filtering everything.
-        return spec if kept.length < 2
+                # Avoid filtering too aggressively (dropping too many points can make the
+        # score biased, e.g. turning many samples into all "a" or all "b").
+        min_keep = [(pairs.length.to_f * 0.75).ceil, 2].max
+        return spec if kept.length < min_keep
 
         out = spec.dup
         out[:pairs] = kept
@@ -166,7 +171,8 @@ module ::MediaGallery
           kept << p unless rects_intersect?(x1: x, y1: y, w1: w, h1: h, x2: rect[:x], y2: rect[:y], w2: rect[:w], h2: rect[:h])
         end
 
-        return spec if kept.length < 2
+                min_keep = [(tiles.length.to_f * 0.75).ceil, 2].max
+        return spec if kept.length < min_keep
 
         out = spec.dup
         out[:tiles] = kept
@@ -356,7 +362,63 @@ module ::MediaGallery
         end
       end
 
-      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s }
+            # If the extracted variants are extremely skewed (e.g. all "a"), it often
+      # means the raw score is dominated by scene brightness/gradients rather
+      # than the watermark sign. In that case, classify variants relative to an
+      # adaptive threshold (median score) instead of using score sign.
+      extraction_strategy = "sign"
+      threshold_score = nil
+
+      usable_scores = []
+      variants.each_with_index do |v, i|
+        next if v.blank?
+        s = scores[i]
+        next if s.nil?
+        usable_scores << s.to_i
+      end
+
+      if usable_scores.length >= 8
+        a_count = variants.count { |v| v == "a" }
+        b_count = variants.count { |v| v == "b" }
+        total_v = a_count + b_count
+
+        if total_v > 0
+          frac = [a_count.to_f / total_v.to_f, b_count.to_f / total_v.to_f].max
+          if frac >= 0.9
+            threshold_score = median(usable_scores).to_i
+            extraction_strategy = "adaptive_threshold"
+
+            points =
+              if spec[:kind].to_s == "pairs"
+                (spec[:pairs] || []).length
+              else
+                (spec[:tiles] || []).length
+              end
+            denom = [points.to_i, 1].max * 255.0
+
+            variants.each_with_index do |_v, i|
+              c0 = confidences[i].to_f
+              next if c0 < MIN_CONFIDENCE
+              s = scores[i]
+              next if s.nil?
+
+              centered = s.to_f - threshold_score.to_f
+              v2 = centered >= 0 ? "a" : "b"
+              c2 = (centered.abs.to_f / denom).round(4)
+
+              if c2 < MIN_CONFIDENCE
+                variants[i] = nil
+                confidences[i] = c2
+              else
+                variants[i] = v2
+                confidences[i] = [c0, c2].max.round(4)
+              end
+            end
+          end
+        end
+      end
+
+      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s, extraction_strategy: extraction_strategy, threshold_score: threshold_score }
     end
 
     
