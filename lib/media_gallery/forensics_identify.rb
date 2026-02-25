@@ -31,15 +31,7 @@ module ::MediaGallery
     # runaway work on very heavy encodes.
     MAX_RESAMPLED_SEGMENTS = 30
 
-    # Heuristic: visible (burned-in) watermarks can overlap our subtle A/B tiles.
-    # When that happens (especially with screen-recordings), those regions add structured noise
-    # and can flip bits. For forensics extraction only, we optionally ignore tiles/pairs that
-    # overlap the visible watermark area when the watermark is placed centrally.
-    #
-    # NOTE: This does NOT change how HLS variants are generated; it only changes sampling.
-    VISIBLE_WATERMARK_EXCLUSION_POSITIONS = %w[center top_center bottom_center].freeze
-
-    def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil)
+    def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil, sample_times: nil)
       raise ArgumentError, "missing media_item" if media_item.blank?
       raise ArgumentError, "missing file" if file_path.blank? || !File.exist?(file_path)
 
@@ -62,13 +54,19 @@ module ::MediaGallery
           ::MediaGallery::FingerprintWatermark.spec_for(media_item_id: media_item.id, layout: layout)
         end
 
-      forensics_spec = filtered_spec_for_forensics(spec)
+      # When available, prefer the *packaged* HLS playlist timing for sampling.
+      # Real HLS segments are not always exactly `segment_seconds` long (frame rounding),
+      # and drift can cause us to sample near boundaries (hurts A/B detection).
+      #
+      # Using playlist-derived midpoints tends to reduce bit flips and increase separation.
+      sample_times ||= packaged_segment_midpoints_for(media_item: media_item)
 
       obs = extract_observed_variants(
         file_path: file_path,
         segment_seconds: seg,
-        spec: forensics_spec,
-        max_samples: max_samples
+        spec: spec,
+        max_samples: max_samples,
+        sample_times: sample_times
       )
 
       match = match_fingerprints(
@@ -87,16 +85,9 @@ module ::MediaGallery
           media_item_id: media_item.id,
           segment_seconds: seg,
           layout: spec[:layout].to_s.presence || layout,
-          forensics_spec_kind: forensics_spec[:kind].to_s,
-          forensics_spec_points: (forensics_spec[:kind].to_s == "pairs" ? (forensics_spec[:pairs]&.length || 0) : (forensics_spec[:tiles]&.length || 0)),
-          forensics_excluded_points: (forensics_spec[:forensics_excluded_points] || 0),
           duration_seconds: obs[:duration_seconds],
           samples: obs[:variants].length,
           usable_samples: obs[:variants].count { |v| v.present? },
-          variant_extraction: obs[:extraction_strategy],
-          variant_threshold_score: obs[:threshold_score],
-          variant_adaptive_mad: obs[:adaptive_mad],
-          variant_adaptive_skew: obs[:adaptive_skew],
         }.merge(match_meta),
         observed: {
           variants: obs[:variants].join(""),
@@ -110,110 +101,6 @@ module ::MediaGallery
       result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
       result
     end
-
-    # ----------------------------------------------------------------------
-
-    def filtered_spec_for_forensics(spec)
-      return spec unless spec.is_a?(Hash)
-
-      # Only attempt this heuristic when a visible watermark exists and is placed centrally.
-      begin
-        return spec unless SiteSetting.respond_to?(:media_gallery_watermark_enabled)
-        return spec unless SiteSetting.media_gallery_watermark_enabled
-      rescue
-        return spec
-      end
-
-      pos = nil
-      begin
-        pos = ::MediaGallery::Watermark.global_position.to_s
-      rescue
-        pos = nil
-      end
-
-      return spec unless pos.present? && VISIBLE_WATERMARK_EXCLUSION_POSITIONS.include?(pos)
-
-      rect = visible_watermark_exclusion_rect(pos)
-      return spec if rect.blank?
-
-      kind = spec[:kind].to_s
-      box = spec[:box_size_frac].to_f
-      box = 0.12 if box <= 0
-
-      if kind == "pairs" && spec[:pairs].is_a?(Array)
-        pairs = spec[:pairs]
-        kept = []
-        pairs.each do |p|
-          x = p[:x].to_f
-          y = p[:y].to_f
-          w = box * 2.0
-          h = box
-          kept << p unless rects_intersect?(x1: x, y1: y, w1: w, h1: h, x2: rect[:x], y2: rect[:y], w2: rect[:w], h2: rect[:h])
-        end
-
-                # Avoid filtering too aggressively (dropping too many points can make the
-        # score biased, e.g. turning many samples into all "a" or all "b").
-        min_keep = [(pairs.length.to_f * 0.75).ceil, 2].max
-        return spec if kept.length < min_keep
-
-        out = spec.dup
-        out[:pairs] = kept
-        out[:forensics_excluded_points] = pairs.length - kept.length
-        return out
-      end
-
-      if kind == "tiles" && spec[:tiles].is_a?(Array)
-        tiles = spec[:tiles]
-        kept = []
-        tiles.each do |p|
-          x = p[:x].to_f
-          y = p[:y].to_f
-          w = box
-          h = box
-          kept << p unless rects_intersect?(x1: x, y1: y, w1: w, h1: h, x2: rect[:x], y2: rect[:y], w2: rect[:w], h2: rect[:h])
-        end
-
-                min_keep = [(tiles.length.to_f * 0.75).ceil, 2].max
-        return spec if kept.length < min_keep
-
-        out = spec.dup
-        out[:tiles] = kept
-        out[:forensics_excluded_points] = tiles.length - kept.length
-        return out
-      end
-
-      spec
-    rescue
-      spec
-    end
-    private_class_method :filtered_spec_for_forensics
-
-    def visible_watermark_exclusion_rect(pos)
-      # Rough normalized rectangles that cover common central watermark positions.
-      # We intentionally overshoot a bit; losing 1-2 sampling points is preferable to
-      # including corrupted ones.
-      case pos.to_s
-      when "center"
-        { x: 0.12, y: 0.34, w: 0.76, h: 0.32 }
-      when "top_center"
-        { x: 0.12, y: 0.00, w: 0.76, h: 0.26 }
-      when "bottom_center"
-        { x: 0.12, y: 0.70, w: 0.76, h: 0.30 }
-      else
-        nil
-      end
-    end
-    private_class_method :visible_watermark_exclusion_rect
-
-    def rects_intersect?(x1:, y1:, w1:, h1:, x2:, y2:, w2:, h2:)
-      return false if w1 <= 0 || h1 <= 0 || w2 <= 0 || h2 <= 0
-      x1b = x1 + w1
-      y1b = y1 + h1
-      x2b = x2 + w2
-      y2b = y2 + h2
-      (x1 < x2b) && (x1b > x2) && (y1 < y2b) && (y1b > y2)
-    end
-    private_class_method :rects_intersect?
 
     # ----------------------------------------------------------------------
 
@@ -282,19 +169,33 @@ module ::MediaGallery
     private_class_method :symbolize_hash_keys
 
 
-    def extract_observed_variants(file_path:, segment_seconds:, spec:, max_samples:)
+    def extract_observed_variants(file_path:, segment_seconds:, spec:, max_samples:, sample_times: nil)
       duration = probe_duration_seconds(file_path)
       duration = 0.0 if duration.nan? || duration.infinite? || duration.negative?
 
       # Sample at segment midpoints; cap work.
       seg = segment_seconds.to_i
-      total = (duration / seg).floor
-      total = 0 if total.negative?
+      seg = 6 if seg <= 0
 
-      sample_count = [total, max_samples.to_i].min
-      sample_count = 0 if sample_count.negative?
+      times_mid = nil
+      if sample_times.present?
+        times = Array(sample_times).map { |t| t.to_f }.select { |t| t >= 0.0 }
+        times_mid = times
+      end
 
-      times_mid = sample_count.times.map { |i| (i + 0.5) * seg }
+      if times_mid.present?
+        # Clamp to file duration and apply max_samples.
+        times_mid = times_mid.select { |t| t < duration.to_f + 0.05 }
+        times_mid = times_mid.first(max_samples.to_i)
+      else
+        total = (duration / seg).floor
+        total = 0 if total.negative?
+
+        sample_count = [total, max_samples.to_i].min
+        sample_count = 0 if sample_count.negative?
+
+        times_mid = sample_count.times.map { |i| (i + 0.5) * seg }
+      end
 
       # Pass 1: sample midpoints in a single ffmpeg run.
       pass1 = sample_variants_batch_single(file_path: file_path, times: times_mid, spec: spec)
@@ -364,69 +265,54 @@ module ::MediaGallery
         end
       end
 
-            # If the extracted variants are extremely skewed (e.g. all "a"), it often
-      # means the raw score is dominated by scene brightness/gradients rather
-      # than the watermark sign. In that case, classify variants relative to an
-      # adaptive threshold (median score) instead of using score sign.
-      #
-      # Important: this must NOT erase usable samples. It should only change
-      # the A/B decision boundary when we have evidence of bias.
-      extraction_strategy = "sign"
-      threshold_score = nil
-      adaptive_mad = nil
-      adaptive_skew = nil
-
-      usable_scores = []
-      variants.each_with_index do |v, i|
-        next if v.blank?
-        s = scores[i]
-        next if s.nil?
-        usable_scores << s.to_f
-      end
-
-      if usable_scores.length >= 8
-        a_count = variants.count { |v| v == "a" }
-        b_count = variants.count { |v| v == "b" }
-        total_v = a_count + b_count
-
-        if total_v > 0
-          frac = [a_count.to_f / total_v.to_f, b_count.to_f / total_v.to_f].max
-          if frac >= 0.9
-            threshold_score = median(usable_scores).to_f
-            abs_devs = usable_scores.map { |s| (s - threshold_score).abs }
-            mad = median(abs_devs).to_f
-            adaptive_mad = mad.round(4)
-            adaptive_skew = frac.round(4)
-
-            # Only apply adaptive thresholding when there is enough spread in
-            # the scores. If the scores are essentially constant, switching
-            # thresholds cannot recover information and would only add noise.
-            if mad >= 1.0
-              extraction_strategy = "adaptive_threshold"
-
-              variants.each_with_index do |_v, i|
-                c0 = confidences[i].to_f
-                next if c0 < MIN_CONFIDENCE
-                s = scores[i]
-                next if s.nil?
-
-                centered = s.to_f - threshold_score
-                next if centered == 0.0
-
-                variants[i] = centered >= 0 ? "a" : "b"
-
-                # Keep original confidence (derived from per-tile/pair contrast),
-                # but allow a small bump when centered distance is strong.
-                c2 = (centered.abs.to_f / (mad.to_f * 6.0)).round(4)
-                confidences[i] = [c0, c2].max.round(4)
-              end
-            end
-          end
-        end
-      end
-
-      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s, extraction_strategy: extraction_strategy, threshold_score: threshold_score, adaptive_mad: adaptive_mad, adaptive_skew: adaptive_skew }
+      { duration_seconds: duration, variants: variants, confidences: confidences, layout: spec[:layout].to_s }
     end
+
+    # Attempts to derive accurate segment midpoints from the packaged (template) HLS playlist on disk.
+    # This avoids assuming fixed `segment_seconds` and reduces drift-related sampling errors.
+    def packaged_segment_midpoints_for(media_item:)
+      return nil if media_item.blank?
+      return nil unless defined?(::MediaGallery::PrivateStorage) && ::MediaGallery::PrivateStorage.enabled?
+      return nil unless defined?(::MediaGallery::Hls) && ::MediaGallery::Hls.respond_to?(:variants)
+
+      public_id = media_item.public_id.to_s
+      return nil if public_id.blank?
+
+      variant = ::MediaGallery::Hls.variants.first.to_s
+      variant = "v0" if variant.blank?
+
+      pl = ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(public_id, variant)
+      return nil if pl.blank? || !File.exist?(pl)
+
+      midpoints = []
+      cursor = 0.0
+      last_extinf = nil
+
+      File.read(pl).to_s.each_line do |line|
+        l = line.to_s.strip
+        next if l.blank?
+
+        if l.start_with?("#EXTINF:")
+          dur_s = l.sub("#EXTINF:", "").split(",").first.to_s
+          dur = dur_s.to_f
+          last_extinf = (dur > 0.0 ? dur : nil)
+          next
+        end
+
+        # Segment URI line
+        next if l.start_with?("#")
+        next if last_extinf.blank?
+
+        midpoints << (cursor + (last_extinf.to_f / 2.0))
+        cursor += last_extinf.to_f
+        last_extinf = nil
+      end
+
+      midpoints.present? ? midpoints : nil
+    rescue
+      nil
+    end
+    private_class_method :packaged_segment_midpoints_for
 
     
     def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, max_offset_segments:)
@@ -603,33 +489,12 @@ module ::MediaGallery
         offset_strategy: "global",
         chosen_offset_segments: chosen_offset,
         effective_samples: effective,
-        pool_size: fps.length,
-        reference_pool_size: 2000,
       }
 
       if best_diag
         meta[:offset_top_match_ratio] = best_diag[:top_ratio_w].round(4)
         meta[:offset_second_match_ratio] = best_diag[:second_ratio_w].round(4)
         meta[:offset_delta] = best_diag[:delta].round(4)
-      end
-
-      # Add statistical diagnostics so admins can judge how risky a "match" is when
-      # the candidate pool is large (e.g. 2000+ members).
-      pool_n = fps.length.to_i
-      ref_n = 2000
-      candidates.each do |cand|
-        n = cand[:compared].to_i
-        next if n <= 0
-
-        mr = cand[:match_ratio].to_f
-        # Chance baseline for a wrong candidate is ~0.5.
-        z = (mr - 0.5) / Math.sqrt(0.25 / n.to_f)
-        p = z.positive? ? (1.0 - normal_cdf(z)) : 1.0
-
-        cand[:signal_z] = z.round(3)
-        cand[:p_value] = p.round(10)
-        cand[:expected_false_positives_pool] = (pool_n * p).round(3)
-        cand[:expected_false_positives_2000] = (ref_n * p).round(3)
       end
 
       { candidates: candidates, meta: meta }
@@ -670,14 +535,6 @@ module ::MediaGallery
       { offset: 0, match_ratio: 0.0 }
     end
     private_class_method :best_local_offset
-
-    def normal_cdf(z)
-      # Standard normal CDF using erf.
-      0.5 * (1.0 + Math.erf(z.to_f / Math.sqrt(2.0)))
-    rescue
-      0.5
-    end
-    private_class_method :normal_cdf
 
 
     # ----------------------------------------------------------------------
@@ -744,18 +601,14 @@ module ::MediaGallery
         )
 
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          diffs = []
+          score = 0
           pairs.length.times do |i|
             left = bytes[i * 2]
             right = bytes[i * 2 + 1]
-            diffs << (left - right)
+            score += (left - right)
           end
-
-          # Robust aggregation: use the median difference to avoid outliers
-          # (e.g. visible watermark overlap, player overlays, etc.).
-          score = median(diffs)
-          conf = (median(diffs.map { |d| d.abs }).to_f / 255.0).round(4)
-          variant = score.to_i >= 0 ? "a" : "b"
+          conf = (score.abs.to_f / (pairs.length * 255.0)).round(4)
+          variant = score >= 0 ? "a" : "b"
           variant = nil if conf < MIN_CONFIDENCE
           { variant: variant, confidence: conf, score: score }
         end
@@ -773,16 +626,14 @@ module ::MediaGallery
         )
 
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          diffs = []
+          score = 0
           tiles.length.times do |i|
             inner = bytes[i * 2]
             outer_m = bytes[i * 2 + 1]
-            diffs << (inner - outer_m)
+            score += (inner - outer_m)
           end
-
-          score = median(diffs)
-          conf = (median(diffs.map { |d| d.abs }).to_f / 255.0).round(4)
-          variant = score.to_i >= 0 ? "a" : "b"
+          conf = (score.abs.to_f / (tiles.length * 255.0)).round(4)
+          variant = score >= 0 ? "a" : "b"
           variant = nil if conf < MIN_CONFIDENCE
           { variant: variant, confidence: conf, score: score }
         end
@@ -924,18 +775,16 @@ module ::MediaGallery
       expected = pair_count * 2
       return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
 
-      diffs = []
+      score = 0
       pair_count.times do |i|
         left = bytes[i * 2]
         right = bytes[i * 2 + 1]
-        diffs << (left - right)
+        score += (left - right)
       end
 
-      score = median(diffs)
-
       # Positive means left brighter than right (variant A in v2 by construction).
-      variant = score.to_i >= 0 ? "a" : "b"
-      conf = (median(diffs.map { |d| d.abs }).to_f / 255.0).round(4)
+      variant = score >= 0 ? "a" : "b"
+      conf = (score.abs.to_f / (pair_count * 255.0)).round(4)
       variant = nil if conf < MIN_CONFIDENCE
 
       { variant: variant, confidence: conf, score: score }
@@ -984,17 +833,15 @@ module ::MediaGallery
       expected = tile_count * 2
       return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
 
-      diffs = []
+      score = 0
       tile_count.times do |i|
         inner = bytes[i * 2]
         outer_m = bytes[i * 2 + 1]
-        diffs << (inner - outer_m)
+        score += (inner - outer_m)
       end
 
-      score = median(diffs)
-
-      variant = score.to_i >= 0 ? "a" : "b"
-      conf = (median(diffs.map { |d| d.abs }).to_f / 255.0).round(4)
+      variant = score >= 0 ? "a" : "b"
+      conf = (score.abs.to_f / (tile_count * 255.0)).round(4)
       variant = nil if conf < MIN_CONFIDENCE
 
       { variant: variant, confidence: conf, score: score }

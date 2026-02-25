@@ -291,26 +291,70 @@ module ::MediaGallery
       started_ms = ms
       best_score = -Float::INFINITY
 
+      # Fast path for fingerprinted HLS playlists:
+      # Our authenticated variant playlists embed A/B choices in the segment URLs:
+      #   /media/hls/:public_id/seg/:variant/:ab/:seg.ts?token=...
+      #
+      # If we can parse those choices, we can match fingerprints WITHOUT decoding video.
+      # This is both faster and far more robust than pixel sampling, and avoids issues
+      # from screen recording, overlays, or re-encoding.
+      playlist_variants = nil
+      playlist_tmp = nil
+      begin
+        uri = URI.parse(source_url.to_s.strip) rescue nil
+        if uri&.path.to_s.downcase.end_with?(".m3u8")
+          begin
+            playlist_tmp = localize_hls_playlist_to_tempfile!(uri, media_item: media_item)
+          rescue => e
+            if e.message.to_s == "unsupported_hls_url"
+              playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri)
+            else
+              raise e
+            end
+          end
+          temps << playlist_tmp if playlist_tmp
+          playlist_variants = parse_ab_variants_from_playlist_file(playlist_tmp.path)
+          playlist_variants = nil if playlist_variants.blank? || playlist_variants.none?(&:present?)
+        end
+      rescue
+        playlist_variants = nil
+      end
+
       # Up to 3 attempts: requested, doubled, then capped.
       while attempts < 3
         attempts += 1
 
         begin
-          tmp = download_source_url_to_tempfile!(
-            source_url,
-            max_samples: ms,
-            segment_seconds: segment_seconds,
-            media_item: media_item
-          )
-          temps << tmp
+          res = nil
 
-          res = ::MediaGallery::ForensicsIdentify.identify_from_file(
-            media_item: media_item,
-            file_path: tmp.path,
-            max_samples: ms,
-            max_offset_segments: max_offset_segments,
-            layout: layout
-          )
+          # Prefer playlist-based extraction when available.
+          if playlist_variants.present?
+            sliced = playlist_variants.first(ms.to_i)
+            res = identify_from_observed_variants(
+              media_item: media_item,
+              observed_variants: sliced,
+              max_offset_segments: max_offset_segments,
+              layout: layout,
+              segment_seconds: segment_seconds,
+              source_mode: "hls_playlist"
+            )
+          else
+            tmp = download_source_url_to_tempfile!(
+              source_url,
+              max_samples: ms,
+              segment_seconds: segment_seconds,
+              media_item: media_item
+            )
+            temps << tmp
+
+            res = ::MediaGallery::ForensicsIdentify.identify_from_file(
+              media_item: media_item,
+              file_path: tmp.path,
+              max_samples: ms,
+              max_offset_segments: max_offset_segments,
+              layout: layout
+            )
+          end
 
           score = score_result(res)
           if score > best_score
@@ -346,6 +390,85 @@ module ::MediaGallery
       [best, meta_patch, temps]
     end
 
+    def identify_from_observed_variants(media_item:, observed_variants:, max_offset_segments:, layout:, segment_seconds:, source_mode:)
+      lay = layout.presence || (::MediaGallery::ForensicsIdentify.detect_layout_for(media_item: media_item) rescue nil)
+      lay = lay.presence || "auto"
+
+      match = ::MediaGallery::ForensicsIdentify.match_fingerprints(
+        media_item: media_item,
+        observed_variants: observed_variants,
+        observed_confidences: nil,
+        max_offset_segments: max_offset_segments
+      )
+
+      meta_from_match = match[:meta] || {}
+      if meta_from_match.respond_to?(:deep_stringify_keys)
+        meta_from_match = meta_from_match.deep_stringify_keys
+      end
+
+      variants = Array(observed_variants)
+      usable = variants.count { |v| v.present? }
+
+      result = {
+        "meta" => {
+          "public_id" => media_item.public_id,
+          "media_item_id" => media_item.id,
+          "segment_seconds" => segment_seconds.to_i,
+          "layout" => lay,
+          "duration_seconds" => nil,
+          "samples" => variants.length,
+          "usable_samples" => usable,
+          "source_mode" => source_mode.to_s,
+        }.merge(meta_from_match),
+        "observed" => {
+          "variants" => variants.map { |v| v.presence || "?" }.join,
+          "confidences" => [],
+        },
+        "candidates" => (match[:candidates] || []),
+      }
+
+      result
+    end
+
+    def parse_ab_variants_from_playlist_file(path)
+      raw = File.read(path.to_s)
+      return [] if raw.blank?
+
+      out = []
+
+      raw.each_line do |line|
+        l = line.to_s.strip
+        next if l.blank?
+
+        if l.start_with?("#")
+          # Handle EXT-X-MAP (fMP4) if present.
+          if l.include?("URI=\"")
+            uri = l[/URI=\"([^\"]+)\"/, 1].to_s
+            _v = ab_from_path(uri)
+            # we do not treat init segments as samples
+          end
+          next
+        end
+
+        out << ab_from_path(l)
+      end
+
+      out
+    rescue
+      []
+    end
+
+    def ab_from_path(path)
+      p = path.to_s
+      m = p.match(%r{/seg/[^/]+/(?<ab>a|b)/}i)
+      return m[:ab].to_s.downcase if m
+
+      m = p.match(%r{/hls/(?<ab>a|b)/}i)
+      return m[:ab].to_s.downcase if m
+
+      nil
+    end
+
     def score_result(result)
       usable = result.dig("meta", "effective_samples").to_f
       usable = result.dig("meta", "usable_samples").to_i if usable <= 0
@@ -361,9 +484,7 @@ module ::MediaGallery
       # If we already have a conclusive match, do not extend.
       return false if conclusive_match?(result)
 
-      usable_raw = result.dig("meta", "usable_samples").to_i
-      effective = result.dig("meta", "effective_samples").to_f
-      usable = effective > 0 ? effective : usable_raw
+      usable = result.dig("meta", "usable_samples").to_i
       top, second = top_two_match_ratios(result)
       delta = top - second
 
@@ -384,11 +505,6 @@ module ::MediaGallery
       top = result.dig("candidates", 0, "match_ratio").to_f
       second = result.dig("candidates", 1, "match_ratio").to_f
       delta = top - second
-      top_z = result.dig("candidates", 0, "signal_z").to_f
-      second_z = result.dig("candidates", 1, "signal_z").to_f
-      delta_z = top_z - second_z
-      top_expected_fp = result.dig("candidates", 0, "expected_false_positives").to_f
-      top_expected_fp_2000 = result.dig("candidates", 0, "expected_false_positives_2000").to_f
       mismatches = result.dig("candidates", 0, "mismatches").to_i
       compared = result.dig("candidates", 0, "compared").to_i
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
@@ -398,11 +514,6 @@ module ::MediaGallery
       result["meta"]["top_match_ratio"] = top
       result["meta"]["second_match_ratio"] = second
       result["meta"]["match_delta"] = delta
-      result["meta"]["top_signal_z"] = top_z
-      result["meta"]["second_signal_z"] = second_z
-      result["meta"]["signal_delta_z"] = delta_z
-      result["meta"]["top_expected_false_positives"] = top_expected_fp
-      result["meta"]["top_expected_false_positives_2000"] = top_expected_fp_2000
       result["meta"]["top_mismatches"] = mismatches
       result["meta"]["top_compared"] = compared
       result["meta"]["top_mismatch_rate"] = mismatch_rate
@@ -436,9 +547,7 @@ module ::MediaGallery
     end
 
     def classify_decision(result)
-      usable_raw = result.dig("meta", "usable_samples").to_i
-      effective = result.dig("meta", "effective_samples").to_f
-      usable = effective > 0 ? effective : usable_raw
+      usable = result.dig("meta", "usable_samples").to_i
       cands = result["candidates"]
       has_cands = cands.is_a?(Array) && cands.present?
 
@@ -453,41 +562,18 @@ module ::MediaGallery
       compared = cands[0].is_a?(Hash) ? cands[0]["compared"].to_i : 0
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
 
-      top_z = cands[0].is_a?(Hash) ? cands[0]["signal_z"].to_f : 0.0
-      second_z = cands[1].is_a?(Hash) ? cands[1]["signal_z"].to_f : 0.0
-      delta_z = top_z - second_z
-      expected_fp = cands[0].is_a?(Hash) ? cands[0]["expected_false_positives"].to_f : 0.0
+      if usable >= setting_policy_min_usable_strong &&
+           top >= setting_policy_min_match_strong_ratio &&
+           delta >= setting_policy_min_delta_strong_ratio &&
+           mismatch_rate <= setting_policy_max_mismatch_rate_strong_ratio
+        return "conclusive_match"
+      end
 
-      strong_by_ratio =
-        usable >= setting_policy_min_usable_strong &&
-          top >= setting_policy_min_match_strong_ratio &&
-          delta >= setting_policy_min_delta_strong_ratio &&
-          mismatch_rate <= setting_policy_max_mismatch_rate_strong_ratio
-
-      strong_by_z =
-        usable >= setting_policy_min_usable_strong &&
-          compared >= setting_policy_min_usable_strong &&
-          top >= 0.60 &&
-          top_z >= 3.5 &&
-          delta_z >= 1.0 &&
-          expected_fp > 0.0 && expected_fp <= 0.25
-
-      return "conclusive_match" if strong_by_ratio || strong_by_z
-
-      likely_by_ratio =
-        usable >= setting_policy_min_usable_likely &&
-          top >= setting_policy_min_match_likely_ratio &&
-          delta >= setting_policy_min_delta_likely_ratio
-
-      likely_by_z =
-        usable >= setting_policy_min_usable_likely &&
-          compared >= setting_policy_min_usable_likely &&
-          top >= 0.55 &&
-          top_z >= 2.8 &&
-          delta_z >= 0.6 &&
-          expected_fp > 0.0 && expected_fp <= 2.0
-
-      return "likely_match" if likely_by_ratio || likely_by_z
+      if usable >= setting_policy_min_usable_likely &&
+           top >= setting_policy_min_match_likely_ratio &&
+           delta >= setting_policy_min_delta_likely_ratio
+        return "likely_match"
+      end
 
       "ambiguous"
     end
