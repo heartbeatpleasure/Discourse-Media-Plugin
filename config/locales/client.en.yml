@@ -66,8 +66,13 @@ en:
   admin_js:
     admin:
       media_gallery:
+        title: "Media gallery"
+        description: "Admin tools for the Media Gallery plugin."
+        open_settings: "Open settings"
+
         forensics_exports:
           title: "Forensics exports"
+          short_title: "Forensics exports"
           description: "Download the generated playback-session export files."
           rows: "rows"
           download_gz: "download .gz"
@@ -75,6 +80,7 @@ en:
 
         forensics_identify:
           title: "Forensics identify"
+          short_title: "Forensics identify"
           description: "Upload a leaked copy (or paste a variant playlist URL) to attempt identifying the originating user/fingerprint."
           public_id_label: "public_id"
           public_id_placeholder: "Enter the media public_id"

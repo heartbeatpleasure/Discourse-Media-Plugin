@@ -6,6 +6,7 @@
 # authors: Chris
 # url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin
 
+add_admin_route "admin.media_gallery.title", "mediaGallery"
 add_admin_route "admin.media_gallery.forensics_exports.title", "mediaGalleryForensicsExports"
 add_admin_route "admin.media_gallery.forensics_identify.title", "mediaGalleryForensicsIdentify"
 
@@ -48,6 +49,7 @@ after_initialize do
 
   Discourse::Application.routes.append do
     # Admin UI page (served by the admin Ember app)
+    get "/admin/plugins/media-gallery" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-forensics-exports" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-forensics-identify" => "admin/plugins#index", constraints: AdminConstraint.new
 
