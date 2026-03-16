@@ -23,6 +23,7 @@ module ::MediaGallery
     LAYOUT_V1 = "v1_tiles"
     LAYOUT_V2 = "v2_pairs"
     LAYOUT_V3 = "v3_pairs"
+    LAYOUT_V4 = "v4_pairs"
 
     # Conservative defaults; intentionally subtle.
     V1_BOX_COUNT = 6
@@ -33,16 +34,23 @@ module ::MediaGallery
     V3_PAIR_COUNT = 8
     V3_BOX_SIZE_FRAC = 0.085
 
+    # v4: "edge biased" pairs to avoid the common visible watermark band (center)
+    # and reduce content-bias flips on screen recordings.
+    V4_PAIR_COUNT = 16
+    V4_BOX_SIZE_FRAC = 0.065
+
     V2_OPACITY = 0.006 # 0.6% alpha
     V3_OPACITY = 0.010 # 1.0% alpha
+    V4_OPACITY = 0.010 # 1.0% alpha
 
     # Keep away from the borders so mild crops don't remove everything.
     V1_MARGIN = 0.06
     V2_MARGIN = 0.06
     V3_MARGIN = 0.08
+    V4_MARGIN = 0.07
 
     def allowed_layouts
-      [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3]
+      [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4]
     end
     private_class_method :allowed_layouts
 
@@ -62,7 +70,7 @@ module ::MediaGallery
       v = "a" unless %w[a b].include?(v)
 
       mode = layout_mode
-      if mode == LAYOUT_V2 || mode == LAYOUT_V3
+      if mode == LAYOUT_V2 || mode == LAYOUT_V3 || mode == LAYOUT_V4
         vf_pairs(media_item_id: media_item_id, variant: v, layout: mode)
       else
         vf_tiles(media_item_id: media_item_id, variant: v)
@@ -93,6 +101,15 @@ module ::MediaGallery
           box_size_frac: V3_BOX_SIZE_FRAC,
           margin: V3_MARGIN,
           pairs: v3_pairs_for(media_item_id: media_item_id)
+        }
+      when LAYOUT_V4
+        {
+          layout: mode,
+          kind: "pairs",
+          opacity: V4_OPACITY,
+          box_size_frac: V4_BOX_SIZE_FRAC,
+          margin: V4_MARGIN,
+          pairs: v4_pairs_for(media_item_id: media_item_id)
         }
       else
         {
@@ -149,11 +166,17 @@ module ::MediaGallery
 
     def vf_pairs(media_item_id:, variant:, layout:)
       layout = layout.to_s
-      layout = LAYOUT_V2 unless [LAYOUT_V2, LAYOUT_V3].include?(layout)
+      layout = LAYOUT_V2 unless [LAYOUT_V2, LAYOUT_V3, LAYOUT_V4].include?(layout)
 
-      alpha = (layout == LAYOUT_V3) ? V3_OPACITY : V2_OPACITY
-      box = (layout == LAYOUT_V3) ? V3_BOX_SIZE_FRAC : V2_BOX_SIZE_FRAC
-      pairs = (layout == LAYOUT_V3) ? v3_pairs_for(media_item_id: media_item_id) : v2_pairs_for(media_item_id: media_item_id)
+      alpha = (layout == LAYOUT_V4) ? V4_OPACITY : ((layout == LAYOUT_V3) ? V3_OPACITY : V2_OPACITY)
+      box = (layout == LAYOUT_V4) ? V4_BOX_SIZE_FRAC : ((layout == LAYOUT_V3) ? V3_BOX_SIZE_FRAC : V2_BOX_SIZE_FRAC)
+      pairs = if layout == LAYOUT_V4
+        v4_pairs_for(media_item_id: media_item_id)
+      elsif layout == LAYOUT_V3
+        v3_pairs_for(media_item_id: media_item_id)
+      else
+        v2_pairs_for(media_item_id: media_item_id)
+      end
 
       # v2: each pair is two adjacent boxes; variant decides which side is light/dark.
       light = "white"
@@ -228,6 +251,148 @@ module ::MediaGallery
       out
     end
     private_class_method :v3_pairs_for
+
+    def v4_pairs_for(media_item_id:)
+      # v4: place many small pairs near the top/bottom bands to avoid the common visible watermark region (center),
+      # and to reduce content-bias flips on screen recordings.
+      #
+      # We sample within two "safe" Y bands by default:
+      # - top:    ~[V4_MARGIN .. 0.30]
+      # - bottom: ~[0.70 .. 1 - V4_MARGIN - box]
+      #
+      # Additionally, we exclude a coarse region based on the visible watermark position setting.
+      secret = fingerprint_secret
+      seed_bytes = prng_bytes(secret, "wm|#{SALT}|#{media_item_id}|v4", V4_PAIR_COUNT * 12)
+
+      box = V4_BOX_SIZE_FRAC
+      pair_w = (box * 2.0)
+
+      # X range (leave margins + room for full pair width)
+      max_x = 1.0 - V4_MARGIN - pair_w
+      span_x = [max_x - V4_MARGIN, 0.001].max
+
+      # Safe Y bands
+      top_min = V4_MARGIN
+      top_max = 0.30 - box
+      bot_min = 0.70
+      bot_max = 1.0 - V4_MARGIN - box
+
+      top_span = [top_max - top_min, 0.001].max
+      bot_span = [bot_max - bot_min, 0.001].max
+
+      excluded = visible_watermark_exclusion_rects(box: box, pair_w: pair_w)
+
+      out = []
+      occupied = []
+
+      V4_PAIR_COUNT.times do |i|
+        # We allow a few retries to avoid exclusions/overlaps.
+        placed = false
+        12.times do |try|
+          # use different offsets into seed bytes for retries
+          off = (i * 12) + (try % 3) * 4
+
+          x_r = u32_to_unit(seed_bytes, off)
+          y_r = u32_to_unit(seed_bytes, off + 4)
+          j_r = u32_to_unit(seed_bytes, off + 8)
+
+          x = (V4_MARGIN + span_x * x_r).round(6)
+
+          # Choose band by y_r, jitter inside band by j_r
+          if y_r < 0.5
+            y = (top_min + top_span * j_r).round(6)
+          else
+            y = (bot_min + bot_span * j_r).round(6)
+          end
+
+          # Clamp
+          x = [[x, V4_MARGIN].max, max_x].min.round(6)
+          y = [[y, V4_MARGIN].max, 1.0 - V4_MARGIN - box].min.round(6)
+
+          rect = { x: x, y: y, w: pair_w, h: box }
+
+          next if rect_overlaps_any?(rect, excluded)
+
+          # Avoid overlapping with previously placed pairs (simple AABB overlap with small padding)
+          pad = (box * 0.20).round(6)
+          padded = { x: (x - pad), y: (y - pad), w: (pair_w + 2 * pad), h: (box + 2 * pad) }
+          next if rect_overlaps_any?(padded, occupied)
+
+          occupied << rect
+          out << { x: x, y: y }
+          placed = true
+          break
+        end
+
+        # Fallback: if we couldn't place, just place deterministically in the bands.
+        unless placed
+          x = (V4_MARGIN + span_x * (i.to_f / [V4_PAIR_COUNT - 1, 1].max)).round(6)
+          y = (i.even? ? (top_min + top_span * 0.5) : (bot_min + bot_span * 0.5)).round(6)
+          out << { x: x, y: y }
+        end
+      end
+
+      out
+    end
+    private_class_method :v4_pairs_for
+
+    def visible_watermark_exclusion_rects(box:, pair_w:)
+      # Coarse exclusion rectangles based on the visible watermark position.
+      # We intentionally keep this conservative: the goal is to reduce overlap risk, not perfectly model drawtext bounds.
+      pos = nil
+      begin
+        pos = SiteSetting.media_gallery_watermark_position.to_s
+      rescue
+        pos = nil
+      end
+
+      rects = []
+      case pos
+      when "center"
+        rects << { x: 0.0, y: 0.35, w: 1.0, h: 0.30 }
+      when "top_center"
+        rects << { x: 0.0, y: 0.0, w: 1.0, h: 0.25 }
+      when "bottom_center"
+        rects << { x: 0.0, y: 0.75, w: 1.0, h: 0.25 }
+      when "top_left"
+        rects << { x: 0.0, y: 0.0, w: 0.45, h: 0.30 }
+      when "top_right"
+        rects << { x: 0.55, y: 0.0, w: 0.45, h: 0.30 }
+      when "bottom_left"
+        rects << { x: 0.0, y: 0.70, w: 0.45, h: 0.30 }
+      when "bottom_right"
+        rects << { x: 0.55, y: 0.70, w: 0.45, h: 0.30 }
+      else
+        # no exclusion
+      end
+
+      rects
+    end
+    private_class_method :visible_watermark_exclusion_rects
+
+    def rect_overlaps_any?(rect, rects)
+      rects.any? do |r|
+        rects_overlap?(rect, r)
+      end
+    end
+    private_class_method :rect_overlaps_any?
+
+    def rects_overlap?(a, b)
+      ax1 = a[:x].to_f
+      ay1 = a[:y].to_f
+      ax2 = ax1 + a[:w].to_f
+      ay2 = ay1 + a[:h].to_f
+
+      bx1 = b[:x].to_f
+      by1 = b[:y].to_f
+      bx2 = bx1 + b[:w].to_f
+      by2 = by1 + b[:h].to_f
+
+      return false if ax2 <= bx1 || bx2 <= ax1
+      return false if ay2 <= by1 || by2 <= ay1
+      true
+    end
+    private_class_method :rects_overlap?
 
     # ---- helpers -----------------------------------------------------------
 

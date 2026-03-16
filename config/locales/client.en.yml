@@ -96,6 +96,7 @@ en:
           layout_v1_tiles: "v1_tiles"
           layout_v2_pairs: "v2_pairs"
           layout_v3_pairs: "v3_pairs"
+          layout_v4_pairs: "v4_pairs (edge pairs, robust)"
           auto_extend_label: "Auto-extend"
           auto_extend_help: "If the initial result is weak (short/ambiguous), retry automatically with a longer sample (URL mode only)."
           find_media_title: "Find media (public_id)"

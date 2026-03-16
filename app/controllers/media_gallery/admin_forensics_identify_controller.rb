@@ -52,6 +52,7 @@ module ::MediaGallery
                   <option value="v1_tiles">v1_tiles</option>
                   <option value="v2_pairs">v2_pairs</option>
                   <option value="v3_pairs">v3_pairs</option>
+                  <option value="v4_pairs">v4_pairs</option>
                 </select>
               </label>
             </p>
@@ -165,6 +166,9 @@ module ::MediaGallery
 
       result["meta"] ||= {}
       meta_patch.each { |k, v| result["meta"][k.to_s] = v }
+
+      # Ensure candidate hashes use string keys so policy calculations (dig) work reliably.
+      result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
 
       apply_decision_policy!(result)
 
