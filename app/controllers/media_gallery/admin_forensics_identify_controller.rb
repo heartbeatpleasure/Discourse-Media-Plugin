@@ -52,7 +52,6 @@ module ::MediaGallery
                   <option value="v1_tiles">v1_tiles</option>
                   <option value="v2_pairs">v2_pairs</option>
                   <option value="v3_pairs">v3_pairs</option>
-                  <option value="v4_pairs">v4_pairs</option>
                 </select>
               </label>
             </p>
@@ -167,17 +166,48 @@ module ::MediaGallery
       result["meta"] ||= {}
       meta_patch.each { |k, v| result["meta"][k.to_s] = v }
 
-      # Ensure candidate hashes use string keys so policy calculations (dig) work reliably.
+      # Ensure string keys for policy & JSON serialization consistency
       result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
 
-      apply_decision_policy!(result)
+      begin
+        apply_decision_policy!(result)
+        sanitize_for_json!(result)
+        render_json_dump(result)
+      rescue => e
+        begin
+          Rails.logger.error(
+            "[media_gallery] forensics identify response failed (public_id=#{public_id}): #{e.class}: #{e.message}\n"             "#{Array(e.backtrace).first(15).join("\n")}"
+          )
+        rescue
+          # ignore logging failures
+        end
 
-      render_json_dump(result)
+        msg = "#{e.class}: #{e.message}".to_s.strip
+        msg = msg[0, 400] if msg.length > 400
+        return render json: { errors: ["identify_response_failed", msg].compact }, status: 422
+      end
     ensure
       temps&.each { |t| t&.close! rescue nil }
     end
 
     private
+
+    def sanitize_for_json!(obj)
+      case obj
+      when Hash
+        obj.each do |k, v|
+          obj[k] = sanitize_for_json!(v)
+        end
+        obj
+      when Array
+        obj.map! { |v| sanitize_for_json!(v) }
+      when Float
+        return 0.0 if obj.nan? || obj.infinite?
+        obj
+      else
+        obj
+      end
+    end
 
     # Defaults used if site settings are unset/invalid.
     DEFAULT_MAX_URL_SAMPLE_SECONDS = 1800
