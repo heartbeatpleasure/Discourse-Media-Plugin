@@ -1,1400 +1,917 @@
 # frozen_string_literal: true
 
+require "cgi"
+require "tempfile"
+require "uri"
 require "open3"
-require "json"
-require "digest"
+require "net/http"
 
 module ::MediaGallery
-  # Admin-only helper to identify which fingerprint/user likely leaked a video.
-  #
-  # Workflow:
-  # 1) Admin uploads a leaked copy (any common container/codec).
-  # 2) We sample frames at segment midpoints and try to classify each segment as variant A or B
-  #    using the watermark layout.
-  # 3) We compare the observed A/B pattern against all known fingerprint_ids for this media_item.
-  #
-  # This is NOT DRM; it is best-effort forensics. Re-encoding/cropping can reduce confidence.
-  module ForensicsIdentify
-    module_function
+  class AdminForensicsIdentifyController < ::Admin::AdminController
+    requires_plugin "Discourse-Media-Plugin"
 
-    DEFAULT_MAX_SAMPLES = 60
-    DEFAULT_MAX_OFFSET_SEGMENTS = 30
+    def show
+      public_id = params[:public_id].to_s
+      public_id = public_id.sub(/\.(json|html)\z/i, "")
+      item = MediaGallery::MediaItem.find_by(public_id: public_id)
+      if item.blank?
+        return render json: { errors: ["unknown_public_id", public_id] }, status: 422
+      end
 
-    # If the signal is too weak, we return nil bits for that sample.
-    MIN_CONFIDENCE = 0.005
+      action_url = "/admin/plugins/media-gallery/forensics-identify/#{public_id}.json"
 
-    # If a single-frame sample is weak, we automatically resample nearby frames
-    # (still within the same segment) and aggregate.
-    RESAMPLE_MIN_CONFIDENCE = 0.012
+      html = <<~HTML
+        <div class="wrap">
+          <h1>Media Gallery – Forensics Identify</h1>
+          <p>
+            Upload a leaked copy of this video to attempt identification.
+            This is best-effort and can be affected by re-encoding/cropping.
+          </p>
 
-    # Safety/perf: cap how many segments we will do 3-point resampling for.
-    # With batch sampling we can handle many samples, but we still want to avoid
-    # runaway work on very heavy encodes.
-    MAX_RESAMPLED_SEGMENTS = 30
+          <ul>
+            <li><strong>public_id:</strong> #{CGI.escapeHTML(public_id)}</li>
+            <li><strong>media_item_id:</strong> #{item.id}</li>
+          </ul>
 
-    def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil, sample_times: nil)
-      raise ArgumentError, "missing media_item" if media_item.blank?
-      raise ArgumentError, "missing file" if file_path.blank? || !File.exist?(file_path)
+          <form action="#{action_url}" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="authenticity_token" value="#{form_authenticity_token}">
+
+            <p>
+              <label>Leaked file: <input type="file" name="file" required></label>
+            </p>
+
+            <p>
+              <label>Max samples (frames): <input type="number" name="max_samples" value="60" min="5" max="200"></label>
+            </p>
+
+            <p>
+              <label>Max offset segments to scan: <input type="number" name="max_offset_segments" value="30" min="0" max="300"></label>
+            </p>
+
+            <p>
+              <label>Layout override (optional):
+                <select name="layout">
+                  <option value="">auto</option>
+                  <option value="v1_tiles">v1_tiles</option>
+                  <option value="v2_pairs">v2_pairs</option>
+                  <option value="v3_pairs">v3_pairs</option>
+                </select>
+              </label>
+            </p>
+
+            <p>
+              <button class="btn btn-primary" type="submit">Identify</button>
+            </p>
+          </form>
+
+          <p style="opacity:0.75">
+            Tip: if confidence is low, try using a copy that is closer to the original HLS download (less re-encoded).
+          </p>
+        </div>
+      HTML
+
+      render html: html.html_safe, layout: "no_ember"
+    end
+
+    # POST /admin/plugins/media-gallery/forensics-identify/:public_id(.json)
+    # Accepts either:
+    # - file: uploaded leak copy
+    # - source_url: URL to a variant playlist (.m3u8) or direct media URL (admin-only helper)
+    def identify
+      public_id = params[:public_id].to_s
+      public_id = public_id.sub(/\.(json|html)\z/i, "")
+      item = MediaGallery::MediaItem.find_by(public_id: public_id)
+      raise Discourse::NotFound if item.blank?
+
+      max_samples = params[:max_samples].to_i
+      max_samples = 60 if max_samples <= 0
+      max_samples = [max_samples, 200].min
+
+      max_offset = params[:max_offset_segments].to_i
+      max_offset = 30 if max_offset.negative?
+      max_offset = [max_offset, 300].min
+
+      layout = params[:layout].to_s.presence
+
+      # Admin convenience: if URL mode is used and the initial result is weak,
+      # we can automatically retry with a longer sample / more samples.
+      auto_extend = params[:auto_extend].to_s
+      auto_extend = (auto_extend == "1" || auto_extend.casecmp("true").zero?)
 
       seg = SiteSetting.media_gallery_hls_segment_duration_seconds.to_i
       seg = 6 if seg <= 0
 
-      packaged = packaged_fingerprint_spec_for(media_item: media_item)
-      if packaged
-        # Prefer packaged metadata so identify keeps working even if SiteSettings change.
-        seg = packaged[:segment_seconds].to_i if packaged[:segment_seconds].to_i > 0
-        layout ||= packaged[:layout].to_s.presence
-      end
+      source_url = params[:source_url].to_s.strip.presence
 
-      layout ||= detect_layout_for(media_item: media_item)
+      temps = []
+      result = nil
+      base_meta = {
+        requested_max_samples: max_samples,
+        max_offset_segments: max_offset,
+      }
 
-      spec =
-        if packaged && packaged[:spec].is_a?(Hash) && packaged[:layout].to_s == layout.to_s
-          packaged[:spec]
-        else
-          ::MediaGallery::FingerprintWatermark.spec_for(media_item_id: media_item.id, layout: layout)
+      if source_url.present?
+        begin
+          result, meta_patch, temps = identify_from_source_url(
+            source_url,
+            media_item: item,
+            max_samples: max_samples,
+            max_offset_segments: max_offset,
+            layout: layout,
+            segment_seconds: seg,
+            auto_extend: auto_extend
+          )
+
+          meta_patch = base_meta.merge(meta_patch || {})
+        rescue => e
+          # Include the reason in the error payload so the admin UI can display it.
+          msg = e.message.to_s.strip
+          msg = msg[0, 400] if msg.length > 400
+          return render json: { errors: ["invalid_source_url", msg].compact }, status: 422
+        end
+      else
+        file = params[:file]
+        return render json: { errors: ["missing_file_or_url"] }, status: 422 if file.blank?
+
+        path = file.respond_to?(:tempfile) ? file.tempfile&.path : nil
+        return render json: { errors: ["missing_file_or_url"] }, status: 422 if path.blank? || !File.exist?(path)
+
+        begin
+          result = ::MediaGallery::ForensicsIdentify.identify_from_file(
+            media_item: item,
+            file_path: path,
+            max_samples: max_samples,
+            max_offset_segments: max_offset,
+            layout: layout
+          )
+        rescue => e
+          begin
+            Rails.logger.error(
+              "[media_gallery] forensics identify failed (public_id=#{public_id}): #{e.class}: #{e.message}
+"               "#{Array(e.backtrace).first(15).join("
+")}"
+            )
+          rescue
+            # ignore logging failures
+          end
+
+          msg = "#{e.class}: #{e.message}".to_s.strip
+          msg = msg[0, 400] if msg.length > 400
+          return render json: { errors: ["identify_failed", msg].compact }, status: 422
         end
 
-      # When available, prefer the *packaged* HLS playlist timing for sampling.
-      # Real HLS segments are not always exactly `segment_seconds` long (frame rounding),
-      # and drift can cause us to sample near boundaries (hurts A/B detection).
+        meta_patch = base_meta.merge(
+          attempts: 1,
+          auto_extended: false,
+          max_samples_used: max_samples
+        )
+      end
+
+      result["meta"] ||= {}
+      meta_patch.each { |k, v| result["meta"][k.to_s] = v }
+
+      apply_decision_policy!(result)
+
+      render_json_dump(result)
+    ensure
+      temps&.each { |t| t&.close! rescue nil }
+    end
+
+    private
+
+    # Defaults used if site settings are unset/invalid.
+    DEFAULT_MAX_URL_SAMPLE_SECONDS = 1800
+    DEFAULT_MAX_AUTO_EXTEND_SAMPLES = 200
+    DEFAULT_AUTO_EXTEND_MIN_USABLE = 12
+    DEFAULT_AUTO_EXTEND_MIN_MATCH = 0.85
+    DEFAULT_AUTO_EXTEND_MIN_DELTA = 0.15
+
+    DEFAULT_POLICY_MIN_USABLE_STRONG = 12
+    DEFAULT_POLICY_MIN_MATCH_STRONG = 0.85
+    DEFAULT_POLICY_MIN_DELTA_STRONG = 0.15
+    DEFAULT_POLICY_MAX_MISMATCH_RATE_STRONG = 0.20
+    DEFAULT_POLICY_MIN_USABLE_LIKELY = 8
+    DEFAULT_POLICY_MIN_MATCH_LIKELY = 0.75
+    DEFAULT_POLICY_MIN_DELTA_LIKELY = 0.10
+    DEFAULT_POLICY_MIN_USABLE_ANY = 5
+
+    # Some installs use long signed tokens in query strings. 2k is often too small.
+    DEFAULT_MAX_SOURCE_URL_LENGTH = 10_000
+
+    def setting_max_source_url_length
+      v = SiteSetting.media_gallery_forensics_identify_max_source_url_length.to_i
+      v = DEFAULT_MAX_SOURCE_URL_LENGTH if v <= 0
+      v
+    end
+
+    def setting_max_url_sample_seconds
+      v = SiteSetting.media_gallery_forensics_identify_max_url_sample_seconds.to_i
+      v = DEFAULT_MAX_URL_SAMPLE_SECONDS if v <= 0
+      v
+    end
+
+    def setting_max_auto_extend_samples
+      v = SiteSetting.media_gallery_forensics_identify_max_auto_extend_samples.to_i
+      v = DEFAULT_MAX_AUTO_EXTEND_SAMPLES if v <= 0
+      v
+    end
+
+    def setting_auto_extend_min_usable_samples
+      v = SiteSetting.media_gallery_forensics_identify_auto_extend_min_usable_samples.to_i
+      v = DEFAULT_AUTO_EXTEND_MIN_USABLE if v.negative?
+      v
+    end
+
+    def setting_auto_extend_min_match_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_auto_extend_min_match_percent.to_i
+      pct = (DEFAULT_AUTO_EXTEND_MIN_MATCH * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_auto_extend_min_delta_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_auto_extend_min_delta_percent.to_i
+      pct = (DEFAULT_AUTO_EXTEND_MIN_DELTA * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_min_usable_any
+      v = SiteSetting.media_gallery_forensics_identify_policy_min_usable_any.to_i
+      v = DEFAULT_POLICY_MIN_USABLE_ANY if v <= 0
+      v
+    end
+
+    def setting_policy_min_usable_strong
+      v = SiteSetting.media_gallery_forensics_identify_policy_min_usable_strong.to_i
+      v = DEFAULT_POLICY_MIN_USABLE_STRONG if v <= 0
+      v
+    end
+
+    def setting_policy_min_match_strong_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_min_match_strong_percent.to_i
+      pct = (DEFAULT_POLICY_MIN_MATCH_STRONG * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_min_delta_strong_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_min_delta_strong_percent.to_i
+      pct = (DEFAULT_POLICY_MIN_DELTA_STRONG * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_max_mismatch_rate_strong_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_max_mismatch_rate_strong_percent.to_i
+      pct = (DEFAULT_POLICY_MAX_MISMATCH_RATE_STRONG * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_min_usable_likely
+      v = SiteSetting.media_gallery_forensics_identify_policy_min_usable_likely.to_i
+      v = DEFAULT_POLICY_MIN_USABLE_LIKELY if v <= 0
+      v
+    end
+
+    def setting_policy_min_match_likely_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_min_match_likely_percent.to_i
+      pct = (DEFAULT_POLICY_MIN_MATCH_LIKELY * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def setting_policy_min_delta_likely_ratio
+      pct = SiteSetting.media_gallery_forensics_identify_policy_min_delta_likely_percent.to_i
+      pct = (DEFAULT_POLICY_MIN_DELTA_LIKELY * 100).round if pct <= 0
+      [[pct, 0].max, 100].min / 100.0
+    end
+
+    def identify_from_source_url(source_url, media_item:, max_samples:, max_offset_segments:, layout:, segment_seconds:, auto_extend:)
+      max_ext = setting_max_auto_extend_samples
+
+      ms = [max_samples.to_i, max_ext].min
+      ms = 60 if ms <= 0
+
+      temps = []
+      attempts = 0
+      best = nil
+      best_ms = ms
+      started_ms = ms
+      best_score = -Float::INFINITY
+
+      # Fast path for fingerprinted HLS playlists:
+      # Our authenticated variant playlists embed A/B choices in the segment URLs:
+      #   /media/hls/:public_id/seg/:variant/:ab/:seg.ts?token=...
       #
-      # Using playlist-derived midpoints tends to reduce bit flips and increase separation.
-      sample_times ||= packaged_segment_midpoints_for(media_item: media_item)
+      # If we can parse those choices, we can match fingerprints WITHOUT decoding video.
+      # This is both faster and far more robust than pixel sampling, and avoids issues
+      # from screen recording, overlays, or re-encoding.
+      playlist_variants = nil
+      playlist_tmp = nil
+      begin
+        uri = URI.parse(source_url.to_s.strip) rescue nil
+        if uri&.path.to_s.downcase.end_with?(".m3u8")
+          begin
+            playlist_tmp = localize_hls_playlist_to_tempfile!(uri, media_item: media_item)
+          rescue => e
+            if e.message.to_s == "unsupported_hls_url"
+              playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri)
+            else
+              raise e
+            end
+          end
+          temps << playlist_tmp if playlist_tmp
+          playlist_variants = parse_ab_variants_from_playlist_file(playlist_tmp.path)
+          playlist_variants = nil if playlist_variants.blank? || playlist_variants.none?(&:present?)
+        end
+      rescue
+        playlist_variants = nil
+      end
 
-      obs = extract_observed_variants(
-        file_path: file_path,
-        segment_seconds: seg,
-        spec: spec,
-        max_samples: max_samples,
-        sample_times: sample_times
-      )
+      # Up to 3 attempts: requested, doubled, then capped.
+      while attempts < 3
+        attempts += 1
 
-      match = match_fingerprints(
+        begin
+          res = nil
+
+          # Prefer playlist-based extraction when available.
+          if playlist_variants.present?
+            sliced = playlist_variants.first(ms.to_i)
+            res = identify_from_observed_variants(
+              media_item: media_item,
+              observed_variants: sliced,
+              max_offset_segments: max_offset_segments,
+              layout: layout,
+              segment_seconds: segment_seconds,
+              source_mode: "hls_playlist"
+            )
+          else
+            tmp = download_source_url_to_tempfile!(
+              source_url,
+              max_samples: ms,
+              segment_seconds: segment_seconds,
+              media_item: media_item
+            )
+            temps << tmp
+
+            res = ::MediaGallery::ForensicsIdentify.identify_from_file(
+              media_item: media_item,
+              file_path: tmp.path,
+              max_samples: ms,
+              max_offset_segments: max_offset_segments,
+              layout: layout
+            )
+          end
+
+          score = score_result(res)
+          if score > best_score
+            best = res
+            best_score = score
+            best_ms = ms
+          end
+
+          # Stop early if we already have a conclusive match.
+          break if conclusive_match?(res)
+
+          # Decide whether to retry with more samples.
+          break unless auto_extend
+          break if ms >= max_ext
+          break unless should_auto_extend?(res)
+
+          ms = [ms * 2, max_ext].min
+        rescue => e
+          # If the first attempt fails, surface the error (so the UI gets a 422 with a reason).
+          raise e if best.nil?
+
+          # Otherwise, keep the best we have so far.
+          break
+        end
+      end
+
+      meta_patch = {
+        attempts: attempts,
+        auto_extended: (attempts > 1 && best_ms != started_ms),
+        max_samples_used: best_ms,
+      }
+
+      [best, meta_patch, temps]
+    end
+
+    def identify_from_observed_variants(media_item:, observed_variants:, max_offset_segments:, layout:, segment_seconds:, source_mode:)
+      lay = layout.presence || (::MediaGallery::ForensicsIdentify.detect_layout_for(media_item: media_item) rescue nil)
+      lay = lay.presence || "auto"
+
+      match = ::MediaGallery::ForensicsIdentify.match_fingerprints(
         media_item: media_item,
-        observed_variants: obs[:variants],
-        observed_confidences: obs[:confidences],
-        observed_scores: obs[:scores],
-        spec: spec,
+        observed_variants: observed_variants,
+        observed_confidences: nil,
         max_offset_segments: max_offset_segments
       )
 
-      matches = match[:candidates] || []
-      match_meta = match[:meta] || {}
+      meta_from_match = match[:meta] || {}
+      if meta_from_match.respond_to?(:deep_stringify_keys)
+        meta_from_match = meta_from_match.deep_stringify_keys
+      end
+
+      variants = Array(observed_variants)
+      usable = variants.count { |v| v.present? }
 
       result = {
-        meta: {
-          public_id: media_item.public_id,
-          media_item_id: media_item.id,
-          segment_seconds: seg,
-          layout: spec[:layout].to_s.presence || layout,
-          duration_seconds: obs[:duration_seconds],
-          samples: obs[:variants].length,
-          usable_samples: obs[:variants].count { |v| v.present? },
-        }.merge(match_meta),
-        observed: {
-          variants: obs[:variants].join(""),
-          confidences: obs[:confidences],
+        "meta" => {
+          "public_id" => media_item.public_id,
+          "media_item_id" => media_item.id,
+          "segment_seconds" => segment_seconds.to_i,
+          "layout" => lay,
+          "duration_seconds" => nil,
+          "samples" => variants.length,
+          "usable_samples" => usable,
+          "source_mode" => source_mode.to_s,
+        }.merge(meta_from_match),
+        "observed" => {
+          "variants" => variants.map { |v| v.presence || "?" }.join,
+          "confidences" => [],
         },
-        candidates: matches,
+        "candidates" => (match[:candidates] || []),
       }
 
-      # Ensure we only return string keys so controllers can safely merge into
-      # result["meta"] without creating duplicate :meta and "meta" hashes.
-      result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
       result
     end
 
-    # ----------------------------------------------------------------------
-
-    def detect_layout_for(media_item:)
-      # Prefer the metadata file written during packaging.
-      begin
-        root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
-        meta_path = File.join(root, "fingerprint_meta.json")
-        if File.exist?(meta_path)
-          j = JSON.parse(File.read(meta_path))
-          v = j["layout"].to_s
-          return v if v.present?
-        end
-      rescue
-        # ignore
-      end
-
-      ::MediaGallery::FingerprintWatermark.layout_mode
-    end
-
-    def packaged_fingerprint_spec_for(media_item:)
-      root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
-      meta_path = File.join(root, "fingerprint_meta.json")
-      return nil unless File.exist?(meta_path)
-
-      j = JSON.parse(File.read(meta_path)) rescue nil
-      return nil unless j.is_a?(Hash)
-
-      spec = j["watermark_spec"]
-      spec = symbolize_spec(spec) if spec.is_a?(Hash)
-      return nil unless spec.is_a?(Hash) && spec[:layout].to_s.present?
-
-      {
-        layout: j["layout"].to_s.presence || spec[:layout].to_s,
-        segment_seconds: j["segment_seconds"],
-        spec: spec,
-      }
-    rescue
-      nil
-    end
-    private_class_method :packaged_fingerprint_spec_for
-
-    def symbolize_spec(h)
-      out = symbolize_hash_keys(h)
-
-      if out[:pairs].is_a?(Array)
-        out[:pairs] = out[:pairs].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
-      end
-
-      if out[:tiles].is_a?(Array)
-        out[:tiles] = out[:tiles].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
-      end
-
-      out
-    end
-    private_class_method :symbolize_spec
-
-    def symbolize_hash_keys(h)
-      out = {}
-      h.each do |k, v|
-        kk = k.respond_to?(:to_sym) ? k.to_sym : k
-        out[kk] = v
-      end
-      out
-    end
-    private_class_method :symbolize_hash_keys
-
-
-    def extract_observed_variants(file_path:, segment_seconds:, spec:, max_samples:, sample_times: nil)
-      duration = probe_duration_seconds(file_path)
-      duration = 0.0 if duration.nan? || duration.infinite? || duration.negative?
-
-      # Sample at segment midpoints; cap work.
-      seg = segment_seconds.to_i
-      seg = 6 if seg <= 0
-
-      times_mid = nil
-      if sample_times.present?
-        times = Array(sample_times).map { |t| t.to_f }.select { |t| t >= 0.0 }
-        times_mid = times
-      end
-
-      if times_mid.present?
-        # Clamp to file duration and apply max_samples.
-        times_mid = times_mid.select { |t| t < duration.to_f + 0.05 }
-        times_mid = times_mid.first(max_samples.to_i)
-      else
-        total = (duration / seg).floor
-        total = 0 if total.negative?
-
-        sample_count = [total, max_samples.to_i].min
-        sample_count = 0 if sample_count.negative?
-
-        times_mid = sample_count.times.map { |i| (i + 0.5) * seg }
-      end
-
-      # Pass 1: sample midpoints in a single ffmpeg run.
-      pass1 = sample_variants_batch_single(file_path: file_path, times: times_mid, spec: spec)
-      variants = pass1.map { |r| r[:variant] }
-      confidences = pass1.map { |r| r[:confidence] }
-      scores = pass1.map { |r| r[:score] }
-
-      # Pass 2: for weak samples, resample within the same segment and aggregate.
-      weak_idxs = []
-      variants.each_with_index do |v, i|
-        c = confidences[i].to_f
-        next if v.present? && c >= RESAMPLE_MIN_CONFIDENCE
-        weak_idxs << i
-      end
-      weak_idxs = weak_idxs.first(MAX_RESAMPLED_SEGMENTS)
-
-      if weak_idxs.present?
-        seg_f = seg.to_f
-        offset = (seg_f * 0.25).to_f
-        offset = 0.25 if offset < 0.25
-
-        # Build resample time list (2 extra timestamps per weak segment).
-        resample_times = []
-        resample_map = {} # rounded_time -> [segment_idx, ...]
-
-        weak_idxs.each do |i|
-          t_mid = times_mid[i]
-          t1 = clamp_time(t_mid - offset, duration_seconds: duration)
-          t2 = clamp_time(t_mid + offset, duration_seconds: duration)
-
-          [t1, t2].each do |tt|
-            key = tt.to_f.round(3)
-            resample_times << tt
-            (resample_map[key] ||= []) << i
-          end
-        end
-
-        pass2 = sample_variants_batch_single(file_path: file_path, times: resample_times, spec: spec)
-
-        # Aggregate per weak segment using median(score) and median(confidence).
-        per_seg_scores = Hash.new { |h, k| h[k] = [] }
-        per_seg_confs = Hash.new { |h, k| h[k] = [] }
-
-        resample_times.each_with_index do |tt, idx|
-          key = tt.to_f.round(3)
-          seg_idxs = resample_map[key] || []
-          next if seg_idxs.empty?
-          seg_idxs.each do |si|
-            per_seg_scores[si] << pass2[idx][:score].to_i
-            per_seg_confs[si] << pass2[idx][:confidence].to_f
-          end
-        end
-
-        weak_idxs.each do |i|
-          all_scores = [scores[i].to_i] + per_seg_scores[i]
-          all_confs = [confidences[i].to_f] + per_seg_confs[i]
-
-          med_score = median(all_scores)
-          med_conf = median(all_confs).to_f.round(4)
-
-          v = med_score >= 0 ? "a" : "b"
-          v = nil if med_conf < MIN_CONFIDENCE
-
-          variants[i] = v
-          confidences[i] = med_conf
-          scores[i] = med_score
-        end
-      end
-
-      { duration_seconds: duration, variants: variants, confidences: confidences, scores: scores, times: times_mid, layout: spec[:layout].to_s }
-    end
-
-    # Attempts to derive accurate segment midpoints from the packaged (template) HLS playlist on disk.
-    # This avoids assuming fixed `segment_seconds` and reduces drift-related sampling errors.
-    def packaged_segment_midpoints_for(media_item:)
-      return nil if media_item.blank?
-      return nil unless defined?(::MediaGallery::PrivateStorage) && ::MediaGallery::PrivateStorage.enabled?
-      return nil unless defined?(::MediaGallery::Hls) && ::MediaGallery::Hls.respond_to?(:variants)
-
-      public_id = media_item.public_id.to_s
-      return nil if public_id.blank?
-
-      variant = ::MediaGallery::Hls.variants.first.to_s
-      variant = "v0" if variant.blank?
-
-      pl = ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(public_id, variant)
-      return nil if pl.blank? || !File.exist?(pl)
-
-      midpoints = []
-      cursor = 0.0
-      last_extinf = nil
-
-      File.read(pl).to_s.each_line do |line|
-        l = line.to_s.strip
-        next if l.blank?
-
-        if l.start_with?("#EXTINF:")
-          dur_s = l.sub("#EXTINF:", "").split(",").first.to_s
-          dur = dur_s.to_f
-          last_extinf = (dur > 0.0 ? dur : nil)
-          next
-        end
-
-        # Segment URI line
-        next if l.start_with?("#")
-        next if last_extinf.blank?
-
-        midpoints << (cursor + (last_extinf.to_f / 2.0))
-        cursor += last_extinf.to_f
-        last_extinf = nil
-      end
-
-      midpoints.present? ? midpoints : nil
-    rescue
-      nil
-    end
-    private_class_method :packaged_segment_midpoints_for
-
-    # Parses the packaged template playlist (/hls/<variant>/index.m3u8) and returns an array of
-    # { uri: "seg_00000.ts", duration: 3.012 } in segment order.
-    def packaged_segments_for(media_item:)
-      return nil if media_item.blank?
-      return nil unless defined?(::MediaGallery::PrivateStorage) && ::MediaGallery::PrivateStorage.enabled?
-      return nil unless defined?(::MediaGallery::Hls) && ::MediaGallery::Hls.respond_to?(:variants)
-
-      public_id = media_item.public_id.to_s
-      return nil if public_id.blank?
-
-      variant = ::MediaGallery::Hls.variants.first.to_s
-      variant = "v0" if variant.blank?
-
-      pl = ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(public_id, variant)
-      return nil if pl.blank? || !File.exist?(pl)
+    def parse_ab_variants_from_playlist_file(path)
+      raw = File.read(path.to_s)
+      return [] if raw.blank?
 
       out = []
-      last_extinf = nil
 
-      File.read(pl).to_s.each_line do |line|
+      raw.each_line do |line|
         l = line.to_s.strip
         next if l.blank?
 
-        if l.start_with?("#EXTINF:")
-          dur_s = l.sub("#EXTINF:", "").split(",").first.to_s
-          dur = dur_s.to_f
-          last_extinf = (dur > 0.0 ? dur : nil)
+        if l.start_with?("#")
+          # Handle EXT-X-MAP (fMP4) if present.
+          if l.include?("URI=\"")
+            uri = l[/URI=\"([^\"]+)\"/, 1].to_s
+            _v = ab_from_path(uri)
+            # we do not treat init segments as samples
+          end
           next
         end
 
-        next if l.start_with?("#")
-        next if last_extinf.blank?
-
-        out << { uri: l, duration: last_extinf.to_f }
-        last_extinf = nil
+        out << ab_from_path(l)
       end
 
-      out.present? ? out : nil
-    rescue
-      nil
-    end
-    private_class_method :packaged_segments_for
-
-    # Builds (and caches) per-segment reference thresholds derived from the packaged A/B variants.
-    # This makes A/B classification much more robust for re-encodes/screen recordings, because we
-    # compare the leak score against the content-matched A and B scores for the *same* segment.
-    
-# Builds (and caches) per-segment reference thresholds derived from the packaged A/B variants.
-# This makes A/B classification much more robust for re-encodes/screen recordings, because we
-# compare the leak score against the content-matched A and B scores for the *same* segment.
-#
-# Performance note:
-# Earlier implementations sampled each segment file individually, which can spawn hundreds of ffmpeg
-# processes for a single identify run (slow + can hit request timeouts). We instead sample the packaged
-# A and B playlists at absolute segment midpoints, in a small number of ffmpeg runs (chunked).
-def reference_tables_for(media_item:, spec:, needed_count:)
-  return nil if media_item.blank? || spec.blank?
-  return nil unless defined?(::MediaGallery::PrivateStorage) && ::MediaGallery::PrivateStorage.enabled?
-  return nil unless defined?(::MediaGallery::Hls) && ::MediaGallery::Hls.respond_to?(:variants)
-
-  root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
-  return nil if root.blank? || !Dir.exist?(root)
-
-  segs = packaged_segments_for(media_item: media_item)
-  return nil if segs.blank?
-
-  needed = needed_count.to_i
-  needed = 0 if needed.negative?
-  needed = [needed, segs.length].min
-  return nil if needed <= 0
-
-  # Cache is safe because the plugin is in active development; we key on a digest of the spec.
-  spec_hash =
-    begin
-      base = spec.slice(:layout, :kind, :box_size_frac, :pairs, :tiles)
-      base = base.deep_stringify_keys if base.respond_to?(:deep_stringify_keys)
-      Digest::SHA256.hexdigest(JSON.dump(base))[0, 16]
-    rescue
-      "na"
-    end
-  cache_path = File.join(root, "forensics_reference_#{spec[:layout].to_s.presence || 'layout'}.json")
-
-  cache = (JSON.parse(File.read(cache_path)) rescue nil) if File.exist?(cache_path)
-  if cache.is_a?(Hash) && cache["spec_hash"].to_s == spec_hash && cache["thr"].is_a?(Array) && cache["delta"].is_a?(Array)
-    thr = cache["thr"]
-    delta = cache["delta"]
-    if thr.length >= needed && delta.length >= needed
-      med = cache["delta_median"].to_f
-      med = 1.0 if med <= 0
-      return { thr: thr, delta: delta, delta_median: med }
-    end
-  end
-
-  variant = ::MediaGallery::Hls.variants.first.to_s
-  variant = "v0" if variant.blank?
-
-  a_dir = File.join(root, "a", variant)
-  b_dir = File.join(root, "b", variant)
-  return nil unless Dir.exist?(a_dir) && Dir.exist?(b_dir)
-
-  a_pl = File.join(a_dir, "index.m3u8")
-  b_pl = File.join(b_dir, "index.m3u8")
-  return nil unless File.exist?(a_pl) && File.exist?(b_pl)
-
-  # Build absolute midpoints across the whole stream so we can sample in playlist space.
-  t = 0.0
-  times = []
-  needed.times do |i|
-    dur = segs[i][:duration].to_f
-    dur = 0.0 if dur.nan? || dur.infinite? || dur.negative?
-    times << (t + (dur * 0.5))
-    t += dur
-  end
-
-  # Sample scores in chunks to keep ffmpeg command lines reasonable.
-  chunk = 25
-  chunk = 10 if needed <= 20
-  chunk = 40 if needed >= 160
-
-  sa = sample_scores_chunked(file_path: a_pl, times: times, spec: spec, chunk_size: chunk)
-  sb = sample_scores_chunked(file_path: b_pl, times: times, spec: spec, chunk_size: chunk)
-
-  # Pad defensively
-  sa += [0.0] * (needed - sa.length) if sa.length < needed
-  sb += [0.0] * (needed - sb.length) if sb.length < needed
-
-  thr = []
-  delta = []
-  needed.times do |i|
-    a = sa[i].to_f
-    b = sb[i].to_f
-    thr << ((a + b) / 2.0)
-    delta << ((a - b) / 2.0)
-  end
-
-  deltas_abs = delta.map { |d| d.to_f.abs }.select { |d| d > 0 }
-  delta_median = deltas_abs.empty? ? 1.0 : deltas_abs.sort[deltas_abs.length / 2].to_f
-  delta_median = 1.0 if delta_median <= 0
-
-  begin
-    File.write(
-      cache_path,
-      JSON.pretty_generate({
-        "layout" => spec[:layout].to_s,
-        "spec_hash" => spec_hash,
-        "method" => "playlist_midpoints_chunked",
-        "thr" => thr,
-        "delta" => delta,
-        "delta_median" => delta_median,
-        "generated_at" => Time.now.utc.iso8601
-      })
-    )
-  rescue
-    # ignore cache write errors
-  end
-
-  { thr: thr, delta: delta, delta_median: delta_median }
-rescue
-  nil
-end
-private_class_method :reference_tables_for
-
-def sample_scores_chunked(file_path:, times:, spec:, chunk_size:)
-  out = []
-  times = Array(times).map { |t| t.to_f }
-  chunk_size = chunk_size.to_i
-  chunk_size = 25 if chunk_size <= 0
-
-  times.each_slice(chunk_size) do |chunk|
-    scores = sample_scores_batch_single(file_path: file_path, times: chunk, spec: spec)
-    scores = Array(scores).map { |v| v.to_f }
-    # Keep alignment with chunk length.
-    if scores.length < chunk.length
-      scores += [0.0] * (chunk.length - scores.length)
-    end
-    out.concat(scores.first(chunk.length))
-  end
-
-  out
-rescue
-  []
-end
-private_class_method :sample_scores_chunked
-
-
-    
-    def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, spec: nil, max_offset_segments:)
-      fps = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).includes(:user).to_a
-      return { candidates: [], meta: { offset_strategy: "global" } } if fps.empty?
-
-      # Reference-calibrated matching path (for screen recordings / re-encodes):
-      # If we have per-sample numeric scores (from pixel extraction) AND can read the packaged A/B segments,
-      # we can classify each sample by comparing it against the packaged A/B reference for the corresponding segment index.
-      #
-      # This greatly reduces scene-bias (e.g. long runs of 'aaaaa...') and improves separation between users.
-      if observed_scores.is_a?(Array) && observed_scores.present? && spec.is_a?(Hash)
-        begin
-          needed_ref = observed_scores.length.to_i + max_offset_segments.to_i + 2
-          ref = reference_tables_for(media_item: media_item, spec: spec, needed_count: needed_ref)
-
-          if ref && ref[:thr].is_a?(Array) && ref[:delta].is_a?(Array)
-            return match_fingerprints_with_reference(
-              fps: fps,
-              media_item: media_item,
-              scores: observed_scores,
-              confidences: (observed_confidences.is_a?(Array) ? observed_confidences : []),
-              ref_thr: ref[:thr],
-              ref_delta: ref[:delta],
-              delta_median: ref[:delta_median].to_f,
-              max_offset_segments: max_offset_segments.to_i
-            )
-          end
-        rescue
-          # fall back to the legacy path
-        end
-      end
-
-
-      max_off = max_offset_segments.to_i
-      max_off = 0 if max_off.negative?
-
-      obs = observed_variants.is_a?(Array) ? observed_variants : []
-      confs = observed_confidences.is_a?(Array) ? observed_confidences : []
-
-      # Build a compact list of usable samples:
-      # [observed_index, "a"/"b", weight, confidence]
-      #
-      # Weighting:
-      # - we always skip nil/blank bits
-      # - higher confidence samples contribute more to mismatch scoring
-      # - use confidence^2 to more strongly down-weight marginal readings
-      samples = []
-      obs.each_with_index do |v, i|
-        next if v.blank?
-
-        c = confs[i].to_f rescue 0.0
-        c = 0.0 if c.nan? || c.infinite? || c.negative?
-
-        if c > 0 && c < MIN_CONFIDENCE
-          next
-        end
-
-        w = c > 0 ? (c * c) : 1.0
-        next if w <= 0.0
-
-        samples << [i, v.to_s, w.to_f, c.to_f]
-      end
-
-      return { candidates: [], meta: { offset_strategy: "global", chosen_offset_segments: 0, effective_samples: 0.0 } } if samples.empty?
-
-      total_weight = samples.reduce(0.0) { |acc, s| acc + s[2].to_f }.to_f
-
-      chosen_offset = 0
-      best_score = nil
-      best_diag = nil
-
-      # Global offset selection:
-      # We choose ONE offset for the leak clip and score all candidates using that.
-      #
-      # Why: letting each user pick their own best offset can overfit noise and
-      # produce false positives with short clips.
-      (0..max_off).each do |offset|
-        top = nil
-        second = nil
-
-        fps.each do |rec|
-          mism_w = 0.0
-          comp_w = 0.0
-
-          samples.each do |(i, ov, w, _c)|
-            exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-              fingerprint_id: rec.fingerprint_id,
-              media_item_id: media_item.id,
-              segment_index: i + offset
-            )
-
-            comp_w += w
-            mism_w += w if exp != ov
-          end
-
-          next if comp_w <= 0.0
-
-          ratio_w = 1.0 - (mism_w / comp_w)
-
-          entry = { ratio_w: ratio_w, comp_w: comp_w, rec: rec }
-
-          if top.nil? || entry[:ratio_w] > top[:ratio_w] || (entry[:ratio_w] == top[:ratio_w] && entry[:comp_w] > top[:comp_w])
-            second = top
-            top = entry
-          elsif second.nil? || entry[:ratio_w] > second[:ratio_w] || (entry[:ratio_w] == second[:ratio_w] && entry[:comp_w] > second[:comp_w])
-            second = entry
-          end
-        end
-
-        next unless top
-
-        second_ratio = second ? second[:ratio_w].to_f : 0.0
-        delta = top[:ratio_w].to_f - second_ratio
-
-        coverage = total_weight > 0 ? (top[:comp_w].to_f / total_weight.to_f) : 0.0
-
-        # Score prioritizes separation, then overall fit, then (slightly) prefers smaller offsets.
-        score = delta + (top[:ratio_w].to_f * 0.02) + (coverage.to_f * 0.01) - (offset.to_f * 0.0002)
-
-        if best_score.nil? || score > best_score ||
-             (score == best_score && top[:ratio_w] > best_diag[:top_ratio_w])
-          best_score = score
-          chosen_offset = offset
-          best_diag = {
-            top_ratio_w: top[:ratio_w].to_f,
-            second_ratio_w: second_ratio,
-            delta: delta,
-          }
-        end
-      end
-
-      # Compute candidates at the chosen global offset.
-      candidates = []
-      fps.each do |rec|
-        mism_w = 0.0
-        comp_w = 0.0
-        mism = 0
-        comp = 0
-
-        samples.each do |(i, ov, w, _c)|
-          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-            fingerprint_id: rec.fingerprint_id,
-            media_item_id: media_item.id,
-            segment_index: i + chosen_offset
-          )
-
-          comp += 1
-          comp_w += w
-          if exp != ov
-            mism += 1
-            mism_w += w
-          end
-        end
-
-        next if comp == 0 || comp_w <= 0.0
-
-        raw_ratio = 1.0 - (mism.to_f / comp.to_f)
-        w_ratio = 1.0 - (mism_w / comp_w)
-
-        candidates << {
-          user_id: rec.user_id,
-          username: rec.user&.username,
-          fingerprint_id: rec.fingerprint_id,
-          best_offset_segments: chosen_offset,
-          mismatches: mism,
-          compared: comp,
-          mismatches_weighted: mism_w.round(6),
-          compared_weighted: comp_w.round(6),
-          # Keep match_ratio aligned with mismatches/compared (raw), and expose
-          # the weighted score separately for diagnostics.
-          match_ratio: raw_ratio.round(4),
-          match_ratio_weighted: w_ratio.round(4),
-        }
-      end
-
-      candidates.sort_by! { |r| [r[:mismatches].to_i, -r[:compared].to_i, r[:mismatches_weighted].to_f] }
-      candidates = candidates.first(10)
-
-      # Add diagnostics: local best offset per candidate (not used for ranking).
-      if max_off > 0 && candidates.present?
-        rec_by_user = fps.index_by(&:user_id)
-        candidates.each do |cand|
-          rec = rec_by_user[cand[:user_id]]
-          next unless rec
-
-          local = best_local_offset(rec: rec, samples: samples, max_off: max_off, media_item_id: media_item.id)
-          cand[:local_best_offset_segments] = local[:offset]
-          cand[:local_match_ratio] = local[:match_ratio].round(4)
-        end
-      end
-
-      # Estimate "effective sample count" by normalizing the weighted sum using the median confidence^2.
-      conf_list = samples.map { |s| s[3].to_f }.select { |c| c > 0.0 }
-      med_c = median(conf_list)
-      med_c = 0.03 if med_c <= 0.0
-      norm = med_c * med_c
-      effective = norm > 0 ? (total_weight / norm) : samples.length.to_f
-      effective = effective.round(2)
-
-      meta = {
-        offset_strategy: "global",
-        chosen_offset_segments: chosen_offset,
-        effective_samples: effective,
-      }
-
-      if best_diag
-        meta[:offset_top_match_ratio] = best_diag[:top_ratio_w].round(4)
-        meta[:offset_second_match_ratio] = best_diag[:second_ratio_w].round(4)
-        meta[:offset_delta] = best_diag[:delta].round(4)
-      end
-
-      { candidates: candidates, meta: meta }
-    end
-
-    def best_local_offset(rec:, samples:, max_off:, media_item_id:)
-      best = { offset: 0, mism_w: nil, comp_w: 0.0, match_ratio: 0.0 }
-
-      (0..max_off).each do |offset|
-        mism_w = 0.0
-        comp_w = 0.0
-
-        samples.each do |(i, ov, w, _c)|
-          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-            fingerprint_id: rec.fingerprint_id,
-            media_item_id: media_item_id,
-            segment_index: i + offset
-          )
-
-          comp_w += w
-          mism_w += w if exp != ov
-        end
-
-        next if comp_w <= 0.0
-
-        if best[:mism_w].nil? || mism_w < best[:mism_w] || (mism_w == best[:mism_w] && comp_w > best[:comp_w])
-          best = {
-            offset: offset,
-            mism_w: mism_w,
-            comp_w: comp_w,
-            match_ratio: 1.0 - (mism_w / comp_w),
-          }
-        end
-      end
-
-      { offset: best[:offset].to_i, match_ratio: best[:match_ratio].to_f }
-    rescue
-      { offset: 0, match_ratio: 0.0 }
-    end
-    private_class_method :best_local_offset
-
-
-    # ----------------------------------------------------------------------
-
-    def probe_duration_seconds(file_path)
-      j = ::MediaGallery::Ffmpeg.probe(file_path)
-      j.dig("format", "duration").to_f
-    rescue
-      0.0
-    end
-    private_class_method :probe_duration_seconds
-
-    def sample_variant_robust(file_path:, t_mid:, segment_seconds:, duration_seconds:, spec:)
-      # Fast path: sample once at the midpoint.
-      first = sample_variant_single(file_path: file_path, t: t_mid, spec: spec)
-      return first if first[:variant].present? && first[:confidence].to_f >= RESAMPLE_MIN_CONFIDENCE
-
-      # Resample nearby points within the segment and aggregate.
-      seg = segment_seconds.to_f
-      offset = (seg * 0.25).to_f
-      offset = 0.25 if offset < 0.25
-
-      times = [t_mid - offset, t_mid, t_mid + offset]
-      times = times.map { |t| clamp_time(t, duration_seconds: duration_seconds) }.uniq
-
-      samples = times.map { |t| sample_variant_single(file_path: file_path, t: t, spec: spec) }
-
-      scores = samples.map { |s| s[:score].to_i }
-      confs = samples.map { |s| s[:confidence].to_f }
-
-      med_score = median(scores)
-      med_conf = median(confs).round(4)
-
-      variant = med_score >= 0 ? "a" : "b"
-      variant = nil if med_conf < MIN_CONFIDENCE
-
-      { variant: variant, confidence: med_conf, score: med_score }
-    rescue
-      { variant: nil, confidence: 0.0, score: 0 }
-    end
-    private_class_method :sample_variant_robust
-
-    # --------------------- batch sampling ---------------------------------
-
-    
-    # Returns an Array of numeric scores (one per time). Does not apply confidence gating.
-    def sample_scores_batch_single(file_path:, times:, spec:)
-      times = Array(times).map { |t| t.to_f }.select { |t| t >= 0.0 }
-      return [] if times.empty?
-
-      kind = spec[:kind].to_s
-      kind = "pairs" if kind.blank? && spec[:pairs].present?
-      kind = "tiles" if kind.blank? && spec[:tiles].present?
-
-      if kind == "pairs"
-        pairs = spec[:pairs] || []
-        box = spec[:box_size_frac].to_f
-        box = 0.12 if box <= 0
-        expected = pairs.length * 2
-
-        raw = ffmpeg_sample_raw_multi(
-          file_path: file_path,
-          times: times,
-          expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box) }
-        )
-
-        out = []
-        parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          score = 0
-          pairs.length.times do |i|
-            left = bytes[i * 2]
-            right = bytes[i * 2 + 1]
-            score += (left - right)
-          end
-          out << score
-          { variant: nil, confidence: 0.0, score: score }
-        end
-        out
-      else
-        tiles = spec[:tiles] || []
-        box = spec[:box_size_frac].to_f
-        box = 0.12 if box <= 0
-        expected = tiles.length * 2
-
-        raw = ffmpeg_sample_raw_multi(
-          file_path: file_path,
-          times: times,
-          expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_tile_filter(in_label: in_label, tiles: tiles, box: box) }
-        )
-
-        out = []
-        parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          score = 0
-          tiles.length.times do |i|
-            inner = bytes[i * 2]
-            outer_m = bytes[i * 2 + 1]
-            score += (inner - outer_m)
-          end
-          out << score
-          { variant: nil, confidence: 0.0, score: score }
-        end
-        out
-      end
+      out
     rescue
       []
     end
-    private_class_method :sample_scores_batch_single
 
-def sample_variants_batch_single(file_path:, times:, spec:)
-      times = Array(times).map { |t| t.to_f }.select { |t| t >= 0.0 }
-      return [] if times.empty?
+    def ab_from_path(path)
+      p = path.to_s
+      m = p.match(%r{/seg/[^/]+/(?<ab>a|b)/}i)
+      return m[:ab].to_s.downcase if m
 
-      kind = spec[:kind].to_s
-      kind = "pairs" if kind.blank? && spec[:pairs].present?
-      kind = "tiles" if kind.blank? && spec[:tiles].present?
+      m = p.match(%r{/hls/(?<ab>a|b)/}i)
+      return m[:ab].to_s.downcase if m
 
-      if kind == "pairs"
-        pairs = spec[:pairs] || []
-        box = spec[:box_size_frac].to_f
-        box = 0.12 if box <= 0
-        expected = pairs.length * 2
-
-        raw = ffmpeg_sample_raw_multi(
-          file_path: file_path,
-          times: times,
-          expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box) }
-        )
-
-        parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          score = 0
-          pairs.length.times do |i|
-            left = bytes[i * 2]
-            right = bytes[i * 2 + 1]
-            score += (left - right)
-          end
-          conf = (score.abs.to_f / (pairs.length * 255.0)).round(4)
-          variant = score >= 0 ? "a" : "b"
-          variant = nil if conf < MIN_CONFIDENCE
-          { variant: variant, confidence: conf, score: score }
-        end
-      else
-        tiles = spec[:tiles] || []
-        box = spec[:box_size_frac].to_f
-        box = 0.12 if box <= 0
-        expected = tiles.length * 2
-
-        raw = ffmpeg_sample_raw_multi(
-          file_path: file_path,
-          times: times,
-          expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_tile_filter(in_label: in_label, tiles: tiles, box: box) }
-        )
-
-        parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          score = 0
-          tiles.length.times do |i|
-            inner = bytes[i * 2]
-            outer_m = bytes[i * 2 + 1]
-            score += (inner - outer_m)
-          end
-          conf = (score.abs.to_f / (tiles.length * 255.0)).round(4)
-          variant = score >= 0 ? "a" : "b"
-          variant = nil if conf < MIN_CONFIDENCE
-          { variant: variant, confidence: conf, score: score }
-        end
-      end
-    rescue
-      times.map { { variant: nil, confidence: 0.0, score: 0 } }
+      nil
     end
-    private_class_method :sample_variants_batch_single
 
-    def parse_batch_bytes(raw:, expected_bytes_per_frame:, times:)
-      out = []
-      bytes = raw&.bytes || []
-      frame_size = expected_bytes_per_frame.to_i
-      frame_size = 0 if frame_size.negative?
+    def score_result(result)
+      usable = result.dig("meta", "effective_samples").to_f
+      usable = result.dig("meta", "usable_samples").to_i if usable <= 0
+      top, second = top_two_match_ratios(result)
+      delta = top - second
 
-      times.length.times do |i|
-        start = i * frame_size
-        slice = bytes[start, frame_size]
-        if slice.nil? || slice.length < frame_size
-          out << { variant: nil, confidence: 0.0, score: 0 }
-        else
-          out << yield(slice)
-        end
-      end
-      out
+      # Heuristic score: prioritize higher match ratio, then clearer separation,
+      # then more usable samples.
+      (top * 100.0) + (delta * 40.0) + (usable * 1.0)
     end
-    private_class_method :parse_batch_bytes
 
-    def build_pair_filter(in_label:, pairs:, box:)
-      pair_count = pairs.length
-      return { filter: "null[out]", expected_bytes: 0 } if pair_count == 0
+    def should_auto_extend?(result)
+      # If we already have a conclusive match, do not extend.
+      return false if conclusive_match?(result)
 
-      pair_w = (box.to_f * 2.0).round(6)
-      filters = []
-      pairs.each_with_index do |p, idx|
-        x = p[:x]
-        y = p[:y]
-        filters << "#{in_label}crop=w=iw*#{pair_w}:h=ih*#{box}:x=iw*#{x}:y=ih*#{y},scale=2:1:flags=area[p#{idx}]"
-      end
-      stack_inputs = (0...pair_count).map { |i| "[p#{i}]" }.join
-      filters << "#{stack_inputs}hstack=inputs=#{pair_count}[out]"
-      { filter: filters.join(";"), expected_bytes: pair_count * 2 }
+      usable = result.dig("meta", "usable_samples").to_i
+      top, second = top_two_match_ratios(result)
+      delta = top - second
+
+      return true if usable < setting_auto_extend_min_usable_samples
+      return true if top < setting_auto_extend_min_match_ratio
+      return true if delta < setting_auto_extend_min_delta_ratio
+      false
     end
-    private_class_method :build_pair_filter
 
-    def build_tile_filter(in_label:, tiles:, box:)
-      tile_count = tiles.length
-      return { filter: "null[out]", expected_bytes: 0 } if tile_count == 0
-
-      outer = (box.to_f * 1.5).round(6)
-      pad = ((outer - box.to_f) / 2.0).round(6)
-
-      filters = []
-      tiles.each_with_index do |p, idx|
-        x = p[:x]
-        y = p[:y]
-
-        filters << "#{in_label}crop=w=iw*#{box}:h=ih*#{box}:x=iw*#{x}:y=ih*#{y},scale=1:1:flags=area[i#{idx}]"
-
-        ox = [[x - pad, 0.0].max, 1.0 - outer].min.round(6)
-        oy = [[y - pad, 0.0].max, 1.0 - outer].min.round(6)
-        filters << "#{in_label}crop=w=iw*#{outer}:h=ih*#{outer}:x=iw*#{ox}:y=ih*#{oy},scale=1:1:flags=area[o#{idx}]"
-      end
-
-      pack = []
-      tiles.each_index do |idx|
-        pack << "[i#{idx}]"
-        pack << "[o#{idx}]"
-      end
-      filters << "#{pack.join}hstack=inputs=#{pack.length}[out]"
-      { filter: filters.join(";"), expected_bytes: tile_count * 2 }
+    def conclusive_match?(result)
+      classify_decision(result) == "conclusive_match"
     end
-    private_class_method :build_tile_filter
 
-    
-    def match_fingerprints_with_reference(fps:, media_item:, scores:, confidences:, ref_thr:, ref_delta:, delta_median:, max_offset_segments:)
-      max_off = max_offset_segments.to_i
-      max_off = 0 if max_off.negative?
+    def apply_decision_policy!(result)
+      result["meta"] ||= {}
 
-      # Leak samples are indexed by sample index (we sample in segment order), so index i corresponds to "segment i" before offset alignment.
-      # We'll compute per-offset predicted A/B using the packaged reference threshold for segment (i + offset).
-      #
-      # We down-weight samples with weak leak confidence and segments with weak A/B separation (small |delta|).
-      delta_med = delta_median.to_f
-      delta_med = 1.0 if delta_med <= 0.0
+      decision = classify_decision(result)
+      top = result.dig("candidates", 0, "match_ratio").to_f
+      second = result.dig("candidates", 1, "match_ratio").to_f
+      delta = top - second
+      mismatches = result.dig("candidates", 0, "mismatches").to_i
+      compared = result.dig("candidates", 0, "compared").to_i
+      mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
 
-      # Skip segments where A/B are nearly indistinguishable
-      min_delta = [delta_med * 0.12, 8.0].max
+      result["meta"]["decision"] = decision
+      result["meta"]["conclusive"] = (decision == "conclusive_match")
+      result["meta"]["top_match_ratio"] = top
+      result["meta"]["second_match_ratio"] = second
+      result["meta"]["match_delta"] = delta
+      result["meta"]["top_mismatches"] = mismatches
+      result["meta"]["top_compared"] = compared
+      result["meta"]["top_mismatch_rate"] = mismatch_rate
 
-      best_offset = 0
-      best_score = nil
-      best_diag = nil
-
-      # Precompute leak confidence weights
-      leak_w = []
-      scores.length.times do |i|
-        c = confidences[i].to_f rescue 0.0
-        c = 0.0 if c.nan? || c.infinite? || c.negative?
-        w = c > 0.0 ? (c * c) : 1.0
-        leak_w << w
-      end
-
-      (0..max_off).each do |offset|
-        usable = []
-        comp_w = 0.0
-
-        scores.each_with_index do |s, i|
-          j = i + offset
-          next if j >= ref_thr.length || j >= ref_delta.length
-
-          d = ref_delta[j].to_f
-          da = d.abs
-          next if da < min_delta
-
-          w = leak_w[i] * [da / delta_med, 0.25].max
-          w = [w, 4.0].min
-          next if w <= 0.0
-
-          thr = ref_thr[j].to_f
-          e = (s.to_f - thr) / (d.nonzero? || 1.0)
-          v = e >= 0 ? "a" : "b"
-          usable << [i, v, w]
-          comp_w += w
-        end
-
-        next if usable.empty? || comp_w <= 0.0
-
-        # Evaluate top/second weighted match ratio at this offset
-        top = nil
-        second = nil
-
-        fps.each do |rec|
-          mism_w = 0.0
-          usable.each do |(i, ov, w)|
-            exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-              fingerprint_id: rec.fingerprint_id,
-              media_item_id: media_item.id,
-              segment_index: i + offset
-            )
-            mism_w += w if exp != ov
-          end
-
-          ratio_w = 1.0 - (mism_w / comp_w)
-          entry = { ratio_w: ratio_w, rec: rec }
-
-          if top.nil? || ratio_w > top[:ratio_w]
-            second = top
-            top = entry
-          elsif second.nil? || ratio_w > second[:ratio_w]
-            second = entry
-          end
-        end
-
-        next unless top
-        second_ratio = second ? second[:ratio_w].to_f : 0.0
-        delta = top[:ratio_w].to_f - second_ratio
-
-        # Score prioritizes separation and overall fit; lightly prefers smaller offsets.
-        score = delta + (top[:ratio_w].to_f * 0.04) - (offset.to_f * 0.0002)
-
-        if best_score.nil? || score > best_score
-          best_score = score
-          best_offset = offset
-          best_diag = { top_ratio_w: top[:ratio_w].to_f, second_ratio_w: second_ratio, delta: delta, comp_w: comp_w, usable: usable.length }
-        end
-      end
-
-      # Build final predicted variants at best offset
-      usable = []
-      comp_w = 0.0
-      scores.each_with_index do |s, i|
-        j = i + best_offset
-        next if j >= ref_thr.length || j >= ref_delta.length
-
-        d = ref_delta[j].to_f
-        da = d.abs
-        next if da < min_delta
-
-        w = leak_w[i] * [da / delta_med, 0.25].max
-        w = [w, 4.0].min
-        next if w <= 0.0
-
-        thr = ref_thr[j].to_f
-        e = (s.to_f - thr) / (d.nonzero? || 1.0)
-        v = e >= 0 ? "a" : "b"
-        usable << [i, v, w]
-        comp_w += w
-      end
-
-      candidates = []
-      fps.each do |rec|
-        mism_w = 0.0
-        mism = 0
-        comp = 0
-
-        usable.each do |(i, ov, w)|
-          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-            fingerprint_id: rec.fingerprint_id,
-            media_item_id: media_item.id,
-            segment_index: i + best_offset
-          )
-          comp += 1
-          if exp != ov
-            mism += 1
-            mism_w += w
-          end
-        end
-
-        next if comp == 0 || comp_w <= 0.0
-
-        candidates << {
-          user_id: rec.user_id,
-          username: rec.user&.username,
-          fingerprint_id: rec.fingerprint_id,
-          best_offset_segments: best_offset,
-          mismatches: mism,
-          compared: comp,
-          mismatches_weighted: mism_w.round(6),
-          compared_weighted: comp_w.round(6),
-          match_ratio: (1.0 - (mism.to_f / comp.to_f)).round(4),
-          match_ratio_weighted: (1.0 - (mism_w / comp_w)).round(4),
-          local_best_offset_segments: best_offset,
-          local_match_ratio: (1.0 - (mism_w / comp_w)).round(4),
-        }
-      end
-
-      # sort by weighted match ratio, then by compared
-      candidates.sort_by! { |c| [-c[:match_ratio_weighted].to_f, -c[:compared].to_i] }
-
-      top = candidates[0]
-      second = candidates[1]
-
-      meta = {
-        offset_strategy: "global_reference",
-        chosen_offset_segments: best_offset,
-        reference_used: true,
-        reference_delta_median: delta_med.round(4),
-        reference_min_delta: min_delta.round(4),
-        effective_samples: comp_w.round(2),
-        offset_top_match_ratio: (best_diag ? best_diag[:top_ratio_w].to_f : top&.dig(:match_ratio_weighted).to_f).round(4),
-        offset_second_match_ratio: (best_diag ? best_diag[:second_ratio_w].to_f : second&.dig(:match_ratio_weighted).to_f).round(4),
-        offset_delta: (best_diag ? best_diag[:delta].to_f : (top&.dig(:match_ratio_weighted).to_f - second&.dig(:match_ratio_weighted).to_f)).round(4),
+      result["meta"]["policy"] = {
+        "min_usable_any" => setting_policy_min_usable_any,
+        "min_usable_strong" => setting_policy_min_usable_strong,
+        "min_match_strong" => setting_policy_min_match_strong_ratio,
+        "min_delta_strong" => setting_policy_min_delta_strong_ratio,
+        "max_mismatch_rate_strong" => setting_policy_max_mismatch_rate_strong_ratio,
+        "min_usable_likely" => setting_policy_min_usable_likely,
+        "min_match_likely" => setting_policy_min_match_likely_ratio,
+        "min_delta_likely" => setting_policy_min_delta_likely_ratio,
       }
 
-      { candidates: candidates, meta: meta }
+      result["meta"]["recommendation"] =
+        case decision
+        when "conclusive_match"
+          "ok"
+        when "likely_match"
+          "gather_longer_sample_to_confirm"
+        when "ambiguous"
+          "gather_longer_sample_or_try_url_mode"
+        when "insufficient_samples"
+          "gather_longer_sample"
+        when "no_match"
+          "try_longer_or_closer_to_original"
+        else
+          "try_longer_or_closer_to_original"
+        end
     end
-    private_class_method :match_fingerprints_with_reference
 
-def clamp_time(t, duration_seconds:)
-      tt = t.to_f
-      tt = 0.0 if tt.negative?
-      if duration_seconds.to_f > 0
-        max_t = [duration_seconds.to_f - 0.05, 0.0].max
-        tt = max_t if tt > max_t
+    def classify_decision(result)
+      usable = result.dig("meta", "usable_samples").to_i
+      cands = result["candidates"]
+      has_cands = cands.is_a?(Array) && cands.present?
+
+      return "insufficient_samples" if usable < setting_policy_min_usable_any
+      return "no_match" unless has_cands
+
+      top = cands[0].is_a?(Hash) ? cands[0]["match_ratio"].to_f : 0.0
+      second = cands[1].is_a?(Hash) ? cands[1]["match_ratio"].to_f : 0.0
+      delta = top - second
+
+      mismatches = cands[0].is_a?(Hash) ? cands[0]["mismatches"].to_i : 0
+      compared = cands[0].is_a?(Hash) ? cands[0]["compared"].to_i : 0
+      mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
+
+      if usable >= setting_policy_min_usable_strong &&
+           top >= setting_policy_min_match_strong_ratio &&
+           delta >= setting_policy_min_delta_strong_ratio &&
+           mismatch_rate <= setting_policy_max_mismatch_rate_strong_ratio
+        return "conclusive_match"
       end
-      tt
+
+      if usable >= setting_policy_min_usable_likely &&
+           top >= setting_policy_min_match_likely_ratio &&
+           delta >= setting_policy_min_delta_likely_ratio
+        return "likely_match"
+      end
+
+      "ambiguous"
     end
-    private_class_method :clamp_time
 
-    def median(arr)
-      a = arr.compact.sort
-      return 0 if a.empty?
-      a[a.length / 2]
+    def top_two_match_ratios(result)
+      cands = result["candidates"]
+      return [0.0, 0.0] unless cands.is_a?(Array) && cands.present?
+
+      top = cands[0].is_a?(Hash) ? cands[0]["match_ratio"].to_f : 0.0
+      second = cands[1].is_a?(Hash) ? cands[1]["match_ratio"].to_f : 0.0
+      [top, second]
     end
-    private_class_method :median
 
-    def sample_variant_single(file_path:, t:, spec:)
-      kind = spec[:kind].to_s
-      kind = "pairs" if kind.blank? && spec[:pairs].present?
-      kind = "tiles" if kind.blank? && spec[:tiles].present?
+    def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:, media_item:)
+      url = source_url.to_s.strip
+      raise "source_url is blank" if url.blank?
+      raise "source_url is too long" if url.length > setting_max_source_url_length
 
-      if kind == "pairs"
-        sample_pair_score(
-          file_path: file_path,
-          t: t,
-          pairs: spec[:pairs] || [],
-          box: spec[:box_size_frac].to_f
-        )
-      else
-        sample_tile_score(
-          file_path: file_path,
-          t: t,
-          tiles: spec[:tiles] || [],
-          box: spec[:box_size_frac].to_f
-        )
-      end
-    end
-    private_class_method :sample_variant_single
+      uri = URI.parse(url) rescue nil
+      raise "source_url is not a valid http(s) URL" if uri.blank? || uri.host.blank? || !%w[http https].include?(uri.scheme)
 
-    # --------------------- v2 (pairs) --------------------------------------
+      # Security: only allow URLs on this Discourse host for now.
+      # (If you later need CDN support, we can add an allowlist site setting.)
+      base_host = (URI.parse(Discourse.base_url).host rescue nil)
+      req_host = request&.host
+      allowed_hosts = [base_host, req_host].compact.uniq
 
-    def sample_pair_score(file_path:, t:, pairs:, box:)
-      pair_count = pairs.length
-      return { variant: nil, confidence: 0.0, score: 0 } if pair_count == 0
-
-      box = box.to_f
-      box = 0.12 if box <= 0
-      pair_w = (box * 2.0).round(6)
-
-      filters = []
-      pairs.each_with_index do |p, idx|
-        x = p[:x]
-        y = p[:y]
-        filters << "[0:v]crop=w=iw*#{pair_w}:h=ih*#{box}:x=iw*#{x}:y=ih*#{y},scale=2:1:flags=area[p#{idx}]"
+      unless allowed_hosts.include?(uri.host)
+        raise "Only URLs on this site are allowed (#{allowed_hosts.join(', ')})."
       end
 
-      stack_inputs = (0...pair_count).map { |i| "[p#{i}]" }.join
-      filters << "#{stack_inputs}hstack=inputs=#{pair_count}[out]"
+      seg = segment_seconds.to_i
+      seg = 6 if seg <= 0
 
-      raw = ffmpeg_sample_raw(file_path: file_path, t: t, filter_complex: filters.join(";"))
-      bytes = raw&.bytes || []
+      ms = max_samples.to_i
+      ms = 60 if ms <= 0
+      ms = [ms, 200].min
 
-      expected = pair_count * 2
-      return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
+      # Download just enough to cover the requested samples.
+      target_seconds = (ms * seg) + seg
+      target_seconds = 30 if target_seconds < 30
+      target_seconds = [target_seconds, setting_max_url_sample_seconds].min
 
-      score = 0
-      pair_count.times do |i|
-        left = bytes[i * 2]
-        right = bytes[i * 2 + 1]
-        score += (left - right)
+      playlist_tmp = nil
+      input = url
+
+      # If the URL points at our own authenticated HLS endpoints, avoid making an HTTP
+      # request entirely. Those endpoints require a logged-in user session *and* validate
+      # the token against current_user (and sometimes IP). When an admin pastes a playback
+      # URL, the server-side fetch won't have the member's browser session cookies, which
+      # results in redirects/login HTML and ffmpeg failures.
+      #
+      # Instead, we build a local playlist directly from the packaged files on disk.
+      # If the URL isn't one of our HLS endpoints, fall back to a conservative HTTP playlist rewrite.
+      if uri.path.to_s.downcase.end_with?(".m3u8")
+        begin
+          playlist_tmp = localize_hls_playlist_to_tempfile!(uri, media_item: media_item)
+        rescue => e
+          if e.message.to_s == "unsupported_hls_url"
+            playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri)
+          else
+            raise e
+          end
+        end
+        input = playlist_tmp.path
       end
 
-      # Positive means left brighter than right (variant A in v2 by construction).
-      variant = score >= 0 ? "a" : "b"
-      conf = (score.abs.to_f / (pair_count * 255.0)).round(4)
-      variant = nil if conf < MIN_CONFIDENCE
+      tmp = Tempfile.new(["media_gallery_identify_", ".mp4"])
+      tmp.binmode
 
-      { variant: variant, confidence: conf, score: score }
-    rescue
-      { variant: nil, confidence: 0.0, score: 0 }
-    end
-    private_class_method :sample_pair_score
-
-    # --------------------- v1 (tiles) --------------------------------------
-
-    def sample_tile_score(file_path:, t:, tiles:, box:)
-      tile_count = tiles.length
-      return { variant: nil, confidence: 0.0, score: 0 } if tile_count == 0
-
-      box = box.to_f
-      box = 0.12 if box <= 0
-      outer = (box * 1.5).round(6)
-      pad = ((outer - box) / 2.0).round(6)
-
-      filters = []
-      tiles.each_with_index do |p, idx|
-        x = p[:x]
-        y = p[:y]
-
-        # Inner box mean (1x1 pixel)
-        filters << "[0:v]crop=w=iw*#{box}:h=ih*#{box}:x=iw*#{x}:y=ih*#{y},scale=1:1:flags=area[i#{idx}]"
-
-        # Outer neighborhood mean (bigger crop around the box)
-        ox = [[x - pad, 0.0].max, 1.0 - outer].min.round(6)
-        oy = [[y - pad, 0.0].max, 1.0 - outer].min.round(6)
-        filters << "[0:v]crop=w=iw*#{outer}:h=ih*#{outer}:x=iw*#{ox}:y=ih*#{oy},scale=1:1:flags=area[o#{idx}]"
-      end
-
-      # Pack into a strip: i0 o0 i1 o1 ...
-      pack = []
-      tiles.each_index do |idx|
-        pack << "[i#{idx}]"
-        pack << "[o#{idx}]"
-      end
-
-      filters << "#{pack.join}hstack=inputs=#{pack.length}[out]"
-
-      raw = ffmpeg_sample_raw(file_path: file_path, t: t, filter_complex: filters.join(";"))
-      bytes = raw&.bytes || []
-
-      expected = tile_count * 2
-      return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
-
-      score = 0
-      tile_count.times do |i|
-        inner = bytes[i * 2]
-        outer_m = bytes[i * 2 + 1]
-        score += (inner - outer_m)
-      end
-
-      variant = score >= 0 ? "a" : "b"
-      conf = (score.abs.to_f / (tile_count * 255.0)).round(4)
-      variant = nil if conf < MIN_CONFIDENCE
-
-      { variant: variant, confidence: conf, score: score }
-    rescue
-      { variant: nil, confidence: 0.0, score: 0 }
-    end
-    private_class_method :sample_tile_score
-
-    # --------------------- ffmpeg runner -----------------------------------
-
-    def ffmpeg_sample_raw(file_path:, t:, filter_complex:)
       cmd = [
         ::MediaGallery::Ffmpeg.ffmpeg_path,
         *::MediaGallery::Ffmpeg.ffmpeg_common_args,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostats",
-        "-ss",
-        t.to_f.to_s,
+        "-y",
+        "-protocol_whitelist",
+        "file,http,https,tcp,tls,crypto",
+        "-allowed_extensions",
+        "ALL",
         "-i",
-        file_path,
-        "-frames:v",
-        "1",
-        "-filter_complex",
-        filter_complex,
-        "-map",
-        "[out]",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "gray",
-        "-",
+        input,
+        "-t",
+        target_seconds.to_s,
+        "-c",
+        "copy",
+        # Only needed when remuxing AAC-in-TS into MP4. Safe to keep, but if it fails
+        # on odd inputs, we can later add a re-encode fallback.
+        "-bsf:a",
+        "aac_adtstoasc",
+        tmp.path,
       ]
 
-      stdout, _stderr, status = Open3.capture3(*cmd)
-      return nil unless status.success?
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      unless status.success? && File.size?(tmp.path)
+        tip = "tip: try the *index.m3u8* variant playlist (not master.m3u8)"
+        tip << "; if it still fails, the auth token may not be applied to segment URLs" if uri.path.to_s.downcase.end_with?(".m3u8")
+        raise "ffmpeg download failed (#{tip}): #{::MediaGallery::Ffmpeg.short_err(stderr)}"
+      end
 
-      stdout
+      tmp
+    rescue => e
+      playlist_tmp&.close! rescue nil
+      tmp&.close! rescue nil
+      raise e
     end
-    private_class_method :ffmpeg_sample_raw
 
-    def ffmpeg_sample_raw_multi(file_path:, times:, expected_bytes_per_frame:, filter_builder:)
-      times = Array(times).map { |t| t.to_f }
-      return nil if times.empty?
+    # Downloads the playlist text and rewrites all referenced URIs to absolute URLs.
+    # If the incoming playlist URL has a `token=...` query param, it will be appended
+    # to any referenced URIs that don't already have it.
+    def rewrite_hls_playlist_to_tempfile!(playlist_uri)
+      token = extract_token_param(playlist_uri)
 
-      cmd = [
-        ::MediaGallery::Ffmpeg.ffmpeg_path,
-        *::MediaGallery::Ffmpeg.ffmpeg_common_args,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostats",
-      ]
+      body = http_get_text!(playlist_uri)
+      raise "playlist did not look like M3U8" unless body.lstrip.start_with?("#EXTM3U")
 
-      times.each do |t|
-        cmd += ["-ss", t.to_s, "-i", file_path]
-      end
+      base = playlist_uri.dup
+      base.fragment = nil
+      base.query = nil
+      base.path = base.path.to_s.sub(%r{[^/]+\z}, "")
 
-      filters = []
-      out_labels = []
+      rewritten = body.each_line.map do |line|
+        raw = line.to_s.strip
+        next "" if raw.blank?
 
-      times.each_with_index do |_t, idx|
-        in_label = "[#{idx}:v]"
-        built = filter_builder.call(in_label)
-        filters << built[:filter].gsub("[out]", "[o#{idx}]")
-        out_labels << "[o#{idx}]"
-      end
+        if raw.start_with?("#")
+          rewrite_quoted_uris_in_tag_line(raw, base, token)
+        else
+          rewrite_uri_line(raw, base, token)
+        end
+      end.join("\n")
 
-      if out_labels.length == 1
-        filters << "#{out_labels.first}copy[out]"
-      else
-        filters << "#{out_labels.join}concat=n=#{out_labels.length}:v=1:a=0[out]"
-      end
-
-      cmd += [
-        "-filter_complex",
-        filters.join(";"),
-        "-map",
-        "[out]",
-        "-frames:v",
-        times.length.to_s,
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "gray",
-        "-",
-      ]
-
-      stdout, _stderr, status = Open3.capture3(*cmd)
-      return nil unless status.success?
-
-      need = expected_bytes_per_frame.to_i * times.length
-      return nil if need > 0 && stdout.to_s.bytesize < need
-
-      stdout
+      tmp = Tempfile.new(["media_gallery_identify_playlist_", ".m3u8"])
+      tmp.binmode
+      tmp.write(rewritten)
+      tmp.write("\n") unless rewritten.end_with?("\n")
+      tmp.flush
+      tmp
     end
-    private_class_method :ffmpeg_sample_raw_multi
+
+    # Build a local M3U8 that points at absolute files on disk.
+    # Supports Discourse-Media-Plugin's HLS URLs, e.g.:
+    #   /media/hls/:public_id/v/:variant/index.m3u8?token=...
+    #
+    # Why this exists:
+    # - /media/hls/* endpoints require ensure_logged_in and also validate token vs current_user.
+    # - Server-side fetching the URL (Net::HTTP / ffmpeg) does not carry the member's cookies.
+    # - So the request often redirects to login HTML, and the playlist "doesn't look like M3U8".
+    #
+    # Admin-only identify can safely read the packaged HLS files from private storage.
+    def localize_hls_playlist_to_tempfile!(playlist_uri, media_item:)
+      path = playlist_uri.path.to_s
+
+      # Variant playlist URL
+      m = path.match(%r{\A/media/hls/(?<public_id>[\w\-]+)/v/(?<variant>[^/]+)/index\.m3u8\z}i)
+
+      # Master playlist URL (we'll pick a variant from disk)
+      master = path.match(%r{\A/media/hls/(?<public_id>[\w\-]+)/master\.m3u8\z}i)
+
+      if m.blank? && master.blank?
+        raise "unsupported_hls_url"
+      end
+
+      public_id = (m ? m[:public_id] : master[:public_id]).to_s
+      variant = m ? m[:variant].to_s : nil
+
+      if public_id != media_item.public_id.to_s
+        raise "public_id_mismatch"
+      end
+
+      token = extract_token_param(playlist_uri)
+      payload = token.present? ? (MediaGallery::Token.verify(token, purpose: "hls") rescue nil) : nil
+      fingerprint_id = payload.is_a?(Hash) ? payload["fingerprint_id"].presence : nil
+      token_media_item_id = payload.is_a?(Hash) ? payload["media_item_id"].presence : nil
+
+      if token_media_item_id.present? && token_media_item_id.to_i != media_item.id
+        raise "token_item_mismatch"
+      end
+
+      if variant.blank?
+        master_abs = MediaGallery::PrivateStorage.hls_master_abs_path(media_item)
+        raise "master_playlist_not_found" if master_abs.blank? || !File.exist?(master_abs)
+
+        master_raw = File.read(master_abs)
+        picked = nil
+        master_raw.to_s.each_line do |line|
+          l = line.to_s.strip
+          next if l.blank? || l.start_with?("#")
+          v = l.split("/").first.to_s
+          if MediaGallery::Hls.variant_allowed?(v)
+            picked = v
+            break
+          end
+        end
+        raise "no_variant_found_in_master" if picked.blank?
+        variant = picked
+      end
+
+      abs = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(public_id, variant)
+      raise "variant_playlist_not_found" if abs.blank? || !File.exist?(abs)
+
+      raw = File.read(abs)
+
+      rewritten = []
+      seg_counter = 0
+
+      raw.to_s.each_line do |line|
+        l = line.to_s.rstrip
+        if l.blank? || l.start_with?("#")
+          # Handle EXT-X-MAP URI for fMP4
+          if l.include?("URI=\"")
+            rewritten << l.gsub(/URI=\"([^\"]+)\"/) do
+              uri_str = Regexp.last_match(1).to_s
+              file = File.basename(uri_str)
+              local = resolve_segment_abs_path(public_id, variant, file, fingerprint_id: fingerprint_id, media_item_id: media_item.id)
+              "URI=\"#{local}\""
+            end
+          else
+            rewritten << l
+          end
+          next
+        end
+
+        seg = File.basename(l)
+        if seg =~ /\A[\w\-.]+\.(ts|m4s)\z/i
+          local = resolve_segment_abs_path(public_id, variant, seg, fingerprint_id: fingerprint_id, media_item_id: media_item.id, seg_counter: seg_counter)
+          seg_counter += 1
+          rewritten << local
+        else
+          # Unknown line type; keep as-is.
+          rewritten << l
+        end
+      end
+
+      out = rewritten.join("\n") + "\n"
+      raise "playlist did not look like M3U8" unless out.lstrip.start_with?("#EXTM3U")
+
+      tmp = Tempfile.new(["media_gallery_identify_local_", ".m3u8"])
+      tmp.binmode
+      tmp.write(out)
+      tmp.flush
+      tmp
+    end
+
+    def resolve_segment_abs_path(public_id, variant, segment, fingerprint_id: nil, media_item_id: nil, seg_counter: nil)
+      seg = segment.to_s
+
+      # Prefer A/B-specific files when fingerprinting is enabled and the token contains a fingerprint_id.
+      if MediaGallery::Fingerprinting.enabled? && fingerprint_id.present? && media_item_id.present?
+        idx = MediaGallery::Fingerprinting.segment_index_from_filename(seg)
+        idx ||= seg_counter
+        if idx.present?
+          ab = MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: fingerprint_id,
+            media_item_id: media_item_id,
+            segment_index: idx
+          )
+
+          if ab.present?
+            ab_abs = File.join(MediaGallery::PrivateStorage.private_root, public_id.to_s, "hls", ab.to_s, variant.to_s, seg)
+            return ab_abs if File.exist?(ab_abs)
+          end
+        end
+      end
+
+      # Fallback to legacy packaging.
+      MediaGallery::PrivateStorage.hls_segment_abs_path(public_id, variant, seg)
+    end
+
+    def http_get_text!(uri)
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = (uri.scheme == "https")
+      http.open_timeout = 10
+      http.read_timeout = 20
+
+      req = Net::HTTP::Get.new(uri.request_uri)
+      req["User-Agent"] = "DiscourseMediaGalleryForensicsIdentify/1.0"
+
+      # If the URL requires authentication (e.g. ensure_logged_in), forward cookies from
+      # the admin's browser session. This makes URL-mode usable for protected endpoints.
+      cookie = request&.headers&.[]("Cookie").to_s
+      req["Cookie"] = cookie if cookie.present?
+      req["Accept"] = "application/vnd.apple.mpegurl, */*"
+
+      res = http.request(req)
+      unless res.is_a?(Net::HTTPSuccess)
+        raise "playlist HTTP #{res.code}"
+      end
+
+      res.body.to_s
+    end
+
+    def extract_token_param(uri)
+      qs = CGI.parse(uri.query.to_s)
+      qs["token"]&.first.presence
+    end
+
+    def rewrite_uri_line(value, base_uri, token)
+      abs = absolutize_uri(value, base_uri)
+      add_token(abs, token)
+    end
+
+    # Rewrites URI="..." occurrences in HLS tag lines like EXT-X-KEY, EXT-X-MAP, EXT-X-MEDIA.
+    def rewrite_quoted_uris_in_tag_line(line, base_uri, token)
+      line.gsub(/URI="([^"]+)"/) do
+        original = Regexp.last_match(1)
+        abs = absolutize_uri(original, base_uri)
+        rewritten = add_token(abs, token)
+        "URI=\"#{rewritten}\""
+      end
+    end
+
+    def absolutize_uri(value, base_uri)
+      v = value.to_s
+      begin
+        u = URI.parse(v)
+        if u.scheme.present? && u.host.present?
+          u
+        else
+          URI.join(base_uri.to_s, v)
+        end
+      rescue
+        URI.join(base_uri.to_s, v)
+      end
+    end
+
+    def add_token(uri, token)
+      return uri.to_s if token.blank?
+
+      u = uri.is_a?(URI) ? uri.dup : URI.parse(uri.to_s)
+      q = CGI.parse(u.query.to_s)
+      q["token"] ||= [token]
+      u.query = URI.encode_www_form(q.flat_map { |k, vs| vs.map { |v| [k, v] } })
+      u.to_s
+    rescue
+      uri.to_s
+    end
   end
 end
