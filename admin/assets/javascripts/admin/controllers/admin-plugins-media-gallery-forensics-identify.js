@@ -246,6 +246,52 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return this.meta?.max_samples_used ?? null;
   }
 
+  get chosenPhaseSeconds() {
+    const v = this.meta?.chosen_phase_seconds;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get denseStepSeconds() {
+    const v = this.meta?.dense_step_seconds;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get expectedVariantsTopCandidate() {
+    return this.meta?.expected_variants_top_candidate || this.topCandidate?.expected_variants || "";
+  }
+
+  get mismatchPositions() {
+    const arr = this.meta?.mismatch_positions || this.topCandidate?.mismatch_positions || [];
+    return Array.isArray(arr) ? arr : [];
+  }
+
+  get mismatchPositionsText() {
+    return this.mismatchPositions.length ? this.mismatchPositions.join(", ") : "";
+  }
+
+  get referenceSegmentIndicesText() {
+    const arr = this.meta?.reference_segment_indices_used || this.topCandidate?.reference_segment_indices_used || [];
+    if (!Array.isArray(arr) || !arr.length) {
+      return "";
+    }
+    return arr.map((v) => (v === null || v === undefined ? "." : String(v))).join(", ");
+  }
+
+  get phaseSearchUsed() {
+    return !!this.meta?.phase_search_used;
+  }
+
+  get hasAlignmentDebug() {
+    return !!(
+      this.observedVariants ||
+      this.expectedVariantsTopCandidate ||
+      this.referenceSegmentIndicesText ||
+      this.mismatchPositions.length
+    );
+  }
+
   get hasMoreCandidates() {
     return (this.candidates?.length || 0) > 3;
   }

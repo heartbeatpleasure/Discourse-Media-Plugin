@@ -40,6 +40,14 @@ module ::MediaGallery
     # We sample in chunks to keep commands small and to allow early cutoff by time budget.
     FILEMODE_SAMPLE_CHUNK = 15
 
+    # File-mode phase search samples a dense score timeline once and then evaluates
+    # multiple sub-segment phase candidates against that same data.
+    DENSE_SAMPLE_STEP_DEFAULT = 1.0
+    DENSE_SAMPLE_STEP_FINE = 0.5
+    PHASE_SEARCH_WINDOW_RATIO = 0.35
+    PHASE_SEARCH_WINDOW_MAX_SECONDS = 1.25
+    PHASE_SEARCH_MIN_SECONDS = 0.5
+
     def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil, sample_times: nil)
       raise ArgumentError, "missing media_item" if media_item.blank?
       raise ArgumentError, "missing file" if file_path.blank? || !File.exist?(file_path)
@@ -72,36 +80,50 @@ module ::MediaGallery
       # Using playlist-derived midpoints tends to reduce bit flips and increase separation.
       sample_times ||= packaged_segment_midpoints_for(media_item: media_item)
 
-      
-obs = extract_observed_variants(
-  file_path: file_path,
-  segment_seconds: seg,
-  spec: spec,
-  max_samples: max_samples,
-  sample_times: sample_times,
-  file_size_bytes: (File.size(file_path) rescue nil),
-  started_at: started_at,
-  time_budget_seconds: FILEMODE_TIME_BUDGET_SECONDS
-)
-
-      match = match_fingerprints(
+      file_size_bytes = (File.size(file_path) rescue nil)
+      obs, match = identify_with_phase_search(
         media_item: media_item,
-        observed_variants: obs[:variants],
-        observed_confidences: obs[:confidences],
-        observed_scores: obs[:scores],
+        file_path: file_path,
+        segment_seconds: seg,
         spec: spec,
+        max_samples: max_samples,
+        sample_times: sample_times,
+        file_size_bytes: file_size_bytes,
+        started_at: started_at,
+        time_budget_seconds: FILEMODE_TIME_BUDGET_SECONDS,
         max_offset_segments: max_offset_segments
       )
+
+      if obs.blank? || match.blank?
+        obs = extract_observed_variants(
+          file_path: file_path,
+          segment_seconds: seg,
+          spec: spec,
+          max_samples: max_samples,
+          sample_times: sample_times,
+          file_size_bytes: file_size_bytes,
+          started_at: started_at,
+          time_budget_seconds: FILEMODE_TIME_BUDGET_SECONDS
+        )
+
+        match = match_fingerprints(
+          media_item: media_item,
+          observed_variants: obs[:variants],
+          observed_confidences: obs[:confidences],
+          observed_scores: obs[:scores],
+          spec: spec,
+          max_offset_segments: max_offset_segments
+        )
+      end
 
       matches = match[:candidates] || []
       match_meta = match[:meta] || {}
 
-# If reference-calibrated matching computed a more reliable A/B sequence, prefer it for display.
-if match_meta.is_a?(Hash) && match_meta[:reference_observed_variants].is_a?(Array)
-  obs[:variants] = match_meta[:reference_observed_variants]
-  obs[:confidences] = match_meta[:reference_observed_confidences] if match_meta[:reference_observed_confidences].is_a?(Array)
-end
-
+      # If reference-calibrated matching computed a more reliable A/B sequence, prefer it for display.
+      if match_meta.is_a?(Hash) && match_meta[:reference_observed_variants].is_a?(Array)
+        obs[:variants] = match_meta[:reference_observed_variants]
+        obs[:confidences] = match_meta[:reference_observed_confidences] if match_meta[:reference_observed_confidences].is_a?(Array)
+      end
 
       result = {
         meta: {
@@ -117,7 +139,9 @@ end
           effective_max_samples: obs[:effective_max_samples],
         }.merge(match_meta),
         observed: {
-          variants: obs[:variants].join(""),
+          variants: format_variant_sequence(obs[:variants]),
+          variants_compact: Array(obs[:variants]).compact.join(""),
+          variants_array: Array(obs[:variants]),
           confidences: obs[:confidences],
         },
         candidates: matches,
@@ -195,6 +219,398 @@ end
     end
     private_class_method :symbolize_hash_keys
 
+    def identify_with_phase_search(media_item:, file_path:, segment_seconds:, spec:, max_samples:, sample_times:, file_size_bytes:, started_at:, time_budget_seconds:, max_offset_segments:)
+      duration = probe_duration_seconds(file_path)
+      duration = 0.0 if duration.nan? || duration.infinite? || duration.negative?
+
+      base_times, effective_cap = build_filemode_sample_times(
+        duration_seconds: duration,
+        segment_seconds: segment_seconds,
+        sample_times: sample_times,
+        max_samples: max_samples,
+        file_size_bytes: file_size_bytes
+      )
+      return [nil, nil] if base_times.blank?
+
+      coarse = run_phase_search_pass(
+        media_item: media_item,
+        file_path: file_path,
+        segment_seconds: segment_seconds,
+        spec: spec,
+        base_times: base_times,
+        duration_seconds: duration,
+        effective_max_samples: effective_cap,
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds,
+        max_offset_segments: max_offset_segments,
+        dense_step_seconds: DENSE_SAMPLE_STEP_DEFAULT
+      )
+
+      best_obs = coarse[:obs]
+      best_match = coarse[:match]
+      best_score = phase_result_score(match: best_match)
+
+      if phase_search_needs_refinement?(match: best_match) && time_remaining_seconds(started_at: started_at, budget_seconds: time_budget_seconds) >= 5.0
+        fine = run_phase_search_pass(
+          media_item: media_item,
+          file_path: file_path,
+          segment_seconds: segment_seconds,
+          spec: spec,
+          base_times: base_times,
+          duration_seconds: duration,
+          effective_max_samples: effective_cap,
+          started_at: started_at,
+          time_budget_seconds: time_budget_seconds,
+          max_offset_segments: max_offset_segments,
+          dense_step_seconds: DENSE_SAMPLE_STEP_FINE
+        )
+
+        fine_score = phase_result_score(match: fine[:match])
+        if fine_score >= best_score
+          best_obs = fine[:obs]
+          best_match = fine[:match]
+          best_score = fine_score
+        end
+      end
+
+      [best_obs, best_match]
+    rescue
+      [nil, nil]
+    end
+    private_class_method :identify_with_phase_search
+
+    def run_phase_search_pass(media_item:, file_path:, segment_seconds:, spec:, base_times:, duration_seconds:, effective_max_samples:, started_at:, time_budget_seconds:, max_offset_segments:, dense_step_seconds:)
+      dense = extract_dense_observed_variants(
+        file_path: file_path,
+        spec: spec,
+        base_times: base_times,
+        duration_seconds: duration_seconds,
+        effective_max_samples: effective_max_samples,
+        segment_seconds: segment_seconds,
+        step_seconds: dense_step_seconds,
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds
+      )
+
+      phase_candidates = build_phase_candidates(segment_seconds: segment_seconds, dense_step_seconds: dense_step_seconds)
+      phase_results = []
+
+      phase_candidates.each do |phase_seconds|
+        obs = build_phase_observation_from_dense(
+          dense: dense,
+          base_times: base_times,
+          duration_seconds: duration_seconds,
+          phase_seconds: phase_seconds,
+          segment_seconds: segment_seconds,
+          effective_max_samples: effective_max_samples
+        )
+        next if obs.blank?
+
+        match = match_fingerprints(
+          media_item: media_item,
+          observed_variants: obs[:variants],
+          observed_confidences: obs[:confidences],
+          observed_scores: obs[:scores],
+          spec: spec,
+          max_offset_segments: max_offset_segments
+        )
+
+        meta = match[:meta] || {}
+        meta[:phase_search_used] = true
+        meta[:chosen_phase_seconds] = phase_seconds.round(3)
+        meta[:phase_candidates_seconds] ||= phase_candidates.map { |v| v.round(3) }
+        meta[:dense_step_seconds] = dense_step_seconds.round(3)
+        meta[:dense_samples] = Array(dense[:times]).length
+        meta[:phase_search_refined] = (dense_step_seconds.to_f <= DENSE_SAMPLE_STEP_FINE.to_f)
+        match[:meta] = meta
+
+        phase_results << { obs: obs, match: match }
+      end
+
+      best = phase_results.max_by { |entry| phase_result_score(match: entry[:match]) }
+      best || { obs: nil, match: nil }
+    end
+    private_class_method :run_phase_search_pass
+
+    def extract_dense_observed_variants(file_path:, spec:, base_times:, duration_seconds:, effective_max_samples:, segment_seconds:, step_seconds:, started_at:, time_budget_seconds:)
+      step = step_seconds.to_f
+      step = DENSE_SAMPLE_STEP_DEFAULT.to_f if step <= 0.0
+
+      budget = time_budget_seconds.to_f
+      budget = FILEMODE_TIME_BUDGET_SECONDS.to_f if budget <= 0.0
+
+      max_target_time = Array(base_times).last.to_f
+      phase_window = phase_search_window_seconds(segment_seconds)
+      dense_end = [max_target_time + phase_window + step, duration_seconds.to_f].min
+      dense_end = duration_seconds.to_f if dense_end <= 0.0
+
+      times = []
+      t = 0.0
+      while t <= dense_end + 0.001
+        times << t.round(3)
+        t += step
+      end
+      times << dense_end.round(3) if times.empty? || times.last.to_f < dense_end.to_f - 0.05
+      times.uniq!
+
+      chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
+      chunk_size = 15 if chunk_size <= 0
+
+      budget_exceeded = lambda do
+        next false if started_at.blank?
+        (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at.to_f) > budget
+      end
+
+      sampled = []
+      used_times = []
+      times.each_slice(chunk_size) do |chunk|
+        break if budget_exceeded.call
+        res = sample_variants_batch_single(file_path: file_path, times: chunk, spec: spec)
+        sampled.concat(Array(res))
+        used_times.concat(chunk.first(Array(res).length))
+      end
+
+      elapsed = nil
+      if started_at.present?
+        elapsed = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at.to_f).round(3)
+      end
+
+      {
+        duration_seconds: duration_seconds,
+        times: used_times,
+        variants: sampled.map { |r| r[:variant] },
+        confidences: sampled.map { |r| r[:confidence] },
+        scores: sampled.map { |r| r[:score] },
+        dense_step_seconds: step,
+        truncated: used_times.length < times.length,
+        effective_max_samples: effective_max_samples,
+        layout: spec[:layout].to_s,
+        elapsed_seconds: elapsed,
+      }
+    end
+    private_class_method :extract_dense_observed_variants
+
+    def build_phase_observation_from_dense(dense:, base_times:, duration_seconds:, phase_seconds:, segment_seconds:, effective_max_samples:)
+      variants = []
+      confidences = []
+      scores = []
+      used_times = []
+
+      Array(base_times).each do |t_base|
+        target_time = clamp_time(t_base.to_f + phase_seconds.to_f, duration_seconds: duration_seconds)
+        sample = interpolate_dense_sample(dense: dense, target_time: target_time)
+        used_times << target_time.round(3)
+
+        if sample.blank?
+          variants << nil
+          confidences << 0.0
+          scores << 0.0
+          next
+        end
+
+        score = sample[:score].to_f
+        conf = sample[:confidence].to_f
+        conf = 0.0 if conf.nan? || conf.infinite? || conf.negative?
+        variant = score >= 0 ? "a" : "b"
+        variant = nil if conf < MIN_CONFIDENCE
+
+        variants << variant
+        confidences << conf.round(4)
+        scores << score
+      end
+
+      elapsed = nil
+      if dense[:elapsed_seconds].present?
+        elapsed = dense[:elapsed_seconds]
+      end
+
+      {
+        duration_seconds: duration_seconds,
+        variants: variants,
+        confidences: confidences,
+        scores: scores,
+        times: used_times,
+        layout: dense[:layout].to_s,
+        truncated: !!dense[:truncated],
+        elapsed_seconds: elapsed,
+        effective_max_samples: effective_max_samples,
+        phase_seconds: phase_seconds.to_f,
+        dense_step_seconds: dense[:dense_step_seconds].to_f,
+      }
+    end
+    private_class_method :build_phase_observation_from_dense
+
+    def interpolate_dense_sample(dense:, target_time:)
+      times = Array(dense[:times]).map(&:to_f)
+      return nil if times.empty?
+
+      idx = times.bsearch_index { |tt| tt >= target_time.to_f }
+      if idx.nil?
+        idx = times.length - 1
+      elsif idx == 0 || times[idx].to_f == target_time.to_f
+        score = Array(dense[:scores])[idx].to_f
+        conf = Array(dense[:confidences])[idx].to_f
+        return { score: score, confidence: conf }
+      end
+
+      left_idx = idx - 1
+      right_idx = idx
+      t0 = times[left_idx].to_f
+      t1 = times[right_idx].to_f
+      return nil if t1 <= t0
+
+      ratio = (target_time.to_f - t0) / (t1 - t0)
+      ratio = 0.0 if ratio < 0.0
+      ratio = 1.0 if ratio > 1.0
+
+      s0 = Array(dense[:scores])[left_idx].to_f
+      s1 = Array(dense[:scores])[right_idx].to_f
+      c0 = Array(dense[:confidences])[left_idx].to_f
+      c1 = Array(dense[:confidences])[right_idx].to_f
+
+      {
+        score: (s0 + ((s1 - s0) * ratio)),
+        confidence: (c0 + ((c1 - c0) * ratio)),
+      }
+    rescue
+      nil
+    end
+    private_class_method :interpolate_dense_sample
+
+    def build_phase_candidates(segment_seconds:, dense_step_seconds:)
+      window = phase_search_window_seconds(segment_seconds)
+      step = (dense_step_seconds.to_f / 2.0)
+      step = 0.25 if step <= 0.0
+
+      out = [0.0]
+      cur = step
+      while cur <= window + 0.001
+        out << cur
+        out << -cur
+        cur += step
+      end
+
+      out.map { |v| v.round(3) }.uniq.sort
+    end
+    private_class_method :build_phase_candidates
+
+    def phase_search_window_seconds(segment_seconds)
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+      window = seg * PHASE_SEARCH_WINDOW_RATIO.to_f
+      window = PHASE_SEARCH_MIN_SECONDS.to_f if window < PHASE_SEARCH_MIN_SECONDS.to_f
+      window = PHASE_SEARCH_WINDOW_MAX_SECONDS.to_f if window > PHASE_SEARCH_WINDOW_MAX_SECONDS.to_f
+      window
+    end
+    private_class_method :phase_search_window_seconds
+
+    def phase_search_needs_refinement?(match:)
+      return false if match.blank?
+      meta = match[:meta] || {}
+      cands = Array(match[:candidates])
+      top_ratio = cands[0] ? cands[0][:match_ratio].to_f : 0.0
+      delta = meta[:offset_delta].to_f
+      effective = meta[:effective_samples].to_f
+      effective < 8.0 || delta < 0.12 || top_ratio < 0.72
+    rescue
+      false
+    end
+    private_class_method :phase_search_needs_refinement?
+
+    def phase_result_score(match:)
+      return -Float::INFINITY if match.blank?
+      meta = match[:meta] || {}
+      cands = Array(match[:candidates])
+      top = cands[0]
+      second = cands[1]
+      top_ratio = top ? top[:match_ratio_weighted].to_f : 0.0
+      top_ratio = cands[0][:match_ratio].to_f if top_ratio <= 0.0 && cands[0]
+      second_ratio = second ? second[:match_ratio_weighted].to_f : 0.0
+      second_ratio = cands[1][:match_ratio].to_f if second_ratio <= 0.0 && cands[1]
+      delta = meta[:offset_delta].to_f
+      delta = (top_ratio - second_ratio) if delta <= 0.0
+      effective = meta[:effective_samples].to_f
+      phase_penalty = meta[:chosen_phase_seconds].to_f.abs * 0.001
+      (delta * 1.0) + (top_ratio * 0.05) + (effective * 0.0025) - phase_penalty
+    rescue
+      -Float::INFINITY
+    end
+    private_class_method :phase_result_score
+
+    def build_filemode_sample_times(duration_seconds:, segment_seconds:, sample_times:, max_samples:, file_size_bytes: nil)
+      seg = segment_seconds.to_i
+      seg = 6 if seg <= 0
+
+      times_mid = nil
+      if sample_times.present?
+        times = Array(sample_times).map { |t| t.to_f }.select { |t| t >= 0.0 }
+        times_mid = times
+      end
+
+      if times_mid.present?
+        times_mid = times_mid.select { |t| t < duration_seconds.to_f + 0.05 }
+      else
+        total = (duration_seconds.to_f / seg).floor
+        total = 0 if total.negative?
+        sample_count = [total, max_samples.to_i].min
+        sample_count = 0 if sample_count.negative?
+        times_mid = sample_count.times.map { |i| (i + 0.5) * seg }
+      end
+
+      cap = filemode_sample_cap_for(max_samples: max_samples, duration_seconds: duration_seconds, file_size_bytes: file_size_bytes)
+      cap = 5 if cap < 5 && times_mid.length >= 5
+      times_mid = times_mid.first(cap) if cap > 0
+
+      [times_mid, cap]
+    end
+    private_class_method :build_filemode_sample_times
+
+    def filemode_sample_cap_for(max_samples:, duration_seconds:, file_size_bytes: nil)
+      cap = max_samples.to_i
+      cap = 0 if cap.negative?
+
+      if duration_seconds.to_f > 0
+        if duration_seconds.to_f > 900
+          cap = [cap, 18].min
+        elsif duration_seconds.to_f > 480
+          cap = [cap, 24].min
+        elsif duration_seconds.to_f > 240
+          cap = [cap, 30].min
+        elsif duration_seconds.to_f > 120
+          cap = [cap, 40].min
+        end
+      end
+
+      fs = file_size_bytes.to_i
+      if fs > 0
+        if fs > 250 * 1024 * 1024
+          cap = [cap, 18].min
+        elsif fs > 150 * 1024 * 1024
+          cap = [cap, 24].min
+        elsif fs > 100 * 1024 * 1024
+          cap = [cap, 30].min
+        elsif fs > 70 * 1024 * 1024
+          cap = [cap, 40].min
+        end
+      end
+
+      cap
+    end
+    private_class_method :filemode_sample_cap_for
+
+    def time_remaining_seconds(started_at:, budget_seconds:)
+      return budget_seconds.to_f if started_at.blank?
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at.to_f
+      budget_seconds.to_f - elapsed.to_f
+    rescue
+      0.0
+    end
+    private_class_method :time_remaining_seconds
+
+    def format_variant_sequence(arr)
+      Array(arr).map { |v| v.present? ? v.to_s : "." }.join("")
+    end
+    private_class_method :format_variant_sequence
 
     def extract_observed_variants(file_path:, segment_seconds:, spec:, max_samples:, sample_times: nil, file_size_bytes: nil, started_at: nil, time_budget_seconds: nil)
   duration = probe_duration_seconds(file_path)
@@ -213,53 +629,13 @@ end
     (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at.to_f) > budget
   end
 
-  # Build sample times (prefer playlist-derived segment midpoints when available).
-  times_mid = nil
-  if sample_times.present?
-    times = Array(sample_times).map { |t| t.to_f }.select { |t| t >= 0.0 }
-    times_mid = times
-  end
-
-  if times_mid.present?
-    times_mid = times_mid.select { |t| t < duration.to_f + 0.05 }
-  else
-    total = (duration / seg).floor
-    total = 0 if total.negative?
-    sample_count = [total, max_samples.to_i].min
-    sample_count = 0 if sample_count.negative?
-    times_mid = sample_count.times.map { |i| (i + 0.5) * seg }
-  end
-
-  # Dynamic caps to keep file-mode under timeouts for long/large uploads.
-  cap = max_samples.to_i
-  cap = 0 if cap.negative?
-  if duration.to_f > 0
-    if duration.to_f > 900
-      cap = [cap, 18].min
-    elsif duration.to_f > 480
-      cap = [cap, 24].min
-    elsif duration.to_f > 240
-      cap = [cap, 30].min
-    elsif duration.to_f > 120
-      cap = [cap, 40].min
-    end
-  end
-
-  fs = file_size_bytes.to_i
-  if fs > 0
-    if fs > 250 * 1024 * 1024
-      cap = [cap, 18].min
-    elsif fs > 150 * 1024 * 1024
-      cap = [cap, 24].min
-    elsif fs > 100 * 1024 * 1024
-      cap = [cap, 30].min
-    elsif fs > 70 * 1024 * 1024
-      cap = [cap, 40].min
-    end
-  end
-
-  cap = 5 if cap < 5 && times_mid.length >= 5
-  times_mid = times_mid.first(cap) if cap > 0
+  times_mid, cap = build_filemode_sample_times(
+    duration_seconds: duration,
+    segment_seconds: seg,
+    sample_times: sample_times,
+    max_samples: max_samples,
+    file_size_bytes: file_size_bytes
+  )
 
   pass1 = []
   used_times = []
@@ -553,7 +929,54 @@ end
     private_class_method :reference_tables_for
 
 
-    
+
+    def annotate_candidate_debugs!(candidates:, observed_variants:, media_item_id:)
+      obs = Array(observed_variants)
+      return if candidates.blank? || obs.empty?
+
+      candidates.each do |cand|
+        offset = cand[:best_offset_segments].to_i
+        expected = Array.new(obs.length)
+        indices = Array.new(obs.length)
+        mismatches = []
+
+        obs.each_with_index do |ov, i|
+          seg_idx = i + offset
+          next if ov.blank?
+
+          indices[i] = seg_idx
+          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: cand[:fingerprint_id],
+            media_item_id: media_item_id,
+            segment_index: seg_idx
+          )
+          expected[i] = exp
+          mismatches << i if exp != ov
+        end
+
+        cand[:reference_segment_indices_used] = indices
+        cand[:expected_variants] = format_variant_sequence(expected)
+        cand[:mismatch_positions] = mismatches
+      end
+    rescue
+      nil
+    end
+    private_class_method :annotate_candidate_debugs!
+
+    def apply_top_candidate_debug_to_meta!(meta:, candidates:)
+      return meta unless meta.is_a?(Hash)
+      top = Array(candidates).first
+      return meta if top.blank?
+
+      meta[:reference_segment_indices_used] = top[:reference_segment_indices_used] if top[:reference_segment_indices_used].present?
+      meta[:expected_variants_top_candidate] = top[:expected_variants].to_s if top[:expected_variants].present?
+      meta[:mismatch_positions] = top[:mismatch_positions] if top[:mismatch_positions].present?
+      meta
+    rescue
+      meta
+    end
+    private_class_method :apply_top_candidate_debug_to_meta!
+
     def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, spec: nil, max_offset_segments:)
       fps = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).includes(:user).to_a
       return { candidates: [], meta: { offset_strategy: "global" } } if fps.empty?
@@ -763,6 +1186,9 @@ end
         meta[:offset_second_match_ratio] = best_diag[:second_ratio_w].round(4)
         meta[:offset_delta] = best_diag[:delta].round(4)
       end
+
+      annotate_candidate_debugs!(candidates: candidates, observed_variants: obs, media_item_id: media_item.id)
+      apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
 
       { candidates: candidates, meta: meta }
     end
@@ -1249,6 +1675,9 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     reference_observed_variants: ref_obs,
     reference_observed_confidences: ref_conf
   }
+
+  annotate_candidate_debugs!(candidates: candidates, observed_variants: ref_obs, media_item_id: media_item.id)
+  apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
 
   { candidates: candidates, meta: meta }
 end

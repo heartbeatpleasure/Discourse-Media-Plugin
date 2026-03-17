@@ -204,6 +204,19 @@ export default RouteTemplate(
                 {{#if @controller.meta.layout}}
                   <div><strong>layout:</strong> {{@controller.meta.layout}}</div>
                 {{/if}}
+                {{#if @controller.phaseSearchUsed}}
+                  <div>
+                    <strong>phase:</strong>
+                    {{#if @controller.chosenPhaseSeconds}}
+                      {{@controller.chosenPhaseSeconds}}s
+                    {{else}}
+                      0.0s
+                    {{/if}}
+                    {{#if @controller.denseStepSeconds}}
+                      <span style="opacity:0.85;">(dense_step: {{@controller.denseStepSeconds}}s)</span>
+                    {{/if}}
+                  </div>
+                {{/if}}
 
                 {{#if @controller.attempts}}
                   <div>
@@ -240,12 +253,39 @@ export default RouteTemplate(
               {{/if}}
             </div>
 
-            {{#if @controller.observedVariants}}
+            {{#if @controller.hasAlignmentDebug}}
               <div style="margin-top: 1rem;">
                 <strong>Observed variants:</strong>
                 <code style="display:block; white-space: pre-wrap; word-break: break-word; margin-top: 0.35rem;">
                   {{@controller.observedVariants}}
                 </code>
+
+                {{#if @controller.expectedVariantsTopCandidate}}
+                  <div style="margin-top: 0.65rem;">
+                    <strong>Expected top candidate:</strong>
+                    <code style="display:block; white-space: pre-wrap; word-break: break-word; margin-top: 0.35rem;">
+                      {{@controller.expectedVariantsTopCandidate}}
+                    </code>
+                  </div>
+                {{/if}}
+
+                {{#if @controller.referenceSegmentIndicesText}}
+                  <div style="margin-top: 0.65rem;">
+                    <strong>Reference segment indices:</strong>
+                    <code style="display:block; white-space: pre-wrap; word-break: break-word; margin-top: 0.35rem;">
+                      {{@controller.referenceSegmentIndicesText}}
+                    </code>
+                  </div>
+                {{/if}}
+
+                {{#if @controller.mismatchPositions.length}}
+                  <div style="margin-top: 0.65rem;">
+                    <strong>Mismatch positions:</strong>
+                    <code style="display:block; white-space: pre-wrap; word-break: break-word; margin-top: 0.35rem;">
+                      {{@controller.mismatchPositionsText}}
+                    </code>
+                  </div>
+                {{/if}}
               </div>
             {{/if}}
 
