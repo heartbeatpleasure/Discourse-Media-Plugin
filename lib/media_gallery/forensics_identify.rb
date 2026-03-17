@@ -48,6 +48,14 @@ module ::MediaGallery
     PHASE_SEARCH_WINDOW_MAX_SECONDS = 1.25
     PHASE_SEARCH_MIN_SECONDS = 0.5
 
+    # Inverted polarity is a useful rescue path for some screen recordings,
+    # but we only want to use it when it is clearly better than normal polarity.
+    POLARITY_SWITCH_MIN_TOP_RATIO = 0.62
+    POLARITY_SWITCH_MIN_RATIO_GAIN = 0.03
+    POLARITY_SWITCH_MIN_DELTA_GAIN = 0.03
+    POLARITY_SWITCH_MIN_SCORE_GAIN = 0.01
+    POLARITY_SWITCH_MAX_DELTA_REGRESSION = 0.015
+
     def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil, sample_times: nil)
       raise ArgumentError, "missing media_item" if media_item.blank?
       raise ArgumentError, "missing file" if file_path.blank? || !File.exist?(file_path)
@@ -612,6 +620,64 @@ module ::MediaGallery
     end
     private_class_method :format_variant_sequence
 
+    def invert_variant(v)
+      return nil if v.blank?
+
+      vv = v.to_s
+      return "b" if vv == "a"
+      return "a" if vv == "b"
+
+      vv
+    end
+    private_class_method :invert_variant
+
+    def invert_variant_sequence(arr)
+      Array(arr).map { |v| invert_variant(v) }
+    end
+    private_class_method :invert_variant_sequence
+
+    def select_polarity_result(normal_result:, inverted_result:)
+      normal_diag = normal_result.is_a?(Hash) ? (normal_result[:diag] || {}) : {}
+      inverted_diag = inverted_result.is_a?(Hash) ? (inverted_result[:diag] || {}) : {}
+
+      normal_score = normal_result&.dig(:score).to_f
+      inverted_score = inverted_result&.dig(:score).to_f
+      normal_ratio = normal_diag[:top_ratio_w].to_f
+      inverted_ratio = inverted_diag[:top_ratio_w].to_f
+      normal_delta = normal_diag[:delta].to_f
+      inverted_delta = inverted_diag[:delta].to_f
+
+      ratio_gain = inverted_ratio - normal_ratio
+      delta_gain = inverted_delta - normal_delta
+      score_gain = inverted_score - normal_score
+
+      gate_passed =
+        inverted_result.present? &&
+          inverted_ratio >= POLARITY_SWITCH_MIN_TOP_RATIO &&
+          delta_gain >= -POLARITY_SWITCH_MAX_DELTA_REGRESSION &&
+          (
+            score_gain >= POLARITY_SWITCH_MIN_SCORE_GAIN ||
+              ratio_gain >= POLARITY_SWITCH_MIN_RATIO_GAIN ||
+              delta_gain >= POLARITY_SWITCH_MIN_DELTA_GAIN
+          )
+
+      chosen_flip = gate_passed
+      chosen = chosen_flip ? inverted_result : normal_result
+      fallback = chosen_flip ? normal_result : inverted_result
+
+      {
+        chosen: chosen,
+        chosen_flip: chosen_flip,
+        gate_passed: gate_passed,
+        ratio_gain: ratio_gain.round(4),
+        delta_gain: delta_gain.round(4),
+        score_gain: score_gain.round(4),
+        chosen_score: chosen&.dig(:score),
+        fallback_score: fallback&.dig(:score),
+      }
+    end
+    private_class_method :select_polarity_result
+
     def extract_observed_variants(file_path:, segment_seconds:, spec:, max_samples:, sample_times: nil, file_size_bytes: nil, started_at: nil, time_budget_seconds: nil)
   duration = probe_duration_seconds(file_path)
   duration = 0.0 if duration.nan? || duration.infinite? || duration.negative?
@@ -1043,68 +1109,116 @@ end
 
       total_weight = samples.reduce(0.0) { |acc, s| acc + s[2].to_f }.to_f
 
+      polarity_sets = [
+        {
+          flip: false,
+          samples: samples,
+          observed_variants: obs,
+        }
+      ]
+
+      polarity_sets << {
+        flip: true,
+        samples: samples.map { |(i, ov, w, c)| [i, invert_variant(ov), w, c] },
+        observed_variants: invert_variant_sequence(obs),
+      }
+
       chosen_offset = 0
+      chosen_polarity_flip = false
+      chosen_samples = samples
+      chosen_obs = obs
       best_score = nil
       best_diag = nil
+      polarity_best_scores = { false => -Float::INFINITY, true => -Float::INFINITY }
+      best_by_polarity = {}
 
       # Global offset selection:
       # We choose ONE offset for the leak clip and score all candidates using that.
       #
       # Why: letting each user pick their own best offset can overfit noise and
       # produce false positives with short clips.
-      (0..max_off).each do |offset|
-        top = nil
-        second = nil
+      polarity_sets.each do |pol|
+        pol_samples = pol[:samples]
+        next if pol_samples.blank?
 
-        fps.each do |rec|
-          mism_w = 0.0
-          comp_w = 0.0
+        (0..max_off).each do |offset|
+          top = nil
+          second = nil
 
-          samples.each do |(i, ov, w, _c)|
-            exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-              fingerprint_id: rec.fingerprint_id,
-              media_item_id: media_item.id,
-              segment_index: i + offset
-            )
+          fps.each do |rec|
+            mism_w = 0.0
+            comp_w = 0.0
 
-            comp_w += w
-            mism_w += w if exp != ov
+            pol_samples.each do |(i, ov, w, _c)|
+              exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+                fingerprint_id: rec.fingerprint_id,
+                media_item_id: media_item.id,
+                segment_index: i + offset
+              )
+
+              comp_w += w
+              mism_w += w if exp != ov
+            end
+
+            next if comp_w <= 0.0
+
+            ratio_w = 1.0 - (mism_w / comp_w)
+
+            entry = { ratio_w: ratio_w, comp_w: comp_w, rec: rec }
+
+            if top.nil? || entry[:ratio_w] > top[:ratio_w] || (entry[:ratio_w] == top[:ratio_w] && entry[:comp_w] > top[:comp_w])
+              second = top
+              top = entry
+            elsif second.nil? || entry[:ratio_w] > second[:ratio_w] || (entry[:ratio_w] == second[:ratio_w] && entry[:comp_w] > second[:comp_w])
+              second = entry
+            end
           end
 
-          next if comp_w <= 0.0
+          next unless top
 
-          ratio_w = 1.0 - (mism_w / comp_w)
+          second_ratio = second ? second[:ratio_w].to_f : 0.0
+          delta = top[:ratio_w].to_f - second_ratio
 
-          entry = { ratio_w: ratio_w, comp_w: comp_w, rec: rec }
+          coverage = total_weight > 0 ? (top[:comp_w].to_f / total_weight.to_f) : 0.0
 
-          if top.nil? || entry[:ratio_w] > top[:ratio_w] || (entry[:ratio_w] == top[:ratio_w] && entry[:comp_w] > top[:comp_w])
-            second = top
-            top = entry
-          elsif second.nil? || entry[:ratio_w] > second[:ratio_w] || (entry[:ratio_w] == second[:ratio_w] && entry[:comp_w] > second[:comp_w])
-            second = entry
+          # Score prioritizes separation, then overall fit, then (slightly) prefers smaller offsets.
+          # We still apply a small inverted-penalty here, but the final polarity choice is gated
+          # separately so normal polarity remains the default unless inverted is clearly better.
+          score = delta + (top[:ratio_w].to_f * 0.02) + (coverage.to_f * 0.01) - (offset.to_f * 0.0002) - (pol[:flip] ? 0.0025 : 0.0)
+          polarity_best_scores[pol[:flip]] = score if score > polarity_best_scores[pol[:flip]]
+
+          current_best = best_by_polarity[pol[:flip]]
+          if current_best.nil? || score > current_best[:score] ||
+               (score == current_best[:score] && top[:ratio_w].to_f > current_best.dig(:diag, :top_ratio_w).to_f)
+            best_by_polarity[pol[:flip]] = {
+              score: score,
+              offset: offset,
+              flip: pol[:flip],
+              samples: pol_samples,
+              observed_variants: pol[:observed_variants],
+              diag: {
+                top_ratio_w: top[:ratio_w].to_f,
+                second_ratio_w: second_ratio,
+                delta: delta,
+              }
+            }
           end
         end
+      end
 
-        next unless top
+      polarity_choice = select_polarity_result(
+        normal_result: best_by_polarity[false],
+        inverted_result: best_by_polarity[true]
+      )
+      chosen_result = polarity_choice[:chosen] || best_by_polarity[false] || best_by_polarity[true]
 
-        second_ratio = second ? second[:ratio_w].to_f : 0.0
-        delta = top[:ratio_w].to_f - second_ratio
-
-        coverage = total_weight > 0 ? (top[:comp_w].to_f / total_weight.to_f) : 0.0
-
-        # Score prioritizes separation, then overall fit, then (slightly) prefers smaller offsets.
-        score = delta + (top[:ratio_w].to_f * 0.02) + (coverage.to_f * 0.01) - (offset.to_f * 0.0002)
-
-        if best_score.nil? || score > best_score ||
-             (score == best_score && top[:ratio_w] > best_diag[:top_ratio_w])
-          best_score = score
-          chosen_offset = offset
-          best_diag = {
-            top_ratio_w: top[:ratio_w].to_f,
-            second_ratio_w: second_ratio,
-            delta: delta,
-          }
-        end
+      if chosen_result.present?
+        best_score = chosen_result[:score]
+        chosen_offset = chosen_result[:offset].to_i
+        chosen_polarity_flip = chosen_result[:flip] ? true : false
+        chosen_samples = chosen_result[:samples] || samples
+        chosen_obs = chosen_result[:observed_variants] || obs
+        best_diag = chosen_result[:diag] || {}
       end
 
       # Compute candidates at the chosen global offset.
@@ -1115,7 +1229,7 @@ end
         mism = 0
         comp = 0
 
-        samples.each do |(i, ov, w, _c)|
+        chosen_samples.each do |(i, ov, w, _c)|
           exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
             fingerprint_id: rec.fingerprint_id,
             media_item_id: media_item.id,
@@ -1144,10 +1258,10 @@ end
           compared: comp,
           mismatches_weighted: mism_w.round(6),
           compared_weighted: comp_w.round(6),
-          # Keep match_ratio aligned with mismatches/compared (raw), and expose
-          # the weighted score separately for diagnostics.
           match_ratio: raw_ratio.round(4),
           match_ratio_weighted: w_ratio.round(4),
+          polarity_flip_used: chosen_polarity_flip,
+          variant_polarity: (chosen_polarity_flip ? "inverted" : "normal"),
         }
       end
 
@@ -1161,24 +1275,32 @@ end
           rec = rec_by_user[cand[:user_id]]
           next unless rec
 
-          local = best_local_offset(rec: rec, samples: samples, max_off: max_off, media_item_id: media_item.id)
+          local = best_local_offset(rec: rec, samples: chosen_samples, max_off: max_off, media_item_id: media_item.id)
           cand[:local_best_offset_segments] = local[:offset]
           cand[:local_match_ratio] = local[:match_ratio].round(4)
         end
       end
 
       # Estimate "effective sample count" by normalizing the weighted sum using the median confidence^2.
-      conf_list = samples.map { |s| s[3].to_f }.select { |c| c > 0.0 }
+      conf_list = chosen_samples.map { |s| s[3].to_f }.select { |c| c > 0.0 }
       med_c = median(conf_list)
       med_c = 0.03 if med_c <= 0.0
       norm = med_c * med_c
-      effective = norm > 0 ? (total_weight / norm) : samples.length.to_f
+      chosen_total_weight = chosen_samples.reduce(0.0) { |acc, s| acc + s[2].to_f }.to_f
+      effective = norm > 0 ? (chosen_total_weight / norm) : chosen_samples.length.to_f
       effective = effective.round(2)
 
       meta = {
         offset_strategy: "global",
         chosen_offset_segments: chosen_offset,
         effective_samples: effective,
+        polarity_flip_used: chosen_polarity_flip,
+        variant_polarity: (chosen_polarity_flip ? "inverted" : "normal"),
+        polarity_selection_strategy: "prefer_normal_unless_inverted_clearly_better",
+        polarity_gate_passed: polarity_choice[:gate_passed],
+        polarity_ratio_gain: polarity_choice[:ratio_gain],
+        polarity_delta_gain: polarity_choice[:delta_gain],
+        polarity_score_gain: polarity_choice[:score_gain],
       }
 
       if best_diag
@@ -1187,7 +1309,12 @@ end
         meta[:offset_delta] = best_diag[:delta].round(4)
       end
 
-      annotate_candidate_debugs!(candidates: candidates, observed_variants: obs, media_item_id: media_item.id)
+      other_score = polarity_best_scores[!chosen_polarity_flip]
+      if other_score && other_score.finite? && best_score && best_score.finite?
+        meta[:polarity_score_delta] = (best_score - other_score).round(4)
+      end
+
+      annotate_candidate_debugs!(candidates: candidates, observed_variants: chosen_obs, media_item_id: media_item.id)
       apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
 
       { candidates: candidates, meta: meta }
@@ -1495,7 +1622,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
 
   eps = 1e-6
 
-  build_usable = lambda do |offset|
+  build_usable = lambda do |offset, polarity_flip = false|
     usable = []
     ratios = []
     margins = []
@@ -1529,6 +1656,8 @@ def sample_variants_batch_single(file_path:, times:, spec:)
         d_ot = da_l
       end
 
+      v = invert_variant(v) if polarity_flip
+
       ratio = d_cl / (sep + eps)
       margin = (d_ot - d_cl) / (sep + eps)
 
@@ -1553,60 +1682,84 @@ def sample_variants_batch_single(file_path:, times:, spec:)
   end
 
   best_offset = 0
+  best_polarity_flip = false
   best_score = nil
   best_diag = nil
+  polarity_best_scores = { false => -Float::INFINITY, true => -Float::INFINITY }
+  best_by_polarity = {}
 
-  (0..max_off).each do |offset|
-    u = build_usable.call(offset)
-    next if u[:usable].empty? || u[:comp_w] <= 0.0
+  [false, true].each do |polarity_flip|
+    (0..max_off).each do |offset|
+      u = build_usable.call(offset, polarity_flip)
+      next if u[:usable].empty? || u[:comp_w] <= 0.0
 
-    top = nil
-    second = nil
+      top = nil
+      second = nil
 
-    fps.each do |rec|
-      mism_w = 0.0
-      u[:usable].each do |(i, ov, w, _m, _r)|
-        exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-          fingerprint_id: rec.fingerprint_id,
-          media_item_id: media_item.id,
-          segment_index: i + offset
-        )
-        mism_w += w if exp != ov
+      fps.each do |rec|
+        mism_w = 0.0
+        u[:usable].each do |(i, ov, w, _m, _r)|
+          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: rec.fingerprint_id,
+            media_item_id: media_item.id,
+            segment_index: i + offset
+          )
+          mism_w += w if exp != ov
+        end
+
+        ratio_w = 1.0 - (mism_w / u[:comp_w])
+        entry = { ratio_w: ratio_w, rec: rec }
+
+        if top.nil? || ratio_w > top[:ratio_w]
+          second = top
+          top = entry
+        elsif second.nil? || ratio_w > second[:ratio_w]
+          second = entry
+        end
       end
 
-      ratio_w = 1.0 - (mism_w / u[:comp_w])
-      entry = { ratio_w: ratio_w, rec: rec }
+      next unless top
+      second_ratio = second ? second[:ratio_w].to_f : 0.0
+      delta = top[:ratio_w].to_f - second_ratio
 
-      if top.nil? || ratio_w > top[:ratio_w]
-        second = top
-        top = entry
-      elsif second.nil? || ratio_w > second[:ratio_w]
-        second = entry
+      score = delta + (top[:ratio_w].to_f * 0.03) + (u[:median_margin].to_f * 0.02) - (offset.to_f * 0.0002) - (polarity_flip ? 0.0025 : 0.0)
+      polarity_best_scores[polarity_flip] = score if score > polarity_best_scores[polarity_flip]
+
+      current_best = best_by_polarity[polarity_flip]
+      if current_best.nil? || score > current_best[:score] ||
+           (score == current_best[:score] && top[:ratio_w].to_f > current_best.dig(:diag, :top_ratio_w).to_f)
+        best_by_polarity[polarity_flip] = {
+          score: score,
+          offset: offset,
+          flip: polarity_flip,
+          diag: {
+            top_ratio_w: top[:ratio_w].to_f,
+            second_ratio_w: second_ratio,
+            delta: delta,
+            comp_w: u[:comp_w],
+            usable_count: u[:usable_count],
+            median_ratio: u[:median_ratio],
+            median_margin: u[:median_margin]
+          }
+        }
       end
-    end
-
-    next unless top
-    second_ratio = second ? second[:ratio_w].to_f : 0.0
-    delta = top[:ratio_w].to_f - second_ratio
-
-    score = delta + (top[:ratio_w].to_f * 0.03) + (u[:median_margin].to_f * 0.02) - (offset.to_f * 0.0002)
-
-    if best_score.nil? || score > best_score
-      best_score = score
-      best_offset = offset
-      best_diag = {
-        top_ratio_w: top[:ratio_w].to_f,
-        second_ratio_w: second_ratio,
-        delta: delta,
-        comp_w: u[:comp_w],
-        usable_count: u[:usable_count],
-        median_ratio: u[:median_ratio],
-        median_margin: u[:median_margin]
-      }
     end
   end
 
-  u = build_usable.call(best_offset)
+  polarity_choice = select_polarity_result(
+    normal_result: best_by_polarity[false],
+    inverted_result: best_by_polarity[true]
+  )
+  chosen_result = polarity_choice[:chosen] || best_by_polarity[false] || best_by_polarity[true]
+
+  if chosen_result.present?
+    best_score = chosen_result[:score]
+    best_offset = chosen_result[:offset].to_i
+    best_polarity_flip = chosen_result[:flip] ? true : false
+    best_diag = chosen_result[:diag] || {}
+  end
+
+  u = build_usable.call(best_offset, best_polarity_flip)
 
   candidates = []
   fps.each do |rec|
@@ -1642,6 +1795,8 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       match_ratio_weighted: (1.0 - (mism_w / u[:comp_w])).round(4),
       local_best_offset_segments: best_offset,
       local_match_ratio: (1.0 - (mism_w / u[:comp_w])).round(4),
+      polarity_flip_used: best_polarity_flip,
+      variant_polarity: (best_polarity_flip ? "inverted" : "normal"),
     }
   end
 
@@ -1673,8 +1828,20 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     offset_second_match_ratio: (best_diag ? best_diag[:second_ratio_w].to_f : second&.dig(:match_ratio_weighted).to_f).round(4),
     offset_delta: (best_diag ? best_diag[:delta].to_f : (top&.dig(:match_ratio_weighted).to_f - second&.dig(:match_ratio_weighted).to_f)).round(4),
     reference_observed_variants: ref_obs,
-    reference_observed_confidences: ref_conf
+    reference_observed_confidences: ref_conf,
+    polarity_flip_used: best_polarity_flip,
+    variant_polarity: (best_polarity_flip ? "inverted" : "normal"),
+    polarity_selection_strategy: "prefer_normal_unless_inverted_clearly_better",
+    polarity_gate_passed: polarity_choice[:gate_passed],
+    polarity_ratio_gain: polarity_choice[:ratio_gain],
+    polarity_delta_gain: polarity_choice[:delta_gain],
+    polarity_score_gain: polarity_choice[:score_gain]
   }
+
+  other_score = polarity_best_scores[!best_polarity_flip]
+  if other_score && other_score.finite? && best_score && best_score.finite?
+    meta[:polarity_score_delta] = (best_score - other_score).round(4)
+  end
 
   annotate_candidate_debugs!(candidates: candidates, observed_variants: ref_obs, media_item_id: media_item.id)
   apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)

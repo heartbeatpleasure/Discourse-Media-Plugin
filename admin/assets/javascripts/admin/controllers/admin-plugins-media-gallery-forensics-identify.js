@@ -258,6 +258,20 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return Number.isFinite(f) ? f : null;
   }
 
+  get variantPolarity() {
+    return this.meta?.variant_polarity || this.topCandidate?.variant_polarity || "normal";
+  }
+
+  get polarityFlipUsed() {
+    return !!(this.meta?.polarity_flip_used || this.topCandidate?.polarity_flip_used);
+  }
+
+  get polarityScoreDelta() {
+    const v = this.meta?.polarity_score_delta;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
   get expectedVariantsTopCandidate() {
     return this.meta?.expected_variants_top_candidate || this.topCandidate?.expected_variants || "";
   }

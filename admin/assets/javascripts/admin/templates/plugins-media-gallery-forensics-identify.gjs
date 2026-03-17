@@ -217,6 +217,12 @@ export default RouteTemplate(
                     {{/if}}
                   </div>
                 {{/if}}
+                <div>
+                  <strong>variant polarity:</strong> {{@controller.variantPolarity}}
+                  {{#if @controller.polarityFlipUsed}}
+                    <span style="opacity:0.85;">(A/B flipped during matching{{#if @controller.polarityScoreDelta}}, score Δ: {{@controller.polarityScoreDelta}}{{/if}})</span>
+                  {{/if}}
+                </div>
 
                 {{#if @controller.attempts}}
                   <div>
