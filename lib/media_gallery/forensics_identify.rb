@@ -377,7 +377,9 @@ module ::MediaGallery
       needed = needed_count.to_i
       needed = 0 if needed.negative?
       needed = [needed, segs.length].min
-      return nil if needed <= 0      # Cache is safe because the plugin is in active development; we key on a digest of the spec.
+      return nil if needed <= 0
+
+      # Cache key on a digest of the spec.
       spec_hash =
         begin
           base = spec.slice(:layout, :kind, :box_size_frac, :pairs, :tiles)
@@ -386,10 +388,10 @@ module ::MediaGallery
         rescue
           "na"
         end
+
       cache_path = File.join(root, "forensics_reference_#{spec[:layout].to_s.presence || 'layout'}.json")
 
       cache = (JSON.parse(File.read(cache_path)) rescue nil) if File.exist?(cache_path)
-
       if cache.is_a?(Hash) && cache["spec_hash"].to_s == spec_hash && cache["thr"].is_a?(Array) && cache["delta"].is_a?(Array)
         thr = cache["thr"]
         delta = cache["delta"]
@@ -407,59 +409,189 @@ module ::MediaGallery
       b_dir = File.join(root, "b", variant)
       return nil unless Dir.exist?(a_dir) && Dir.exist?(b_dir)
 
-      thr = []
-      delta = []
+      # Build concat demuxer lists so we can sample many segment midpoints in a handful of ffmpeg calls.
+      # This avoids spawning hundreds of ffmpeg processes (which can trigger request timeouts / 500s).
+      begin
+        a_list = Tempfile.new(["mg_ref_a_", ".txt"])
+        b_list = Tempfile.new(["mg_ref_b_", ".txt"])
+        a_list.binmode
+        b_list.binmode
 
-      needed.times do |i|
-        uri = segs[i][:uri].to_s
-        dur = segs[i][:duration].to_f
-        a_path = File.join(a_dir, uri)
-        b_path = File.join(b_dir, uri)
-
-        if uri.blank? || !File.exist?(a_path) || !File.exist?(b_path)
-          thr << 0.0
-          delta << 0.0
-          next
+        # concat list escaping
+        esc = lambda do |p|
+          p.to_s.gsub("'", "'\\''")
         end
 
-        # Sample a few timestamps within the segment. HLS packaging forces keyframes at boundaries,
-        # so segments are independently decodable and fast to sample.
-        t1 = [dur * 0.25, 0.05].max
-        t2 = [dur * 0.50, 0.10].max
-        t3 = [dur * 0.75, 0.15].max
-        times = [t1, t2, t3].map { |t| t.to_f.round(3) }.uniq
+        cursor = 0.0
+        times = []
+        needed.times do |i|
+          uri = segs[i][:uri].to_s
+          dur = segs[i][:duration].to_f
+          dur = 0.0 if dur.negative? || dur.nan? || dur.infinite?
+          dur = 0.001 if dur <= 0.0
 
-        sa = median(sample_scores_batch_single(file_path: a_path, times: times, spec: spec))
-        sb = median(sample_scores_batch_single(file_path: b_path, times: times, spec: spec))
+          a_path = File.join(a_dir, uri)
+          b_path = File.join(b_dir, uri)
 
-        thr << ((sa.to_f + sb.to_f) / 2.0)
-        delta << ((sa.to_f - sb.to_f) / 2.0)
+          # If any segment is missing, we still keep alignment by inserting a tiny duration.
+          if File.exist?(a_path) && File.exist?(b_path)
+            a_list.write("file '#{esc.call(a_path)}'
+")
+            b_list.write("file '#{esc.call(b_path)}'
+")
+          else
+            # Write the template segment as a fallback if present; otherwise skip and keep going.
+            # We'll mark its delta as 0 later.
+            tmpl = File.join(root, variant, uri)
+            if File.exist?(tmpl)
+              a_list.write("file '#{esc.call(tmpl)}'
+")
+              b_list.write("file '#{esc.call(tmpl)}'
+")
+            end
+          end
+
+          times << (cursor + (dur / 2.0))
+          cursor += dur
+        end
+
+        a_list.flush
+        b_list.flush
+
+        kind = spec[:kind].to_s
+        kind = "pairs" if kind.blank? && spec[:pairs].present?
+        kind = "tiles" if kind.blank? && spec[:tiles].present?
+
+        expected =
+          if kind == "pairs"
+            (spec[:pairs] || []).length * 2
+          else
+            (spec[:tiles] || []).length * 2
+          end
+
+        return nil if expected <= 0
+
+        # Sample in chunks to keep filter graphs reasonable.
+        chunk = 40
+        a_scores = []
+        b_scores = []
+
+        times.each_slice(chunk).with_index do |ts, idx|
+          # Align slice indices
+          t0 = idx * chunk
+          slice = ts
+
+          raw_a = ffmpeg_sample_raw_single_input_times(
+            input_args: ["-f", "concat", "-safe", "0", "-i", a_list.path],
+            times: slice,
+            expected_bytes_per_frame: expected,
+            filter_builder: lambda do |in_label|
+              if kind == "pairs"
+                build_pair_filter(in_label: in_label, pairs: (spec[:pairs] || []), box: spec[:box_size_frac].to_f)
+              else
+                build_tile_filter(in_label: in_label, tiles: (spec[:tiles] || []), box: spec[:box_size_frac].to_f)
+              end
+            end
+          )
+
+          raw_b = ffmpeg_sample_raw_single_input_times(
+            input_args: ["-f", "concat", "-safe", "0", "-i", b_list.path],
+            times: slice,
+            expected_bytes_per_frame: expected,
+            filter_builder: lambda do |in_label|
+              if kind == "pairs"
+                build_pair_filter(in_label: in_label, pairs: (spec[:pairs] || []), box: spec[:box_size_frac].to_f)
+              else
+                build_tile_filter(in_label: in_label, tiles: (spec[:tiles] || []), box: spec[:box_size_frac].to_f)
+              end
+            end
+          )
+
+          # If either chunk fails, abort reference mode (fallback to legacy).
+          return nil if raw_a.nil? || raw_b.nil?
+
+          # Parse into per-time scores
+          parse_batch_bytes(raw: raw_a, expected_bytes_per_frame: expected, times: slice) do |bytes|
+            score = 0
+            if kind == "pairs"
+              pairs = (spec[:pairs] || [])
+              pairs.length.times do |pi|
+                left = bytes[pi * 2]
+                right = bytes[pi * 2 + 1]
+                score += (left - right)
+              end
+            else
+              tiles = (spec[:tiles] || [])
+              tiles.length.times do |ti|
+                inner = bytes[ti * 2]
+                outer_m = bytes[ti * 2 + 1]
+                score += (inner - outer_m)
+              end
+            end
+            a_scores << score
+            { variant: nil, confidence: 0.0, score: score }
+          end
+
+          parse_batch_bytes(raw: raw_b, expected_bytes_per_frame: expected, times: slice) do |bytes|
+            score = 0
+            if kind == "pairs"
+              pairs = (spec[:pairs] || [])
+              pairs.length.times do |pi|
+                left = bytes[pi * 2]
+                right = bytes[pi * 2 + 1]
+                score += (left - right)
+              end
+            else
+              tiles = (spec[:tiles] || [])
+              tiles.length.times do |ti|
+                inner = bytes[ti * 2]
+                outer_m = bytes[ti * 2 + 1]
+                score += (inner - outer_m)
+              end
+            end
+            b_scores << score
+            { variant: nil, confidence: 0.0, score: score }
+          end
+        end
+
+        # Derive per-segment threshold + delta
+        thr = []
+        delta = []
+        needed.times do |i|
+          sa = a_scores[i].to_f
+          sb = b_scores[i].to_f
+          thr << ((sa + sb) / 2.0)
+          delta << ((sa - sb) / 2.0)
+        end
+
+        deltas_abs = delta.map { |d| d.to_f.abs }.select { |d| d > 0 }
+        delta_median = deltas_abs.empty? ? 1.0 : deltas_abs.sort[deltas_abs.length / 2].to_f
+        delta_median = 1.0 if delta_median <= 0
+
+        begin
+          File.write(
+            cache_path,
+            JSON.pretty_generate({
+              "layout" => spec[:layout].to_s,
+              "spec_hash" => spec_hash,
+              "thr" => thr,
+              "delta" => delta,
+              "delta_median" => delta_median,
+              "generated_at" => Time.now.utc.iso8601
+            })
+          )
+        rescue
+        end
+
+        { thr: thr, delta: delta, delta_median: delta_median }
+      ensure
+        a_list&.close! rescue nil
+        b_list&.close! rescue nil
       end
-
-      deltas_abs = delta.map { |d| d.to_f.abs }.select { |d| d > 0 }
-      delta_median = deltas_abs.empty? ? 1.0 : deltas_abs.sort[deltas_abs.length / 2].to_f
-      delta_median = 1.0 if delta_median <= 0
-
-      begin
-        File.write(
-          cache_path,
-          JSON.pretty_generate({
-            "layout" => spec[:layout].to_s,
-            "spec_hash" => spec_hash,
-            "thr" => thr,
-            "delta" => delta,
-            "delta_median" => delta_median,
-            "generated_at" => Time.now.utc.iso8601
-          })
-        )
-      rescue
-        # ignore cache write errors
-      end
-
-      { thr: thr, delta: delta, delta_median: delta_median }
     rescue
       nil
     end
+
     private_class_method :reference_tables_for
 
 
@@ -772,7 +904,7 @@ module ::MediaGallery
         box = 0.12 if box <= 0
         expected = pairs.length * 2
 
-        raw = ffmpeg_sample_raw_multi(
+        raw = ffmpeg_sample_raw_times(
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
@@ -797,7 +929,7 @@ module ::MediaGallery
         box = 0.12 if box <= 0
         expected = tiles.length * 2
 
-        raw = ffmpeg_sample_raw_multi(
+        raw = ffmpeg_sample_raw_times(
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
@@ -836,7 +968,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
         box = 0.12 if box <= 0
         expected = pairs.length * 2
 
-        raw = ffmpeg_sample_raw_multi(
+        raw = ffmpeg_sample_raw_times(
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
@@ -861,7 +993,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
         box = 0.12 if box <= 0
         expected = tiles.length * 2
 
-        raw = ffmpeg_sample_raw_multi(
+        raw = ffmpeg_sample_raw_times(
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
@@ -1300,6 +1432,99 @@ def clamp_time(t, duration_seconds:)
       stdout
     end
     private_class_method :ffmpeg_sample_raw
+
+    # Sample multiple timestamps from a SINGLE input without spawning multiple inputs.
+    # This is significantly faster and avoids timeouts when sampling many frames.
+    #
+    # Implementation: for each timestamp t, we trim a tiny window starting at t, pick the first frame,
+    # apply the crop/scale filter for the watermark spec, then concat all outputs.
+    def ffmpeg_sample_raw_single_input_times(input_args:, times:, expected_bytes_per_frame:, filter_builder:)
+      times = Array(times).map { |t| t.to_f }.select { |t| t >= 0.0 }
+      return nil if times.empty?
+
+      cmd = [
+        ::MediaGallery::Ffmpeg.ffmpeg_path,
+        *::MediaGallery::Ffmpeg.ffmpeg_common_args,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
+        *Array(input_args),
+      ]
+
+      filters = []
+      out_labels = []
+
+      times.each_with_index do |t, idx|
+        # Grab a very small window and select the first frame.
+        # Escape comma in eq() as \, for ffmpeg.
+        filters << "[0:v]trim=start=#{t}:duration=0.25,setpts=PTS-STARTPTS,select='eq(n\,0)'[t#{idx}]"
+        built = filter_builder.call("[t#{idx}]")
+        filters << built[:filter].gsub("[out]", "[o#{idx}]")
+        out_labels << "[o#{idx}]"
+      end
+
+      if out_labels.length == 1
+        filters << "#{out_labels.first}copy[out]"
+      else
+        filters << "#{out_labels.join}concat=n=#{out_labels.length}:v=1:a=0[out]"
+      end
+
+      cmd += [
+        "-filter_complex",
+        filters.join(";"),
+        "-map",
+        "[out]",
+        "-frames:v",
+        times.length.to_s,
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "gray",
+        "-",
+      ]
+
+      stdout, _stderr, status = Open3.capture3(*cmd)
+      return nil unless status.success?
+
+      need = expected_bytes_per_frame.to_i * times.length
+      return nil if need > 0 && stdout.to_s.bytesize < need
+
+      stdout
+    rescue
+      nil
+    end
+    private_class_method :ffmpeg_sample_raw_single_input_times
+
+    # Like ffmpeg_sample_raw_multi but uses the single-input implementation when possible.
+    def ffmpeg_sample_raw_times(file_path:, times:, expected_bytes_per_frame:, filter_builder:)
+      # Keep filter graph sizes reasonable.
+      chunk = 40
+      times = Array(times)
+      out = +""
+      times.each_slice(chunk) do |ts|
+        raw = ffmpeg_sample_raw_single_input_times(
+          input_args: ["-i", file_path],
+          times: ts,
+          expected_bytes_per_frame: expected_bytes_per_frame,
+          filter_builder: filter_builder
+        )
+
+        raw ||= ffmpeg_sample_raw_multi(
+          file_path: file_path,
+          times: ts,
+          expected_bytes_per_frame: expected_bytes_per_frame,
+          filter_builder: filter_builder
+        )
+
+        return nil if raw.nil?
+        out << raw
+      end
+      out
+    rescue
+      nil
+    end
+    private_class_method :ffmpeg_sample_raw_times
 
     def ffmpeg_sample_raw_multi(file_path:, times:, expected_bytes_per_frame:, filter_builder:)
       times = Array(times).map { |t| t.to_f }
