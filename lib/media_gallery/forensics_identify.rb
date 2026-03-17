@@ -79,16 +79,12 @@ module ::MediaGallery
         max_offset_segments: max_offset_segments
       )
 
-      # If the matching strategy reconstructed a better observed A/B sequence (e.g. reference-calibrated
-      # decoding for screen recordings), prefer that for reporting and for usable_samples accounting.
-      if match.is_a?(Hash) && match[:observed].is_a?(Hash)
-        ovr = match[:observed]
-        if ovr[:variants].is_a?(Array) && ovr[:variants].length == obs[:variants].length
-          obs[:variants] = ovr[:variants]
-        end
-        if ovr[:confidences].is_a?(Array) && ovr[:confidences].length == obs[:confidences].length
-          obs[:confidences] = ovr[:confidences]
-        end
+      # If the reference-calibrated path produced better per-sample variants/confidences,
+      # prefer those for UI/debug output. This helps avoid misleading long runs like "aaaa..."
+      # which can occur when using absolute-sign classification on re-encodes.
+      if match.is_a?(Hash) && match[:observed_variants].is_a?(Array)
+        obs[:variants] = match[:observed_variants]
+        obs[:confidences] = match[:observed_confidences] if match[:observed_confidences].is_a?(Array)
       end
 
       matches = match[:candidates] || []
@@ -398,9 +394,7 @@ module ::MediaGallery
         rescue
           "na"
         end
-      # Cache is keyed by a versioned filename so we can safely change the reference
-      # extraction method without reusing older, incompatible caches.
-      cache_path = File.join(root, "forensics_reference_v2_#{spec[:layout].to_s.presence || 'layout'}.json")
+      cache_path = File.join(root, "forensics_reference_#{spec[:layout].to_s.presence || 'layout'}.json")
 
       cache = (JSON.parse(File.read(cache_path)) rescue nil) if File.exist?(cache_path)
 
@@ -421,50 +415,33 @@ module ::MediaGallery
       b_dir = File.join(root, "b", variant)
       return nil unless Dir.exist?(a_dir) && Dir.exist?(b_dir)
 
-      # Performance + reliability:
-      # Sampling per-segment files (A then B) can require hundreds of ffmpeg invocations and can
-      # time out on modest hardware. Instead, sample the packaged A/B playlists directly at the
-      # segment midpoints. That gives us content-matched reference scores with only 2 ffmpeg runs.
-      a_pl = File.join(a_dir, "index.m3u8")
-      b_pl = File.join(b_dir, "index.m3u8")
-      return nil unless File.exist?(a_pl) && File.exist?(b_pl)
+      thr = []
+      delta = []
 
-      # Derive midpoints from the A playlist (durations + segment order are identical between A and B).
-      times = []
-      cursor = 0.0
-      last_extinf = nil
-      File.read(a_pl).to_s.each_line do |line|
-        l = line.to_s.strip
-        next if l.blank?
+      needed.times do |i|
+        uri = segs[i][:uri].to_s
+        dur = segs[i][:duration].to_f
+        a_path = File.join(a_dir, uri)
+        b_path = File.join(b_dir, uri)
 
-        if l.start_with?("#EXTINF:")
-          dur_s = l.sub("#EXTINF:", "").split(",").first.to_s
-          dur = dur_s.to_f
-          last_extinf = (dur > 0.0 ? dur : nil)
+        if uri.blank? || !File.exist?(a_path) || !File.exist?(b_path)
+          thr << 0.0
+          delta << 0.0
           next
         end
 
-        next if l.start_with?("#")
-        next if last_extinf.blank?
+        # Sample a few timestamps within the segment. HLS packaging forces keyframes at boundaries,
+        # so segments are independently decodable and fast to sample.
+        t1 = [dur * 0.25, 0.05].max
+        t2 = [dur * 0.50, 0.10].max
+        t3 = [dur * 0.75, 0.15].max
+        times = [t1, t2, t3].map { |t| t.to_f.round(3) }.uniq
 
-        times << (cursor + (last_extinf.to_f / 2.0))
-        cursor += last_extinf.to_f
-        last_extinf = nil
-        break if times.length >= needed
-      end
+        sa = median(sample_scores_batch_single(file_path: a_path, times: times, spec: spec))
+        sb = median(sample_scores_batch_single(file_path: b_path, times: times, spec: spec))
 
-      return nil if times.blank?
-
-      scores_a = sample_scores_batch_single(file_path: a_pl, times: times, spec: spec)
-      scores_b = sample_scores_batch_single(file_path: b_pl, times: times, spec: spec)
-
-      thr = []
-      delta = []
-      needed.times do |i|
-        sa = scores_a[i].to_f
-        sb = scores_b[i].to_f
-        thr << ((sa + sb) / 2.0)
-        delta << ((sa - sb) / 2.0)
+        thr << ((sa.to_f + sb.to_f) / 2.0)
+        delta << ((sa.to_f - sb.to_f) / 2.0)
       end
 
       deltas_abs = delta.map { |d| d.to_f.abs }.select { |d| d > 0 }
@@ -994,26 +971,27 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       delta_med = delta_median.to_f
       delta_med = 1.0 if delta_med <= 0.0
 
-      # Skip segments where A/B are nearly indistinguishable.
-      # The watermark is subtle by design, so absolute deltas can be small; use a relative threshold.
-      min_delta = [delta_med * 0.10, 1.5].max
+      # Skip segments where A/B are nearly indistinguishable
+      min_delta = [delta_med * 0.12, 8.0].max
 
       best_offset = 0
       best_score = nil
       best_diag = nil
 
-      # Precompute leak confidence weights (but do not let tiny confidences collapse all weights).
-      leak_w = scores.map.with_index do |_s, i|
-        c = confidences[i].to_f rescue 0.0
-        c = 0.0 if c.nan? || c.infinite? || c.negative?
-        w = c > 0.0 ? (c * c) : 1.0
-        [w, 0.04].max # floor so we can still use reference-delta weighting
-      end
+      # NOTE: The raw "confidence" from absolute-sign (|score|/(pairs*255)) can be dominated by
+      # scene gradients and visible overlays, and is not a reliable measure of A/B separability.
+      # For reference-calibrated matching we derive weights from how far the leak score is from the
+      # per-segment A/B threshold (after bias correction), and the reference separation |delta|.
+      #
+      # We still accept the confidences array to preserve backwards compatibility, but we do not
+      # use it as the primary weight source here.
+
+      min_evidence = 0.15 # minimum |normalized evidence| to treat a sample as usable
 
       (0..max_off).each do |offset|
-        usable = []
-        comp_w = 0.0
-
+        # Build per-sample normalized evidence e = (s - thr) / d
+        # Then remove a global bias by subtracting median(e) for this offset.
+        raw = []
         scores.each_with_index do |s, i|
           j = i + offset
           next if j >= ref_thr.length || j >= ref_delta.length
@@ -1022,67 +1000,98 @@ def sample_variants_batch_single(file_path:, times:, spec:)
           da = d.abs
           next if da < min_delta
 
-          # Evidence strength is proportional to (distance from threshold) and reference separation.
           thr = ref_thr[j].to_f
           e = (s.to_f - thr) / (d.nonzero? || 1.0)
-          e_abs = e.abs
-
-          w = leak_w[i] * [[da / delta_med, 0.25].max, 4.0].min * [[e_abs, 0.25].max, 3.0].min
-          next if w <= 0.0
-          v = e >= 0 ? "a" : "b"
-          usable << [i, v, w]
-          comp_w += w
+          raw << [i, e, da]
         end
 
-        next if usable.empty? || comp_w <= 0.0
+        next if raw.empty?
 
-        # Evaluate top/second weighted match ratio at this offset
-        top = nil
-        second = nil
+        med_e = median(raw.map { |(_, e, _)| e })
 
-        fps.each do |rec|
-          mism_w = 0.0
-          usable.each do |(i, ov, w)|
-            exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-              fingerprint_id: rec.fingerprint_id,
-              media_item_id: media_item.id,
-              segment_index: i + offset
-            )
-            mism_w += w if exp != ov
+        # Evaluate both polarities: sometimes the watermark polarity can be inverted due to
+        # capture pipelines or orientation changes.
+        [1, -1].each do |pol|
+          usable = []
+          comp_w = 0.0
+
+          raw.each do |(i, e, da)|
+            e2 = e.to_f - med_e.to_f
+            conf = e2.abs
+            next if conf < min_evidence
+            conf = 1.0 if conf > 1.0
+
+            v = e2 >= 0 ? "a" : "b"
+            v = (v == "a" ? "b" : "a") if pol == -1
+
+            # Weight: evidence confidence^2 * reference separation factor
+            w = (conf * conf) * [da / delta_med, 0.25].max
+            w = [w, 4.0].min
+            next if w <= 0.0
+
+            usable << [i, v, w]
+            comp_w += w
           end
 
-          ratio_w = 1.0 - (mism_w / comp_w)
-          entry = { ratio_w: ratio_w, rec: rec }
+          next if usable.empty? || comp_w <= 0.0
 
-          if top.nil? || ratio_w > top[:ratio_w]
-            second = top
-            top = entry
-          elsif second.nil? || ratio_w > second[:ratio_w]
-            second = entry
+          top = nil
+          second = nil
+
+          fps.each do |rec|
+            mism_w = 0.0
+            usable.each do |(i, ov, w)|
+              exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+                fingerprint_id: rec.fingerprint_id,
+                media_item_id: media_item.id,
+                segment_index: i + offset
+              )
+              mism_w += w if exp != ov
+            end
+
+            ratio_w = 1.0 - (mism_w / comp_w)
+            entry = { ratio_w: ratio_w, rec: rec }
+
+            if top.nil? || ratio_w > top[:ratio_w]
+              second = top
+              top = entry
+            elsif second.nil? || ratio_w > second[:ratio_w]
+              second = entry
+            end
           end
-        end
 
-        next unless top
-        second_ratio = second ? second[:ratio_w].to_f : 0.0
-        delta = top[:ratio_w].to_f - second_ratio
+          next unless top
+          second_ratio = second ? second[:ratio_w].to_f : 0.0
+          sep = top[:ratio_w].to_f - second_ratio
 
-        # Score prioritizes separation and overall fit; lightly prefers smaller offsets.
-        score = delta + (top[:ratio_w].to_f * 0.04) - (offset.to_f * 0.0002)
+          score = sep + (top[:ratio_w].to_f * 0.04) - (offset.to_f * 0.0002)
 
-        if best_score.nil? || score > best_score
-          best_score = score
-          best_offset = offset
-          best_diag = { top_ratio_w: top[:ratio_w].to_f, second_ratio_w: second_ratio, delta: delta, comp_w: comp_w, usable: usable.length }
+          if best_score.nil? || score > best_score
+            best_score = score
+            best_offset = offset
+            best_diag = {
+              top_ratio_w: top[:ratio_w].to_f,
+              second_ratio_w: second_ratio,
+              delta: sep,
+              comp_w: comp_w,
+              usable: usable.length,
+              bias_median_e: med_e.to_f,
+              polarity: pol
+            }
+          end
         end
       end
 
-      # Build final predicted variants at best offset
+      # Build final predicted variants at best offset (with bias correction + polarity)
+      bias_e = best_diag ? best_diag[:bias_median_e].to_f : 0.0
+      pol = best_diag ? best_diag[:polarity].to_i : 1
+      pol = 1 if pol == 0
+
       usable = []
       comp_w = 0.0
+      out_variants = Array.new(scores.length)
+      out_confs = Array.new(scores.length)
 
-      # For reporting/debugging, reconstruct an observed variants array aligned with the sampled scores.
-      observed_variants = Array.new(scores.length)
-      observed_confidences = Array.new(scores.length, 0.0)
       scores.each_with_index do |s, i|
         j = i + best_offset
         next if j >= ref_thr.length || j >= ref_delta.length
@@ -1093,17 +1102,23 @@ def sample_variants_batch_single(file_path:, times:, spec:)
 
         thr = ref_thr[j].to_f
         e = (s.to_f - thr) / (d.nonzero? || 1.0)
-        e_abs = e.abs
-        w = leak_w[i] * [[da / delta_med, 0.25].max, 4.0].min * [[e_abs, 0.25].max, 3.0].min
+        e2 = e.to_f - bias_e
+
+        conf = e2.abs
+        next if conf < min_evidence
+        conf = 1.0 if conf > 1.0
+
+        v = e2 >= 0 ? "a" : "b"
+        v = (v == "a" ? "b" : "a") if pol == -1
+
+        w = (conf * conf) * [da / delta_med, 0.25].max
+        w = [w, 4.0].min
         next if w <= 0.0
-        v = e >= 0 ? "a" : "b"
+
         usable << [i, v, w]
         comp_w += w
-
-        observed_variants[i] = v
-        # Reference-based confidence: how far from the decision boundary, normalized.
-        # Clamp into [0, 1] for UI friendliness.
-        observed_confidences[i] = [[(e_abs / 2.0), 0.0].max, 1.0].min.round(4)
+        out_variants[i] = v
+        out_confs[i] = conf.round(4)
       end
 
       candidates = []
@@ -1155,13 +1170,15 @@ def sample_variants_batch_single(file_path:, times:, spec:)
         reference_used: true,
         reference_delta_median: delta_med.round(4),
         reference_min_delta: min_delta.round(4),
+        reference_bias_median_e: (best_diag ? best_diag[:bias_median_e].to_f : 0.0).round(4),
+        reference_polarity: (best_diag ? best_diag[:polarity].to_i : 1),
         effective_samples: comp_w.round(2),
         offset_top_match_ratio: (best_diag ? best_diag[:top_ratio_w].to_f : top&.dig(:match_ratio_weighted).to_f).round(4),
         offset_second_match_ratio: (best_diag ? best_diag[:second_ratio_w].to_f : second&.dig(:match_ratio_weighted).to_f).round(4),
         offset_delta: (best_diag ? best_diag[:delta].to_f : (top&.dig(:match_ratio_weighted).to_f - second&.dig(:match_ratio_weighted).to_f)).round(4),
       }
 
-      { candidates: candidates, meta: meta, observed: { variants: observed_variants, confidences: observed_confidences } }
+      { candidates: candidates, meta: meta, observed_variants: out_variants, observed_confidences: out_confs }
     end
     private_class_method :match_fingerprints_with_reference
 
@@ -1352,12 +1369,6 @@ def clamp_time(t, duration_seconds:)
         "-loglevel",
         "error",
         "-nostats",
-        # Allow local playlists to reference local segment files (and keep compatibility
-        # with authenticated HLS downloads where present).
-        "-protocol_whitelist",
-        "file,http,https,tcp,tls,crypto",
-        "-allowed_extensions",
-        "ALL",
       ]
 
       times.each do |t|

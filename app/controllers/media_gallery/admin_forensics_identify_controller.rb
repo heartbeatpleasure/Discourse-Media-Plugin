@@ -167,6 +167,11 @@ module ::MediaGallery
         )
       end
 
+      # Normalize keys to strings so decision policy can reliably read meta/candidates.
+      if result.respond_to?(:deep_stringify_keys)
+        result = result.deep_stringify_keys
+      end
+
       result["meta"] ||= {}
       meta_patch.each { |k, v| result["meta"][k.to_s] = v }
 
@@ -431,11 +436,6 @@ module ::MediaGallery
         "candidates" => (match[:candidates] || []),
       }
 
-      # Important: match_fingerprints returns Ruby hashes with symbol keys.
-      # Our decision policy reads string keys (e.g. result.dig("candidates", 0, "match_ratio")).
-      # Normalize before apply_decision_policy! so URL mode can be conclusive.
-      result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
-
       result
     end
 
@@ -676,7 +676,8 @@ module ::MediaGallery
 
       _stdout, stderr, status = Open3.capture3(*cmd)
       unless status.success? && File.size?(tmp.path)
-        tip = "tip: try the *index.m3u8* variant playlist (not master.m3u8)"
+        # NOTE: frozen_string_literal is enabled; use a mutable string.
+        tip = +"tip: try the *index.m3u8* variant playlist (not master.m3u8)"
         tip << "; if it still fails, the auth token may not be applied to segment URLs" if uri.path.to_s.downcase.end_with?(".m3u8")
         raise "ffmpeg download failed (#{tip}): #{::MediaGallery::Ffmpeg.short_err(stderr)}"
       end
