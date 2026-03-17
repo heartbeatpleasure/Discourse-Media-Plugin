@@ -119,6 +119,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
           return "medium";
         case "ambiguous":
           return "weak";
+        case "no_signal":
+        case "timeout":
+        case "error":
+          return "none";
         default:
           return "none";
       }
@@ -184,6 +188,12 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
         return "Ambiguous";
       case "insufficient_samples":
         return "Insufficient usable samples";
+      case "no_signal":
+        return "No reliable watermark signal";
+      case "timeout":
+        return "Timed out";
+      case "error":
+        return "Error";
       case "no_match":
         return "No match";
       default:

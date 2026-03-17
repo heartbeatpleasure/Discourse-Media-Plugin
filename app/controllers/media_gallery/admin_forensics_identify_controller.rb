@@ -5,14 +5,26 @@ require "tempfile"
 require "uri"
 require "open3"
 require "net/http"
+require "timeout"
+require "securerandom"
 
 module ::MediaGallery
   class AdminForensicsIdentifyController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
+    # Keep file-mode requests below common request timeout thresholds.
+    # Many installs run Rack::Timeout around ~30s; we aim to stay comfortably below that.
+    FILEMODE_SOFT_TIME_BUDGET_SECONDS = 24
+
+    # Auto-cap sampling for large uploads to avoid timeouts.
+    FILEMODE_AUTOCAP_MB_1 = 60
+    FILEMODE_AUTOCAP_MB_2 = 120
+    FILEMODE_AUTOCAP_MB_3 = 250
+
     def show
       public_id = params[:public_id].to_s
       public_id = public_id.sub(/\.(json|html)\z/i, "")
+      public_id = public_id.strip
       item = MediaGallery::MediaItem.find_by(public_id: public_id)
       if item.blank?
         return render json: { errors: ["unknown_public_id", public_id] }, status: 422
@@ -80,8 +92,11 @@ module ::MediaGallery
     def identify
       public_id = params[:public_id].to_s
       public_id = public_id.sub(/\.(json|html)\z/i, "")
+      public_id = public_id.strip
       item = MediaGallery::MediaItem.find_by(public_id: public_id)
-      raise Discourse::NotFound if item.blank?
+      if item.blank?
+        return render json: { errors: ["unknown_public_id", public_id] }, status: 422
+      end
 
       max_samples = params[:max_samples].to_i
       max_samples = 60 if max_samples <= 0
@@ -136,48 +151,102 @@ module ::MediaGallery
         path = file.respond_to?(:tempfile) ? file.tempfile&.path : nil
         return render json: { errors: ["missing_file_or_url"] }, status: 422 if path.blank? || !File.exist?(path)
 
-        begin
-          result = ::MediaGallery::ForensicsIdentify.identify_from_file(
-            media_item: item,
-            file_path: path,
-            max_samples: max_samples,
-            max_offset_segments: max_offset,
-            layout: layout
-          )
-        rescue => e
-          begin
-            Rails.logger.error(
-              "[media_gallery] forensics identify failed (public_id=#{public_id}): #{e.class}: #{e.message}
-"               "#{Array(e.backtrace).first(15).join("
-")}"
-            )
-          rescue
-            # ignore logging failures
-          end
+        file_bytes = (File.size(path) rescue 0).to_i
+        file_mb = (file_bytes / (1024.0 * 1024.0)).round(1)
 
-          msg = "#{e.class}: #{e.message}".to_s.strip
-          msg = msg[0, 400] if msg.length > 400
-          return render json: { errors: ["identify_failed", msg].compact }, status: 422
+        capped_max_samples = max_samples
+        if file_mb >= FILEMODE_AUTOCAP_MB_3
+          capped_max_samples = [capped_max_samples, 25].min
+        elsif file_mb >= FILEMODE_AUTOCAP_MB_2
+          capped_max_samples = [capped_max_samples, 35].min
+        elsif file_mb >= FILEMODE_AUTOCAP_MB_1
+          capped_max_samples = [capped_max_samples, 45].min
+        end
+
+        identify_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        begin
+          Timeout.timeout(FILEMODE_SOFT_TIME_BUDGET_SECONDS) do
+            result = ::MediaGallery::ForensicsIdentify.identify_from_file(
+              media_item: item,
+              file_path: path,
+              max_samples: capped_max_samples,
+              max_offset_segments: max_offset,
+              layout: layout
+            )
+          end
+        rescue Timeout::Error
+          result = {
+            meta: {
+              public_id: item.public_id,
+              media_item_id: item.id,
+              decision: "timeout",
+              conclusive: false,
+              recommendation: "try_shorter_clip_or_lower_max_samples",
+              user_message: "Analyse duurde te lang en is afgebroken om timeouts te voorkomen. Probeer een kortere clip (bijv. 1–3 minuten) of verlaag 'Max samples'.",
+            },
+            observed: { variants: "", confidences: [] },
+            candidates: [],
+          }
+        rescue => e
+          debug_id = "mgfi_#{SecureRandom.hex(6)}"
+          Rails.logger.error(
+            "[media_gallery] forensics identify failed debug_id=#{debug_id} public_id=#{public_id} #{e.class}: #{e.message}\n" \
+            "#{Array(e.backtrace).first(20).join("\n")}" \
+          ) rescue nil
+
+          # Return 200 with structured error for inline display.
+          result = {
+            meta: {
+              public_id: item.public_id,
+              media_item_id: item.id,
+              decision: "error",
+              conclusive: false,
+              debug_id: debug_id,
+              recommendation: "check_server_logs",
+              user_message: "Interne fout tijdens analyse (debug_id=#{debug_id}). Kijk in production.log voor details.",
+            },
+            observed: { variants: "", confidences: [] },
+            candidates: [],
+          }
+        ensure
+          elapsed = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - identify_started_at).to_f
+          base_meta[:file_size_mb] = file_mb
+          base_meta[:max_samples_autocapped] = (capped_max_samples != max_samples)
+          base_meta[:effective_max_samples] = capped_max_samples
+          base_meta[:filemode_elapsed_seconds] = elapsed.round(3)
         end
 
         meta_patch = base_meta.merge(
           attempts: 1,
           auto_extended: false,
-          max_samples_used: max_samples
+          max_samples_used: base_meta[:effective_max_samples] || max_samples
         )
       end
 
-      # Normalize keys to strings so decision policy can reliably read meta/candidates.
-      if result.respond_to?(:deep_stringify_keys)
-        result = result.deep_stringify_keys
-      end
-
+      result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
       result["meta"] ||= {}
       meta_patch.each { |k, v| result["meta"][k.to_s] = v }
 
-      apply_decision_policy!(result)
+      apply_no_signal_guard!(result)
 
-      render_json_dump(result)
+      begin
+        apply_decision_policy!(result)
+      rescue => e
+        debug_id = "mgfi_policy_#{SecureRandom.hex(6)}"
+        Rails.logger.error("[media_gallery] forensics policy failed debug_id=#{debug_id} #{e.class}: #{e.message}") rescue nil
+        result["meta"]["decision"] = "error"
+        result["meta"]["conclusive"] = false
+        result["meta"]["debug_id"] = debug_id
+        result["meta"]["user_message"] ||= "Interne fout tijdens scoreberekening (debug_id=#{debug_id})."
+      end
+
+      begin
+        render_json_dump(result)
+      rescue => e
+        debug_id = "mgfi_render_#{SecureRandom.hex(6)}"
+        Rails.logger.error("[media_gallery] forensics render failed debug_id=#{debug_id} #{e.class}: #{e.message}") rescue nil
+        render json: result, status: 200
+      end
     ensure
       temps&.each { |t| t&.close! rescue nil }
     end
@@ -208,6 +277,37 @@ module ::MediaGallery
       v = DEFAULT_MAX_SOURCE_URL_LENGTH if v <= 0
       v
     end
+
+    def apply_no_signal_guard!(result)
+      return unless result.is_a?(Hash)
+      meta = result["meta"]
+      return unless meta.is_a?(Hash)
+
+      # Do not apply to playlist URL-mode: it is exact and should always be conclusive.
+      return if meta["source_mode"].to_s == "hls_playlist"
+
+      eff = meta["effective_samples"].to_f
+      cand0 = (result["candidates"].is_a?(Array) ? result["candidates"].first : nil)
+      comp_w = cand0.is_a?(Hash) ? cand0["compared_weighted"].to_f : 0.0
+
+      confs = result.dig("observed", "confidences")
+      confs = Array(confs).map { |c| c.to_f }.select { |c| c.finite? && c >= 0 }
+      conf_med = confs.empty? ? 0.0 : confs.sort[confs.length / 2]
+
+      # If we effectively have no evidence, do not show candidate scores.
+      if eff <= 0.5 || comp_w < 1.0 || conf_med < 0.005
+        meta["decision"] = "no_signal"
+        meta["conclusive"] = false
+        meta["recommendation"] = "check_public_id_or_use_hls_url"
+        meta["user_message"] =
+          "Geen betrouwbaar watermark-signaal gevonden voor deze public_id. Dit betekent meestal een verkeerd public_id, of dat de upload geen afgeleide is van deze video (of zwaar ge-reencode/cropped). Probeer: (1) juiste public_id, (2) clip dichter bij originele HLS download, of (3) HLS URL-mode."
+
+        result["candidates"] = []
+      end
+    rescue
+      nil
+    end
+    private :apply_no_signal_guard!
 
     def setting_max_url_sample_seconds
       v = SiteSetting.media_gallery_forensics_identify_max_url_sample_seconds.to_i
@@ -510,6 +610,33 @@ module ::MediaGallery
     def apply_decision_policy!(result)
       result["meta"] ||= {}
 
+      # If an earlier guardrail already produced a terminal decision (e.g. no-signal/timeout/error),
+      # keep it and avoid overwriting with the normal match policy.
+      preset = result.dig("meta", "decision").to_s
+      if %w[no_signal timeout error].include?(preset)
+        result["meta"]["conclusive"] = false
+        result["meta"]["top_match_ratio"] ||= 0.0
+        result["meta"]["second_match_ratio"] ||= 0.0
+        result["meta"]["match_delta"] ||= 0.0
+        result["meta"]["top_mismatches"] ||= 0
+        result["meta"]["top_compared"] ||= 0
+        result["meta"]["top_mismatch_rate"] ||= 1.0
+
+        result["meta"]["policy"] ||= {
+          "min_usable_any" => setting_policy_min_usable_any,
+          "min_usable_strong" => setting_policy_min_usable_strong,
+          "min_match_strong" => setting_policy_min_match_strong_ratio,
+          "min_delta_strong" => setting_policy_min_delta_strong_ratio,
+          "max_mismatch_rate_strong" => setting_policy_max_mismatch_rate_strong_ratio,
+          "min_usable_likely" => setting_policy_min_usable_likely,
+          "min_match_likely" => setting_policy_min_match_likely_ratio,
+          "min_delta_likely" => setting_policy_min_delta_likely_ratio,
+        }
+
+        result["meta"]["recommendation"] ||= "gather_longer_sample_or_try_url_mode"
+        return
+      end
+
       decision = classify_decision(result)
       top = result.dig("candidates", 0, "match_ratio").to_f
       second = result.dig("candidates", 1, "match_ratio").to_f
@@ -676,8 +803,7 @@ module ::MediaGallery
 
       _stdout, stderr, status = Open3.capture3(*cmd)
       unless status.success? && File.size?(tmp.path)
-        # NOTE: frozen_string_literal is enabled; use a mutable string.
-        tip = +"tip: try the *index.m3u8* variant playlist (not master.m3u8)"
+        tip = "tip: try the *index.m3u8* variant playlist (not master.m3u8)"
         tip << "; if it still fails, the auth token may not be applied to segment URLs" if uri.path.to_s.downcase.end_with?(".m3u8")
         raise "ffmpeg download failed (#{tip}): #{::MediaGallery::Ffmpeg.short_err(stderr)}"
       end

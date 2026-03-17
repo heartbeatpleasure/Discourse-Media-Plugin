@@ -162,6 +162,12 @@ export default RouteTemplate(
                   <div><strong>decision:</strong> {{@controller.decisionText}}</div>
                 {{/if}}
                 <div><strong>confidence:</strong> {{@controller.confidence}}</div>
+
+                {{#if @controller.meta.user_message}}
+                  <div style="margin-top: 0.5rem; opacity: 0.95;">
+                    <strong>note:</strong> {{@controller.meta.user_message}}
+                  </div>
+                {{/if}}
                 {{#if @controller.candidates.length}}
                   <div>
                     <strong>top_match:</strong> {{@controller.topMatchRatio}}
