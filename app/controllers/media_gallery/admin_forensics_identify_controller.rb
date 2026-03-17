@@ -170,20 +170,9 @@ module ::MediaGallery
       result["meta"] ||= {}
       meta_patch.each { |k, v| result["meta"][k.to_s] = v }
 
-      begin
-        apply_decision_policy!(result)
-        render_json_dump(result)
-      rescue => e
-        debug_id = SecureRandom.hex(8) rescue "na"
-        begin
-          Rails.logger.error("[media_gallery] forensics identify response failed debug_id=#{debug_id} public_id=#{public_id} error=#{e.class}: #{e.message}\n#{Array(e.backtrace).first(30).join("\n")}")
-        rescue
-        end
-        msg = "#{e.class}: #{e.message}".to_s.strip
-        msg = msg[0, 400] if msg.length > 400
-        return render json: { errors: ["identify_response_failed", msg, "debug_id=#{debug_id}"].compact }, status: 422
-      end
+      apply_decision_policy!(result)
 
+      render_json_dump(result)
     ensure
       temps&.each { |t| t&.close! rescue nil }
     end
@@ -441,6 +430,11 @@ module ::MediaGallery
         },
         "candidates" => (match[:candidates] || []),
       }
+
+      # Important: match_fingerprints returns Ruby hashes with symbol keys.
+      # Our decision policy reads string keys (e.g. result.dig("candidates", 0, "match_ratio")).
+      # Normalize before apply_decision_policy! so URL mode can be conclusive.
+      result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
 
       result
     end
