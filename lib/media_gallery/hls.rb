@@ -187,6 +187,8 @@ module ::MediaGallery
           "box_size_frac" => wm_spec[:box_size_frac],
           "margin" => wm_spec[:margin],
           "count" => (wm_spec[:pairs] || wm_spec[:tiles] || []).length,
+          "sync_count" => Array(wm_spec[:sync_pairs]).length,
+          "sync_period" => wm_spec[:sync_period],
         }
 
         # Persist minimal metadata in the HLS folder so later forensic tooling can
@@ -205,6 +207,11 @@ module ::MediaGallery
                 "margin" => wm_spec[:margin],
                 "pairs" => wm_spec[:pairs],
                 "tiles" => wm_spec[:tiles],
+                "sync_pairs" => wm_spec[:sync_pairs],
+                "sync_pattern" => wm_spec[:sync_pattern],
+                "sync_period" => wm_spec[:sync_period],
+                "sync_opacity" => wm_spec[:sync_opacity],
+                "sync_box_size_frac" => wm_spec[:sync_box_size_frac],
               },
               "generated_at" => Time.now.utc.iso8601,
               "media_item_id" => item.id,

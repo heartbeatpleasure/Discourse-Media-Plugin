@@ -139,6 +139,9 @@ module ::MediaGallery
           media_item_id: media_item.id,
           segment_seconds: seg,
           layout: spec[:layout].to_s.presence || layout,
+          sync_period: Array(spec[:sync_pattern]).length,
+          sync_pairs_count: Array(spec[:sync_pairs]).length,
+          ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
           duration_seconds: obs[:duration_seconds],
           samples: obs[:variants].length,
           usable_samples: obs[:variants].count { |v| v.present? },
@@ -211,6 +214,10 @@ module ::MediaGallery
 
       if out[:tiles].is_a?(Array)
         out[:tiles] = out[:tiles].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
+      end
+
+      if out[:sync_pairs].is_a?(Array)
+        out[:sync_pairs] = out[:sync_pairs].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
       end
 
       out
@@ -620,6 +627,146 @@ module ::MediaGallery
     end
     private_class_method :format_variant_sequence
 
+    def analysis_pairs_for_spec(spec)
+      return [] unless spec.is_a?(Hash)
+
+      main = Array(spec[:pairs])
+      sync = Array(spec[:sync_pairs])
+      main + sync
+    rescue
+      Array(spec[:pairs])
+    end
+    private_class_method :analysis_pairs_for_spec
+
+    def main_pair_count_for_spec(spec)
+      Array(spec[:pairs]).length
+    rescue
+      0
+    end
+    private_class_method :main_pair_count_for_spec
+
+    def ecc_grouped_samples(samples:, offset:)
+      arr = Array(samples)
+      return [] if arr.empty?
+
+      groups = {}
+      arr.each do |entry|
+        i = entry[0].to_i
+        ov = entry[1].to_s
+        w = entry[2].to_f
+        c = entry[3].to_f
+        next if ov.blank? || w <= 0.0
+
+        seg_idx = i + offset.to_i
+        slot = if ::MediaGallery::Fingerprinting.respond_to?(:logical_slot_for_segment)
+          ::MediaGallery::Fingerprinting.logical_slot_for_segment(segment_index: seg_idx)
+        else
+          { block_index: 0, logical_index: seg_idx }
+        end
+
+        key = [slot[:block_index].to_i, slot[:logical_index].to_i]
+        g = (groups[key] ||= { rep_i: i, rep_seg: seg_idx, a_w: 0.0, b_w: 0.0, raw_weight: 0.0, raw_conf: [], raw_count: 0 })
+        if ov == "a"
+          g[:a_w] += w
+        else
+          g[:b_w] += w
+        end
+        g[:raw_weight] += w
+        g[:raw_conf] << c if c > 0.0
+        g[:raw_count] += 1
+        if seg_idx < g[:rep_seg].to_i
+          g[:rep_seg] = seg_idx
+          g[:rep_i] = i
+        end
+      end
+
+      groups.map do |_key, g|
+        total = g[:raw_weight].to_f
+        next if total <= 0.0
+
+        diff = (g[:a_w].to_f - g[:b_w].to_f)
+        ov = diff >= 0.0 ? "a" : "b"
+        margin = diff.abs / [total, 1e-6].max
+        w = total * (0.65 + (0.35 * margin))
+        c = median(g[:raw_conf])
+        [g[:rep_i].to_i, ov, w.to_f, c.to_f, g[:raw_count].to_i, margin.to_f]
+      end.compact
+    rescue
+      arr
+    end
+    private_class_method :ecc_grouped_samples
+
+    def ecc_grouped_reference_usable(usable:, offset:)
+      arr = Array(usable)
+      return { usable: [], comp_w: 0.0, usable_count: 0 } if arr.empty?
+
+      groups = {}
+      arr.each do |entry|
+        i = entry[0].to_i
+        ov = entry[1].to_s
+        w = entry[2].to_f
+        margin = entry[3].to_f
+        ratio = entry[4].to_f
+        next if ov.blank? || w <= 0.0
+
+        seg_idx = i + offset.to_i
+        slot = if ::MediaGallery::Fingerprinting.respond_to?(:logical_slot_for_segment)
+          ::MediaGallery::Fingerprinting.logical_slot_for_segment(segment_index: seg_idx)
+        else
+          { block_index: 0, logical_index: seg_idx }
+        end
+
+        key = [slot[:block_index].to_i, slot[:logical_index].to_i]
+        g = (groups[key] ||= { rep_i: i, rep_seg: seg_idx, a_w: 0.0, b_w: 0.0, raw_weight: 0.0, margins: [], ratios: [], raw_count: 0 })
+        if ov == "a"
+          g[:a_w] += w
+        else
+          g[:b_w] += w
+        end
+        g[:raw_weight] += w
+        g[:margins] << margin
+        g[:ratios] << ratio
+        g[:raw_count] += 1
+        if seg_idx < g[:rep_seg].to_i
+          g[:rep_seg] = seg_idx
+          g[:rep_i] = i
+        end
+      end
+
+      usable_out = []
+      comp_w = 0.0
+      margins = []
+      ratios = []
+
+      groups.each do |_key, g|
+        total = g[:raw_weight].to_f
+        next if total <= 0.0
+
+        diff = g[:a_w].to_f - g[:b_w].to_f
+        ov = diff >= 0.0 ? "a" : "b"
+        consensus = diff.abs / [total, 1e-6].max
+        margin = [median(g[:margins]).to_f, consensus].max
+        ratio = median(g[:ratios]).to_f
+        weight = total * (0.65 + (0.35 * consensus))
+
+        usable_out << [g[:rep_i].to_i, ov, weight.to_f, margin.to_f, ratio.to_f, g[:rep_seg].to_i, g[:raw_count].to_i]
+        comp_w += weight.to_f
+        margins << margin.to_f
+        ratios << ratio.to_f
+      end
+
+      {
+        usable: usable_out,
+        comp_w: comp_w.to_f,
+        median_ratio: median(ratios).to_f,
+        median_margin: median(margins).to_f,
+        usable_count: usable_out.length
+      }
+    rescue
+      { usable: arr, comp_w: arr.reduce(0.0) { |acc, e| acc + e[2].to_f }, usable_count: arr.length }
+    end
+    private_class_method :ecc_grouped_reference_usable
+
     def invert_variant(v)
       return nil if v.blank?
 
@@ -907,7 +1054,7 @@ end
 
   spec_hash =
     begin
-      base = spec.slice(:layout, :kind, :box_size_frac, :pairs, :tiles)
+      base = spec.slice(:layout, :kind, :box_size_frac, :pairs, :tiles, :sync_pairs, :sync_pattern, :sync_period, :sync_opacity, :sync_box_size_frac)
       base = base.deep_stringify_keys if base.respond_to?(:deep_stringify_keys)
       Digest::SHA256.hexdigest(JSON.dump(base))[0, 16]
     rescue
@@ -1141,7 +1288,15 @@ end
         pol_samples = pol[:samples]
         next if pol_samples.blank?
 
+        raw_total_weight = pol_samples.reduce(0.0) { |acc, s| acc + s[2].to_f }.to_f
+
         (0..max_off).each do |offset|
+          grouped_samples = ecc_grouped_samples(samples: pol_samples, offset: offset)
+          next if grouped_samples.blank?
+
+          grouped_total_weight = grouped_samples.reduce(0.0) { |acc, s| acc + s[2].to_f }.to_f
+          next if grouped_total_weight <= 0.0
+
           top = nil
           second = nil
 
@@ -1149,7 +1304,7 @@ end
             mism_w = 0.0
             comp_w = 0.0
 
-            pol_samples.each do |(i, ov, w, _c)|
+            grouped_samples.each do |(i, ov, w, _c, _raw_count, _margin)|
               exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
                 fingerprint_id: rec.fingerprint_id,
                 media_item_id: media_item.id,
@@ -1179,9 +1334,9 @@ end
           second_ratio = second ? second[:ratio_w].to_f : 0.0
           delta = top[:ratio_w].to_f - second_ratio
 
-          coverage = total_weight > 0 ? (top[:comp_w].to_f / total_weight.to_f) : 0.0
+          coverage = raw_total_weight > 0 ? (grouped_total_weight.to_f / raw_total_weight.to_f) : 0.0
 
-          # Score prioritizes separation, then overall fit, then (slightly) prefers smaller offsets.
+          # Score prioritizes separation, then overall fit, then coverage, then (slightly) prefers smaller offsets.
           # We still apply a small inverted-penalty here, but the final polarity choice is gated
           # separately so normal polarity remains the default unless inverted is clearly better.
           score = delta + (top[:ratio_w].to_f * 0.02) + (coverage.to_f * 0.01) - (offset.to_f * 0.0002) - (pol[:flip] ? 0.0025 : 0.0)
@@ -1194,12 +1349,14 @@ end
               score: score,
               offset: offset,
               flip: pol[:flip],
-              samples: pol_samples,
+              samples: grouped_samples,
               observed_variants: pol[:observed_variants],
               diag: {
                 top_ratio_w: top[:ratio_w].to_f,
                 second_ratio_w: second_ratio,
                 delta: delta,
+                coverage: coverage,
+                ecc_groups: grouped_samples.length
               }
             }
           end
@@ -1216,7 +1373,7 @@ end
         best_score = chosen_result[:score]
         chosen_offset = chosen_result[:offset].to_i
         chosen_polarity_flip = chosen_result[:flip] ? true : false
-        chosen_samples = chosen_result[:samples] || samples
+        chosen_samples = chosen_result[:samples] || ecc_grouped_samples(samples: samples, offset: chosen_offset)
         chosen_obs = chosen_result[:observed_variants] || obs
         best_diag = chosen_result[:diag] || {}
       end
@@ -1229,7 +1386,7 @@ end
         mism = 0
         comp = 0
 
-        chosen_samples.each do |(i, ov, w, _c)|
+        chosen_samples.each do |(i, ov, w, _c, _raw_count, _margin)|
           exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
             fingerprint_id: rec.fingerprint_id,
             media_item_id: media_item.id,
@@ -1301,12 +1458,15 @@ end
         polarity_ratio_gain: polarity_choice[:ratio_gain],
         polarity_delta_gain: polarity_choice[:delta_gain],
         polarity_score_gain: polarity_choice[:score_gain],
+        ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
+        ecc_groups_used: chosen_samples.length,
       }
 
       if best_diag
         meta[:offset_top_match_ratio] = best_diag[:top_ratio_w].round(4)
         meta[:offset_second_match_ratio] = best_diag[:second_ratio_w].round(4)
         meta[:offset_delta] = best_diag[:delta].round(4)
+        meta[:offset_coverage] = best_diag[:coverage].round(4) if best_diag[:coverage]
       end
 
       other_score = polarity_best_scores[!chosen_polarity_flip]
@@ -1410,7 +1570,8 @@ end
       kind = "tiles" if kind.blank? && spec[:tiles].present?
 
       if kind == "pairs"
-        pairs = spec[:pairs] || []
+        main_pairs = Array(spec[:pairs])
+        pairs = analysis_pairs_for_spec(spec)
         box = spec[:box_size_frac].to_f
         box = 0.12 if box <= 0
         expected = pairs.length * 2
@@ -1424,12 +1585,19 @@ end
 
         out = []
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          score = 0
+          main_score = 0
+          sync_score = 0
           pairs.length.times do |i|
             left = bytes[i * 2]
             right = bytes[i * 2 + 1]
-            score += (left - right)
+            diff = (left - right)
+            if i < main_pairs.length
+              main_score += diff
+            else
+              sync_score += diff
+            end
           end
+          score = main_score + sync_score
           out << score
           { variant: nil, confidence: 0.0, score: score }
         end
@@ -1474,7 +1642,8 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       kind = "tiles" if kind.blank? && spec[:tiles].present?
 
       if kind == "pairs"
-        pairs = spec[:pairs] || []
+        main_pairs = Array(spec[:pairs])
+        pairs = analysis_pairs_for_spec(spec)
         box = spec[:box_size_frac].to_f
         box = 0.12 if box <= 0
         expected = pairs.length * 2
@@ -1487,14 +1656,21 @@ def sample_variants_batch_single(file_path:, times:, spec:)
         )
 
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          score = 0
+          main_score = 0
+          sync_score = 0
           pairs.length.times do |i|
             left = bytes[i * 2]
             right = bytes[i * 2 + 1]
-            score += (left - right)
+            diff = (left - right)
+            if i < main_pairs.length
+              main_score += diff
+            else
+              sync_score += diff
+            end
           end
-          conf = (score.abs.to_f / (pairs.length * 255.0)).round(4)
-          variant = score >= 0 ? "a" : "b"
+          score = main_score + sync_score
+          conf = (main_score.abs.to_f / ([main_pairs.length, 1].max * 255.0)).round(4)
+          variant = main_score >= 0 ? "a" : "b"
           variant = nil if conf < MIN_CONFIDENCE
           { variant: variant, confidence: conf, score: score }
         end
@@ -1672,13 +1848,10 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       margins << margin
     end
 
-    {
-      usable: usable,
-      comp_w: comp_w,
-      median_ratio: median(ratios).to_f,
-      median_margin: median(margins).to_f,
-      usable_count: usable.length
-    }
+    ecc_grouped_reference_usable(usable: usable, offset: offset).merge(
+      raw_usable_count: usable.length,
+      raw_comp_w: comp_w.to_f
+    )
   end
 
   best_offset = 0
@@ -1698,7 +1871,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
 
       fps.each do |rec|
         mism_w = 0.0
-        u[:usable].each do |(i, ov, w, _m, _r)|
+        u[:usable].each do |(i, ov, w, _m, _r, _seg_idx, _raw_count)|
           exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
             fingerprint_id: rec.fingerprint_id,
             media_item_id: media_item.id,
@@ -1739,7 +1912,9 @@ def sample_variants_batch_single(file_path:, times:, spec:)
             comp_w: u[:comp_w],
             usable_count: u[:usable_count],
             median_ratio: u[:median_ratio],
-            median_margin: u[:median_margin]
+            median_margin: u[:median_margin],
+            raw_usable_count: u[:raw_usable_count],
+            raw_comp_w: u[:raw_comp_w]
           }
         }
       end
@@ -1767,7 +1942,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     mism = 0
     comp = 0
 
-    u[:usable].each do |(i, ov, w, _m, _r)|
+    u[:usable].each do |(i, ov, w, _m, _r, _seg_idx, _raw_count)|
       exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
         fingerprint_id: rec.fingerprint_id,
         media_item_id: media_item.id,
@@ -1805,7 +1980,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
   # Reference-derived observed variants/confidences (for UI).
   ref_obs = Array.new(scores.length)
   ref_conf = Array.new(scores.length, 0.0)
-  u[:usable].each do |(i, ov, _w, margin, ratio)|
+  u[:usable].each do |(i, ov, _w, margin, ratio, _seg_idx, _raw_count)|
     ref_obs[i] = ov
     c = margin.to_f
     c *= 0.5 if ratio.to_f > 1.0
@@ -1835,7 +2010,10 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     polarity_gate_passed: polarity_choice[:gate_passed],
     polarity_ratio_gain: polarity_choice[:ratio_gain],
     polarity_delta_gain: polarity_choice[:delta_gain],
-    polarity_score_gain: polarity_choice[:score_gain]
+    polarity_score_gain: polarity_choice[:score_gain],
+    ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
+    ecc_groups_used: u[:usable_count],
+    ecc_raw_usable_samples: u[:raw_usable_count]
   }
 
   other_score = polarity_best_scores[!best_polarity_flip]

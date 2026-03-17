@@ -20,6 +20,10 @@ module ::MediaGallery
 
     SALT = "media_gallery_fingerprint_v1"
 
+    ECC_LOGICAL_BITS = 16
+    ECC_REPEAT = 4
+    ECC_BLOCK_SPAN = ECC_LOGICAL_BITS * ECC_REPEAT
+
     def enabled?
       SiteSetting.respond_to?(:media_gallery_fingerprint_enabled) && SiteSetting.media_gallery_fingerprint_enabled
     end
@@ -45,13 +49,56 @@ module ::MediaGallery
       OpenSSL::HMAC.hexdigest("SHA256", secret, msg)[0, 32]
     end
 
-    # Returns "a" or "b" for the given segment index (0-based).
-    def expected_variant_for_segment(fingerprint_id:, media_item_id:, segment_index:)
+    def ecc_profile
+      {
+        logical_bits: ECC_LOGICAL_BITS,
+        repeat: ECC_REPEAT,
+        block_span: ECC_BLOCK_SPAN,
+        scheme: "repeat_interleave_v1"
+      }
+    end
+
+    def logical_slot_for_segment(segment_index:)
       idx = segment_index.to_i
       idx = 0 if idx.negative?
-      msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|s=#{idx}"
+
+      {
+        block_index: idx / ECC_BLOCK_SPAN,
+        logical_index: idx % ECC_LOGICAL_BITS,
+        block_span: ECC_BLOCK_SPAN,
+        repeat: ECC_REPEAT,
+        logical_bits: ECC_LOGICAL_BITS
+      }
+    end
+
+    def expected_logical_variant(fingerprint_id:, media_item_id:, block_index:, logical_index:)
+      block = block_index.to_i
+      block = 0 if block.negative?
+      logical = logical_index.to_i
+      logical = 0 if logical.negative?
+      logical %= ECC_LOGICAL_BITS
+
+      msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|b=#{block}|l=#{logical}"
       byte0 = OpenSSL::HMAC.digest("SHA256", secret, msg).getbyte(0)
       (byte0 & 1) == 1 ? "b" : "a"
+    rescue
+      "a"
+    end
+
+    # Returns "a" or "b" for the given segment index (0-based).
+    #
+    # We intentionally use a small repeated/interleaved code block here instead of
+    # independent per-segment bits. This acts as lightweight ECC: short leaks often
+    # contain multiple observations of the same logical bit, allowing the matcher to
+    # majority-vote away isolated bit flips from screen recordings.
+    def expected_variant_for_segment(fingerprint_id:, media_item_id:, segment_index:)
+      slot = logical_slot_for_segment(segment_index: segment_index)
+      expected_logical_variant(
+        fingerprint_id: fingerprint_id,
+        media_item_id: media_item_id,
+        block_index: slot[:block_index],
+        logical_index: slot[:logical_index]
+      )
     rescue
       "a"
     end

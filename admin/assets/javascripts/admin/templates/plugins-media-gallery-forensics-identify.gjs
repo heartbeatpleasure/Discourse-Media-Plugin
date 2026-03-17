@@ -204,6 +204,22 @@ export default RouteTemplate(
                 {{#if @controller.meta.layout}}
                   <div><strong>layout:</strong> {{@controller.meta.layout}}</div>
                 {{/if}}
+                {{#if @controller.syncPeriod}}
+                  <div>
+                    <strong>sync layer:</strong> period {{@controller.syncPeriod}}
+                    {{#if @controller.syncPairsCount}}
+                      <span style="opacity:0.85;">({{@controller.syncPairsCount}} safe-zone pairs)</span>
+                    {{/if}}
+                  </div>
+                {{/if}}
+                {{#if @controller.eccScheme}}
+                  <div>
+                    <strong>ecc:</strong> {{@controller.eccScheme}}
+                    {{#if @controller.eccGroupsUsed}}
+                      <span style="opacity:0.85;">(logical groups: {{@controller.eccGroupsUsed}}{{#if @controller.eccRawUsableSamples}}, raw usable: {{@controller.eccRawUsableSamples}}{{/if}})</span>
+                    {{/if}}
+                  </div>
+                {{/if}}
                 {{#if @controller.phaseSearchUsed}}
                   <div>
                     <strong>phase:</strong>

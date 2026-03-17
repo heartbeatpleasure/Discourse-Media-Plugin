@@ -39,6 +39,16 @@ module ::MediaGallery
     V4_PAIR_COUNT = 16
     V4_BOX_SIZE_FRAC = 0.065
 
+    # Periodic sync beacons, identical in A and B, used to make reference-based
+    # alignment more robust without sacrificing user-specific A/B capacity.
+    #
+    # We keep these away from the extreme corners and away from the common visible
+    # watermark band in the center. The pattern repeats, so trimmed clips can still
+    # lock onto the next beacon cycle later in the video.
+    V4_SYNC_PAIR_COUNT = 4
+    V4_SYNC_OPACITY = 0.006
+    V4_SYNC_PATTERN = %w[a a a b b a b a b b a].freeze
+
     V2_OPACITY = 0.006 # 0.6% alpha
     V3_OPACITY = 0.010 # 1.0% alpha
     V4_OPACITY = 0.010 # 1.0% alpha
@@ -109,7 +119,12 @@ module ::MediaGallery
           opacity: V4_OPACITY,
           box_size_frac: V4_BOX_SIZE_FRAC,
           margin: V4_MARGIN,
-          pairs: v4_pairs_for(media_item_id: media_item_id)
+          pairs: v4_pairs_for(media_item_id: media_item_id),
+          sync_pairs: v4_sync_pairs,
+          sync_pattern: v4_sync_pattern,
+          sync_period: v4_sync_pattern.length,
+          sync_opacity: V4_SYNC_OPACITY,
+          sync_box_size_frac: V4_BOX_SIZE_FRAC
         }
       else
         {
@@ -198,6 +213,10 @@ module ::MediaGallery
         filters << "drawbox=x=iw*#{(x + w).round(6)}:y=ih*#{y}:w=iw*#{w}:h=ih*#{h}:color=#{right_color}@#{alpha}:t=fill"
       end
 
+      if layout == LAYOUT_V4
+        filters.concat(v4_sync_filters(box: box))
+      end
+
       filters.join(",")
     end
     private_class_method :vf_pairs
@@ -281,6 +300,7 @@ module ::MediaGallery
       bot_span = [bot_max - bot_min, 0.001].max
 
       excluded = visible_watermark_exclusion_rects(box: box, pair_w: pair_w)
+      excluded += v4_sync_pairs.map { |p| { x: p[:x], y: p[:y], w: pair_w, h: box } }
 
       out = []
       occupied = []
@@ -335,6 +355,68 @@ module ::MediaGallery
       out
     end
     private_class_method :v4_pairs_for
+
+    def v4_sync_pairs
+      [
+        { x: 0.16, y: 0.17 },
+        { x: 0.68, y: 0.17 },
+        { x: 0.16, y: 0.76 },
+        { x: 0.68, y: 0.76 }
+      ]
+    end
+    private_class_method :v4_sync_pairs
+
+    def v4_sync_pattern
+      V4_SYNC_PATTERN
+    end
+    private_class_method :v4_sync_pattern
+
+    def sync_segment_seconds
+      seg = SiteSetting.media_gallery_hls_segment_duration_seconds.to_i
+      seg = 6 if seg <= 0
+      seg
+    rescue
+      6
+    end
+    private_class_method :sync_segment_seconds
+
+    def sync_enable_expr(sync_variant)
+      mods = []
+      v4_sync_pattern.each_with_index do |vv, idx|
+        mods << idx if vv.to_s == sync_variant.to_s
+      end
+      return nil if mods.empty?
+
+      seg = sync_segment_seconds
+      period = v4_sync_pattern.length
+      checks = mods.map { |m| "eq(mod(floor(t/#{seg}),#{period}),#{m})" }
+      checks.join("+")
+    end
+    private_class_method :sync_enable_expr
+
+    def v4_sync_filters(box:)
+      w = box.to_f.round(6)
+      h = w
+      alpha = V4_SYNC_OPACITY
+      enable_a = sync_enable_expr("a")
+      enable_b = sync_enable_expr("b")
+      return [] if enable_a.blank? || enable_b.blank?
+
+      filters = []
+      v4_sync_pairs.each do |p|
+        x = p[:x].to_f.round(6)
+        y = p[:y].to_f.round(6)
+        xr = (x + w).round(6)
+
+        filters << "drawbox=x=iw*#{x}:y=ih*#{y}:w=iw*#{w}:h=ih*#{h}:color=white@#{alpha}:t=fill:enable='#{enable_a}'"
+        filters << "drawbox=x=iw*#{xr}:y=ih*#{y}:w=iw*#{w}:h=ih*#{h}:color=black@#{alpha}:t=fill:enable='#{enable_a}'"
+        filters << "drawbox=x=iw*#{x}:y=ih*#{y}:w=iw*#{w}:h=ih*#{h}:color=black@#{alpha}:t=fill:enable='#{enable_b}'"
+        filters << "drawbox=x=iw*#{xr}:y=ih*#{y}:w=iw*#{w}:h=ih*#{h}:color=white@#{alpha}:t=fill:enable='#{enable_b}'"
+      end
+
+      filters
+    end
+    private_class_method :v4_sync_filters
 
     def visible_watermark_exclusion_rects(box:, pair_w:)
       # Coarse exclusion rectangles based on the visible watermark position.

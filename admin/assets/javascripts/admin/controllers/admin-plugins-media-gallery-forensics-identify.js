@@ -258,6 +258,34 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return Number.isFinite(f) ? f : null;
   }
 
+  get syncPeriod() {
+    const v = this.meta?.sync_period;
+    const f = typeof v === "number" ? v : parseInt(v, 10);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get syncPairsCount() {
+    const v = this.meta?.sync_pairs_count;
+    const f = typeof v === "number" ? v : parseInt(v, 10);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get eccScheme() {
+    return this.meta?.ecc_scheme || "";
+  }
+
+  get eccGroupsUsed() {
+    const v = this.meta?.ecc_groups_used;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get eccRawUsableSamples() {
+    const v = this.meta?.ecc_raw_usable_samples;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
   get variantPolarity() {
     return this.meta?.variant_polarity || this.topCandidate?.variant_polarity || "normal";
   }
