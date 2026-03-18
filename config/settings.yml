@@ -416,6 +416,20 @@ plugins:
     max: 200000
     client: false
 
+  media_gallery_forensics_identify_filemode_soft_time_budget_seconds:
+    default: 24
+    type: integer
+    min: 5
+    max: 600
+    client: false
+
+  media_gallery_forensics_identify_filemode_engine_time_budget_seconds:
+    default: 22
+    type: integer
+    min: 5
+    max: 600
+    client: false
+
   # When URL-mode is used, we remux only a short sample locally before running identify.
   media_gallery_forensics_identify_max_url_sample_seconds:
     default: 1800

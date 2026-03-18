@@ -258,6 +258,26 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return Number.isFinite(f) ? f : null;
   }
 
+  get configuredFilemodeSoftBudgetSeconds() {
+    const v = this.meta?.configured_filemode_soft_time_budget_seconds;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get configuredFilemodeEngineBudgetSeconds() {
+    const v = this.meta?.configured_filemode_engine_time_budget_seconds;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get timeoutKind() {
+    return this.meta?.timeout_kind || "";
+  }
+
+  get likelyTimeoutLayer() {
+    return this.meta?.likely_timeout_layer || "";
+  }
+
   get syncPeriod() {
     const v = this.meta?.sync_period;
     const f = typeof v === "number" ? v : parseInt(v, 10);

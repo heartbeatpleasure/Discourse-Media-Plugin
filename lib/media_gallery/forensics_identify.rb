@@ -56,11 +56,19 @@ module ::MediaGallery
     POLARITY_SWITCH_MIN_SCORE_GAIN = 0.01
     POLARITY_SWITCH_MAX_DELTA_REGRESSION = 0.015
 
-    def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil, sample_times: nil)
+    def normalize_filemode_time_budget_seconds(value)
+      v = value.to_f
+      v = FILEMODE_TIME_BUDGET_SECONDS.to_f if v <= 0.0
+      v
+    end
+    private_class_method :normalize_filemode_time_budget_seconds
+
+    def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil, sample_times: nil, time_budget_seconds: nil)
       raise ArgumentError, "missing media_item" if media_item.blank?
       raise ArgumentError, "missing file" if file_path.blank? || !File.exist?(file_path)
 
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      filemode_budget_seconds = normalize_filemode_time_budget_seconds(time_budget_seconds)
 
       seg = SiteSetting.media_gallery_hls_segment_duration_seconds.to_i
       seg = 6 if seg <= 0
@@ -98,7 +106,7 @@ module ::MediaGallery
         sample_times: sample_times,
         file_size_bytes: file_size_bytes,
         started_at: started_at,
-        time_budget_seconds: FILEMODE_TIME_BUDGET_SECONDS,
+        time_budget_seconds: filemode_budget_seconds,
         max_offset_segments: max_offset_segments
       )
 
@@ -111,7 +119,7 @@ module ::MediaGallery
           sample_times: sample_times,
           file_size_bytes: file_size_bytes,
           started_at: started_at,
-          time_budget_seconds: FILEMODE_TIME_BUDGET_SECONDS
+          time_budget_seconds: filemode_budget_seconds
         )
 
         match = match_fingerprints(
@@ -148,6 +156,8 @@ module ::MediaGallery
           filemode_elapsed_seconds: obs[:elapsed_seconds],
           filemode_truncated: obs[:truncated],
           effective_max_samples: obs[:effective_max_samples],
+          configured_filemode_engine_time_budget_seconds: filemode_budget_seconds,
+          filemode_budget_exhausted: (obs[:budget_exhausted] == true || match_meta[:phase_search_budget_exhausted] == true || match_meta[:budget_exhausted] == true),
         }.merge(match_meta),
         observed: {
           variants: format_variant_sequence(obs[:variants]),
@@ -337,8 +347,10 @@ module ::MediaGallery
         meta[:dense_step_seconds] = dense_step_seconds.round(3)
         meta[:dense_samples] = Array(dense[:times]).length
         meta[:phase_search_refined] = (dense_step_seconds.to_f <= DENSE_SAMPLE_STEP_FINE.to_f)
+        meta[:phase_search_budget_exhausted] = (dense[:budget_exhausted] == true)
         match[:meta] = meta
 
+        obs[:budget_exhausted] = (dense[:budget_exhausted] == true)
         phase_results << { obs: obs, match: match }
       end
 
@@ -401,6 +413,7 @@ module ::MediaGallery
         effective_max_samples: effective_max_samples,
         layout: spec[:layout].to_s,
         elapsed_seconds: elapsed,
+        budget_exhausted: budget_exceeded.call,
       }
     end
     private_class_method :extract_dense_observed_variants
@@ -941,7 +954,8 @@ module ::MediaGallery
     layout: spec[:layout].to_s,
     truncated: used_times.length < times_mid.length || budget_exceeded.call,
     elapsed_seconds: elapsed,
-    effective_max_samples: cap
+    effective_max_samples: cap,
+    budget_exhausted: budget_exceeded.call
   }
 end
     # Attempts to derive accurate segment midpoints from the packaged (template) HLS playlist on disk.

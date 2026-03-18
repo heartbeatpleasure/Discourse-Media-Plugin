@@ -251,6 +251,25 @@ export default RouteTemplate(
                     {{/if}}
                   </div>
                 {{/if}}
+
+                {{#if @controller.configuredFilemodeSoftBudgetSeconds}}
+                  <div>
+                    <strong>file-mode budgets:</strong>
+                    soft {{@controller.configuredFilemodeSoftBudgetSeconds}}s
+                    {{#if @controller.configuredFilemodeEngineBudgetSeconds}}
+                      <span style="opacity:0.85;">/ engine {{@controller.configuredFilemodeEngineBudgetSeconds}}s</span>
+                    {{/if}}
+                  </div>
+                {{/if}}
+
+                {{#if @controller.timeoutKind}}
+                  <div style="opacity:0.95;">
+                    <strong>timeout kind:</strong> {{@controller.timeoutKind}}
+                    {{#if @controller.likelyTimeoutLayer}}
+                      <span style="opacity:0.85;">({{@controller.likelyTimeoutLayer}})</span>
+                    {{/if}}
+                  </div>
+                {{/if}}
               </div>
 
               {{#if @controller.showWeakTip}}

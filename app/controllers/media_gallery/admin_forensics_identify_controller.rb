@@ -13,8 +13,9 @@ module ::MediaGallery
     requires_plugin "Discourse-Media-Plugin"
 
     # Keep file-mode requests below common request timeout thresholds.
-    # Many installs run Rack::Timeout around ~30s; we aim to stay comfortably below that.
-    FILEMODE_SOFT_TIME_BUDGET_SECONDS = 24
+    # Many installs run into the Discourse production web timeout (~30s) before a reverse proxy does.
+    DEFAULT_FILEMODE_SOFT_TIME_BUDGET_SECONDS = 24
+    DEFAULT_FILEMODE_ENGINE_TIME_BUDGET_SECONDS = 22
 
     # Auto-cap sampling for large uploads to avoid timeouts.
     FILEMODE_AUTOCAP_MB_1 = 60
@@ -120,9 +121,14 @@ module ::MediaGallery
 
       temps = []
       result = nil
+      filemode_soft_budget_seconds = setting_filemode_soft_time_budget_seconds
+      filemode_engine_budget_seconds = setting_filemode_engine_time_budget_seconds(soft_budget_seconds: filemode_soft_budget_seconds)
+
       base_meta = {
         requested_max_samples: max_samples,
         max_offset_segments: max_offset,
+        configured_filemode_soft_time_budget_seconds: filemode_soft_budget_seconds,
+        configured_filemode_engine_time_budget_seconds: filemode_engine_budget_seconds,
       }
 
       if source_url.present?
@@ -165,13 +171,14 @@ module ::MediaGallery
 
         identify_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         begin
-          Timeout.timeout(FILEMODE_SOFT_TIME_BUDGET_SECONDS) do
+          Timeout.timeout(filemode_soft_budget_seconds) do
             result = ::MediaGallery::ForensicsIdentify.identify_from_file(
               media_item: item,
               file_path: path,
               max_samples: capped_max_samples,
               max_offset_segments: max_offset,
-              layout: layout
+              layout: layout,
+              time_budget_seconds: filemode_engine_budget_seconds
             )
           end
         rescue Timeout::Error
@@ -181,8 +188,10 @@ module ::MediaGallery
               media_item_id: item.id,
               decision: "timeout",
               conclusive: false,
-              recommendation: "try_shorter_clip_or_lower_max_samples",
-              user_message: "Analyse duurde te lang en is afgebroken om timeouts te voorkomen. Probeer een kortere clip (bijv. 1–3 minuten) of verlaag 'Max samples'.",
+              timeout_kind: "filemode_soft_budget",
+              likely_timeout_layer: "discourse_web_worker_or_reverse_proxy",
+              recommendation: "raise_filemode_budget_or_infrastructure_timeouts",
+              user_message: "Analyse bereikte de ingestelde file-mode tijdslimiet (soft=#{filemode_soft_budget_seconds}s, engine=#{filemode_engine_budget_seconds}s). Op Discourse is de backend-timeout in productie vaak ~30s; verhoog deze budgets alleen samen met je infrastructuur-timeouts (bijv. Unicorn/web worker en eventuele reverse proxy).",
             },
             observed: { variants: "", confidences: [] },
             candidates: [],
@@ -272,6 +281,22 @@ module ::MediaGallery
     # Some installs use long signed tokens in query strings. 2k is often too small.
     DEFAULT_MAX_SOURCE_URL_LENGTH = 10_000
 
+    def setting_filemode_soft_time_budget_seconds
+      v = SiteSetting.media_gallery_forensics_identify_filemode_soft_time_budget_seconds.to_i
+      v = DEFAULT_FILEMODE_SOFT_TIME_BUDGET_SECONDS if v <= 0
+      v
+    end
+
+    def setting_filemode_engine_time_budget_seconds(soft_budget_seconds: nil)
+      v = SiteSetting.media_gallery_forensics_identify_filemode_engine_time_budget_seconds.to_i
+      v = DEFAULT_FILEMODE_ENGINE_TIME_BUDGET_SECONDS if v <= 0
+
+      soft = soft_budget_seconds.to_i
+      soft = setting_filemode_soft_time_budget_seconds if soft <= 0
+      max_engine = [soft - 1, 1].max
+      [v, max_engine].min
+    end
+
     def setting_max_source_url_length
       v = SiteSetting.media_gallery_forensics_identify_max_source_url_length.to_i
       v = DEFAULT_MAX_SOURCE_URL_LENGTH if v <= 0
@@ -282,6 +307,10 @@ module ::MediaGallery
       return unless result.is_a?(Hash)
       meta = result["meta"]
       return unless meta.is_a?(Hash)
+
+      # Keep terminal outcomes intact.
+      preset = meta["decision"].to_s
+      return if %w[timeout error].include?(preset)
 
       # Do not apply to playlist URL-mode: it is exact and should always be conclusive.
       return if meta["source_mode"].to_s == "hls_playlist"
@@ -294,8 +323,33 @@ module ::MediaGallery
       confs = Array(confs).map { |c| c.to_f }.select { |c| c.finite? && c >= 0 }
       conf_med = confs.empty? ? 0.0 : confs.sort[confs.length / 2]
 
+      soft_budget = meta["configured_filemode_soft_time_budget_seconds"].to_f
+      engine_budget = meta["configured_filemode_engine_time_budget_seconds"].to_f
+      budget_exhausted =
+        meta["filemode_budget_exhausted"] == true ||
+          meta["phase_search_budget_exhausted"] == true ||
+          meta["budget_exhausted"] == true
+
       # If we effectively have no evidence, do not show candidate scores.
       if eff <= 0.5 || comp_w < 1.0 || conf_med < 0.005
+        if budget_exhausted
+          meta["decision"] = "timeout"
+          meta["conclusive"] = false
+          meta["timeout_kind"] ||= "filemode_engine_budget"
+          meta["likely_timeout_layer"] ||= "plugin_budget_before_full_signal"
+          meta["recommendation"] = "raise_filemode_budget_or_infrastructure_timeouts"
+          meta["user_message"] ||= begin
+            msg = "Analyse stopte voordat er genoeg watermark-signaal was opgebouwd"
+            parts = []
+            parts << "engine=#{engine_budget.to_i}s" if engine_budget > 0
+            parts << "soft=#{soft_budget.to_i}s" if soft_budget > 0
+            msg += " (#{parts.join(', ')})" if parts.present?
+            msg + ". Dit wijst vaker op een tijdslimiet dan op een verkeerd public_id. Verhoog eerst de file-mode budgets in plugin settings; ga alleen richting ~30s of hoger als je ook de Discourse/web-worker timeout en eventuele reverse-proxy timeout verhoogt."
+          end
+          result["candidates"] = []
+          return
+        end
+
         meta["decision"] = "no_signal"
         meta["conclusive"] = false
         meta["recommendation"] = "check_public_id_or_use_hls_url"
