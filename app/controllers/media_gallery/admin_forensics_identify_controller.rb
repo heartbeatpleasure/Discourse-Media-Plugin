@@ -316,8 +316,22 @@ module ::MediaGallery
       return if meta["source_mode"].to_s == "hls_playlist"
 
       eff = meta["effective_samples"].to_f
+      usable = meta["usable_samples"].to_i
+      top_ratio = meta["offset_top_match_ratio"].to_f
+
       cand0 = (result["candidates"].is_a?(Array) ? result["candidates"].first : nil)
-      comp_w = cand0.is_a?(Hash) ? cand0["compared_weighted"].to_f : 0.0
+      comp_w = 0.0
+      comp = 0
+      if cand0.is_a?(Hash)
+        comp_w = cand0["compared_weighted"].to_f
+        comp_w = cand0[:compared_weighted].to_f if comp_w <= 0.0 && cand0.key?(:compared_weighted)
+        comp = cand0["compared"].to_i
+        comp = cand0[:compared].to_i if comp <= 0 && cand0.key?(:compared)
+      end
+
+      observed_variants = result.dig("observed", "variants_array")
+      observed_variants = result.dig("observed", "variants").to_s.chars if observed_variants.blank?
+      observed_non_null = Array(observed_variants).count { |v| v.present? && v != "." && v != "?" }
 
       confs = result.dig("observed", "confidences")
       confs = Array(confs).map { |c| c.to_f }.select { |c| c.finite? && c >= 0 }
@@ -330,8 +344,25 @@ module ::MediaGallery
           meta["phase_search_budget_exhausted"] == true ||
           meta["budget_exhausted"] == true
 
-      # If we effectively have no evidence, do not show candidate scores.
-      if eff <= 0.5 || comp_w < 1.0 || conf_med < 0.005
+      # After phase-search / polarity / ECC we can already have meaningful evidence
+      # even if one individual guard signal is weak. Only collapse to no-signal when
+      # *all* evidence channels are effectively empty.
+      has_partial_signal =
+        eff > 0.5 ||
+          usable >= setting_policy_min_usable_any ||
+          observed_non_null >= setting_policy_min_usable_any ||
+          comp_w >= 1.0 ||
+          comp >= setting_policy_min_usable_any ||
+          top_ratio > 0.0 ||
+          conf_med >= 0.005
+
+      meta["guard_observed_non_null"] = observed_non_null
+      meta["guard_candidate_compared_weighted"] = comp_w.round(4)
+      meta["guard_candidate_compared"] = comp
+      meta["guard_offset_top_match_ratio"] = top_ratio.round(4)
+      meta["guard_has_partial_signal"] = has_partial_signal
+
+      unless has_partial_signal
         if budget_exhausted
           meta["decision"] = "timeout"
           meta["conclusive"] = false
