@@ -56,6 +56,12 @@ module ::MediaGallery
     POLARITY_SWITCH_MIN_SCORE_GAIN = 0.01
     POLARITY_SWITCH_MAX_DELTA_REGRESSION = 0.015
 
+    # Chunked re-sync: for longer leaked clips, one global offset/phase can drift.
+    # We therefore allow local offset re-selection per chunk and aggregate the chunks.
+    CHUNKED_RESYNC_WINDOW_SEGMENTS = 8
+    CHUNKED_RESYNC_MIN_TOTAL_SAMPLES = 12
+    CHUNKED_RESYNC_MIN_LOCAL_USABLE = 4
+
     def normalize_filemode_time_budget_seconds(value)
       v = value.to_f
       v = FILEMODE_TIME_BUDGET_SECONDS.to_f if v <= 0.0
@@ -837,6 +843,236 @@ module ::MediaGallery
       }
     end
     private_class_method :select_polarity_result
+
+    def chunked_resync_window_ranges(total_samples:)
+      total = total_samples.to_i
+      return [] if total <= 0
+
+      win = CHUNKED_RESYNC_WINDOW_SEGMENTS.to_i
+      win = 8 if win <= 0
+
+      ranges = []
+      start_idx = 0
+      while start_idx < total
+        end_idx = [start_idx + win - 1, total - 1].min
+        ranges << (start_idx..end_idx)
+        start_idx = end_idx + 1
+      end
+      ranges
+    rescue
+      []
+    end
+    private_class_method :chunked_resync_window_ranges
+
+    def summarize_reference_window(usable_entries:, range:)
+      entries = Array(usable_entries).select do |entry|
+        idx = entry[0].to_i
+        range.cover?(idx)
+      end
+      return nil if entries.empty?
+
+      comp_w = entries.reduce(0.0) { |acc, e| acc + e[2].to_f }.to_f
+      return nil if comp_w <= 0.0
+
+      {
+        usable: entries,
+        comp_w: comp_w,
+        usable_count: entries.length,
+        median_margin: median(entries.map { |e| e[3].to_f }).to_f,
+        median_ratio: median(entries.map { |e| e[4].to_f }).to_f,
+      }
+    rescue
+      nil
+    end
+    private_class_method :summarize_reference_window
+
+    def chunked_resync_should_run?(scores_length:, global_usable_count:)
+      scores_length.to_i >= CHUNKED_RESYNC_MIN_TOTAL_SAMPLES.to_i && global_usable_count.to_i >= 8
+    rescue
+      false
+    end
+    private_class_method :chunked_resync_should_run?
+
+    def chunked_resync_score(top_ratio:, second_ratio:, usable_count:, median_margin:)
+      delta = top_ratio.to_f - second_ratio.to_f
+      delta + (top_ratio.to_f * 0.03) + (usable_count.to_f * 0.003) + (median_margin.to_f * 0.02)
+    end
+    private_class_method :chunked_resync_score
+
+    def build_chunked_reference_result(fps:, media_item:, scores_length:, max_off:, polarity_flip:, build_usable:)
+      ranges = chunked_resync_window_ranges(total_samples: scores_length)
+      return nil if ranges.length < 2
+
+      usable_by_offset = {}
+      (0..max_off).each do |offset|
+        u = build_usable.call(offset, polarity_flip)
+        next if u.blank? || Array(u[:usable]).empty? || u[:comp_w].to_f <= 0.0
+        usable_by_offset[offset] = u
+      end
+      return nil if usable_by_offset.empty?
+
+      chosen_chunks = []
+      ref_obs = Array.new(scores_length)
+      ref_conf = Array.new(scores_length, 0.0)
+
+      ranges.each do |range|
+        best = nil
+
+        usable_by_offset.each do |offset, u|
+          summary = summarize_reference_window(usable_entries: u[:usable], range: range)
+          next if summary.blank? || summary[:usable_count].to_i < CHUNKED_RESYNC_MIN_LOCAL_USABLE.to_i
+
+          top = nil
+          second = nil
+          fps.each do |rec|
+            mism_w = 0.0
+            summary[:usable].each do |(i, ov, w, _m, _r, _seg_idx, _raw_count)|
+              exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+                fingerprint_id: rec.fingerprint_id,
+                media_item_id: media_item.id,
+                segment_index: i + offset
+              )
+              mism_w += w if exp != ov
+            end
+
+            ratio_w = 1.0 - (mism_w / summary[:comp_w])
+            entry = { ratio_w: ratio_w, rec: rec }
+            if top.nil? || ratio_w > top[:ratio_w]
+              second = top
+              top = entry
+            elsif second.nil? || ratio_w > second[:ratio_w]
+              second = entry
+            end
+          end
+
+          next unless top
+          second_ratio = second ? second[:ratio_w].to_f : 0.0
+          score = chunked_resync_score(
+            top_ratio: top[:ratio_w].to_f,
+            second_ratio: second_ratio,
+            usable_count: summary[:usable_count],
+            median_margin: summary[:median_margin]
+          )
+
+          entry = {
+            range: range,
+            offset: offset,
+            usable: summary[:usable],
+            comp_w: summary[:comp_w].to_f,
+            usable_count: summary[:usable_count].to_i,
+            median_margin: summary[:median_margin].to_f,
+            median_ratio: summary[:median_ratio].to_f,
+            top_ratio_w: top[:ratio_w].to_f,
+            second_ratio_w: second_ratio,
+            top_user_id: top.dig(:rec, :user_id),
+            score: score,
+          }
+
+          if best.nil? || entry[:score] > best[:score] ||
+               (entry[:score] == best[:score] && entry[:usable_count].to_i > best[:usable_count].to_i)
+            best = entry
+          end
+        end
+
+        next if best.blank?
+        chosen_chunks << best
+        best[:usable].each do |(i, ov, _w, margin, ratio, _seg_idx, _raw_count)|
+          ref_obs[i] = ov
+          c = margin.to_f
+          c *= 0.5 if ratio.to_f > 1.0
+          ref_conf[i] = c.round(4)
+        end
+      end
+
+      return nil if chosen_chunks.length < 2
+
+      candidates = []
+      fps.each do |rec|
+        mism_w = 0.0
+        comp_w = 0.0
+        mism = 0
+        comp = 0
+
+        chosen_chunks.each do |chunk|
+          off = chunk[:offset].to_i
+          chunk[:usable].each do |(i, ov, w, _m, _r, _seg_idx, _raw_count)|
+            exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+              fingerprint_id: rec.fingerprint_id,
+              media_item_id: media_item.id,
+              segment_index: i + off
+            )
+            comp += 1
+            comp_w += w.to_f
+            if exp != ov
+              mism += 1
+              mism_w += w.to_f
+            end
+          end
+        end
+
+        next if comp <= 0 || comp_w <= 0.0
+
+        candidates << {
+          user_id: rec.user_id,
+          username: rec.user&.username,
+          fingerprint_id: rec.fingerprint_id,
+          best_offset_segments: chosen_chunks.first[:offset].to_i,
+          mismatches: mism,
+          compared: comp,
+          mismatches_weighted: mism_w.round(6),
+          compared_weighted: comp_w.round(6),
+          match_ratio: (1.0 - (mism.to_f / comp.to_f)).round(4),
+          match_ratio_weighted: (1.0 - (mism_w / comp_w)).round(4),
+          local_best_offset_segments: chosen_chunks.first[:offset].to_i,
+          local_match_ratio: (1.0 - (mism_w / comp_w)).round(4),
+          polarity_flip_used: polarity_flip,
+          variant_polarity: (polarity_flip ? "inverted" : "normal"),
+        }
+      end
+
+      candidates.sort_by! { |c| [-c[:match_ratio_weighted].to_f, -c[:compared].to_i] }
+      top = candidates[0]
+      second = candidates[1]
+      top_ratio = top&.dig(:match_ratio_weighted).to_f
+      second_ratio = second&.dig(:match_ratio_weighted).to_f
+      usable_count = chosen_chunks.reduce(0) { |acc, c| acc + c[:usable_count].to_i }
+      median_margin = median(chosen_chunks.map { |c| c[:median_margin].to_f }).to_f
+
+      {
+        candidates: candidates,
+        meta: {
+          offset_strategy: "chunked_reference",
+          chosen_offset_segments: chosen_chunks.first[:offset].to_i,
+          effective_samples: usable_count.to_f.round(2),
+          offset_top_match_ratio: top_ratio.round(4),
+          offset_second_match_ratio: second_ratio.round(4),
+          offset_delta: (top_ratio - second_ratio).round(4),
+          reference_observed_variants: ref_obs,
+          reference_observed_confidences: ref_conf,
+          chunked_resync_used: true,
+          chunked_resync_chunks_used: chosen_chunks.length,
+          chunked_resync_window_segments: CHUNKED_RESYNC_WINDOW_SEGMENTS,
+          chunked_resync_offsets: chosen_chunks.map { |c| c[:offset].to_i },
+          chunked_resync_ranges: chosen_chunks.map { |c| "#{c[:range].begin}-#{c[:range].end}" },
+          chunked_resync_score: chunked_resync_score(
+            top_ratio: top_ratio,
+            second_ratio: second_ratio,
+            usable_count: usable_count,
+            median_margin: median_margin
+          ).round(4),
+          chunked_resync_top_user_ids: chosen_chunks.map { |c| c[:top_user_id] }.compact,
+        },
+        score: chunked_resync_score(
+          top_ratio: top_ratio,
+          second_ratio: second_ratio,
+          usable_count: usable_count,
+          median_margin: median_margin
+        ),
+      }
+    rescue
+      nil
+    end
+    private_class_method :build_chunked_reference_result
 
     def extract_observed_variants(file_path:, segment_seconds:, spec:, max_samples:, sample_times: nil, file_size_bytes: nil, started_at: nil, time_budget_seconds: nil)
   duration = probe_duration_seconds(file_path)
@@ -1950,8 +2186,44 @@ def sample_variants_batch_single(file_path:, times:, spec:)
 
   u = build_usable.call(best_offset, best_polarity_flip)
 
-  candidates = []
-  fps.each do |rec|
+  chunked = nil
+  if chunked_resync_should_run?(scores_length: scores.length, global_usable_count: u[:usable_count].to_i)
+    chunked = build_chunked_reference_result(
+      fps: fps,
+      media_item: media_item,
+      scores_length: scores.length,
+      max_off: max_off,
+      polarity_flip: best_polarity_flip,
+      build_usable: build_usable
+    )
+  end
+
+  use_chunked = false
+  if chunked.present?
+    global_score = chunked_resync_score(
+      top_ratio: (best_diag ? best_diag[:top_ratio_w].to_f : 0.0),
+      second_ratio: (best_diag ? best_diag[:second_ratio_w].to_f : 0.0),
+      usable_count: u[:usable_count].to_i,
+      median_margin: (best_diag ? best_diag[:median_margin].to_f : 0.0)
+    )
+    chunked_score = chunked[:score].to_f
+    global_top = (best_diag ? best_diag[:top_ratio_w].to_f : 0.0)
+    chunked_top = chunked.dig(:meta, :offset_top_match_ratio).to_f
+    global_delta = (best_diag ? best_diag[:delta].to_f : 0.0)
+    chunked_delta = chunked.dig(:meta, :offset_delta).to_f
+
+    use_chunked =
+      chunked_score >= (global_score + 0.01) ||
+      (chunked_top >= (global_top - 0.01) && chunked_delta >= (global_delta + 0.05))
+  end
+
+  if use_chunked
+    candidates = Array(chunked[:candidates]).first(10)
+    ref_obs = chunked.dig(:meta, :reference_observed_variants) || Array.new(scores.length)
+    ref_conf = chunked.dig(:meta, :reference_observed_confidences) || Array.new(scores.length, 0.0)
+  else
+    candidates = []
+    fps.each do |rec|
     mism_w = 0.0
     mism = 0
     comp = 0
@@ -1991,14 +2263,15 @@ def sample_variants_batch_single(file_path:, times:, spec:)
 
   candidates.sort_by! { |c| [-c[:match_ratio_weighted].to_f, -c[:compared].to_i] }
 
-  # Reference-derived observed variants/confidences (for UI).
-  ref_obs = Array.new(scores.length)
-  ref_conf = Array.new(scores.length, 0.0)
-  u[:usable].each do |(i, ov, _w, margin, ratio, _seg_idx, _raw_count)|
-    ref_obs[i] = ov
-    c = margin.to_f
-    c *= 0.5 if ratio.to_f > 1.0
-    ref_conf[i] = c.round(4)
+    # Reference-derived observed variants/confidences (for UI).
+    ref_obs = Array.new(scores.length)
+    ref_conf = Array.new(scores.length, 0.0)
+    u[:usable].each do |(i, ov, _w, margin, ratio, _seg_idx, _raw_count)|
+      ref_obs[i] = ov
+      c = margin.to_f
+      c *= 0.5 if ratio.to_f > 1.0
+      ref_conf[i] = c.round(4)
+    end
   end
 
   top = candidates[0]
@@ -2029,6 +2302,23 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     ecc_groups_used: u[:usable_count],
     ecc_raw_usable_samples: u[:raw_usable_count]
   }
+
+  if use_chunked && chunked.is_a?(Hash)
+    meta[:offset_strategy] = "chunked_reference"
+    meta[:chosen_offset_segments] = chunked.dig(:meta, :chosen_offset_segments).to_i
+    meta[:effective_samples] = chunked.dig(:meta, :effective_samples).to_f.round(2)
+    meta[:offset_top_match_ratio] = chunked.dig(:meta, :offset_top_match_ratio).to_f.round(4)
+    meta[:offset_second_match_ratio] = chunked.dig(:meta, :offset_second_match_ratio).to_f.round(4)
+    meta[:offset_delta] = chunked.dig(:meta, :offset_delta).to_f.round(4)
+    meta[:reference_observed_variants] = ref_obs
+    meta[:reference_observed_confidences] = ref_conf
+    meta[:chunked_resync_used] = true
+    meta[:chunked_resync_chunks_used] = chunked.dig(:meta, :chunked_resync_chunks_used)
+    meta[:chunked_resync_window_segments] = chunked.dig(:meta, :chunked_resync_window_segments)
+    meta[:chunked_resync_offsets] = chunked.dig(:meta, :chunked_resync_offsets)
+    meta[:chunked_resync_ranges] = chunked.dig(:meta, :chunked_resync_ranges)
+    meta[:chunked_resync_score] = chunked.dig(:meta, :chunked_resync_score)
+  end
 
   other_score = polarity_best_scores[!best_polarity_flip]
   if other_score && other_score.finite? && best_score && best_score.finite?

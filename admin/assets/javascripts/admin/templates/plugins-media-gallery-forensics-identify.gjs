@@ -233,6 +233,25 @@ export default RouteTemplate(
                     {{/if}}
                   </div>
                 {{/if}}
+                {{#if @controller.chunkedResyncUsed}}
+                  <div>
+                    <strong>chunked re-sync:</strong>
+                    {{@controller.chunkedResyncChunksUsed}} chunks
+                    {{#if @controller.chunkedResyncWindowSegments}}
+                      <span style="opacity:0.85;">(window: {{@controller.chunkedResyncWindowSegments}} seg)</span>
+                    {{/if}}
+                    {{#if @controller.chunkedResyncOffsets.length}}
+                      <div style="opacity:0.85; margin-left: 1rem;">
+                        offsets: {{@controller.chunkedResyncOffsets}}
+                      </div>
+                    {{/if}}
+                    {{#if @controller.chunkedResyncRanges.length}}
+                      <div style="opacity:0.85; margin-left: 1rem;">
+                        ranges: {{@controller.chunkedResyncRanges}}
+                      </div>
+                    {{/if}}
+                  </div>
+                {{/if}}
                 <div>
                   <strong>variant polarity:</strong> {{@controller.variantPolarity}}
                   {{#if @controller.polarityFlipUsed}}
