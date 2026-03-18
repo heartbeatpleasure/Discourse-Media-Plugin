@@ -24,6 +24,7 @@ after_initialize do
   require_relative "lib/media_gallery/upload_path"
   require_relative "lib/media_gallery/permissions"
   require_relative "lib/media_gallery/private_storage"
+  require_relative "lib/media_gallery/test_downloads"
   require_relative "lib/media_gallery/watermark"   # ✅ NEW
   require_relative "lib/media_gallery/forensics_identify"
 
@@ -37,6 +38,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_media_items_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/hls_controller.rb", __dir__)
@@ -66,6 +68,10 @@ after_initialize do
 
     # Admin-only helper to find media items by public_id/title/id.
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
+
+    # Admin-only: generate temporary personalized remux/clip downloads for testing.
+    post "/admin/plugins/media-gallery/test-downloads/:public_id" => "media_gallery/admin_test_downloads#create", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/test-downloads/:public_id/:artifact_id" => "media_gallery/admin_test_downloads#download"
 
     get "/media/stream/:token(.:ext)" => "media_gallery/stream#show",
         defaults: { format: :json },

@@ -58,6 +58,9 @@ en:
     media_gallery_ffprobe_path: "ffprobe binary path"
 
     media_gallery_forensics_identify_max_source_url_length: "Maximum length (characters) of source_url accepted by Forensics Identify"
+    media_gallery_forensics_test_downloads_enabled: "Enable admin-only forensic test downloads (temporary personalized remux/clip exports)"
+    media_gallery_forensics_test_downloads_root_path: "Root path for temporary forensic test downloads"
+    media_gallery_forensics_test_downloads_retention_hours: "Retention for temporary forensic test downloads (hours)"
     media_gallery_forensics_identify_filemode_soft_time_budget_seconds: "Forensics Identify file-mode soft request budget (seconds). Keep below your backend timeout unless you also raise infrastructure timeouts."
     media_gallery_forensics_identify_filemode_engine_time_budget_seconds: "Forensics Identify file-mode internal sampling budget (seconds). Usually keep this slightly below the soft request budget."
     media_gallery_forensics_identify_max_url_sample_seconds: "Maximum seconds to remux when using Forensics Identify URL-mode"

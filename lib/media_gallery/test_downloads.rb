@@ -1,0 +1,189 @@
+# frozen_string_literal: true
+
+require "fileutils"
+require "json"
+require "securerandom"
+require "time"
+
+module ::MediaGallery
+  module TestDownloads
+    module_function
+
+    DEFAULT_ROOT = "/shared/media_gallery/test_downloads"
+    DEFAULT_RETENTION_HOURS = 24
+    DEFAULT_VARIANT = ::MediaGallery::Hls::DEFAULT_VARIANT rescue "v0"
+
+    def enabled?
+      SiteSetting.respond_to?(:media_gallery_forensics_test_downloads_enabled) &&
+        SiteSetting.media_gallery_forensics_test_downloads_enabled
+    end
+
+    def root_path
+      p = SiteSetting.media_gallery_forensics_test_downloads_root_path.to_s.strip
+      p = DEFAULT_ROOT if p.blank?
+      p
+    end
+
+    def retention_hours
+      hours = SiteSetting.media_gallery_forensics_test_downloads_retention_hours.to_i
+      hours = DEFAULT_RETENTION_HOURS if hours <= 0
+      hours
+    rescue
+      DEFAULT_RETENTION_HOURS
+    end
+
+    def ensure_root!
+      FileUtils.mkdir_p(root_path)
+      test = File.join(root_path, ".writable_test_#{SecureRandom.hex(4)}")
+      File.write(test, "ok")
+      FileUtils.rm_f(test)
+      true
+    end
+
+    def cleanup!
+      return unless Dir.exist?(root_path)
+      cutoff = Time.now - retention_hours.hours
+
+      Dir.glob(File.join(root_path, "*", "*", ".complete")).each do |marker|
+        begin
+          next if File.mtime(marker) > cutoff
+          FileUtils.rm_rf(File.dirname(marker))
+        rescue
+          # ignore cleanup failures
+        end
+      end
+    end
+
+    def item_dir(public_id)
+      File.join(root_path, public_id.to_s)
+    end
+
+    def artifact_dir(public_id, artifact_id)
+      File.join(item_dir(public_id), artifact_id.to_s)
+    end
+
+    def artifact_meta_path(public_id, artifact_id)
+      File.join(artifact_dir(public_id, artifact_id), "meta.json")
+    end
+
+    def artifact_file_path(public_id, artifact_id, ext = "mp4")
+      File.join(artifact_dir(public_id, artifact_id), "artifact.#{ext}")
+    end
+
+    def template_playlist_path(item, variant: DEFAULT_VARIANT)
+      ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
+    end
+
+    def parse_template_segments(item, variant: DEFAULT_VARIANT)
+      path = template_playlist_path(item, variant: variant)
+      raise Discourse::NotFound if path.blank? || !File.exist?(path)
+
+      names = []
+      File.read(path).each_line do |line|
+        l = line.to_s.strip
+        next if l.blank? || l.start_with?("#")
+        names << File.basename(l)
+      end
+      names
+    end
+
+    def selected_segment_paths(item:, user_id:, start_segment: 0, segment_count: nil, variant: DEFAULT_VARIANT)
+      seg_names = parse_template_segments(item, variant: variant)
+      raise "no_hls_segments" if seg_names.blank?
+
+      start_idx = [start_segment.to_i, 0].max
+      chosen = seg_names.drop(start_idx)
+      chosen = chosen.first(segment_count.to_i) if segment_count.to_i > 0
+      raise "no_segments_selected" if chosen.blank?
+
+      fingerprint_id = ::MediaGallery::Fingerprinting.fingerprint_id_for(user_id: user_id.to_i, media_item_id: item.id)
+
+      paths = chosen.map do |filename|
+        seg_idx = ::MediaGallery::Fingerprinting.segment_index_from_filename(filename)
+        raise "invalid_segment_filename: #{filename}" if seg_idx.nil?
+
+        ab = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          fingerprint_id: fingerprint_id,
+          media_item_id: item.id,
+          segment_index: seg_idx,
+        )
+
+        base = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+        path = File.join(base, ab, variant.to_s, filename)
+        raise "missing_segment_file: #{path}" unless File.exist?(path)
+        path
+      end
+
+      {
+        segment_paths: paths,
+        fingerprint_id: fingerprint_id,
+        start_segment: start_idx,
+        segment_count: paths.length,
+        variant: variant.to_s,
+      }
+    end
+
+    def build_artifact!(item:, user_id:, mode:, start_segment: 0, segment_count: nil)
+      raise Discourse::InvalidAccess unless enabled?
+
+      ensure_root!
+      cleanup!
+
+      selected = selected_segment_paths(
+        item: item,
+        user_id: user_id,
+        start_segment: start_segment,
+        segment_count: segment_count,
+      )
+
+      artifact_id = SecureRandom.hex(12)
+      dir = artifact_dir(item.public_id, artifact_id)
+      FileUtils.mkdir_p(dir)
+
+      output_path = artifact_file_path(item.public_id, artifact_id, "mp4")
+      concat_list = File.join(dir, "concat.txt")
+      File.write(concat_list, selected[:segment_paths].map { |p| "file '#{p.gsub("'", %q('\\''))}'" }.join("\n") + "\n")
+
+      ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
+        concat_file_path: concat_list,
+        output_path: output_path,
+      )
+
+      user = ::User.find_by(id: user_id.to_i)
+
+      meta = {
+        "artifact_id" => artifact_id,
+        "public_id" => item.public_id,
+        "media_item_id" => item.id,
+        "user_id" => user_id.to_i,
+        "username" => user&.username,
+        "fingerprint_id" => selected[:fingerprint_id],
+        "mode" => mode.to_s,
+        "variant" => selected[:variant],
+        "start_segment" => selected[:start_segment],
+        "segment_count" => selected[:segment_count],
+        "segment_seconds" => ::MediaGallery::Hls.segment_duration_seconds,
+        "created_at" => Time.now.utc.iso8601,
+        "file_path" => output_path,
+        "file_size_bytes" => File.size?(output_path).to_i,
+      }
+
+      File.write(artifact_meta_path(item.public_id, artifact_id), JSON.pretty_generate(meta))
+      File.write(File.join(dir, ".complete"), Time.now.utc.iso8601)
+      meta
+    rescue => e
+      begin
+        FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+      rescue
+        nil
+      end
+      raise e
+    end
+
+    def read_meta!(public_id, artifact_id)
+      path = artifact_meta_path(public_id, artifact_id)
+      raise Discourse::NotFound unless File.exist?(path)
+      JSON.parse(File.read(path))
+    end
+  end
+end

@@ -416,6 +416,24 @@ plugins:
     max: 200000
     client: false
 
+
+  # Admin-only test artifact generation for forensic validation.
+  # Generates temporary personalized remux/clip downloads from private HLS segments.
+  media_gallery_forensics_test_downloads_enabled:
+    default: false
+    client: false
+
+  media_gallery_forensics_test_downloads_root_path:
+    default: "/shared/media_gallery/test_downloads"
+    client: false
+
+  media_gallery_forensics_test_downloads_retention_hours:
+    default: 24
+    type: integer
+    min: 1
+    max: 168
+    client: false
+
   media_gallery_forensics_identify_filemode_soft_time_budget_seconds:
     default: 24
     type: integer

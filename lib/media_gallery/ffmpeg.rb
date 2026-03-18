@@ -177,6 +177,29 @@ module MediaGallery
       raise "ffmpeg_video_failed: #{short_err(stderr)}" unless status.success?
     end
 
+
+    def self.concat_ts_segments_to_mp4(concat_file_path:, output_path:)
+      cmd = [
+        ffmpeg_path,
+        *ffmpeg_common_args,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        concat_file_path,
+        "-c",
+        "copy",
+        "-bsf:a",
+        "aac_adtstoasc",
+        output_path,
+      ]
+
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      raise "ffmpeg_concat_failed: #{short_err(stderr)}" unless status.success?
+    end
+
     # Milestone 1: package a processed MP4 into a single HLS variant.
     # Produces: output_dir/index.m3u8 + output_dir/seg_XXXXX.ts
     def self.package_hls_single_variant(input_path:, output_dir:, segment_seconds:)
