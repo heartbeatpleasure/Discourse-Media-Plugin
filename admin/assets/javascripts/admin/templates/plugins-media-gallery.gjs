@@ -22,6 +22,10 @@ export default RouteTemplate(
         <a class="btn" href="/admin/plugins/media-gallery-forensics-exports">
           {{i18n "admin.media_gallery.forensics_exports.short_title"}}
         </a>
+
+        <a class="btn" href="/admin/plugins/media-gallery-test-downloads">
+          {{i18n "admin.media_gallery.test_downloads.short_title"}}
+        </a>
       </div>
     </div>
   </template>

@@ -52,6 +52,7 @@ after_initialize do
     get "/admin/plugins/media-gallery" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-forensics-exports" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-forensics-identify" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-test-downloads" => "admin/plugins#index", constraints: AdminConstraint.new
 
     get "/media-library" => "media_gallery/library#index"
 

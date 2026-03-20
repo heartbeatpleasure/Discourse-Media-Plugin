@@ -421,7 +421,7 @@ plugins:
   # Generates temporary personalized remux/clip downloads from private HLS segments.
   media_gallery_forensics_test_downloads_enabled:
     default: false
-    client: false
+    client: true
 
   media_gallery_forensics_test_downloads_root_path:
     default: "/shared/media_gallery/test_downloads"

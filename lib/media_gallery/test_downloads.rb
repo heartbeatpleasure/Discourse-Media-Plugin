@@ -49,7 +49,7 @@ module ::MediaGallery
           next if File.mtime(marker) > cutoff
           FileUtils.rm_rf(File.dirname(marker))
         rescue
-          # ignore cleanup failures
+          nil
         end
       end
     end
@@ -87,18 +87,75 @@ module ::MediaGallery
       names
     end
 
-    def selected_segment_paths(item:, user_id:, start_segment: 0, segment_count: nil, variant: DEFAULT_VARIANT)
-      seg_names = parse_template_segments(item, variant: variant)
-      raise "no_hls_segments" if seg_names.blank?
+    def choose_random_partial(total_segments)
+      total = total_segments.to_i
+      raise "no_hls_segments" if total <= 0
 
-      start_idx = [start_segment.to_i, 0].max
+      min_count = [[(total * 0.40).floor, 1].max, total].min
+      max_count = [[(total * 0.50).ceil, min_count].max, total].min
+      count = max_count <= min_count ? min_count : rand(min_count..max_count)
+
+      region = %w[start middle end].sample
+      start_idx =
+        case region
+        when "start"
+          0
+        when "middle"
+          [(total - count) / 2, 0].max
+        else
+          [total - count, 0].max
+        end
+
+      {
+        start_segment: start_idx,
+        segment_count: count,
+        region: region,
+        total_segments: total,
+        percent_of_video: total > 0 ? ((count.to_f / total) * 100.0).round(1) : 0.0,
+      }
+    end
+
+    def resolve_segment_selection(seg_names:, mode:, start_segment:, segment_count:)
+      total = seg_names.length
+      raise "no_hls_segments" if total <= 0
+
+      selection = {
+        mode: mode.to_s,
+        start_segment: [start_segment.to_i, 0].max,
+        segment_count: segment_count.to_i > 0 ? segment_count.to_i : nil,
+        total_segments: total,
+        random_clip_region: nil,
+        clip_percent_of_video: nil,
+      }
+
+      if mode.to_s == "random_partial"
+        random_sel = choose_random_partial(total)
+        selection[:start_segment] = random_sel[:start_segment]
+        selection[:segment_count] = random_sel[:segment_count]
+        selection[:random_clip_region] = random_sel[:region]
+        selection[:clip_percent_of_video] = random_sel[:percent_of_video]
+      end
+
+      start_idx = [selection[:start_segment].to_i, 0].max
       chosen = seg_names.drop(start_idx)
-      chosen = chosen.first(segment_count.to_i) if segment_count.to_i > 0
+      chosen = chosen.first(selection[:segment_count].to_i) if selection[:segment_count].to_i > 0
       raise "no_segments_selected" if chosen.blank?
+
+      selection.merge(chosen_segment_names: chosen)
+    end
+
+    def selected_segment_paths(item:, user_id:, mode:, start_segment: 0, segment_count: nil, variant: DEFAULT_VARIANT)
+      seg_names = parse_template_segments(item, variant: variant)
+      selection = resolve_segment_selection(
+        seg_names: seg_names,
+        mode: mode,
+        start_segment: start_segment,
+        segment_count: segment_count,
+      )
 
       fingerprint_id = ::MediaGallery::Fingerprinting.fingerprint_id_for(user_id: user_id.to_i, media_item_id: item.id)
 
-      paths = chosen.map do |filename|
+      paths = selection[:chosen_segment_names].map do |filename|
         seg_idx = ::MediaGallery::Fingerprinting.segment_index_from_filename(filename)
         raise "invalid_segment_filename: #{filename}" if seg_idx.nil?
 
@@ -117,8 +174,11 @@ module ::MediaGallery
       {
         segment_paths: paths,
         fingerprint_id: fingerprint_id,
-        start_segment: start_idx,
+        start_segment: selection[:start_segment],
         segment_count: paths.length,
+        total_segments: selection[:total_segments],
+        random_clip_region: selection[:random_clip_region],
+        clip_percent_of_video: selection[:clip_percent_of_video],
         variant: variant.to_s,
       }
     end
@@ -132,6 +192,7 @@ module ::MediaGallery
       selected = selected_segment_paths(
         item: item,
         user_id: user_id,
+        mode: mode,
         start_segment: start_segment,
         segment_count: segment_count,
       )
@@ -162,6 +223,9 @@ module ::MediaGallery
         "variant" => selected[:variant],
         "start_segment" => selected[:start_segment],
         "segment_count" => selected[:segment_count],
+        "total_segments" => selected[:total_segments],
+        "random_clip_region" => selected[:random_clip_region],
+        "clip_percent_of_video" => selected[:clip_percent_of_video],
         "segment_seconds" => ::MediaGallery::Hls.segment_duration_seconds,
         "created_at" => Time.now.utc.iso8601,
         "file_path" => output_path,

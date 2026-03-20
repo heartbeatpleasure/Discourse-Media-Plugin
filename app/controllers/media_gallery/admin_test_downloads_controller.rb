@@ -15,7 +15,7 @@ module ::MediaGallery
       raise Discourse::InvalidParameters.new(:user_id) if user_id <= 0
 
       mode = params[:mode].to_s.presence || "full"
-      unless %w[full clip].include?(mode)
+      unless %w[full clip random_partial].include?(mode)
         raise Discourse::InvalidParameters.new(:mode)
       end
 
@@ -59,7 +59,7 @@ module ::MediaGallery
       raise Discourse::NotFound if path.blank? || !File.exist?(path)
 
       username = meta["username"].presence || ::User.find_by(id: meta["user_id"].to_i)&.username || "user#{meta['user_id']}"
-      basename = [item.public_id, username, meta["mode"], "s#{meta['start_segment']}", "n#{meta['segment_count']}"]
+      basename = [item.public_id, username, meta["mode"], meta["random_clip_region"], "s#{meta['start_segment']}", "n#{meta['segment_count']}"]
         .compact.join("-")
         .gsub(/[^a-zA-Z0-9._-]+/, "_")
 
