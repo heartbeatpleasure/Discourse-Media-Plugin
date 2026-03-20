@@ -7,6 +7,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked searchResults = [];
   @tracked isSearching = false;
   @tracked searchError = "";
+  @tracked hasSearched = false;
 
   @tracked publicId = "";
   @tracked selectedItem = null;
@@ -23,16 +24,24 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
   _searchTimer = null;
 
-  // Deliberately do not hard-block the UI on a client-side setting read.
-  // The backend endpoint remains admin-only and setting-gated, so the server
-  // is still the source of truth. This avoids false "disabled" banners caused
-  // by stale/missing client-side settings hydration.
   get enabled() {
     return true;
   }
 
   get hasSelectedItem() {
     return !!this.publicId;
+  }
+
+  get hasSearchQuery() {
+    return (this.searchQuery || "").trim().length >= 3;
+  }
+
+  get showNoResults() {
+    return this.hasSearched && !this.isSearching && !this.searchError && (this.searchResults?.length || 0) === 0;
+  }
+
+  get canUseTypedPublicId() {
+    return this.hasSearchQuery && !this.isLoadingUsers && !this.isGenerating;
   }
 
   get resolvedUserId() {
@@ -65,6 +74,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.searchResults = [];
     this.isSearching = false;
     this.searchError = "";
+    this.hasSearched = false;
     this.publicId = "";
     this.selectedItem = null;
     this.users = [];
@@ -80,7 +90,16 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @action
   onSearchInput(event) {
     this.searchQuery = (event?.target?.value || "").trim();
+    this.hasSearched = false;
     this._debouncedSearch();
+  }
+
+  @action
+  onSearchKeydown(event) {
+    if (event?.key === "Enter") {
+      event.preventDefault();
+      this.search();
+    }
   }
 
   _debouncedSearch() {
@@ -122,9 +141,12 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     return `HTTP ${response.status}`;
   }
 
+  @action
   async search() {
     this.searchError = "";
     this.isSearching = true;
+    this.hasSearched = true;
+
     try {
       const q = this.searchQuery;
       if (q && q.length < 3) {
@@ -132,9 +154,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
         return;
       }
 
-      const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(
-        q || ""
-      )}`;
+      const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(q || "")}`;
       const response = await fetch(url, {
         method: "GET",
         headers: { Accept: "application/json" },
@@ -171,6 +191,23 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   @action
+  async useTypedPublicId() {
+    const q = (this.searchQuery || "").trim();
+    if (q.length < 3) {
+      return;
+    }
+
+    const exact = (this.searchResults || []).find((item) => item?.public_id === q) || null;
+    this.selectedItem = exact;
+    this.publicId = q;
+    this.users = [];
+    this.selectedUserId = "";
+    this.usersError = "";
+    this.generateError = "";
+    await this.loadUsers();
+  }
+
+  @action
   onManualUserIdInput(event) {
     this.manualUserId = (event?.target?.value || "").trim();
   }
@@ -189,9 +226,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.usersError = "";
     try {
       const response = await fetch(
-        `/admin/plugins/media-gallery/fingerprints/${encodeURIComponent(
-          this.publicId
-        )}.json`,
+        `/admin/plugins/media-gallery/fingerprints/${encodeURIComponent(this.publicId)}.json`,
         {
           method: "GET",
           headers: { Accept: "application/json" },
@@ -233,57 +268,53 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   _csrfToken() {
-    return document
-      .querySelector("meta[name='csrf-token']")
-      ?.getAttribute("content");
+    return document.querySelector("meta[name='csrf-token']")?.getAttribute("content");
   }
 
-  async _createArtifact(mode) {
-    if (!this.canGenerate) {
-      this.generateError = "Please select a media item and user first.";
+  _pushArtifact(artifact) {
+    if (!artifact) {
+      return;
+    }
+    this.artifacts = [artifact, ...(this.artifacts || [])];
+  }
+
+  async _generate(payload) {
+    if (!this.publicId || !this.resolvedUserId) {
       return;
     }
 
     this.isGenerating = true;
     this.generateError = "";
 
-    const body = {
-      user_id: this.resolvedUserId,
-      mode,
-    };
-
     try {
       const response = await fetch(
-        `/admin/plugins/media-gallery/test-downloads/${encodeURIComponent(
-          this.publicId
-        )}.json`,
+        `/admin/plugins/media-gallery/test-downloads/${encodeURIComponent(this.publicId)}.json`,
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
             Accept: "application/json",
-            ...(this._csrfToken() ? { "X-CSRF-Token": this._csrfToken() } : {}),
+            "Content-Type": "application/json",
+            "X-CSRF-Token": this._csrfToken(),
           },
           credentials: "same-origin",
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            user_id: this.resolvedUserId,
+            ...payload,
+          }),
         }
       );
 
-      if (!response.ok) {
-        const err = await this._extractError(response);
-        this.generateError = `HTTP ${response.status}: ${err}`;
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.ok || !json?.artifact) {
+        const err = json?.error || json?.message || `HTTP ${response.status}`;
+        this.generateError = String(err);
         return;
       }
 
-      const json = await response.json();
-      const artifact = json?.artifact;
-      if (!artifact?.download_url) {
-        this.generateError = "No download URL returned.";
-        return;
+      this._pushArtifact(json.artifact);
+      if (json.artifact.download_url) {
+        window.open(json.artifact.download_url, "_blank", "noopener,noreferrer");
       }
-
-      this.artifacts = [artifact, ...(this.artifacts || [])].slice(0, 10);
-      window.location.assign(artifact.download_url);
     } catch (e) {
       this.generateError = e?.message || String(e);
     } finally {
@@ -293,11 +324,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
   @action
   async generateFull() {
-    await this._createArtifact("full");
+    await this._generate({ mode: "full" });
   }
 
   @action
   async generateRandomPartial() {
-    await this._createArtifact("random_partial");
+    await this._generate({ mode: "random_partial" });
   }
 }
