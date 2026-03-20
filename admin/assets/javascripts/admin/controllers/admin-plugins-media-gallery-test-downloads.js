@@ -8,6 +8,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked isSearching = false;
   @tracked searchError = "";
   @tracked hasSearched = false;
+  @tracked searchInfo = "";
 
   @tracked publicId = "";
   @tracked selectedItem = null;
@@ -22,14 +23,12 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked generateError = "";
   @tracked artifacts = [];
 
-  _searchTimer = null;
-
   get enabled() {
     return true;
   }
 
   get hasSelectedItem() {
-    return !!this.publicId;
+    return !!(this.publicId || "").trim();
   }
 
   get hasSearchQuery() {
@@ -45,7 +44,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get searchButtonDisabled() {
-    return !this.hasSearchQuery;
+    return !this.hasSearchQuery || this.isSearching;
   }
 
   get useTypedPublicIdDisabled() {
@@ -70,36 +69,18 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get showNoUsersWarning() {
-    return !this.isLoadingUsers && (this.users?.length || 0) === 0;
+    return this.hasSelectedItem && !this.isLoadingUsers && !this.usersError && (this.users?.length || 0) === 0;
   }
 
   get generateDisabled() {
     return !this.canGenerate;
   }
 
-  resetState() {
-    this.searchQuery = "";
-    this.searchResults = [];
-    this.isSearching = false;
-    this.searchError = "";
-    this.hasSearched = false;
-    this.publicId = "";
-    this.selectedItem = null;
-    this.users = [];
-    this.isLoadingUsers = false;
-    this.usersError = "";
-    this.selectedUserId = "";
-    this.manualUserId = "";
-    this.isGenerating = false;
-    this.generateError = "";
-    this.artifacts = [];
-  }
-
   @action
   onSearchInput(event) {
     this.searchQuery = (event?.target?.value || "").trim();
     this.hasSearched = false;
-    this._debouncedSearch();
+    this.searchInfo = "";
   }
 
   @action
@@ -108,17 +89,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       event.preventDefault();
       this.search();
     }
-  }
-
-  _debouncedSearch() {
-    if (this._searchTimer) {
-      clearTimeout(this._searchTimer);
-    }
-
-    this._searchTimer = setTimeout(() => {
-      this._searchTimer = null;
-      this.search();
-    }, 300);
   }
 
   async _extractError(response) {
@@ -152,17 +122,18 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @action
   async search() {
     this.searchError = "";
+    this.searchInfo = "";
     this.isSearching = true;
     this.hasSearched = true;
 
     try {
-      const q = this.searchQuery;
-      if (q && q.length < 3) {
+      const q = (this.searchQuery || "").trim();
+      if (q.length < 3) {
         this.searchResults = [];
         return;
       }
 
-      const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(q || "")}`;
+      const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(q)}`;
       const response = await fetch(url, {
         method: "GET",
         headers: { Accept: "application/json" },
@@ -171,13 +142,14 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       if (!response.ok) {
         const err = await this._extractError(response);
-        this.searchError = `HTTP ${response.status}: ${err}`;
+        this.searchError = `Search failed (${response.status}): ${err}`;
         this.searchResults = [];
         return;
       }
 
       const json = await response.json();
       this.searchResults = Array.isArray(json?.items) ? json.items : [];
+      this.searchInfo = `${this.searchResults.length} result(s) found.`;
     } catch (e) {
       this.searchError = e?.message || String(e);
       this.searchResults = [];
@@ -187,32 +159,31 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   @action
-  async pickItem(item) {
+  pickItem(item) {
     this.selectedItem = item || null;
     this.publicId = item?.public_id || "";
     this.users = [];
     this.selectedUserId = "";
     this.usersError = "";
-    if (this.publicId) {
-      await this.loadUsers();
-    }
+    this.generateError = "";
+    this.searchInfo = this.publicId ? `Selected public_id ${this.publicId}.` : "";
   }
 
   @action
-  async useTypedPublicId() {
+  useTypedPublicId() {
     const q = (this.searchQuery || "").trim();
     if (q.length < 3) {
       return;
     }
 
     const exact = (this.searchResults || []).find((item) => item?.public_id === q) || null;
-    this.selectedItem = exact;
+    this.selectedItem = exact || { public_id: q, title: null, username: null };
     this.publicId = q;
     this.users = [];
     this.selectedUserId = "";
     this.usersError = "";
     this.generateError = "";
-    await this.loadUsers();
+    this.searchInfo = `Selected entered public_id ${q}. Click “Load users” below.`;
   }
 
   @action
@@ -225,8 +196,10 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.selectedUserId = event?.target?.value || "";
   }
 
+  @action
   async loadUsers() {
     if (!this.publicId) {
+      this.usersError = "No public_id selected yet.";
       return;
     }
 
@@ -244,7 +217,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       if (!response.ok) {
         const err = await this._extractError(response);
-        this.usersError = `HTTP ${response.status}: ${err}`;
+        this.usersError = `Load users failed (${response.status}): ${err}`;
         this.users = [];
         return;
       }
@@ -267,6 +240,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       if (!this.selectedUserId && this.users.length === 1) {
         this.selectedUserId = String(this.users[0].id);
       }
+      this.searchInfo = `Loaded ${this.users.length} user option(s) for ${this.publicId}.`;
     } catch (e) {
       this.usersError = e?.message || String(e);
       this.users = [];
@@ -288,6 +262,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
   async _generate(payload) {
     if (!this.publicId || !this.resolvedUserId) {
+      this.generateError = "Select a public_id and user first.";
       return;
     }
 

@@ -14,13 +14,13 @@ export default RouteTemplate(
       </div>
 
       <div class="control-group" style="margin-top: 1rem; max-width: 1000px;">
-        <label class="control-label">{{i18n "admin.media_gallery.test_downloads.search_label"}}</label>
+        <label class="control-label">Find media</label>
         <div style="display:flex; gap:0.75rem; align-items:flex-start; flex-wrap:wrap;">
           <input
             class="admin-input"
             type="text"
             value={{this.searchQuery}}
-            placeholder={{i18n "admin.media_gallery.test_downloads.search_placeholder"}}
+            placeholder="Paste full public_id or part of title"
             {{on "input" this.onSearchInput}}
             {{on "keydown" this.onSearchKeydown}}
             style="min-width: 320px;"
@@ -32,8 +32,14 @@ export default RouteTemplate(
             Use entered public_id
           </button>
         </div>
-        <div class="desc">{{i18n "admin.media_gallery.test_downloads.search_help"}}</div>
+        <div class="desc">Best: paste the full public_id. Search is optional; you can also continue directly with the entered public_id.</div>
       </div>
+
+      {{#if this.searchInfo}}
+        <div class="alert alert-info" style="margin-top:1rem; max-width: 1000px;">
+          {{this.searchInfo}}
+        </div>
+      {{/if}}
 
       {{#if this.isSearching}}
         <p>Searching…</p>
@@ -81,13 +87,13 @@ export default RouteTemplate(
 
       {{#if this.hasSelectedItem}}
         <div class="alert alert-info" style="margin-top:1rem; max-width: 900px;">
-          <strong>{{i18n "admin.media_gallery.test_downloads.selected_media"}}:</strong>
+          <strong>Selected media:</strong>
           <code>{{this.publicId}}</code>
           {{#if this.selectedItem.title}} — {{this.selectedItem.title}}{{/if}}
         </div>
 
         <div class="control-group" style="margin-top: 1rem; max-width: 900px;">
-          <label class="control-label">{{i18n "admin.media_gallery.test_downloads.users_label"}}</label>
+          <label class="control-label">Users</label>
           <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
             <select class="combobox" value={{this.selectedUserId}} {{on "change" this.onUserSelect}}>
               <option value="">-- select user --</option>
@@ -98,10 +104,10 @@ export default RouteTemplate(
               {{/each}}
             </select>
             <button class="btn" type="button" {{on "click" this.loadUsers}} disabled={{this.isLoadingUsers}}>
-              {{i18n "admin.media_gallery.test_downloads.load_users"}}
+              {{if this.isLoadingUsers "Loading users…" "Load users"}}
             </button>
           </div>
-          <div class="desc">{{i18n "admin.media_gallery.test_downloads.users_help"}}</div>
+          <div class="desc">Load available users for this public_id, or fill a user ID manually below.</div>
         </div>
 
         {{#if this.usersError}}
@@ -110,29 +116,29 @@ export default RouteTemplate(
 
         {{#if this.showNoUsersWarning}}
           <div class="alert alert-warning" style="max-width: 900px;">
-            {{i18n "admin.media_gallery.test_downloads.no_users"}}
+            No users found from fingerprints/playback sessions for this public_id yet. You can still enter a user ID manually.
           </div>
         {{/if}}
 
         <div class="control-group" style="margin-top: 1rem; max-width: 900px;">
-          <label class="control-label">{{i18n "admin.media_gallery.test_downloads.manual_user_id_label"}}</label>
+          <label class="control-label">Manual user ID</label>
           <input
             class="admin-input"
             type="number"
             min="1"
             value={{this.manualUserId}}
-            placeholder={{i18n "admin.media_gallery.test_downloads.manual_user_id_placeholder"}}
+            placeholder="Enter user ID"
             {{on "input" this.onManualUserIdInput}}
           />
-          <div class="desc">{{i18n "admin.media_gallery.test_downloads.manual_user_id_help"}}</div>
+          <div class="desc">Use this if no users are listed automatically.</div>
         </div>
 
         <div style="margin-top:1rem; display:flex; gap:0.75rem; flex-wrap:wrap;">
           <button class="btn btn-primary" type="button" {{on "click" this.generateFull}} disabled={{this.generateDisabled}}>
-            {{i18n "admin.media_gallery.test_downloads.generate_full"}}
+            Generate full download
           </button>
           <button class="btn" type="button" {{on "click" this.generateRandomPartial}} disabled={{this.generateDisabled}}>
-            {{i18n "admin.media_gallery.test_downloads.generate_random_partial"}}
+            Generate random partial (~40–50%)
           </button>
         </div>
 
