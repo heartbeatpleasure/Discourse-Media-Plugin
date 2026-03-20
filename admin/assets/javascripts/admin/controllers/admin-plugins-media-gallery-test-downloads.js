@@ -23,6 +23,28 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked generateError = "";
   @tracked artifacts = [];
 
+  resetState() {
+    this.searchQuery = "";
+    this.searchResults = [];
+    this.isSearching = false;
+    this.searchError = "";
+    this.hasSearched = false;
+    this.searchInfo = "";
+
+    this.publicId = "";
+    this.selectedItem = null;
+
+    this.users = [];
+    this.isLoadingUsers = false;
+    this.usersError = "";
+    this.selectedUserId = "";
+    this.manualUserId = "";
+
+    this.isGenerating = false;
+    this.generateError = "";
+    this.artifacts = [];
+  }
+
   get enabled() {
     return true;
   }
@@ -36,7 +58,12 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get showNoResults() {
-    return this.hasSearched && !this.isSearching && !this.searchError && (this.searchResults?.length || 0) === 0;
+    return (
+      this.hasSearched &&
+      !this.isSearching &&
+      !this.searchError &&
+      (this.searchResults?.length || 0) === 0
+    );
   }
 
   get canUseTypedPublicId() {
@@ -56,6 +83,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     if (Number.isFinite(fromSelect) && fromSelect > 0) {
       return fromSelect;
     }
+
     const manual = parseInt(this.manualUserId, 10);
     return Number.isFinite(manual) && manual > 0 ? manual : null;
   }
@@ -69,11 +97,25 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get showNoUsersWarning() {
-    return this.hasSelectedItem && !this.isLoadingUsers && !this.usersError && (this.users?.length || 0) === 0;
+    return (
+      this.hasSelectedItem &&
+      !this.isLoadingUsers &&
+      !this.usersError &&
+      (this.users?.length || 0) === 0
+    );
   }
 
   get generateDisabled() {
     return !this.canGenerate;
+  }
+
+  get selectedSummary() {
+    if (!this.publicId) {
+      return "";
+    }
+
+    const title = this.selectedItem?.title;
+    return title ? `${this.publicId} — ${title}` : this.publicId;
   }
 
   @action
@@ -81,6 +123,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.searchQuery = (event?.target?.value || "").trim();
     this.hasSearched = false;
     this.searchInfo = "";
+    this.searchError = "";
   }
 
   @action
@@ -159,20 +202,25 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   @action
-  pickItem(item) {
+  async pickItem(item) {
     this.selectedItem = item || null;
     this.publicId = item?.public_id || "";
     this.users = [];
     this.selectedUserId = "";
     this.usersError = "";
     this.generateError = "";
-    this.searchInfo = this.publicId ? `Selected public_id ${this.publicId}.` : "";
+    this.searchInfo = this.publicId ? `Selected public_id ${this.publicId}. Loading users…` : "";
+
+    if (this.publicId) {
+      await this.loadUsers();
+    }
   }
 
   @action
-  useTypedPublicId() {
+  async useTypedPublicId() {
     const q = (this.searchQuery || "").trim();
     if (q.length < 3) {
+      this.searchError = "Enter at least 3 characters or a full public_id.";
       return;
     }
 
@@ -183,7 +231,9 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.selectedUserId = "";
     this.usersError = "";
     this.generateError = "";
-    this.searchInfo = `Selected entered public_id ${q}. Click “Load users” below.`;
+    this.searchInfo = `Selected entered public_id ${q}. Loading users…`;
+
+    await this.loadUsers();
   }
 
   @action
@@ -224,23 +274,34 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       const json = await response.json();
       const byId = new Map();
+
       for (const fp of json?.fingerprints || []) {
         if (fp?.user_id) {
-          byId.set(fp.user_id, { id: fp.user_id, username: fp.username || `user_${fp.user_id}` });
+          byId.set(fp.user_id, {
+            id: fp.user_id,
+            username: fp.username || `user_${fp.user_id}`,
+          });
         }
       }
+
       for (const s of json?.playback_sessions || []) {
         if (s?.user_id && !byId.has(s.user_id)) {
-          byId.set(s.user_id, { id: s.user_id, username: s.username || `user_${s.user_id}` });
+          byId.set(s.user_id, {
+            id: s.user_id,
+            username: s.username || `user_${s.user_id}`,
+          });
         }
       }
+
       this.users = Array.from(byId.values()).sort((a, b) =>
         (a.username || "").localeCompare(b.username || "")
       );
+
       if (!this.selectedUserId && this.users.length === 1) {
         this.selectedUserId = String(this.users[0].id);
       }
-      this.searchInfo = `Loaded ${this.users.length} user option(s) for ${this.publicId}.`;
+
+      this.searchInfo = `Selected ${this.publicId}. Loaded ${this.users.length} user option(s).`;
     } catch (e) {
       this.usersError = e?.message || String(e);
       this.users = [];

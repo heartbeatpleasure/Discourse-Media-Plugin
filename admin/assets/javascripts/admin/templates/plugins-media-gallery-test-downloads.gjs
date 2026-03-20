@@ -88,8 +88,7 @@ export default RouteTemplate(
       {{#if this.hasSelectedItem}}
         <div class="alert alert-info" style="margin-top:1rem; max-width: 900px;">
           <strong>Selected media:</strong>
-          <code>{{this.publicId}}</code>
-          {{#if this.selectedItem.title}} — {{this.selectedItem.title}}{{/if}}
+          <code>{{this.selectedSummary}}</code>
         </div>
 
         <div class="control-group" style="margin-top: 1rem; max-width: 900px;">
@@ -104,10 +103,10 @@ export default RouteTemplate(
               {{/each}}
             </select>
             <button class="btn" type="button" {{on "click" this.loadUsers}} disabled={{this.isLoadingUsers}}>
-              {{if this.isLoadingUsers "Loading users…" "Load users"}}
+              {{if this.isLoadingUsers "Loading users…" "Reload users"}}
             </button>
           </div>
-          <div class="desc">Load available users for this public_id, or fill a user ID manually below.</div>
+          <div class="desc">Users are auto-loaded after you select a public_id. Reload if needed, or fill a user ID manually below.</div>
         </div>
 
         {{#if this.usersError}}
