@@ -1,10 +1,12 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
+import { service } from "@ember/service";
 import { tracked } from "@glimmer/tracking";
 import { i18n } from "discourse-i18n";
-import siteSettings from "discourse/lib/site-settings";
 
 export default class AdminPluginsMediaGalleryTestDownloadsController extends Controller {
+  @service siteSettings;
+
   @tracked searchQuery = "";
   @tracked searchResults = [];
   @tracked isSearching = false;
@@ -26,7 +28,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   _searchTimer = null;
 
   get enabled() {
-    return !!siteSettings.media_gallery_forensics_test_downloads_enabled;
+    return !!this.siteSettings?.media_gallery_forensics_test_downloads_enabled;
   }
 
   get hasSelectedItem() {
