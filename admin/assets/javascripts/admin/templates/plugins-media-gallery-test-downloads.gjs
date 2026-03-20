@@ -9,11 +9,9 @@ export default RouteTemplate(
       <h1>{{i18n "admin.media_gallery.test_downloads.title"}}</h1>
       <p>{{i18n "admin.media_gallery.test_downloads.description"}}</p>
 
-      {{#unless this.enabled}}
-        <div class="alert alert-warning">
-          {{i18n "admin.media_gallery.test_downloads.disabled"}}
-        </div>
-      {{/unless}}
+      <div class="alert alert-info">
+        This page is admin-only. The backend still enforces the test-download setting.
+      </div>
 
       <div class="control-group" style="margin-top: 1rem; max-width: 900px;">
         <label class="control-label">{{i18n "admin.media_gallery.test_downloads.search_label"}}</label>

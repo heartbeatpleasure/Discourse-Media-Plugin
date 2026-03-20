@@ -1,12 +1,8 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
-import { service } from "@ember/service";
 import { tracked } from "@glimmer/tracking";
-import { i18n } from "discourse-i18n";
 
 export default class AdminPluginsMediaGalleryTestDownloadsController extends Controller {
-  @service siteSettings;
-
   @tracked searchQuery = "";
   @tracked searchResults = [];
   @tracked isSearching = false;
@@ -27,8 +23,12 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
   _searchTimer = null;
 
+  // Deliberately do not hard-block the UI on a client-side setting read.
+  // The backend endpoint remains admin-only and setting-gated, so the server
+  // is still the source of truth. This avoids false "disabled" banners caused
+  // by stale/missing client-side settings hydration.
   get enabled() {
-    return !!this.siteSettings?.media_gallery_forensics_test_downloads_enabled;
+    return true;
   }
 
   get hasSelectedItem() {
@@ -45,7 +45,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get canGenerate() {
-    return this.enabled && !!this.publicId && !!this.resolvedUserId && !this.isGenerating;
+    return !!this.publicId && !!this.resolvedUserId && !this.isGenerating;
   }
 
   get hasArtifacts() {
@@ -102,6 +102,9 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       }
       if (json?.error) {
         return String(json.error);
+      }
+      if (json?.message) {
+        return String(json.message);
       }
     } catch {
       // ignore
@@ -237,9 +240,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
   async _createArtifact(mode) {
     if (!this.canGenerate) {
-      this.generateError = !this.enabled
-        ? i18n("admin.media_gallery.test_downloads.disabled")
-        : "Please select a media item and user first.";
+      this.generateError = "Please select a media item and user first.";
       return;
     }
 
