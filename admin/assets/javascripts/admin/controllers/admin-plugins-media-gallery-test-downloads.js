@@ -50,6 +50,14 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     return (this.artifacts?.length || 0) > 0;
   }
 
+  get showNoUsersWarning() {
+    return !this.isLoadingUsers && (this.users?.length || 0) === 0;
+  }
+
+  get generateDisabled() {
+    return !this.canGenerate;
+  }
+
   resetState() {
     this.searchQuery = "";
     this.searchResults = [];

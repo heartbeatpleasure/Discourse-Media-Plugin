@@ -1,4 +1,6 @@
 import RouteTemplate from "ember-route-template";
+import { fn } from "@ember/helper";
+import { on } from "@ember/modifier";
 import { i18n } from "discourse-i18n";
 
 export default RouteTemplate(
@@ -91,7 +93,7 @@ export default RouteTemplate(
           <div class="alert alert-error">{{this.usersError}}</div>
         {{/if}}
 
-        {{#if (and (not this.isLoadingUsers) (eq this.users.length 0))}}
+        {{#if this.showNoUsersWarning}}
           <div class="alert alert-warning" style="max-width: 900px;">
             {{i18n "admin.media_gallery.test_downloads.no_users"}}
           </div>
@@ -113,10 +115,10 @@ export default RouteTemplate(
         {{/if}}
 
         <div style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-top:1rem;">
-          <button class="btn btn-primary" type="button" {{on "click" this.generateFull}} disabled={{not this.canGenerate}}>
+          <button class="btn btn-primary" type="button" {{on "click" this.generateFull}} disabled={{this.generateDisabled}}>
             {{if this.isGenerating (i18n "admin.media_gallery.test_downloads.generating") (i18n "admin.media_gallery.test_downloads.full_button")}}
           </button>
-          <button class="btn" type="button" {{on "click" this.generateRandomPartial}} disabled={{not this.canGenerate}}>
+          <button class="btn" type="button" {{on "click" this.generateRandomPartial}} disabled={{this.generateDisabled}}>
             {{if this.isGenerating (i18n "admin.media_gallery.test_downloads.generating") (i18n "admin.media_gallery.test_downloads.random_partial_button")}}
           </button>
         </div>
