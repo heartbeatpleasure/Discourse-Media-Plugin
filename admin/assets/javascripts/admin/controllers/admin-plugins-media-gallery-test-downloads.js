@@ -44,6 +44,14 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     return this.hasSearchQuery && !this.isLoadingUsers && !this.isGenerating;
   }
 
+  get searchButtonDisabled() {
+    return !this.hasSearchQuery;
+  }
+
+  get useTypedPublicIdDisabled() {
+    return !this.canUseTypedPublicId;
+  }
+
   get resolvedUserId() {
     const fromSelect = parseInt(this.selectedUserId, 10);
     if (Number.isFinite(fromSelect) && fromSelect > 0) {

@@ -25,10 +25,10 @@ export default RouteTemplate(
             {{on "keydown" this.onSearchKeydown}}
             style="min-width: 320px;"
           />
-          <button class="btn" type="button" {{on "click" this.search}} disabled={{not this.hasSearchQuery}}>
+          <button class="btn" type="button" {{on "click" this.search}} disabled={{this.searchButtonDisabled}}>
             Search
           </button>
-          <button class="btn" type="button" {{on "click" this.useTypedPublicId}} disabled={{not this.canUseTypedPublicId}}>
+          <button class="btn" type="button" {{on "click" this.useTypedPublicId}} disabled={{this.useTypedPublicIdDisabled}}>
             Use entered public_id
           </button>
         </div>
