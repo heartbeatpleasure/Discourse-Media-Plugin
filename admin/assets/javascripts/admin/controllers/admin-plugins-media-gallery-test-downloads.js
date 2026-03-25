@@ -342,7 +342,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
     try {
       const response = await fetch(
-        `/admin/plugins/media-gallery/test-downloads/${encodeURIComponent(this.publicId)}.json`,
+        `/admin/plugins/media-gallery/test-downloads/${encodeURIComponent(this.publicId)}`,
         {
           method: "POST",
           headers: {
