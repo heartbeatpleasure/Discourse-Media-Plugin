@@ -19,6 +19,11 @@ export default RouteTemplate(
           <input
             class="admin-input"
             type="text"
+            autocomplete="off"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            data-lpignore="true"
             value={{@controller.searchQuery}}
             placeholder="Paste full public_id or part of title"
             {{on "input" @controller.onSearchInput}}
@@ -131,6 +136,11 @@ export default RouteTemplate(
           <input
             class="admin-input"
             type="number"
+            autocomplete="off"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            data-lpignore="true"
             min="1"
             value={{@controller.manualUserId}}
             placeholder="Enter user ID"

@@ -1,11 +1,9 @@
 # frozen_string_literal: true
 
 module ::MediaGallery
-  class AdminTestDownloadsController < ::ApplicationController
+  class AdminTestDownloadsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
-    before_action :ensure_logged_in
-    before_action :ensure_admin_user
     before_action :ensure_test_downloads_enabled
 
     def create
@@ -31,7 +29,7 @@ module ::MediaGallery
         raise Discourse::InvalidParameters.new(:segment_count) if segment_count.to_i <= 0
       end
 
-      artifact = ::MediaGallery::TestDownloads.build_artifact!(
+      meta = ::MediaGallery::TestDownloads.build_artifact!(
         item: item,
         user_id: user_id,
         mode: mode,
@@ -39,16 +37,17 @@ module ::MediaGallery
         segment_count: segment_count,
       )
 
-      artifact = artifact.merge(
-        "download_url" => "/admin/plugins/media-gallery/test-downloads/#{item.public_id}/#{artifact['artifact_id']}"
+      artifact = meta.merge(
+        "download_url" => "/admin/plugins/media-gallery/test-downloads/#{item.public_id}/#{meta['artifact_id']}"
       )
 
       render_json_dump(ok: true, artifact: artifact)
     rescue => e
-      log_error("create", e)
-      render_json_dump(ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name)
+      render_json_error_payload(e)
     end
 
+    # Kept for compatibility with any frontend code that still polls, even though
+    # the current flow returns an artifact directly from #create.
     def status
       task = ::MediaGallery::TestDownloads.read_task(params[:task_id].to_s)
       raise Discourse::NotFound if task.blank?
@@ -66,8 +65,7 @@ module ::MediaGallery
         error: task["error"],
       )
     rescue => e
-      log_error("status", e)
-      render_json_dump(ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name)
+      render_json_error_payload(e, status: 404)
     end
 
     def download
@@ -91,21 +89,18 @@ module ::MediaGallery
       ].compact.join("-").gsub(/[^a-zA-Z0-9._-]+/, "_")
 
       response.headers["Cache-Control"] = "no-store"
-
-      return send_file path,
-                       filename: "#{basename}.mp4",
-                       type: "video/mp4",
-                       disposition: "attachment"
+      return send_data(
+        File.binread(path),
+        filename: "#{basename}.mp4",
+        type: "video/mp4",
+        disposition: "attachment",
+      )
     rescue => e
       log_error("download", e)
       raise e
     end
 
     private
-
-    def ensure_admin_user
-      guardian.ensure_admin
-    end
 
     def ensure_test_downloads_enabled
       raise Discourse::InvalidAccess unless ::MediaGallery::TestDownloads.enabled?
@@ -128,10 +123,14 @@ module ::MediaGallery
       i.negative? ? 0 : i
     end
 
+    def render_json_error_payload(error, status: 422)
+      log_error("request", error)
+      render json: { ok: false, error: "#{error.class}: #{error.message}", error_class: error.class.name }, status: status
+    end
+
     def log_error(context, error)
       Rails.logger.warn("[media_gallery] admin test download #{context} failed error=#{error.class}: #{error.message}")
-      Rails.logger.warn(error.backtrace.first(30).join("
-")) if error.backtrace.present?
+      Rails.logger.warn(error.backtrace.first(30).join("\n")) if error.backtrace.present?
     end
   end
 end
