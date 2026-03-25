@@ -294,34 +294,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.artifacts = [artifact, ...(this.artifacts || [])];
   }
 
-  async _pollTask(statusUrl) {
-    const started = Date.now();
-    while (Date.now() - started < 180000) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      const response = await fetch(statusUrl, {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        credentials: "same-origin",
-      });
-      const json = await response.json().catch(() => null);
-      if (!response.ok || !json?.ok || !json?.task) {
-        const err = json?.error || json?.message || `Status poll failed (${response.status})`;
-        throw new Error(String(err));
-      }
-
-      const task = json.task;
-      if (task.status === "complete" && task.artifact) {
-        return task.artifact;
-      }
-      if (task.status === "failed") {
-        throw new Error(task.error || "Generation failed.");
-      }
-      this.selectionMessage = `Generating ${task.mode} download for ${task.public_id}… (${task.status})`;
-    }
-
-    throw new Error("Generation timed out while waiting for the background job.");
-  }
-
   async _generate(payload) {
     if (!this.publicId || !this.resolvedUserId) {
       this.generateError = "Select a public_id and user first.";
@@ -351,23 +323,18 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       const json = await response.json().catch(() => null);
       if (!response.ok) {
-        const err = json?.error || json?.message || `Generation request failed (${response.status})`;
+        const err = json?.error || json?.message || (await this._extractError(response));
         this.generateError = String(err);
         return;
       }
-      if (!json?.ok || !json?.queued || !json?.status_url) {
-        const err = json?.error || json?.message || "Generation request failed.";
+      if (!json?.ok || !json?.artifact) {
+        const err = json?.error || json?.message || "Generation failed.";
         this.generateError = String(err);
         return;
       }
 
-      this.selectionMessage = `Queued ${payload.mode} generation for ${this.publicId}. Waiting for background job…`;
-      const artifact = await this._pollTask(json.status_url);
-      this._pushArtifact(artifact);
-      this.selectionMessage = `Artifact generated for ${this.publicId}.`;
-      if (artifact.download_url) {
-        window.open(artifact.download_url, "_blank", "noopener,noreferrer");
-      }
+      this._pushArtifact(json.artifact);
+      this.selectionMessage = `Artifact generated for ${this.publicId}. Use the Download button below.`;
     } catch (e) {
       this.generateError = e?.message || String(e);
     } finally {
