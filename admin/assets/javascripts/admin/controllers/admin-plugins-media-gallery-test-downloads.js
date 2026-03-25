@@ -47,10 +47,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.artifacts = [];
   }
 
-  get enabled() {
-    return true;
-  }
-
   get hasSelectedItem() {
     return !!(this.publicId || "").trim();
   }
@@ -294,6 +290,47 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.artifacts = [artifact, ...(this.artifacts || [])];
   }
 
+  async _pollTask(taskId, statusUrl) {
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const response = await fetch(statusUrl, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+
+      const json = await response.json().catch(() => null);
+      if (!response.ok) {
+        const err = json?.error || json?.message || (await this._extractError(response));
+        this.generateError = String(err);
+        return;
+      }
+
+      const status = json?.status || "queued";
+      if (status === "queued" || status === "working") {
+        this.selectionMessage = `Generating artifact for ${this.publicId}… (${status})`;
+        continue;
+      }
+
+      if (status === "complete" && json?.artifact) {
+        this._pushArtifact(json.artifact);
+        this.selectionMessage = `Artifact generated for ${this.publicId}. Use the Download button below.`;
+        return;
+      }
+
+      if (status === "failed") {
+        this.generateError = String(json?.error || "Generation failed.");
+        return;
+      }
+
+      this.generateError = `Unexpected task state for ${taskId}: ${status}`;
+      return;
+    }
+
+    this.generateError = "Timed out while waiting for artifact generation.";
+  }
+
   async _generate(payload) {
     if (!this.publicId || !this.resolvedUserId) {
       this.generateError = "Select a public_id and user first.";
@@ -327,14 +364,21 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
         this.generateError = String(err);
         return;
       }
-      if (!json?.ok || !json?.artifact) {
-        const err = json?.error || json?.message || "Generation failed.";
-        this.generateError = String(err);
+
+      if (json?.ok && json?.queued && json?.task_id && json?.status_url) {
+        this.selectionMessage = `Queued generation for ${this.publicId}.`;
+        await this._pollTask(json.task_id, json.status_url);
         return;
       }
 
-      this._pushArtifact(json.artifact);
-      this.selectionMessage = `Artifact generated for ${this.publicId}. Use the Download button below.`;
+      if (json?.ok && json?.artifact) {
+        this._pushArtifact(json.artifact);
+        this.selectionMessage = `Artifact generated for ${this.publicId}. Use the Download button below.`;
+        return;
+      }
+
+      const err = json?.error || json?.message || "Generation failed.";
+      this.generateError = String(err);
     } catch (e) {
       this.generateError = e?.message || String(e);
     } finally {

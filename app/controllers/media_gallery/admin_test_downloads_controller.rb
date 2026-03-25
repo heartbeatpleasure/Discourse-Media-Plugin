@@ -39,7 +39,7 @@ module ::MediaGallery
         segment_count: segment_count,
       )
 
-      Jobs.enqueue(
+      ::Jobs.enqueue(
         :media_gallery_generate_test_download,
         task_id: task_id,
         public_id: item.public_id,
@@ -57,29 +57,28 @@ module ::MediaGallery
       }
     rescue => e
       log_error("create", e)
-      render json: { ok: false, error: e.message, error_class: e.class.name }, status: error_status(e)
+      render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name }, status: 422
     end
 
     def status
-      payload = ::MediaGallery::TestDownloads.read_task(params[:task_id].to_s)
-      raise Discourse::NotFound if payload.blank?
+      task = ::MediaGallery::TestDownloads.read_task(params[:task_id].to_s)
+      raise Discourse::NotFound if task.blank?
 
-      artifact = payload["artifact"]
+      artifact = task["artifact"].is_a?(Hash) ? task["artifact"].dup : nil
       if artifact.present?
-        item = ::MediaGallery::MediaItem.find_by(public_id: payload["public_id"].to_s)
-        if item.present?
-          user = ::User.find_by(id: artifact["user_id"].to_i)
-          artifact = artifact.merge(
-            "username" => artifact["username"].presence || user&.username,
-            "download_url" => "/admin/plugins/media-gallery/test-downloads/#{item.public_id}/#{artifact['artifact_id']}"
-          )
-        end
+        artifact["download_url"] ||= "/admin/plugins/media-gallery/test-downloads/#{artifact['public_id'] || task['public_id']}/#{artifact['artifact_id']}"
       end
 
-      render json: { ok: true, task: payload.except("artifact").merge("artifact" => artifact) }
+      render json: {
+        ok: true,
+        task_id: task["task_id"] || params[:task_id].to_s,
+        status: task["status"].presence || "queued",
+        artifact: artifact,
+        error: task["error"],
+      }
     rescue => e
       log_error("status", e)
-      render json: { ok: false, error: e.message, error_class: e.class.name }, status: error_status(e)
+      render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name }, status: 404
     end
 
     def download
@@ -107,7 +106,7 @@ module ::MediaGallery
         File.binread(path),
         filename: "#{basename}.mp4",
         type: "video/mp4",
-        disposition: "attachment"
+        disposition: "attachment",
       )
     rescue => e
       log_error("download", e)
@@ -124,16 +123,11 @@ module ::MediaGallery
       raise Discourse::InvalidAccess unless ::MediaGallery::TestDownloads.enabled?
     end
 
-    def positive_or_zero(v)
-      i = v.to_i
-      i.negative? ? 0 : i
-    end
-
     def ensure_artifact_path_allowed!(path)
       rp = ::File.realpath(path) rescue nil
       raise Discourse::NotFound if rp.blank?
 
-      root = ::MediaGallery::TestDownloads.root_path.to_s
+      root = ::MediaGallery::TestDownloads.root_path
       rr = ::File.realpath(root) rescue nil
       raise Discourse::NotFound if rr.blank?
 
@@ -141,20 +135,14 @@ module ::MediaGallery
       raise Discourse::NotFound unless rp.start_with?(allowed_prefix)
     end
 
-    def error_status(exception)
-      case exception
-      when Discourse::NotFound
-        404
-      when Discourse::InvalidParameters, Discourse::InvalidAccess
-        422
-      else
-        500
-      end
+    def positive_or_zero(v)
+      i = v.to_i
+      i.negative? ? 0 : i
     end
 
-    def log_error(where, exception)
-      Rails.logger.warn("[media_gallery] admin test download #{where} failed error=#{exception.class}: #{exception.message}")
-      Rails.logger.warn(exception.backtrace.first(30).join("\n")) if exception.backtrace.present?
+    def log_error(context, error)
+      Rails.logger.warn("[media_gallery] admin test download #{context} failed error=#{error.class}: #{error.message}")
+      Rails.logger.warn(error.backtrace.first(30).join("\n")) if error.backtrace.present?
     end
   end
 end
