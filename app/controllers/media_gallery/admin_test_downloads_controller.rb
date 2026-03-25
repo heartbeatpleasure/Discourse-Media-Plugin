@@ -50,6 +50,7 @@ module ::MediaGallery
       render json: { ok: true, artifact: artifact }
     rescue => e
       Rails.logger.warn("[media_gallery] admin test download create failed error=#{e.class}: #{e.message}")
+      Rails.logger.warn(e.backtrace.first(20).join("\n")) if e.backtrace.present?
       render json: { ok: false, error: e.message, error_class: e.class.name }, status: 422
     end
 
@@ -77,6 +78,7 @@ module ::MediaGallery
                 filename: "#{basename}.mp4"
     rescue => e
       Rails.logger.warn("[media_gallery] admin test download fetch failed error=#{e.class}: #{e.message}")
+      Rails.logger.warn(e.backtrace.first(20).join("\n")) if e.backtrace.present?
       raise e
     end
 

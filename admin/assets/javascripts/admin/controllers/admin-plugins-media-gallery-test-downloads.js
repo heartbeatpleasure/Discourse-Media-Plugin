@@ -322,8 +322,13 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       );
 
       const json = await response.json().catch(() => null);
-      if (!response.ok || !json?.ok || !json?.artifact) {
-        const err = json?.error || json?.message || `HTTP ${response.status}`;
+      if (!response.ok) {
+        const err = json?.error || json?.message || (await this._extractError(response));
+        this.generateError = String(err);
+        return;
+      }
+      if (!json?.ok || !json?.artifact) {
+        const err = json?.error || json?.message || "Generation failed.";
         this.generateError = String(err);
         return;
       }
