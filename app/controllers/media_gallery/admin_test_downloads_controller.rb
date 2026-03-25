@@ -1,9 +1,11 @@
 # frozen_string_literal: true
 
 module ::MediaGallery
-  class AdminTestDownloadsController < ::Admin::AdminController
+  class AdminTestDownloadsController < ::ApplicationController
     requires_plugin "Discourse-Media-Plugin"
 
+    before_action :ensure_logged_in
+    before_action :ensure_admin_user
     before_action :ensure_test_downloads_enabled
 
     def create
@@ -63,10 +65,21 @@ module ::MediaGallery
         .compact.join("-")
         .gsub(/[^a-zA-Z0-9._-]+/, "_")
 
-      send_file path, type: "video/mp4", disposition: "attachment", filename: "#{basename}.mp4"
+      data = File.binread(path)
+      send_data data,
+                type: "video/mp4",
+                disposition: "attachment",
+                filename: "#{basename}.mp4"
+    rescue => e
+      Rails.logger.warn("[media_gallery] admin test download fetch failed error=#{e.class}: #{e.message}")
+      raise e
     end
 
     private
+
+    def ensure_admin_user
+      guardian.ensure_admin
+    end
 
     def ensure_test_downloads_enabled
       raise Discourse::InvalidAccess unless ::MediaGallery::TestDownloads.enabled?
