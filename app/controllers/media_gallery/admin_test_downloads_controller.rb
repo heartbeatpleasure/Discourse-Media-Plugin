@@ -1,12 +1,12 @@
 # frozen_string_literal: true
 
 module ::MediaGallery
-  class AdminTestDownloadsController < ::ApplicationController
+  class AdminTestDownloadsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
-    before_action :ensure_logged_in
-    before_action :ensure_admin_user
     before_action :ensure_test_downloads_enabled
+
+    rescue_from StandardError, with: :render_test_download_error
 
     def create
       item = ::MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
@@ -17,9 +17,7 @@ module ::MediaGallery
       raise Discourse::InvalidParameters.new(:user_id) if user_id <= 0
 
       mode = params[:mode].to_s.presence || "full"
-      unless %w[full clip random_partial].include?(mode)
-        raise Discourse::InvalidParameters.new(:mode)
-      end
+      raise Discourse::InvalidParameters.new(:mode) unless %w[full clip random_partial].include?(mode)
 
       start_segment = positive_or_zero(params[:start_segment])
       segment_count = nil
@@ -33,25 +31,52 @@ module ::MediaGallery
         raise Discourse::InvalidParameters.new(:segment_count) if segment_count.to_i <= 0
       end
 
-      meta = ::MediaGallery::TestDownloads.build_artifact!(
-        item: item,
+      task_id = ::MediaGallery::TestDownloads.create_task!(
+        public_id: item.public_id,
         user_id: user_id,
         mode: mode,
         start_segment: start_segment,
         segment_count: segment_count,
       )
 
-      user = ::User.find_by(id: user_id)
-      artifact = meta.merge(
-        "username" => user&.username,
-        "download_url" => "/admin/plugins/media-gallery/test-downloads/#{item.public_id}/#{meta['artifact_id']}",
+      Jobs.enqueue(
+        :media_gallery_generate_test_download,
+        task_id: task_id,
+        public_id: item.public_id,
+        user_id: user_id,
+        mode: mode,
+        start_segment: start_segment,
+        segment_count: segment_count,
       )
 
-      render json: { ok: true, artifact: artifact }
-    rescue => e
-      Rails.logger.warn("[media_gallery] admin test download create failed error=#{e.class}: #{e.message}")
-      Rails.logger.warn(e.backtrace.first(20).join("\n")) if e.backtrace.present?
-      render json: { ok: false, error: e.message, error_class: e.class.name }, status: 422
+      render json: {
+        ok: true,
+        queued: true,
+        task_id: task_id,
+        status_url: "/admin/plugins/media-gallery/test-downloads/status/#{task_id}.json",
+      }
+    end
+
+    def status
+      payload = ::MediaGallery::TestDownloads.read_task(params[:task_id].to_s)
+      raise Discourse::NotFound if payload.blank?
+
+      artifact = payload["artifact"]
+      if artifact.present?
+        item = ::MediaGallery::MediaItem.find_by(public_id: payload["public_id"].to_s)
+        if item.present?
+          user = ::User.find_by(id: artifact["user_id"].to_i)
+          artifact = artifact.merge(
+            "username" => artifact["username"].presence || user&.username,
+            "download_url" => "/admin/plugins/media-gallery/test-downloads/#{item.public_id}/#{artifact['artifact_id']}",
+          )
+        end
+      end
+
+      render json: {
+        ok: true,
+        task: payload.except("artifact").merge("artifact" => artifact),
+      }
     end
 
     def download
@@ -72,21 +97,15 @@ module ::MediaGallery
         "n#{meta['segment_count']}",
       ].compact.join("-").gsub(/[^a-zA-Z0-9._-]+/, "_")
 
-      send_data File.binread(path),
-                type: "video/mp4",
-                disposition: "attachment",
-                filename: "#{basename}.mp4"
-    rescue => e
-      Rails.logger.warn("[media_gallery] admin test download fetch failed error=#{e.class}: #{e.message}")
-      Rails.logger.warn(e.backtrace.first(20).join("\n")) if e.backtrace.present?
-      raise e
+      send_data(
+        File.binread(path),
+        type: "video/mp4",
+        disposition: "attachment",
+        filename: "#{basename}.mp4",
+      )
     end
 
     private
-
-    def ensure_admin_user
-      guardian.ensure_admin
-    end
 
     def ensure_test_downloads_enabled
       raise Discourse::InvalidAccess unless ::MediaGallery::TestDownloads.enabled?
@@ -95,6 +114,27 @@ module ::MediaGallery
     def positive_or_zero(v)
       i = v.to_i
       i.negative? ? 0 : i
+    end
+
+    def render_test_download_error(exception)
+      Rails.logger.warn("[media_gallery] admin test download controller failed error=#{exception.class}: #{exception.message}")
+      Rails.logger.warn(exception.backtrace.first(30).join("\n")) if exception.backtrace.present?
+
+      status =
+        case exception
+        when Discourse::NotFound
+          404
+        when Discourse::InvalidParameters, Discourse::InvalidAccess
+          422
+        else
+          500
+        end
+
+      render json: {
+        ok: false,
+        error: exception.message,
+        error_class: exception.class.name,
+      }, status: status
     end
   end
 end

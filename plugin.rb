@@ -43,6 +43,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/hls_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/library_controller.rb", __dir__)
+  require_dependency File.expand_path("jobs/regular/media_gallery_generate_test_download.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
@@ -72,6 +73,7 @@ after_initialize do
 
     # Admin-only: generate temporary personalized remux/clip downloads for testing.
     post "/admin/plugins/media-gallery/test-downloads/:public_id" => "media_gallery/admin_test_downloads#create", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/test-downloads/status/:task_id" => "media_gallery/admin_test_downloads#status", defaults: { format: :json }
     get "/admin/plugins/media-gallery/test-downloads/:public_id/:artifact_id" => "media_gallery/admin_test_downloads#download"
 
     get "/media/stream/:token(.:ext)" => "media_gallery/stream#show",

@@ -54,6 +54,64 @@ module ::MediaGallery
       end
     end
 
+
+
+    TASK_NAMESPACE = "media_gallery_test_downloads"
+
+    def task_key(task_id)
+      task_id.to_s
+    end
+
+    def create_task!(public_id:, user_id:, mode:, start_segment: 0, segment_count: nil)
+      task_id = SecureRandom.hex(12)
+      payload = {
+        "task_id" => task_id,
+        "public_id" => public_id.to_s,
+        "user_id" => user_id.to_i,
+        "mode" => mode.to_s,
+        "start_segment" => start_segment.to_i,
+        "segment_count" => segment_count.to_i > 0 ? segment_count.to_i : nil,
+        "status" => "queued",
+        "created_at" => Time.now.utc.iso8601,
+        "updated_at" => Time.now.utc.iso8601,
+        "artifact" => nil,
+        "error" => nil,
+      }
+      ::PluginStore.set(TASK_NAMESPACE, task_key(task_id), payload)
+      task_id
+    end
+
+    def read_task(task_id)
+      ::PluginStore.get(TASK_NAMESPACE, task_key(task_id))
+    end
+
+    def write_task(task_id, payload)
+      payload["updated_at"] = Time.now.utc.iso8601
+      ::PluginStore.set(TASK_NAMESPACE, task_key(task_id), payload)
+      payload
+    end
+
+    def mark_task_working!(task_id)
+      payload = read_task(task_id) || {}
+      payload["status"] = "working"
+      write_task(task_id, payload)
+    end
+
+    def mark_task_complete!(task_id, artifact_meta)
+      payload = read_task(task_id) || {}
+      payload["status"] = "complete"
+      payload["artifact"] = artifact_meta
+      payload["error"] = nil
+      write_task(task_id, payload)
+    end
+
+    def mark_task_failed!(task_id, error_message)
+      payload = read_task(task_id) || {}
+      payload["status"] = "failed"
+      payload["error"] = error_message.to_s
+      write_task(task_id, payload)
+    end
+
     def item_dir(public_id)
       File.join(root_path, public_id.to_s)
     end
