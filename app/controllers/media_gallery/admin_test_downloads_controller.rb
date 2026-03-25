@@ -39,7 +39,7 @@ module ::MediaGallery
         segment_count: segment_count,
       )
 
-      ::Jobs.enqueue(
+      Jobs.enqueue(
         :media_gallery_generate_test_download,
         task_id: task_id,
         public_id: item.public_id,
@@ -57,17 +57,29 @@ module ::MediaGallery
       }
     rescue => e
       log_error("create", e)
-      render json: { ok: false, error: e.message, error_class: e.class.name }, status: 422
+      render json: { ok: false, error: e.message, error_class: e.class.name }, status: error_status(e)
     end
 
     def status
-      task = ::MediaGallery::TestDownloads.read_task(params[:task_id].to_s)
-      raise Discourse::NotFound if task.blank?
+      payload = ::MediaGallery::TestDownloads.read_task(params[:task_id].to_s)
+      raise Discourse::NotFound if payload.blank?
 
-      render json: { ok: true, task: task }
+      artifact = payload["artifact"]
+      if artifact.present?
+        item = ::MediaGallery::MediaItem.find_by(public_id: payload["public_id"].to_s)
+        if item.present?
+          user = ::User.find_by(id: artifact["user_id"].to_i)
+          artifact = artifact.merge(
+            "username" => artifact["username"].presence || user&.username,
+            "download_url" => "/admin/plugins/media-gallery/test-downloads/#{item.public_id}/#{artifact['artifact_id']}"
+          )
+        end
+      end
+
+      render json: { ok: true, task: payload.except("artifact").merge("artifact" => artifact) }
     rescue => e
       log_error("status", e)
-      render json: { ok: false, error: e.message, error_class: e.class.name }, status: 404
+      render json: { ok: false, error: e.message, error_class: e.class.name }, status: error_status(e)
     end
 
     def download
@@ -92,14 +104,14 @@ module ::MediaGallery
 
       response.headers["Cache-Control"] = "no-store"
       send_data(
-        ::File.binread(path),
+        File.binread(path),
         filename: "#{basename}.mp4",
         type: "video/mp4",
-        disposition: "attachment",
+        disposition: "attachment"
       )
     rescue => e
       log_error("download", e)
-      raise
+      raise e
     end
 
     private
@@ -112,11 +124,16 @@ module ::MediaGallery
       raise Discourse::InvalidAccess unless ::MediaGallery::TestDownloads.enabled?
     end
 
+    def positive_or_zero(v)
+      i = v.to_i
+      i.negative? ? 0 : i
+    end
+
     def ensure_artifact_path_allowed!(path)
       rp = ::File.realpath(path) rescue nil
       raise Discourse::NotFound if rp.blank?
 
-      root = ::MediaGallery::TestDownloads.root_path
+      root = ::MediaGallery::TestDownloads.root_path.to_s
       rr = ::File.realpath(root) rescue nil
       raise Discourse::NotFound if rr.blank?
 
@@ -124,15 +141,20 @@ module ::MediaGallery
       raise Discourse::NotFound unless rp.start_with?(allowed_prefix)
     end
 
-    def positive_or_zero(v)
-      i = v.to_i
-      i.negative? ? 0 : i
+    def error_status(exception)
+      case exception
+      when Discourse::NotFound
+        404
+      when Discourse::InvalidParameters, Discourse::InvalidAccess
+        422
+      else
+        500
+      end
     end
 
-    def log_error(stage, error)
-      Rails.logger.warn("[media_gallery] admin test download #{stage} failed error=#{error.class}: #{error.message}")
-      Rails.logger.warn(error.backtrace.first(30).join("
-")) if error.backtrace.present?
+    def log_error(where, exception)
+      Rails.logger.warn("[media_gallery] admin test download #{where} failed error=#{exception.class}: #{exception.message}")
+      Rails.logger.warn(exception.backtrace.first(30).join("\n")) if exception.backtrace.present?
     end
   end
 end
