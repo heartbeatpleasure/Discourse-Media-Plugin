@@ -12,6 +12,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
   @tracked publicId = "";
   @tracked selectedItem = null;
+  @tracked selectionMessage = "";
 
   @tracked users = [];
   @tracked isLoadingUsers = false;
@@ -33,6 +34,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
     this.publicId = "";
     this.selectedItem = null;
+    this.selectionMessage = "";
 
     this.users = [];
     this.isLoadingUsers = false;
@@ -58,12 +60,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get showNoResults() {
-    return (
-      this.hasSearched &&
-      !this.isSearching &&
-      !this.searchError &&
-      (this.searchResults?.length || 0) === 0
-    );
+    return this.hasSearched && !this.isSearching && !this.searchError && (this.searchResults?.length || 0) === 0;
   }
 
   get canUseTypedPublicId() {
@@ -83,7 +80,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     if (Number.isFinite(fromSelect) && fromSelect > 0) {
       return fromSelect;
     }
-
     const manual = parseInt(this.manualUserId, 10);
     return Number.isFinite(manual) && manual > 0 ? manual : null;
   }
@@ -97,25 +93,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get showNoUsersWarning() {
-    return (
-      this.hasSelectedItem &&
-      !this.isLoadingUsers &&
-      !this.usersError &&
-      (this.users?.length || 0) === 0
-    );
+    return this.hasSelectedItem && !this.isLoadingUsers && !this.usersError && (this.users?.length || 0) === 0;
   }
 
   get generateDisabled() {
     return !this.canGenerate;
-  }
-
-  get selectedSummary() {
-    if (!this.publicId) {
-      return "";
-    }
-
-    const title = this.selectedItem?.title;
-    return title ? `${this.publicId} — ${title}` : this.publicId;
   }
 
   @action
@@ -201,39 +183,38 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     }
   }
 
-  @action
-  async pickItem(item) {
-    this.selectedItem = item || null;
-    this.publicId = item?.public_id || "";
+  async _selectPublicId(publicId, item = null) {
+    const trimmed = (publicId || "").trim();
+    if (!trimmed) {
+      return;
+    }
+
+    this.selectedItem = item || { public_id: trimmed, title: null, username: null };
+    this.publicId = trimmed;
     this.users = [];
     this.selectedUserId = "";
+    this.manualUserId = "";
     this.usersError = "";
     this.generateError = "";
-    this.searchInfo = this.publicId ? `Selected public_id ${this.publicId}. Loading users…` : "";
+    this.selectionMessage = `Selected media ${trimmed}. Loading users…`;
+    await this.loadUsers();
+  }
 
-    if (this.publicId) {
-      await this.loadUsers();
-    }
+  @action
+  async pickItem(item) {
+    await this._selectPublicId(item?.public_id, item || null);
   }
 
   @action
   async useTypedPublicId() {
     const q = (this.searchQuery || "").trim();
     if (q.length < 3) {
-      this.searchError = "Enter at least 3 characters or a full public_id.";
+      this.selectionMessage = "Enter at least 3 characters or paste the full public_id.";
       return;
     }
 
     const exact = (this.searchResults || []).find((item) => item?.public_id === q) || null;
-    this.selectedItem = exact || { public_id: q, title: null, username: null };
-    this.publicId = q;
-    this.users = [];
-    this.selectedUserId = "";
-    this.usersError = "";
-    this.generateError = "";
-    this.searchInfo = `Selected entered public_id ${q}. Loading users…`;
-
-    await this.loadUsers();
+    await this._selectPublicId(q, exact);
   }
 
   @action
@@ -269,42 +250,34 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
         const err = await this._extractError(response);
         this.usersError = `Load users failed (${response.status}): ${err}`;
         this.users = [];
+        this.selectionMessage = `Selected media ${this.publicId}, but loading users failed.`;
         return;
       }
 
       const json = await response.json();
       const byId = new Map();
-
       for (const fp of json?.fingerprints || []) {
         if (fp?.user_id) {
-          byId.set(fp.user_id, {
-            id: fp.user_id,
-            username: fp.username || `user_${fp.user_id}`,
-          });
+          byId.set(fp.user_id, { id: fp.user_id, username: fp.username || `user_${fp.user_id}` });
         }
       }
-
       for (const s of json?.playback_sessions || []) {
         if (s?.user_id && !byId.has(s.user_id)) {
-          byId.set(s.user_id, {
-            id: s.user_id,
-            username: s.username || `user_${s.user_id}`,
-          });
+          byId.set(s.user_id, { id: s.user_id, username: s.username || `user_${s.user_id}` });
         }
       }
-
       this.users = Array.from(byId.values()).sort((a, b) =>
         (a.username || "").localeCompare(b.username || "")
       );
-
       if (!this.selectedUserId && this.users.length === 1) {
         this.selectedUserId = String(this.users[0].id);
       }
-
-      this.searchInfo = `Selected ${this.publicId}. Loaded ${this.users.length} user option(s).`;
+      this.searchInfo = `Loaded ${this.users.length} user option(s) for ${this.publicId}.`;
+      this.selectionMessage = `Selected media ${this.publicId}. ${this.users.length} user option(s) loaded.`;
     } catch (e) {
       this.usersError = e?.message || String(e);
       this.users = [];
+      this.selectionMessage = `Selected media ${this.publicId}, but loading users failed.`;
     } finally {
       this.isLoadingUsers = false;
     }
@@ -356,6 +329,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       }
 
       this._pushArtifact(json.artifact);
+      this.selectionMessage = `Artifact generated for ${this.publicId}.`;
       if (json.artifact.download_url) {
         window.open(json.artifact.download_url, "_blank", "noopener,noreferrer");
       }

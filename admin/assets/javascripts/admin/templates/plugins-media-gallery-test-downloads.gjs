@@ -28,12 +28,18 @@ export default RouteTemplate(
           <button class="btn" type="button" {{on "click" this.search}} disabled={{this.searchButtonDisabled}}>
             Search
           </button>
-          <button class="btn" type="button" {{on "click" this.useTypedPublicId}} disabled={{this.useTypedPublicIdDisabled}}>
+          <button class="btn btn-primary" type="button" {{on "click" this.useTypedPublicId}} disabled={{this.useTypedPublicIdDisabled}}>
             Use entered public_id
           </button>
         </div>
         <div class="desc">Best: paste the full public_id. Search is optional; you can also continue directly with the entered public_id.</div>
       </div>
+
+      {{#if this.selectionMessage}}
+        <div class="alert alert-info" style="margin-top:1rem; max-width: 1000px;">
+          {{this.selectionMessage}}
+        </div>
+      {{/if}}
 
       {{#if this.searchInfo}}
         <div class="alert alert-info" style="margin-top:1rem; max-width: 1000px;">
@@ -88,7 +94,8 @@ export default RouteTemplate(
       {{#if this.hasSelectedItem}}
         <div class="alert alert-info" style="margin-top:1rem; max-width: 900px;">
           <strong>Selected media:</strong>
-          <code>{{this.selectedSummary}}</code>
+          <code>{{this.publicId}}</code>
+          {{#if this.selectedItem.title}} — {{this.selectedItem.title}}{{/if}}
         </div>
 
         <div class="control-group" style="margin-top: 1rem; max-width: 900px;">
@@ -106,7 +113,7 @@ export default RouteTemplate(
               {{if this.isLoadingUsers "Loading users…" "Reload users"}}
             </button>
           </div>
-          <div class="desc">Users are auto-loaded after you select a public_id. Reload if needed, or fill a user ID manually below.</div>
+          <div class="desc">Users are auto-loaded after selecting a public_id. You can reload them here or fill a user ID manually below.</div>
         </div>
 
         {{#if this.usersError}}
