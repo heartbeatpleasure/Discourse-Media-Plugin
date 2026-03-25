@@ -19,51 +19,51 @@ export default RouteTemplate(
           <input
             class="admin-input"
             type="text"
-            value={{this.searchQuery}}
+            value={{@controller.searchQuery}}
             placeholder="Paste full public_id or part of title"
-            {{on "input" this.onSearchInput}}
-            {{on "keydown" this.onSearchKeydown}}
+            {{on "input" @controller.onSearchInput}}
+            {{on "keydown" @controller.onSearchKeydown}}
             style="min-width: 320px;"
           />
-          <button class="btn" type="button" {{on "click" this.search}} disabled={{this.searchButtonDisabled}}>
+          <button class="btn" type="button" {{on "click" @controller.search}} disabled={{@controller.searchButtonDisabled}}>
             Search
           </button>
-          <button class="btn btn-primary" type="button" {{on "click" this.useTypedPublicId}} disabled={{this.useTypedPublicIdDisabled}}>
+          <button class="btn btn-primary" type="button" {{on "click" @controller.useTypedPublicId}} disabled={{@controller.useTypedPublicIdDisabled}}>
             Use entered public_id
           </button>
         </div>
         <div class="desc">Best: paste the full public_id. Search is optional; you can also continue directly with the entered public_id.</div>
       </div>
 
-      {{#if this.selectionMessage}}
+      {{#if @controller.selectionMessage}}
         <div class="alert alert-info" style="margin-top:1rem; max-width: 1000px;">
-          {{this.selectionMessage}}
+          {{@controller.selectionMessage}}
         </div>
       {{/if}}
 
-      {{#if this.searchInfo}}
+      {{#if @controller.searchInfo}}
         <div class="alert alert-info" style="margin-top:1rem; max-width: 1000px;">
-          {{this.searchInfo}}
+          {{@controller.searchInfo}}
         </div>
       {{/if}}
 
-      {{#if this.isSearching}}
+      {{#if @controller.isSearching}}
         <p>Searching…</p>
       {{/if}}
 
-      {{#if this.searchError}}
-        <div class="alert alert-error">{{this.searchError}}</div>
+      {{#if @controller.searchError}}
+        <div class="alert alert-error">{{@controller.searchError}}</div>
       {{/if}}
 
-      {{#if this.showNoResults}}
+      {{#if @controller.showNoResults}}
         <div class="alert alert-warning" style="margin-top:1rem; max-width: 1000px;">
           No media items found for this search. If you entered an exact public_id, click <strong>Use entered public_id</strong>.
         </div>
       {{/if}}
 
-      {{#if this.searchResults.length}}
+      {{#if @controller.searchResults.length}}
         <div style="margin-top:1rem; max-width: 1000px;">
-          <p><strong>{{this.searchResults.length}}</strong> result(s)</p>
+          <p><strong>{{@controller.searchResults.length}}</strong> result(s)</p>
           <table class="table">
             <thead>
               <tr>
@@ -74,13 +74,13 @@ export default RouteTemplate(
               </tr>
             </thead>
             <tbody>
-              {{#each this.searchResults as |item|}}
+              {{#each @controller.searchResults as |item|}}
                 <tr>
                   <td><code>{{item.public_id}}</code></td>
                   <td>{{item.title}}</td>
                   <td>{{item.username}}</td>
                   <td>
-                    <button class="btn btn-small" type="button" {{on "click" (fn this.pickItem item)}}>
+                    <button class="btn btn-small" type="button" {{on "click" (fn @controller.pickItem item)}}>
                       Use
                     </button>
                   </td>
@@ -91,36 +91,36 @@ export default RouteTemplate(
         </div>
       {{/if}}
 
-      {{#if this.hasSelectedItem}}
+      {{#if @controller.hasSelectedItem}}
         <div class="alert alert-info" style="margin-top:1rem; max-width: 900px;">
           <strong>Selected media:</strong>
-          <code>{{this.publicId}}</code>
-          {{#if this.selectedItem.title}} — {{this.selectedItem.title}}{{/if}}
+          <code>{{@controller.publicId}}</code>
+          {{#if @controller.selectedItem.title}} — {{@controller.selectedItem.title}}{{/if}}
         </div>
 
         <div class="control-group" style="margin-top: 1rem; max-width: 900px;">
           <label class="control-label">Users</label>
           <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
-            <select class="combobox" value={{this.selectedUserId}} {{on "change" this.onUserSelect}}>
+            <select class="combobox" value={{@controller.selectedUserId}} {{on "change" @controller.onUserSelect}}>
               <option value="">-- select user --</option>
-              {{#each this.users as |user|}}
+              {{#each @controller.users as |user|}}
                 <option value={{user.id}}>
                   {{user.username}} (#{{user.id}})
                 </option>
               {{/each}}
             </select>
-            <button class="btn" type="button" {{on "click" this.loadUsers}} disabled={{this.isLoadingUsers}}>
-              {{if this.isLoadingUsers "Loading users…" "Reload users"}}
+            <button class="btn" type="button" {{on "click" @controller.loadUsers}} disabled={{@controller.isLoadingUsers}}>
+              {{if @controller.isLoadingUsers "Loading users…" "Reload users"}}
             </button>
           </div>
           <div class="desc">Users are auto-loaded after selecting a public_id. You can reload them here or fill a user ID manually below.</div>
         </div>
 
-        {{#if this.usersError}}
-          <div class="alert alert-error">{{this.usersError}}</div>
+        {{#if @controller.usersError}}
+          <div class="alert alert-error">{{@controller.usersError}}</div>
         {{/if}}
 
-        {{#if this.showNoUsersWarning}}
+        {{#if @controller.showNoUsersWarning}}
           <div class="alert alert-warning" style="max-width: 900px;">
             No users found from fingerprints/playback sessions for this public_id yet. You can still enter a user ID manually.
           </div>
@@ -132,31 +132,31 @@ export default RouteTemplate(
             class="admin-input"
             type="number"
             min="1"
-            value={{this.manualUserId}}
+            value={{@controller.manualUserId}}
             placeholder="Enter user ID"
-            {{on "input" this.onManualUserIdInput}}
+            {{on "input" @controller.onManualUserIdInput}}
           />
           <div class="desc">Use this if no users are listed automatically.</div>
         </div>
 
         <div style="margin-top:1rem; display:flex; gap:0.75rem; flex-wrap:wrap;">
-          <button class="btn btn-primary" type="button" {{on "click" this.generateFull}} disabled={{this.generateDisabled}}>
+          <button class="btn btn-primary" type="button" {{on "click" @controller.generateFull}} disabled={{@controller.generateDisabled}}>
             Generate full download
           </button>
-          <button class="btn" type="button" {{on "click" this.generateRandomPartial}} disabled={{this.generateDisabled}}>
+          <button class="btn" type="button" {{on "click" @controller.generateRandomPartial}} disabled={{@controller.generateDisabled}}>
             Generate random partial (~40–50%)
           </button>
         </div>
 
-        {{#if this.generateError}}
-          <div class="alert alert-error" style="margin-top:1rem; max-width: 1000px;">{{this.generateError}}</div>
+        {{#if @controller.generateError}}
+          <div class="alert alert-error" style="margin-top:1rem; max-width: 1000px;">{{@controller.generateError}}</div>
         {{/if}}
       {{/if}}
 
       <div style="margin-top:2rem; max-width: 1000px;">
         <h2>{{i18n "admin.media_gallery.test_downloads.generated"}}</h2>
 
-        {{#if this.hasArtifacts}}
+        {{#if @controller.hasArtifacts}}
           <table class="table">
             <thead>
               <tr>
@@ -169,7 +169,7 @@ export default RouteTemplate(
               </tr>
             </thead>
             <tbody>
-              {{#each this.artifacts as |artifact|}}
+              {{#each @controller.artifacts as |artifact|}}
                 <tr>
                   <td>{{artifact.created_at}}</td>
                   <td><code>{{artifact.public_id}}</code></td>
