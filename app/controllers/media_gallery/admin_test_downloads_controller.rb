@@ -5,6 +5,7 @@ module ::MediaGallery
     requires_plugin "Discourse-Media-Plugin"
 
     before_action :ensure_test_downloads_enabled
+    skip_before_action :check_xhr, only: [:download], raise: false
 
     def create
       item = ::MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)

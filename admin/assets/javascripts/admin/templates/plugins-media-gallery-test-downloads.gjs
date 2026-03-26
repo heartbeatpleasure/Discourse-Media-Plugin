@@ -194,9 +194,9 @@ export default RouteTemplate(
                     start {{artifact.start_segment}}, count {{artifact.segment_count}} / {{artifact.total_segments}}
                   </td>
                   <td>
-                    <a class="btn btn-small" href={{artifact.download_url}} target="_blank" rel="noopener noreferrer">
+                    <button class="btn btn-small" type="button" {{on "click" (fn @controller.downloadArtifact artifact)}}>
                       Download
-                    </a>
+                    </button>
                   </td>
                 </tr>
               {{/each}}

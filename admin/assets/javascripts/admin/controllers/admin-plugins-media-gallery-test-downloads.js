@@ -386,6 +386,88 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     }
   }
 
+
+
+  _downloadFilenameFromHeaders(headers, fallbackName = "download.mp4") {
+    const cd = headers?.get?.("Content-Disposition") || headers?.get?.("content-disposition") || "";
+    const utf8Match = cd.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+      try {
+        return decodeURIComponent(utf8Match[1]);
+      } catch {
+        return utf8Match[1];
+      }
+    }
+
+    const basicMatch = cd.match(/filename="?([^";]+)"?/i);
+    if (basicMatch?.[1]) {
+      return basicMatch[1];
+    }
+
+    return fallbackName;
+  }
+
+  _fallbackArtifactFilename(artifact) {
+    const parts = [
+      artifact?.public_id,
+      artifact?.username,
+      artifact?.mode,
+      artifact?.random_clip_region,
+      artifact?.start_segment != null ? `s${artifact.start_segment}` : null,
+      artifact?.segment_count != null ? `n${artifact.segment_count}` : null,
+    ].filter(Boolean);
+
+    const base = parts.join("-").replace(/[^a-zA-Z0-9._-]+/g, "_") || "artifact";
+    return `${base}.mp4`;
+  }
+
+  @action
+  async downloadArtifact(artifact) {
+    if (!artifact?.download_url) {
+      this.generateError = "Download URL is missing for this artifact.";
+      return;
+    }
+
+    this.generateError = "";
+
+    try {
+      const response = await fetch(artifact.download_url, {
+        method: "GET",
+        headers: {
+          Accept: "video/mp4,application/octet-stream;q=0.9,*/*;q=0.5",
+          "X-Requested-With": "XMLHttpRequest",
+          "X-CSRF-Token": this._csrfToken(),
+        },
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        const err = await this._extractError(response);
+        this.generateError = `Download failed (${response.status}): ${err}`;
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const filename = this._downloadFilenameFromHeaders(
+        response.headers,
+        this._fallbackArtifactFilename(artifact)
+      );
+
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      this.generateError = e?.message || String(e);
+    }
+  }
+
   @action
   async generateFull() {
     await this._generate({ mode: "full" });
