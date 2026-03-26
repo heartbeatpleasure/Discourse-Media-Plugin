@@ -62,9 +62,6 @@ module ::MediaGallery
     CHUNKED_RESYNC_MIN_TOTAL_SAMPLES = 12
     CHUNKED_RESYNC_MIN_LOCAL_USABLE = 4
 
-    FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
-    FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
-
     def normalize_filemode_time_budget_seconds(value)
       v = value.to_f
       v = FILEMODE_TIME_BUDGET_SECONDS.to_f if v <= 0.0
@@ -106,14 +103,6 @@ module ::MediaGallery
       sample_times ||= packaged_segment_midpoints_for(media_item: media_item)
 
       file_size_bytes = (File.size(file_path) rescue nil)
-      probed_duration_seconds = probe_duration_seconds(file_path)
-      effective_max_offset_segments = effective_filemode_max_offset_segments(
-        requested_max_offset_segments: max_offset_segments,
-        sample_times: sample_times,
-        duration_seconds: probed_duration_seconds,
-        segment_seconds: seg
-      )
-
       obs, match = identify_with_phase_search(
         media_item: media_item,
         file_path: file_path,
@@ -124,7 +113,7 @@ module ::MediaGallery
         file_size_bytes: file_size_bytes,
         started_at: started_at,
         time_budget_seconds: filemode_budget_seconds,
-        max_offset_segments: effective_max_offset_segments
+        max_offset_segments: max_offset_segments
       )
 
       if obs.blank? || match.blank?
@@ -145,8 +134,25 @@ module ::MediaGallery
           observed_confidences: obs[:confidences],
           observed_scores: obs[:scores],
           spec: spec,
-          max_offset_segments: effective_max_offset_segments
+          max_offset_segments: max_offset_segments
         )
+      end
+
+      refined = maybe_refine_filemode_observations(
+        media_item: media_item,
+        file_path: file_path,
+        obs: obs,
+        match: match,
+        segment_seconds: seg,
+        spec: spec,
+        started_at: started_at,
+        time_budget_seconds: filemode_budget_seconds,
+        max_offset_segments: max_offset_segments
+      )
+
+      if refined.present?
+        obs = refined[:obs] if refined[:obs].present?
+        match = refined[:match] if refined[:match].present?
       end
 
       matches = match[:candidates] || []
@@ -175,8 +181,6 @@ module ::MediaGallery
           effective_max_samples: obs[:effective_max_samples],
           configured_filemode_engine_time_budget_seconds: filemode_budget_seconds,
           filemode_budget_exhausted: (obs[:budget_exhausted] == true || match_meta[:phase_search_budget_exhausted] == true || match_meta[:budget_exhausted] == true),
-          requested_max_offset_segments: max_offset_segments.to_i,
-          effective_max_offset_segments: effective_max_offset_segments.to_i,
         }.merge(match_meta),
         observed: {
           variants: format_variant_sequence(obs[:variants]),
@@ -584,6 +588,168 @@ module ::MediaGallery
     end
     private_class_method :phase_result_score
 
+
+    def should_run_filemode_multisample_refine?(obs:, match:, started_at:, budget_seconds:)
+      return false if obs.blank? || match.blank?
+      times = Array(obs[:times])
+      return false if times.blank?
+
+      remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds)
+      return false if remaining < 12.0
+
+      meta = match[:meta] || {}
+      cands = Array(match[:candidates])
+      usable = Array(obs[:variants]).count { |v| v.present? }
+      top_ratio = cands[0] ? cands[0][:match_ratio_weighted].to_f : 0.0
+      top_ratio = cands[0][:match_ratio].to_f if top_ratio <= 0.0 && cands[0]
+      delta = meta[:offset_delta].to_f
+      delta = top_ratio - (cands[1] ? cands[1][:match_ratio_weighted].to_f : 0.0) if delta <= 0.0
+
+      usable >= 8 && (
+        meta[:polarity_flip_used] == true ||
+        top_ratio < 0.86 ||
+        delta < 0.45
+      )
+    rescue
+      false
+    end
+    private_class_method :should_run_filemode_multisample_refine?
+
+    def refine_observed_variants_multi_sample(file_path:, obs:, segment_seconds:, spec:, duration_seconds:, started_at:, time_budget_seconds:)
+      times = Array(obs[:times])
+      return nil if times.blank?
+
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+      delta = seg * 0.20
+      delta = 0.40 if delta < 0.40
+      delta = 0.90 if delta > 0.90
+
+      chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
+      chunk_size = 15 if chunk_size <= 0
+      budget = normalize_filemode_time_budget_seconds(time_budget_seconds)
+      total_duration = duration_seconds.to_f
+      total_duration = 0.0 if total_duration.nan? || total_duration.infinite? || total_duration.negative?
+
+      budget_exceeded = lambda do
+        next false if started_at.blank?
+        (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at.to_f) > budget
+      end
+
+      extra_times = []
+      mappings = []
+      times.each_with_index do |t_mid, i|
+        next if t_mid.blank?
+        t1 = clamp_time(t_mid.to_f - delta, duration_seconds: total_duration)
+        t2 = clamp_time(t_mid.to_f + delta, duration_seconds: total_duration)
+        extra_times << t1
+        mappings << [i, 0]
+        extra_times << t2
+        mappings << [i, 1]
+      end
+
+      sampled = []
+      used_map = []
+      extra_times.each_slice(chunk_size).with_index do |chunk, batch_idx|
+        break if budget_exceeded.call
+        res = sample_variants_batch_single(file_path: file_path, times: chunk, spec: spec)
+        sampled.concat(res)
+        start = batch_idx * chunk_size
+        used_map.concat(mappings[start, chunk.length])
+      end
+
+      return nil if sampled.empty?
+
+      variants = Array(obs[:variants]).dup
+      confidences = Array(obs[:confidences]).dup
+      scores = Array(obs[:scores]).dup
+
+      per_idx_scores = Hash.new { |h, k| h[k] = [] }
+      per_idx_confs = Hash.new { |h, k| h[k] = [] }
+      used_map.each_with_index do |(idx, _side), j|
+        r = sampled[j] || {}
+        per_idx_scores[idx] << r[:score].to_i
+        per_idx_confs[idx] << r[:confidence].to_f
+      end
+
+      times.each_with_index do |_t, i|
+        all_scores = [scores[i].to_i] + per_idx_scores[i]
+        all_confs = [confidences[i].to_f] + per_idx_confs[i]
+        next if all_scores.empty?
+
+        med_score = median(all_scores)
+        med_conf = median(all_confs).to_f.round(4)
+        v = med_score >= 0 ? "a" : "b"
+        v = nil if med_conf < MIN_CONFIDENCE
+
+        variants[i] = v
+        confidences[i] = med_conf
+        scores[i] = med_score
+      end
+
+      {
+        duration_seconds: obs[:duration_seconds],
+        variants: variants,
+        confidences: confidences,
+        scores: scores,
+        times: times,
+        layout: obs[:layout],
+        truncated: obs[:truncated],
+        elapsed_seconds: obs[:elapsed_seconds],
+        effective_max_samples: obs[:effective_max_samples],
+        budget_exhausted: (obs[:budget_exhausted] == true || budget_exceeded.call),
+        multisample_refine_used: true,
+        multisample_refine_offset_seconds: delta.round(3),
+        multisample_refine_points_per_segment: 3,
+      }
+    rescue
+      nil
+    end
+    private_class_method :refine_observed_variants_multi_sample
+
+    def maybe_refine_filemode_observations(media_item:, file_path:, obs:, match:, segment_seconds:, spec:, started_at:, time_budget_seconds:, max_offset_segments:)
+      return nil unless should_run_filemode_multisample_refine?(obs: obs, match: match, started_at: started_at, budget_seconds: time_budget_seconds)
+
+      refined_obs = refine_observed_variants_multi_sample(
+        file_path: file_path,
+        obs: obs,
+        segment_seconds: segment_seconds,
+        spec: spec,
+        duration_seconds: obs[:duration_seconds],
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds
+      )
+      return nil if refined_obs.blank?
+
+      refined_match = match_fingerprints(
+        media_item: media_item,
+        observed_variants: refined_obs[:variants],
+        observed_confidences: refined_obs[:confidences],
+        observed_scores: refined_obs[:scores],
+        spec: spec,
+        max_offset_segments: max_offset_segments
+      )
+
+      orig_score = phase_result_score(match: match)
+      refined_score = phase_result_score(match: refined_match)
+      use_refined = refined_score >= (orig_score + 0.005)
+
+      chosen_obs = use_refined ? refined_obs : obs
+      chosen_match = use_refined ? refined_match : match
+      chosen_meta = chosen_match[:meta] || {}
+      chosen_meta[:multisample_refine_used] = true
+      chosen_meta[:multisample_refine_applied] = use_refined
+      chosen_meta[:multisample_refine_score_gain] = (refined_score - orig_score).round(4)
+      chosen_meta[:multisample_refine_offset_seconds] = refined_obs[:multisample_refine_offset_seconds]
+      chosen_meta[:multisample_refine_points_per_segment] = refined_obs[:multisample_refine_points_per_segment]
+      chosen_match[:meta] = chosen_meta
+
+      { obs: chosen_obs, match: chosen_match }
+    rescue
+      nil
+    end
+    private_class_method :maybe_refine_filemode_observations
+
     def build_filemode_sample_times(duration_seconds:, segment_seconds:, sample_times:, max_samples:, file_size_bytes: nil)
       seg = segment_seconds.to_i
       seg = 6 if seg <= 0
@@ -606,68 +772,11 @@ module ::MediaGallery
 
       cap = filemode_sample_cap_for(max_samples: max_samples, duration_seconds: duration_seconds, file_size_bytes: file_size_bytes)
       cap = 5 if cap < 5 && times_mid.length >= 5
-      times_mid = evenly_spaced_subset(times_mid, cap) if cap > 0
+      times_mid = times_mid.first(cap) if cap > 0
 
       [times_mid, cap]
     end
     private_class_method :build_filemode_sample_times
-
-    def evenly_spaced_subset(values, cap)
-      arr = Array(values)
-      return arr if cap.to_i <= 0 || arr.length <= cap.to_i
-      return [arr.first] if cap.to_i == 1
-
-      last_index = arr.length - 1
-      step = last_index.to_f / (cap.to_i - 1).to_f
-
-      picked = []
-      seen = {}
-      cap.to_i.times do |i|
-        idx = (i * step).round
-        idx = 0 if idx < 0
-        idx = last_index if idx > last_index
-        next if seen[idx]
-        seen[idx] = true
-        picked << arr[idx]
-      end
-
-      if picked.length < cap.to_i
-        arr.each_with_index do |val, idx|
-          next if seen[idx]
-          picked << val
-          seen[idx] = true
-          break if picked.length >= cap.to_i
-        end
-      end
-
-      picked.sort
-    end
-    private_class_method :evenly_spaced_subset
-
-    def effective_filemode_max_offset_segments(requested_max_offset_segments:, sample_times:, duration_seconds:, segment_seconds:)
-      requested = requested_max_offset_segments.to_i
-      requested = 0 if requested.negative?
-
-      total_segments = Array(sample_times).length
-      return requested if total_segments <= 0
-
-      seg = segment_seconds.to_f
-      seg = 6.0 if seg <= 0.0
-
-      est_clip_segments = (duration_seconds.to_f / seg).floor
-      est_clip_segments = 1 if est_clip_segments < 1
-
-      max_possible = [total_segments - 1, 0].max
-      auto_needed = total_segments - est_clip_segments + FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS
-      auto_needed = 0 if auto_needed < 0
-      auto_needed = [auto_needed, max_possible].min
-
-      hard_cap = [FILEMODE_AUTO_MAX_OFFSET_HARD_CAP, max_possible].min
-      effective = [requested, auto_needed].max
-      effective = [effective, hard_cap].min
-      effective
-    end
-    private_class_method :effective_filemode_max_offset_segments
 
     def filemode_sample_cap_for(max_samples:, duration_seconds:, file_size_bytes: nil)
       cap = max_samples.to_i
