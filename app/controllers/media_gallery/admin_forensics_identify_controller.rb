@@ -233,11 +233,11 @@ module ::MediaGallery
 
         capped_max_samples = max_samples
         if file_mb >= FILEMODE_AUTOCAP_MB_3
-          capped_max_samples = [capped_max_samples, 25].min
-        elsif file_mb >= FILEMODE_AUTOCAP_MB_2
           capped_max_samples = [capped_max_samples, 35].min
-        elsif file_mb >= FILEMODE_AUTOCAP_MB_1
+        elsif file_mb >= FILEMODE_AUTOCAP_MB_2
           capped_max_samples = [capped_max_samples, 45].min
+        elsif file_mb >= FILEMODE_AUTOCAP_MB_1
+          capped_max_samples = [capped_max_samples, 55].min
         end
 
         identify_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
