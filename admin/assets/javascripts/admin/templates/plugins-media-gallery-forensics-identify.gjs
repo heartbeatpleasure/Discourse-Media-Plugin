@@ -178,6 +178,18 @@ export default RouteTemplate(
                     <span style="opacity:0.85;">(Δ vs #2: {{@controller.matchDelta}})</span>
                   </div>
 
+                  {{#if @controller.shortlistEvidenceGap}}
+                    <div style="opacity:0.95;">
+                      <strong>shortlist gap:</strong> {{@controller.shortlistEvidenceGap}}
+                    </div>
+                  {{/if}}
+
+                  {{#if @controller.topCandidateWhy}}
+                    <div style="opacity:0.95; margin-top:0.25rem;">
+                      <strong>top evidence:</strong> {{@controller.topCandidateWhy}}
+                    </div>
+                  {{/if}}
+
                   {{#if @controller.poolSize}}
                     <div style="margin-top: 0.25rem; opacity:0.95;">
                       <strong>pool_size:</strong> {{@controller.poolSize}}
@@ -237,6 +249,24 @@ export default RouteTemplate(
                     {{/if}}
                   </div>
                 {{/if}}
+                <div>
+                  <strong>offset expansion:</strong>
+                  {{#if @controller.offsetExpansionApplied}}applied{{else}}not applied{{/if}}
+                  {{#if @controller.offsetExpansionReason}}
+                    <span style="opacity:0.85;">({{@controller.offsetExpansionReason}})</span>
+                  {{/if}}
+                </div>
+                <div>
+                  <strong>phase refinement:</strong>
+                  {{#if @controller.phaseRefinementAttempted}}
+                    {{#if @controller.phaseRefinementApplied}}applied{{else}}rejected{{/if}}
+                  {{else}}
+                    not attempted
+                  {{/if}}
+                  {{#if @controller.phaseRefinementReason}}
+                    <span style="opacity:0.85;">({{@controller.phaseRefinementReason}})</span>
+                  {{/if}}
+                </div>
                 {{#if @controller.chunkedResyncUsed}}
                   <div>
                     <strong>chunked re-sync:</strong>
@@ -255,7 +285,25 @@ export default RouteTemplate(
                       </div>
                     {{/if}}
                   </div>
+                {{else}}
+                  <div>
+                    <strong>chunked re-sync:</strong> not applied
+                    {{#if @controller.chunkedResyncReason}}
+                      <span style="opacity:0.85;">({{@controller.chunkedResyncReason}})</span>
+                    {{/if}}
+                  </div>
                 {{/if}}
+                <div>
+                  <strong>multisample refine:</strong>
+                  {{#if @controller.multisampleRefineUsed}}
+                    {{#if @controller.multisampleRefineApplied}}applied{{else}}rejected{{/if}}
+                  {{else}}
+                    not applied
+                  {{/if}}
+                  {{#if @controller.multisampleRefineReason}}
+                    <span style="opacity:0.85;">({{@controller.multisampleRefineReason}})</span>
+                  {{/if}}
+                </div>
                 <div>
                   <strong>variant polarity:</strong> {{@controller.variantPolarity}}
                   {{#if @controller.polarityFlipUsed}}
@@ -301,6 +349,12 @@ export default RouteTemplate(
                   Matching is weakest when the leak is short, heavily re-encoded, cropped, or includes overlays.
                   If possible, use a longer sample that is closer to the original HLS stream.
                   URL mode + auto-extend helps, but confidence still depends on usable samples.
+                    {{#if @controller.decisionReasons.length}}
+                      <div style="margin-top: 0.35rem; opacity:0.9;">
+                        <strong>Policy why:</strong>
+                        {{@controller.decisionReasonsText}}
+                      </div>
+                    {{/if}}
                   {{#if @controller.recommendation}}
                     <div style="margin-top: 0.35rem; opacity:0.9;">
                       <strong>Recommendation:</strong> {{@controller.recommendation}}
@@ -376,6 +430,7 @@ export default RouteTemplate(
                       <th>E[FP] pool</th>
                       <th>E[FP] 2000</th>
                       <th>Δ vs #1</th>
+                      <th>Evidence</th>
                       <th>Mismatches</th>
                       <th>Best offset</th>
                     </tr>
@@ -397,6 +452,12 @@ export default RouteTemplate(
                         <td>{{c.expected_false_positives_pool}}</td>
                         <td>{{c.expected_false_positives_2000}}</td>
                         <td>{{c.delta_from_top}}</td>
+                        <td>
+                          {{c.evidence_score}}
+                          {{#if c.why}}
+                            <div style="opacity:0.75; max-width:18rem;">{{c.why}}</div>
+                          {{/if}}
+                        </td>
                         <td>{{c.mismatches}} / {{c.compared}}</td>
                         <td>{{c.best_offset_segments}}</td>
                       </tr>

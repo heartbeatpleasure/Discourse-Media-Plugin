@@ -43,9 +43,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     const cands = this.candidates || [];
     const top = this.topMatchRatio;
     return cands.slice(0, 3).map((c, idx) => {
-      const v = c?.match_ratio;
-      const mr = typeof v === "number" ? v : parseFloat(v);
-      const matchRatio = Number.isFinite(mr) ? mr : 0;
+      const matchRatio = this._candidateRatio(c);
       return {
         ...c,
         _idx: idx,
@@ -95,15 +93,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get topMatchRatio() {
-    const v = this.topCandidate?.match_ratio;
-    const f = typeof v === "number" ? v : parseFloat(v);
-    return Number.isFinite(f) ? f : 0;
+    return this._candidateRatio(this.topCandidate);
   }
 
   get secondMatchRatio() {
-    const v = this.secondCandidate?.match_ratio;
-    const f = typeof v === "number" ? v : parseFloat(v);
-    return Number.isFinite(f) ? f : 0;
+    return this._candidateRatio(this.secondCandidate);
   }
 
   get matchDelta() {
@@ -280,6 +274,60 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return this.meta?.chunked_resync_ranges || [];
   }
 
+  get chunkedResyncReason() {
+    return this.meta?.chunked_resync_reason || "";
+  }
+
+  get offsetExpansionApplied() {
+    return !!this.meta?.offset_expansion_applied;
+  }
+
+  get offsetExpansionReason() {
+    return this.meta?.offset_expansion_reason || "";
+  }
+
+  get phaseRefinementAttempted() {
+    return !!this.meta?.phase_search_refinement_attempted;
+  }
+
+  get phaseRefinementApplied() {
+    return !!this.meta?.phase_search_refinement_applied;
+  }
+
+  get phaseRefinementReason() {
+    return this.meta?.phase_search_refinement_reason || "";
+  }
+
+  get multisampleRefineUsed() {
+    return !!this.meta?.multisample_refine_used;
+  }
+
+  get multisampleRefineApplied() {
+    return !!this.meta?.multisample_refine_applied;
+  }
+
+  get multisampleRefineReason() {
+    return this.meta?.multisample_refine_reason || "";
+  }
+
+  get shortlistEvidenceGap() {
+    const v = this.meta?.shortlist_evidence_gap;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get decisionReasons() {
+    return Array.isArray(this.meta?.decision_reasons) ? this.meta.decision_reasons : [];
+  }
+
+  get decisionReasonsText() {
+    return this.decisionReasons.join(", ");
+  }
+
+  get topCandidateWhy() {
+    return this.meta?.top_candidate_why || this.topCandidate?.why || "";
+  }
+
   get configuredFilemodeSoftBudgetSeconds() {
     const v = this.meta?.configured_filemode_soft_time_budget_seconds;
     const f = typeof v === "number" ? v : parseFloat(v);
@@ -365,6 +413,18 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get phaseSearchUsed() {
     return !!this.meta?.phase_search_used;
+  }
+
+  _candidateRatio(candidate) {
+    const weighted = candidate?.match_ratio_weighted;
+    const weightedFloat = typeof weighted === "number" ? weighted : parseFloat(weighted);
+    if (Number.isFinite(weightedFloat) && weightedFloat > 0) {
+      return weightedFloat;
+    }
+
+    const raw = candidate?.match_ratio;
+    const rawFloat = typeof raw === "number" ? raw : parseFloat(raw);
+    return Number.isFinite(rawFloat) ? rawFloat : 0;
   }
 
   get hasAlignmentDebug() {

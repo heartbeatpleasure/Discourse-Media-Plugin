@@ -793,13 +793,14 @@ module ::MediaGallery
         return
       end
 
-      decision = classify_decision(result)
-      top = result.dig("candidates", 0, "match_ratio").to_f
-      second = result.dig("candidates", 1, "match_ratio").to_f
-      delta = top - second
-      mismatches = result.dig("candidates", 0, "mismatches").to_i
-      compared = result.dig("candidates", 0, "compared").to_i
-      mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
+      decision_info = classify_decision_with_reasons(result)
+      decision = decision_info[:decision]
+      top = decision_info[:top_ratio].to_f
+      second = decision_info[:second_ratio].to_f
+      delta = decision_info[:delta].to_f
+      mismatches = decision_info[:mismatches].to_i
+      compared = decision_info[:compared].to_i
+      mismatch_rate = decision_info[:mismatch_rate].to_f
 
       result["meta"]["decision"] = decision
       result["meta"]["conclusive"] = (decision == "conclusive_match")
@@ -809,6 +810,11 @@ module ::MediaGallery
       result["meta"]["top_mismatches"] = mismatches
       result["meta"]["top_compared"] = compared
       result["meta"]["top_mismatch_rate"] = mismatch_rate
+      result["meta"]["top_evidence_score"] = decision_info[:top_evidence_score].to_f.round(4)
+      result["meta"]["top_consistent_chunks"] = decision_info[:top_consistent_chunks].to_i
+      result["meta"]["shortlist_evidence_gap"] = decision_info[:shortlist_evidence_gap].to_f.round(4)
+      result["meta"]["decision_reasons"] = Array(decision_info[:reasons])
+      result["meta"]["decision_mode"] = decision_info[:mode]
 
       result["meta"]["policy"] = {
         "min_usable_any" => setting_policy_min_usable_any,
@@ -819,6 +825,7 @@ module ::MediaGallery
         "min_usable_likely" => setting_policy_min_usable_likely,
         "min_match_likely" => setting_policy_min_match_likely_ratio,
         "min_delta_likely" => setting_policy_min_delta_likely_ratio,
+        "filemode_hardened" => true,
       }
 
       result["meta"]["recommendation"] =
@@ -839,43 +846,199 @@ module ::MediaGallery
     end
 
     def classify_decision(result)
+      classify_decision_with_reasons(result)[:decision]
+    end
+
+    def classify_decision_with_reasons(result)
       usable = result.dig("meta", "usable_samples").to_i
       cands = result["candidates"]
       has_cands = cands.is_a?(Array) && cands.present?
 
-      return "insufficient_samples" if usable < setting_policy_min_usable_any
-      return "no_match" unless has_cands
+      reasons = []
+      mode = (result.dig("meta", "source_mode").to_s == "hls_playlist") ? "hls_playlist" : "file_mode"
 
-      top = cands[0].is_a?(Hash) ? cands[0]["match_ratio"].to_f : 0.0
-      second = cands[1].is_a?(Hash) ? cands[1]["match_ratio"].to_f : 0.0
+      if usable < setting_policy_min_usable_any
+        reasons << "usable_samples=#{usable} < #{setting_policy_min_usable_any}"
+        return {
+          decision: "insufficient_samples",
+          reasons: reasons,
+          mode: mode,
+          top_ratio: 0.0,
+          second_ratio: 0.0,
+          delta: 0.0,
+          mismatches: 0,
+          compared: 0,
+          mismatch_rate: 1.0,
+          top_evidence_score: 0.0,
+          top_consistent_chunks: 0,
+          shortlist_evidence_gap: 0.0,
+        }
+      end
+
+      unless has_cands
+        reasons << "no_candidates"
+        return {
+          decision: "no_match",
+          reasons: reasons,
+          mode: mode,
+          top_ratio: 0.0,
+          second_ratio: 0.0,
+          delta: 0.0,
+          mismatches: 0,
+          compared: 0,
+          mismatch_rate: 1.0,
+          top_evidence_score: 0.0,
+          top_consistent_chunks: 0,
+          shortlist_evidence_gap: 0.0,
+        }
+      end
+
+      top_cand = cands[0].is_a?(Hash) ? cands[0] : {}
+      second_cand = cands[1].is_a?(Hash) ? cands[1] : {}
+
+      top = candidate_match_ratio(top_cand)
+      second = candidate_match_ratio(second_cand)
       delta = top - second
 
-      mismatches = cands[0].is_a?(Hash) ? cands[0]["mismatches"].to_i : 0
-      compared = cands[0].is_a?(Hash) ? cands[0]["compared"].to_i : 0
+      mismatches = top_cand["mismatches"].to_i
+      compared = top_cand["compared"].to_i
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
+      top_evidence_score = top_cand["evidence_score"].to_f
+      top_consistent_chunks = top_cand["evidence_consistent_chunks"].to_i
+      shortlist_evidence_gap = result.dig("meta", "shortlist_evidence_gap").to_f
 
-      if usable >= setting_policy_min_usable_strong &&
-           top >= setting_policy_min_match_strong_ratio &&
-           delta >= setting_policy_min_delta_strong_ratio &&
-           mismatch_rate <= setting_policy_max_mismatch_rate_strong_ratio
-        return "conclusive_match"
+      strong_usable = setting_policy_min_usable_strong
+      strong_match = setting_policy_min_match_strong_ratio
+      strong_delta = setting_policy_min_delta_strong_ratio
+      strong_mismatch = setting_policy_max_mismatch_rate_strong_ratio
+      likely_usable = setting_policy_min_usable_likely
+      likely_match = setting_policy_min_match_likely_ratio
+      likely_delta = setting_policy_min_delta_likely_ratio
+
+      if mode == "file_mode"
+        strong_usable = [strong_usable, 16].max
+        strong_match = [strong_match, 0.90].max
+        strong_delta = [strong_delta, 0.18].max
+        strong_mismatch = [strong_mismatch, 0.15].min
+        likely_usable = [likely_usable, 12].max
+        likely_match = [likely_match, 0.82].max
+        likely_delta = [likely_delta, 0.14].max
       end
 
-      if usable >= setting_policy_min_usable_likely &&
-           top >= setting_policy_min_match_likely_ratio &&
-           delta >= setting_policy_min_delta_likely_ratio
-        return "likely_match"
+      strong_ok = true
+      if usable < strong_usable
+        strong_ok = false
+        reasons << "usable_samples=#{usable} < strong=#{strong_usable}"
+      end
+      if top < strong_match
+        strong_ok = false
+        reasons << "top_match=#{top.round(4)} < strong=#{strong_match.round(4)}"
+      end
+      if delta < strong_delta
+        strong_ok = false
+        reasons << "delta=#{delta.round(4)} < strong=#{strong_delta.round(4)}"
+      end
+      if mismatch_rate > strong_mismatch
+        strong_ok = false
+        reasons << "mismatch_rate=#{mismatch_rate.round(4)} > strong=#{strong_mismatch.round(4)}"
+      end
+      if mode == "file_mode"
+        if top_evidence_score < 4.0
+          strong_ok = false
+          reasons << "evidence_score=#{top_evidence_score.round(4)} < strong=4.0"
+        end
+        if top_consistent_chunks < 2
+          strong_ok = false
+          reasons << "stable_chunks=#{top_consistent_chunks} < strong=2"
+        end
+        if shortlist_evidence_gap < 0.75
+          strong_ok = false
+          reasons << "shortlist_gap=#{shortlist_evidence_gap.round(4)} < strong=0.75"
+        end
       end
 
-      "ambiguous"
+      if strong_ok
+        return {
+          decision: "conclusive_match",
+          reasons: ["all_strong_thresholds_passed"],
+          mode: mode,
+          top_ratio: top,
+          second_ratio: second,
+          delta: delta,
+          mismatches: mismatches,
+          compared: compared,
+          mismatch_rate: mismatch_rate,
+          top_evidence_score: top_evidence_score,
+          top_consistent_chunks: top_consistent_chunks,
+          shortlist_evidence_gap: shortlist_evidence_gap,
+        }
+      end
+
+      likely_ok = true
+      if usable < likely_usable
+        likely_ok = false
+      end
+      if top < likely_match
+        likely_ok = false
+      end
+      if delta < likely_delta
+        likely_ok = false
+      end
+      if mode == "file_mode"
+        likely_ok &&= (mismatch_rate <= 0.22)
+        likely_ok &&= (top_evidence_score >= 2.5)
+        likely_ok &&= (top_consistent_chunks >= 2)
+        likely_ok &&= (shortlist_evidence_gap >= 0.35)
+      end
+
+      if likely_ok
+        return {
+          decision: "likely_match",
+          reasons: [mode == "file_mode" ? "file_mode_guardrails_passed" : "likely_thresholds_passed"],
+          mode: mode,
+          top_ratio: top,
+          second_ratio: second,
+          delta: delta,
+          mismatches: mismatches,
+          compared: compared,
+          mismatch_rate: mismatch_rate,
+          top_evidence_score: top_evidence_score,
+          top_consistent_chunks: top_consistent_chunks,
+          shortlist_evidence_gap: shortlist_evidence_gap,
+        }
+      end
+
+      {
+        decision: "ambiguous",
+        reasons: reasons.presence || ["top_candidate_not_separated_enough"],
+        mode: mode,
+        top_ratio: top,
+        second_ratio: second,
+        delta: delta,
+        mismatches: mismatches,
+        compared: compared,
+        mismatch_rate: mismatch_rate,
+        top_evidence_score: top_evidence_score,
+        top_consistent_chunks: top_consistent_chunks,
+        shortlist_evidence_gap: shortlist_evidence_gap,
+      }
+    end
+
+    def candidate_match_ratio(candidate)
+      return 0.0 unless candidate.is_a?(Hash)
+
+      weighted = candidate["match_ratio_weighted"].to_f
+      return weighted if weighted > 0.0
+
+      candidate["match_ratio"].to_f
     end
 
     def top_two_match_ratios(result)
       cands = result["candidates"]
       return [0.0, 0.0] unless cands.is_a?(Array) && cands.present?
 
-      top = cands[0].is_a?(Hash) ? cands[0]["match_ratio"].to_f : 0.0
-      second = cands[1].is_a?(Hash) ? cands[1]["match_ratio"].to_f : 0.0
+      top = cands[0].is_a?(Hash) ? candidate_match_ratio(cands[0]) : 0.0
+      second = cands[1].is_a?(Hash) ? candidate_match_ratio(cands[1]) : 0.0
       [top, second]
     end
 

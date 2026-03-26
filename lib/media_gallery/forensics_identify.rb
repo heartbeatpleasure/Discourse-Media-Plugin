@@ -62,6 +62,11 @@ module ::MediaGallery
     CHUNKED_RESYNC_MIN_TOTAL_SAMPLES = 12
     CHUNKED_RESYNC_MIN_LOCAL_USABLE = 4
 
+    # Iteration 1: prefer shortlist evidence that remains stable across local windows
+    # instead of relying on one global agreement ratio only.
+    CANDIDATE_EVIDENCE_CHUNK_SIZE = 8
+    SHORTLIST_LIMIT = 10
+
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
 
@@ -164,6 +169,26 @@ module ::MediaGallery
       if refined.present?
         obs = refined[:obs] if refined[:obs].present?
         match = refined[:match] if refined[:match].present?
+      end
+
+      match[:meta] ||= {}
+      match[:meta][:offset_expansion_applied] = (effective_max_offset_segments.to_i > max_offset_segments.to_i)
+      match[:meta][:offset_expansion_reason] = if effective_max_offset_segments.to_i > max_offset_segments.to_i
+        "auto_expanded_to_cover_partial_or_shifted_clip"
+      else
+        "requested_offset_window_kept"
+      end
+
+      unless match[:meta].key?(:multisample_refine_used)
+        multisample_diag = filemode_multisample_refine_diagnostics(
+          obs: obs,
+          match: match,
+          started_at: started_at,
+          budget_seconds: filemode_budget_seconds
+        )
+        match[:meta][:multisample_refine_used] = false
+        match[:meta][:multisample_refine_applied] = false
+        match[:meta][:multisample_refine_reason] = multisample_diag[:reason]
       end
 
       matches = match[:candidates] || []
@@ -311,7 +336,12 @@ module ::MediaGallery
       best_match = coarse[:match]
       best_score = phase_result_score(match: best_match)
 
-      if phase_search_needs_refinement?(match: best_match) && time_remaining_seconds(started_at: started_at, budget_seconds: time_budget_seconds) >= 5.0
+      refinement = phase_search_refinement_decision(
+        match: best_match,
+        remaining_seconds: time_remaining_seconds(started_at: started_at, budget_seconds: time_budget_seconds)
+      )
+
+      if refinement[:run]
         fine = run_phase_search_pass(
           media_item: media_item,
           file_path: file_path,
@@ -327,11 +357,25 @@ module ::MediaGallery
         )
 
         fine_score = phase_result_score(match: fine[:match])
-        if fine_score >= best_score
+        use_fine = fine_score >= best_score
+        if use_fine
           best_obs = fine[:obs]
           best_match = fine[:match]
           best_score = fine_score
         end
+
+        best_match[:meta] ||= {}
+        best_match[:meta][:phase_search_refinement_attempted] = true
+        best_match[:meta][:phase_search_refinement_applied] = use_fine
+        best_match[:meta][:phase_search_refinement_reason] = refinement[:reason]
+        best_match[:meta][:phase_search_coarse_score] = coarse[:match].present? ? phase_result_score(match: coarse[:match]).round(4) : nil
+        best_match[:meta][:phase_search_fine_score] = fine[:match].present? ? fine_score.round(4) : nil
+        best_match[:meta][:phase_search_refinement_rejected_reason] = (use_fine ? nil : "coarse_score_better")
+      else
+        best_match[:meta] ||= {}
+        best_match[:meta][:phase_search_refinement_attempted] = false
+        best_match[:meta][:phase_search_refinement_applied] = false
+        best_match[:meta][:phase_search_refinement_reason] = refinement[:reason]
       end
 
       [best_obs, best_match]
@@ -581,6 +625,20 @@ module ::MediaGallery
     end
     private_class_method :phase_search_needs_refinement?
 
+    def phase_search_refinement_decision(match:, remaining_seconds:)
+      return { run: false, reason: "no_match_available" } if match.blank?
+      return { run: false, reason: "insufficient_time_budget" } if remaining_seconds.to_f < 5.0
+
+      if phase_search_needs_refinement?(match: match)
+        { run: true, reason: "coarse_result_needs_more_alignment_precision" }
+      else
+        { run: false, reason: "coarse_result_already_stable" }
+      end
+    rescue
+      { run: false, reason: "phase_refinement_decision_failed" }
+    end
+    private_class_method :phase_search_refinement_decision
+
     def phase_result_score(match:)
       return -Float::INFINITY if match.blank?
       meta = match[:meta] || {}
@@ -603,30 +661,48 @@ module ::MediaGallery
 
 
     def should_run_filemode_multisample_refine?(obs:, match:, started_at:, budget_seconds:)
-      return false if obs.blank? || match.blank?
+      filemode_multisample_refine_diagnostics(obs: obs, match: match, started_at: started_at, budget_seconds: budget_seconds)[:run]
+    rescue
+      false
+    end
+    private_class_method :should_run_filemode_multisample_refine?
+
+    def filemode_multisample_refine_diagnostics(obs:, match:, started_at:, budget_seconds:)
+      return { run: false, reason: "missing_observation_or_match" } if obs.blank? || match.blank?
+
       times = Array(obs[:times])
-      return false if times.blank?
+      return { run: false, reason: "missing_sample_times" } if times.blank?
 
       remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds)
-      return false if remaining < 12.0
+      return { run: false, reason: "insufficient_time_budget" } if remaining < 12.0
 
       meta = match[:meta] || {}
       cands = Array(match[:candidates])
       usable = Array(obs[:variants]).count { |v| v.present? }
+      return { run: false, reason: "too_few_usable_samples", usable: usable } if usable < 8
+
       top_ratio = cands[0] ? cands[0][:match_ratio_weighted].to_f : 0.0
       top_ratio = cands[0][:match_ratio].to_f if top_ratio <= 0.0 && cands[0]
       delta = meta[:offset_delta].to_f
       delta = top_ratio - (cands[1] ? cands[1][:match_ratio_weighted].to_f : 0.0) if delta <= 0.0
 
-      usable >= 8 && (
-        meta[:polarity_flip_used] == true ||
-        top_ratio < 0.86 ||
-        delta < 0.45
-      )
+      if meta[:polarity_flip_used] == true
+        return { run: true, reason: "polarity_flip_needs_verification", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+      end
+
+      if top_ratio < 0.86
+        return { run: true, reason: "top_ratio_still_weak", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+      end
+
+      if delta < 0.45
+        return { run: true, reason: "top2_separation_still_weak", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+      end
+
+      { run: false, reason: "current_result_already_stable", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
     rescue
-      false
+      { run: false, reason: "multisample_refine_decision_failed" }
     end
-    private_class_method :should_run_filemode_multisample_refine?
+    private_class_method :filemode_multisample_refine_diagnostics
 
     def refine_observed_variants_multi_sample(file_path:, obs:, segment_seconds:, spec:, duration_seconds:, started_at:, time_budget_seconds:)
       times = Array(obs[:times])
@@ -721,7 +797,13 @@ module ::MediaGallery
     private_class_method :refine_observed_variants_multi_sample
 
     def maybe_refine_filemode_observations(media_item:, file_path:, obs:, match:, segment_seconds:, spec:, started_at:, time_budget_seconds:, max_offset_segments:)
-      return nil unless should_run_filemode_multisample_refine?(obs: obs, match: match, started_at: started_at, budget_seconds: time_budget_seconds)
+      decision = filemode_multisample_refine_diagnostics(
+        obs: obs,
+        match: match,
+        started_at: started_at,
+        budget_seconds: time_budget_seconds
+      )
+      return nil unless decision[:run]
 
       refined_obs = refine_observed_variants_multi_sample(
         file_path: file_path,
@@ -752,9 +834,11 @@ module ::MediaGallery
       chosen_meta = chosen_match[:meta] || {}
       chosen_meta[:multisample_refine_used] = true
       chosen_meta[:multisample_refine_applied] = use_refined
+      chosen_meta[:multisample_refine_reason] = decision[:reason]
       chosen_meta[:multisample_refine_score_gain] = (refined_score - orig_score).round(4)
       chosen_meta[:multisample_refine_offset_seconds] = refined_obs[:multisample_refine_offset_seconds]
       chosen_meta[:multisample_refine_points_per_segment] = refined_obs[:multisample_refine_points_per_segment]
+      chosen_meta[:multisample_refine_rejected_reason] = (use_refined ? nil : "original_score_better")
       chosen_match[:meta] = chosen_meta
 
       { obs: chosen_obs, match: chosen_match }
@@ -1279,7 +1363,12 @@ module ::MediaGallery
         }
       end
 
-      candidates.sort_by! { |c| [-c[:match_ratio_weighted].to_f, -c[:compared].to_i] }
+      enrich_candidates_with_evidence!(
+        candidates: candidates,
+        observed_variants: ref_obs,
+        observed_confidences: ref_conf,
+        media_item_id: media_item.id
+      )
       top = candidates[0]
       second = candidates[1]
       top_ratio = top&.dig(:match_ratio_weighted).to_f
@@ -1683,11 +1772,154 @@ end
       meta[:reference_segment_indices_used] = top[:reference_segment_indices_used] if top[:reference_segment_indices_used].present?
       meta[:expected_variants_top_candidate] = top[:expected_variants].to_s if top[:expected_variants].present?
       meta[:mismatch_positions] = top[:mismatch_positions] if top[:mismatch_positions].present?
+      meta[:top_candidate_why] = top[:why] if top[:why].present?
       meta
     rescue
       meta
     end
     private_class_method :apply_top_candidate_debug_to_meta!
+
+    def chunk_observation_entries(observed_variants:, observed_confidences:)
+      obs = Array(observed_variants)
+      confs = Array(observed_confidences)
+
+      entries = []
+      obs.each_with_index do |ov, i|
+        next if ov.blank?
+
+        conf = confs[i].to_f
+        conf = 0.0 if conf.nan? || conf.infinite? || conf.negative?
+        next if conf > 0.0 && conf < MIN_CONFIDENCE
+
+        weight = conf > 0.0 ? (conf * conf) : 1.0
+        next if weight <= 0.0
+
+        entries << [i, ov.to_s, weight.to_f]
+      end
+
+      entries
+    rescue
+      []
+    end
+    private_class_method :chunk_observation_entries
+
+    def build_candidate_evidence!(candidate:, observed_variants:, observed_confidences:, media_item_id:)
+      entries = chunk_observation_entries(
+        observed_variants: observed_variants,
+        observed_confidences: observed_confidences
+      )
+      return candidate if entries.empty?
+
+      offset = candidate[:best_offset_segments].to_i
+      chunk_size = CANDIDATE_EVIDENCE_CHUNK_SIZE.to_i
+      chunk_size = 8 if chunk_size <= 0
+
+      chunk_scores = []
+      entries.each_slice(chunk_size) do |chunk|
+        comp_w = 0.0
+        match_w = 0.0
+
+        chunk.each do |(idx, ov, weight)|
+          seg_idx = idx.to_i + offset
+          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: candidate[:fingerprint_id],
+            media_item_id: media_item_id,
+            segment_index: seg_idx
+          )
+
+          comp_w += weight.to_f
+          match_w += weight.to_f if exp == ov
+        end
+
+        next if comp_w <= 0.0
+
+        ratio = match_w / comp_w
+        llr = comp_w * Math.log(([ratio, 1.0e-6].max) / 0.5)
+        chunk_scores << {
+          ratio: ratio,
+          comp_w: comp_w,
+          llr: llr,
+          usable: chunk.length,
+        }
+      end
+
+      return candidate if chunk_scores.empty?
+
+      ratios = chunk_scores.map { |row| row[:ratio].to_f }
+      total_llr = chunk_scores.sum { |row| row[:llr].to_f }
+      consistent_chunks = chunk_scores.count { |row| row[:ratio].to_f >= 0.70 }
+      weak_chunks = chunk_scores.count { |row| row[:ratio].to_f < 0.55 }
+      evidence_score = total_llr + (median(ratios).to_f * 2.0) + (consistent_chunks.to_f * 0.5) - (weak_chunks.to_f * 0.75)
+
+      candidate[:evidence_chunks] = chunk_scores.length
+      candidate[:evidence_consistent_chunks] = consistent_chunks
+      candidate[:evidence_inconsistent_chunks] = weak_chunks
+      candidate[:chunk_match_ratio_median] = median(ratios).to_f.round(4)
+      candidate[:chunk_match_ratio_min] = ratios.min.to_f.round(4)
+      candidate[:chunk_match_ratio_max] = ratios.max.to_f.round(4)
+      candidate[:chunk_llr_total] = total_llr.round(4)
+      candidate[:evidence_score] = evidence_score.round(4)
+      candidate[:why] = [
+        "score=#{candidate[:evidence_score]}",
+        "llr=#{candidate[:chunk_llr_total]}",
+        "median_chunk=#{candidate[:chunk_match_ratio_median]}",
+        "stable_chunks=#{consistent_chunks}/#{chunk_scores.length}",
+        "weighted_match=#{candidate[:match_ratio_weighted]}"
+      ].join(", ")
+
+      candidate
+    rescue
+      candidate
+    end
+    private_class_method :build_candidate_evidence!
+
+    def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:)
+      arr = Array(candidates)
+      return arr if arr.empty?
+
+      arr.each do |candidate|
+        build_candidate_evidence!(
+          candidate: candidate,
+          observed_variants: observed_variants,
+          observed_confidences: observed_confidences,
+          media_item_id: media_item_id
+        )
+      end
+
+      arr.sort_by! do |candidate|
+        [
+          -candidate[:evidence_score].to_f,
+          -candidate[:match_ratio_weighted].to_f,
+          -candidate[:compared].to_i,
+          candidate[:mismatches].to_i,
+        ]
+      end
+
+      arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
+      arr
+    rescue
+      Array(candidates)
+    end
+    private_class_method :enrich_candidates_with_evidence!
+
+    def apply_shortlist_meta!(meta:, candidates:)
+      return meta unless meta.is_a?(Hash)
+
+      arr = Array(candidates)
+      top = arr[0]
+      second = arr[1]
+      meta[:shortlist_metric] = "evidence_score"
+      meta[:shortlist_count] = arr.length
+      meta[:shortlist_top_evidence_score] = top ? top[:evidence_score].to_f.round(4) : 0.0
+      meta[:shortlist_second_evidence_score] = second ? second[:evidence_score].to_f.round(4) : 0.0
+      meta[:shortlist_evidence_gap] = ((top ? top[:evidence_score].to_f : 0.0) - (second ? second[:evidence_score].to_f : 0.0)).round(4)
+      meta[:shortlist_top_why] = top[:why] if top&.dig(:why).present?
+      meta[:shortlist_second_why] = second[:why] if second&.dig(:why).present?
+      meta
+    rescue
+      meta
+    end
+    private_class_method :apply_shortlist_meta!
 
     def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, spec: nil, max_offset_segments:)
       fps = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).includes(:user).to_a
@@ -1921,8 +2153,13 @@ end
         }
       end
 
-      candidates.sort_by! { |r| [r[:mismatches].to_i, -r[:compared].to_i, r[:mismatches_weighted].to_f] }
-      candidates = candidates.first(10)
+      enrich_candidates_with_evidence!(
+        candidates: candidates,
+        observed_variants: chosen_obs,
+        observed_confidences: confs,
+        media_item_id: media_item.id
+      )
+      candidates = candidates.first(SHORTLIST_LIMIT)
 
       # Add diagnostics: local best offset per candidate (not used for ranking).
       if max_off > 0 && candidates.present?
@@ -1974,6 +2211,7 @@ end
       end
 
       annotate_candidate_debugs!(candidates: candidates, observed_variants: chosen_obs, media_item_id: media_item.id)
+      apply_shortlist_meta!(meta: meta, candidates: candidates)
       apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
 
       { candidates: candidates, meta: meta }
@@ -2510,7 +2748,12 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     }
   end
 
-  candidates.sort_by! { |c| [-c[:match_ratio_weighted].to_f, -c[:compared].to_i] }
+  enrich_candidates_with_evidence!(
+    candidates: candidates,
+    observed_variants: ref_obs,
+    observed_confidences: ref_conf,
+    media_item_id: media_item.id
+  )
 
     # Reference-derived observed variants/confidences (for UI).
     ref_obs = Array.new(scores.length)
@@ -2552,6 +2795,17 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     ecc_raw_usable_samples: u[:raw_usable_count]
   }
 
+  unless use_chunked
+    meta[:chunked_resync_used] = false
+    meta[:chunked_resync_reason] = if !chunked_resync_should_run?(scores_length: scores.length, global_usable_count: u[:usable_count].to_i)
+      "not_enough_usable_groups_for_local_resync"
+    elsif chunked.blank?
+      "chunked_resync_candidate_build_failed"
+    else
+      "global_alignment_scored_better"
+    end
+  end
+
   if use_chunked && chunked.is_a?(Hash)
     meta[:offset_strategy] = "chunked_reference"
     meta[:chosen_offset_segments] = chunked.dig(:meta, :chosen_offset_segments).to_i
@@ -2567,6 +2821,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     meta[:chunked_resync_offsets] = chunked.dig(:meta, :chunked_resync_offsets)
     meta[:chunked_resync_ranges] = chunked.dig(:meta, :chunked_resync_ranges)
     meta[:chunked_resync_score] = chunked.dig(:meta, :chunked_resync_score)
+    meta[:chunked_resync_reason] = "chunked_alignment_scored_better"
   end
 
   other_score = polarity_best_scores[!best_polarity_flip]
@@ -2575,6 +2830,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
   end
 
   annotate_candidate_debugs!(candidates: candidates, observed_variants: ref_obs, media_item_id: media_item.id)
+  apply_shortlist_meta!(meta: meta, candidates: candidates)
   apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
 
   { candidates: candidates, meta: meta }
