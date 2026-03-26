@@ -69,6 +69,12 @@ module ::MediaGallery
     SHORTLIST_VERIFY_LIMIT = 4
     CANDIDATE_EVIDENCE_LOCAL_OFFSET_RADIUS = 6
     CANDIDATE_EVIDENCE_LOCAL_OFFSET_PENALTY = 0.02
+    ANCHORED_SHORTLIST_STRONG_TRUST = 0.72
+    ANCHORED_SHORTLIST_MODERATE_TRUST = 0.45
+    ANCHORED_SHORTLIST_STRONG_WINDOW_SEGMENTS = 12
+    ANCHORED_SHORTLIST_MODERATE_WINDOW_SEGMENTS = 24
+    CANDIDATE_ANCHOR_SHIFT_PENALTY = 0.05
+    CANDIDATE_POLARITY_REVIEW_MAX_SCORE_DELTA = 0.02
 
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
@@ -1924,7 +1930,7 @@ end
     end
     private_class_method :chunk_observation_entries
 
-    def score_candidate_chunk_at_offset(candidate:, chunk:, media_item_id:, offset:)
+    def score_candidate_chunk_at_offset(candidate:, chunk:, media_item_id:, offset:, observed_polarity_flip: false)
       comp_w = 0.0
       match_w = 0.0
 
@@ -1935,9 +1941,11 @@ end
           media_item_id: media_item_id,
           segment_index: seg_idx
         )
+        candidate_flip = candidate[:polarity_flip_used] ? true : false
+        observed_variant = (candidate_flip == observed_polarity_flip ? ov : invert_variant(ov))
 
         comp_w += weight.to_f
-        match_w += weight.to_f if exp == ov
+        match_w += weight.to_f if exp == observed_variant
       end
 
       return nil if comp_w <= 0.0
@@ -1954,7 +1962,7 @@ end
     end
     private_class_method :score_candidate_chunk_at_offset
 
-    def best_candidate_chunk_alignment(candidate:, chunk:, media_item_id:, base_offset:, local_offset_radius:, offset_floor:, offset_ceil:)
+    def best_candidate_chunk_alignment(candidate:, chunk:, media_item_id:, base_offset:, local_offset_radius:, offset_floor:, offset_ceil:, observed_polarity_flip: false)
       floor = offset_floor.to_i
       ceil = offset_ceil.to_i
       floor = 0 if floor.negative?
@@ -1977,7 +1985,8 @@ end
           candidate: candidate,
           chunk: chunk,
           media_item_id: media_item_id,
-          offset: offset
+          offset: offset,
+          observed_polarity_flip: observed_polarity_flip
         )
         next if scored.blank?
 
@@ -2002,7 +2011,8 @@ end
         candidate: candidate,
         chunk: chunk,
         media_item_id: media_item_id,
-        offset: base_offset
+        offset: base_offset,
+        observed_polarity_flip: observed_polarity_flip
       )
     end
     private_class_method :best_candidate_chunk_alignment
@@ -2064,7 +2074,88 @@ end
     end
     private_class_method :candidate_local_offset_radius
 
-    def build_candidate_evidence!(candidate:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil)
+
+    def clamp_unit_interval(value)
+      v = value.to_f
+      return 0.0 if v.nan? || v.infinite?
+      return 0.0 if v <= 0.0
+      return 1.0 if v >= 1.0
+
+      v
+    rescue
+      0.0
+    end
+    private_class_method :clamp_unit_interval
+
+    def reference_anchor_trust(top_ratio:, delta:, median_ratio:, median_margin:, usable_count:, budget_exhausted: false)
+      trust = 0.0
+      trust += clamp_unit_interval((top_ratio.to_f - 0.72) / 0.18) * 0.35
+      trust += clamp_unit_interval((delta.to_f - 0.12) / 0.28) * 0.30
+      trust += clamp_unit_interval((median_ratio.to_f - 0.90) / 0.90) * 0.20
+      trust += clamp_unit_interval((usable_count.to_f - 12.0) / 12.0) * 0.10
+      trust += clamp_unit_interval((median_margin.to_f - 0.08) / 0.20) * 0.05
+      trust *= 0.75 if budget_exhausted
+      clamp_unit_interval(trust)
+    rescue
+      0.0
+    end
+    private_class_method :reference_anchor_trust
+
+    def shortlist_offset_search_bounds(anchor_offset:, anchor_trust:, max_off:)
+      floor = 0
+      ceil = max_off.to_i
+      ceil = floor if ceil < floor
+
+      trust = clamp_unit_interval(anchor_trust)
+      center = anchor_offset.to_i
+      center = floor if center < floor
+      center = ceil if center > ceil
+
+      if trust >= ANCHORED_SHORTLIST_STRONG_TRUST.to_f
+        radius = [ANCHORED_SHORTLIST_STRONG_WINDOW_SEGMENTS.to_i, CANDIDATE_EVIDENCE_LOCAL_OFFSET_RADIUS.to_i * 2].max
+        mode = "anchored_strong"
+      elsif trust >= ANCHORED_SHORTLIST_MODERATE_TRUST.to_f
+        radius = [ANCHORED_SHORTLIST_MODERATE_WINDOW_SEGMENTS.to_i, CANDIDATE_EVIDENCE_LOCAL_OFFSET_RADIUS.to_i * 3].max
+        mode = "anchored_moderate"
+      else
+        radius = ceil
+        mode = "global_fallback"
+      end
+
+      lo = [center - radius, floor].max
+      hi = [center + radius, ceil].min
+      hi = lo if hi < lo
+
+      {
+        floor: lo,
+        ceil: hi,
+        mode: mode,
+        radius: radius,
+      }
+    rescue
+      {
+        floor: 0,
+        ceil: [max_off.to_i, 0].max,
+        mode: "global_fallback",
+        radius: [max_off.to_i, 0].max,
+      }
+    end
+    private_class_method :shortlist_offset_search_bounds
+
+    def shortlist_should_review_both_polarities?(anchor_trust:, polarity_score_delta:, polarity_gate_passed:)
+      trust = clamp_unit_interval(anchor_trust)
+      score_delta = polarity_score_delta.to_f.abs
+      return true unless polarity_gate_passed
+      return true if trust < 0.35
+      return true if score_delta <= CANDIDATE_POLARITY_REVIEW_MAX_SCORE_DELTA.to_f
+
+      false
+    rescue
+      true
+    end
+    private_class_method :shortlist_should_review_both_polarities?
+
+    def build_candidate_evidence!(candidate:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil, anchor_offset: nil, anchor_trust: 0.0, observed_polarity_flip: false)
       entries = chunk_observation_entries(
         observed_variants: observed_variants,
         observed_confidences: observed_confidences,
@@ -2090,7 +2181,8 @@ end
           base_offset: offset,
           local_offset_radius: local_offset_radius,
           offset_floor: offset_floor,
-          offset_ceil: max_offset
+          offset_ceil: max_offset,
+          observed_polarity_flip: observed_polarity_flip
         )
         next if alignment.blank? || alignment[:comp_w].to_f <= 0.0
 
@@ -2134,6 +2226,14 @@ end
 
       evidence_score = total_llr + (median(ratios).to_f * 2.0) + (consistent_chunks.to_f * 0.5) - (weak_chunks.to_f * 0.75) + local_offset_bonus
 
+      anchor_shift_penalty = 0.0
+      anchor_distance = nil
+      if !anchor_offset.nil?
+        anchor_distance = (candidate[:best_offset_segments].to_i - anchor_offset.to_i).abs
+        anchor_shift_penalty = anchor_distance.to_f * clamp_unit_interval(anchor_trust) * CANDIDATE_ANCHOR_SHIFT_PENALTY.to_f
+      end
+      rank_score = evidence_score - anchor_shift_penalty
+
       candidate[:evidence_chunks] = chunk_scores.length
       candidate[:evidence_consistent_chunks] = consistent_chunks
       candidate[:evidence_inconsistent_chunks] = weak_chunks
@@ -2142,17 +2242,29 @@ end
       candidate[:chunk_match_ratio_max] = ratios.max.to_f.round(4)
       candidate[:chunk_llr_total] = total_llr.round(4)
       candidate[:evidence_score] = evidence_score.round(4)
+      candidate[:rank_score] = rank_score.round(4)
+      unless anchor_distance.nil?
+        candidate[:anchor_offset_segments] = anchor_offset.to_i
+        candidate[:anchor_offset_distance] = anchor_distance.to_i
+        candidate[:anchor_shift_penalty] = anchor_shift_penalty.round(4)
+        candidate[:anchor_trust] = clamp_unit_interval(anchor_trust).round(4)
+      end
 
       why_parts = [
         "score=#{candidate[:evidence_score]}",
+        "rank=#{candidate[:rank_score]}",
         "llr=#{candidate[:chunk_llr_total]}",
         "median_chunk=#{candidate[:chunk_match_ratio_median]}",
         "stable_chunks=#{consistent_chunks}/#{chunk_scores.length}",
         "weighted_match=#{candidate[:match_ratio_weighted]}"
       ]
       if local_offset_radius.to_i > 0 && chosen_offsets.present?
-        why_parts << "local_offsets=#{chosen_offsets.uniq.join('/') }"
+        why_parts << "local_offsets=#{chosen_offsets.uniq.join('/')}"
         why_parts << "local_stable=#{stable_local_chunks}/#{chunk_scores.length}"
+      end
+      if !anchor_distance.nil?
+        why_parts << "anchor_dist=#{anchor_distance}"
+        why_parts << "anchor_penalty=#{anchor_shift_penalty.round(4)}" if anchor_shift_penalty > 0.0
       end
       candidate[:why] = why_parts.join(", ")
 
@@ -2162,7 +2274,7 @@ end
     end
     private_class_method :build_candidate_evidence!
 
-    def verify_shortlist_candidates_with_local_offsets!(candidates:, media_item:, build_usable:, polarity_flip:, max_off:, shortlist_limit: SHORTLIST_VERIFY_LIMIT)
+    def verify_shortlist_candidates_with_local_offsets!(candidates:, media_item:, build_usable:, polarity_flip:, max_off:, shortlist_limit: SHORTLIST_VERIFY_LIMIT, anchor_trust: 0.0, polarity_score_delta: nil, polarity_gate_passed: true)
       arr = Array(candidates)
       return arr if arr.empty?
 
@@ -2172,30 +2284,60 @@ end
       arr.first(limit).each do |candidate|
         original_offset = candidate[:best_offset_segments].to_i
         best = nil
+        bounds = shortlist_offset_search_bounds(
+          anchor_offset: original_offset,
+          anchor_trust: anchor_trust,
+          max_off: max_off
+        )
+        flips_to_try = if shortlist_should_review_both_polarities?(
+          anchor_trust: anchor_trust,
+          polarity_score_delta: polarity_score_delta,
+          polarity_gate_passed: polarity_gate_passed
+        )
+          [polarity_flip ? true : false, !(polarity_flip ? true : false)].uniq
+        else
+          [polarity_flip ? true : false]
+        end
 
-        (0..max_off.to_i).each do |offset|
-          usable_result = build_usable.call(offset, polarity_flip)
-          next if usable_result.blank? || Array(usable_result[:usable]).empty? || usable_result[:comp_w].to_f <= 0.0
+        flips_to_try.each do |candidate_polarity_flip|
+          (bounds[:floor].to_i..bounds[:ceil].to_i).each do |offset|
+            usable_result = build_usable.call(offset, candidate_polarity_flip)
+            next if usable_result.blank? || Array(usable_result[:usable]).empty? || usable_result[:comp_w].to_f <= 0.0
 
-          stats = reference_candidate_match_stats(
-            candidate: candidate,
-            usable_result: usable_result,
-            media_item_id: media_item.id,
-            offset: offset
-          )
-          next if stats.blank?
+            stats = reference_candidate_match_stats(
+              candidate: candidate,
+              usable_result: usable_result,
+              media_item_id: media_item.id,
+              offset: offset
+            )
+            next if stats.blank?
 
-          score = stats[:llr].to_f +
-            (stats[:match_ratio_weighted].to_f * 0.35) +
-            (stats[:usable_count].to_f * 0.02) +
-            (stats[:median_margin].to_f * 0.2) -
-            (offset.to_f * 0.0002)
+            shift_distance = (offset.to_i - original_offset.to_i).abs
+            shift_penalty = shift_distance.to_f * clamp_unit_interval(anchor_trust) * 0.03
+            polarity_penalty = (candidate_polarity_flip == polarity_flip ? 0.0 : (clamp_unit_interval(anchor_trust) * 0.2))
 
-          entry = stats.merge(score: score)
-          if best.nil? || entry[:score].to_f > best[:score].to_f ||
-               (entry[:score].to_f == best[:score].to_f && entry[:match_ratio_weighted].to_f > best[:match_ratio_weighted].to_f) ||
-               (entry[:score].to_f == best[:score].to_f && entry[:match_ratio_weighted].to_f == best[:match_ratio_weighted].to_f && entry[:compared].to_i > best[:compared].to_i)
-            best = entry
+            score = stats[:llr].to_f +
+              (stats[:match_ratio_weighted].to_f * 0.35) +
+              (stats[:usable_count].to_f * 0.02) +
+              (stats[:median_margin].to_f * 0.2) -
+              (offset.to_f * 0.0002) -
+              shift_penalty -
+              polarity_penalty
+
+            entry = stats.merge(
+              score: score,
+              polarity_flip_used: candidate_polarity_flip,
+              search_mode: bounds[:mode],
+              search_floor: bounds[:floor].to_i,
+              search_ceil: bounds[:ceil].to_i,
+              shift_penalty: shift_penalty,
+              polarity_penalty: polarity_penalty
+            )
+            if best.nil? || entry[:score].to_f > best[:score].to_f ||
+                 (entry[:score].to_f == best[:score].to_f && entry[:match_ratio_weighted].to_f > best[:match_ratio_weighted].to_f) ||
+                 (entry[:score].to_f == best[:score].to_f && entry[:match_ratio_weighted].to_f == best[:match_ratio_weighted].to_f && entry[:compared].to_i > best[:compared].to_i)
+              best = entry
+            end
           end
         end
 
@@ -2214,6 +2356,12 @@ end
         candidate[:candidate_offset_llr] = best[:llr].to_f.round(4)
         candidate[:candidate_offset_score] = best[:score].to_f.round(4)
         candidate[:candidate_offset_shift] = (best[:offset].to_i - original_offset.to_i)
+        candidate[:polarity_flip_used] = best[:polarity_flip_used] ? true : false
+        candidate[:variant_polarity] = (best[:polarity_flip_used] ? "inverted" : "normal")
+        candidate[:candidate_offset_search_mode] = best[:search_mode]
+        candidate[:candidate_offset_search_bounds] = [best[:search_floor].to_i, best[:search_ceil].to_i]
+        candidate[:candidate_offset_shift_penalty] = best[:shift_penalty].to_f.round(4)
+        candidate[:candidate_offset_polarity_penalty] = best[:polarity_penalty].to_f.round(4)
       end
 
       arr
@@ -2222,7 +2370,7 @@ end
     end
     private_class_method :verify_shortlist_candidates_with_local_offsets!
 
-    def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil)
+    def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil, anchor_offset: nil, anchor_trust: 0.0, observed_polarity_flip: false)
       arr = Array(candidates)
       return arr if arr.empty?
 
@@ -2235,12 +2383,16 @@ end
           observed_segment_indices: observed_segment_indices,
           local_offset_radius: local_offset_radius,
           offset_floor: offset_floor,
-          offset_ceil: offset_ceil
+          offset_ceil: offset_ceil,
+          anchor_offset: anchor_offset,
+          anchor_trust: anchor_trust,
+          observed_polarity_flip: observed_polarity_flip
         )
       end
 
       arr.sort_by! do |candidate|
         [
+          -candidate[:rank_score].to_f,
           -candidate[:evidence_score].to_f,
           -candidate[:match_ratio_weighted].to_f,
           -candidate[:compared].to_i,
@@ -2261,8 +2413,11 @@ end
       arr = Array(candidates)
       top = arr[0]
       second = arr[1]
-      meta[:shortlist_metric] = "evidence_score"
+      meta[:shortlist_metric] = "rank_score"
       meta[:shortlist_count] = arr.length
+      meta[:shortlist_top_rank_score] = top ? top[:rank_score].to_f.round(4) : 0.0
+      meta[:shortlist_second_rank_score] = second ? second[:rank_score].to_f.round(4) : 0.0
+      meta[:shortlist_rank_gap] = ((top ? top[:rank_score].to_f : 0.0) - (second ? second[:rank_score].to_f : 0.0)).round(4)
       meta[:shortlist_top_evidence_score] = top ? top[:evidence_score].to_f.round(4) : 0.0
       meta[:shortlist_second_evidence_score] = second ? second[:evidence_score].to_f.round(4) : 0.0
       meta[:shortlist_evidence_gap] = ((top ? top[:evidence_score].to_f : 0.0) - (second ? second[:evidence_score].to_f : 0.0)).round(4)
@@ -3044,6 +3199,14 @@ def sample_variants_batch_single(file_path:, times:, spec:)
   end
 
   u = build_usable.call(best_offset, best_polarity_flip)
+  anchor_trust = reference_anchor_trust(
+    top_ratio: (best_diag ? best_diag[:top_ratio_w].to_f : 0.0),
+    delta: (best_diag ? best_diag[:delta].to_f : 0.0),
+    median_ratio: (best_diag ? best_diag[:median_ratio].to_f : 0.0),
+    median_margin: (best_diag ? best_diag[:median_margin].to_f : 0.0),
+    usable_count: u[:usable_count].to_i,
+    budget_exhausted: false
+  )
 
   chunked = nil
   if chunked_resync_should_run?(scores_length: scores.length, global_usable_count: u[:usable_count].to_i)
@@ -3160,7 +3323,10 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       build_usable: build_usable,
       polarity_flip: best_polarity_flip,
       max_off: max_off,
-      shortlist_limit: SHORTLIST_VERIFY_LIMIT
+      shortlist_limit: SHORTLIST_VERIFY_LIMIT,
+      anchor_trust: anchor_trust,
+      polarity_score_delta: polarity_choice[:score_gain],
+      polarity_gate_passed: polarity_choice[:gate_passed]
     )
     shortlist_verification_used = true
     new_top_user_id = candidates.first&.dig(:user_id)
@@ -3175,7 +3341,10 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     media_item_id: media_item.id,
     local_offset_radius: (use_chunked ? 0 : local_evidence_radius),
     offset_floor: 0,
-    offset_ceil: max_off
+    offset_ceil: max_off,
+    anchor_offset: best_offset,
+    anchor_trust: (use_chunked ? 0.0 : anchor_trust),
+    observed_polarity_flip: best_polarity_flip
   )
 
   top = candidates[0]
@@ -3204,7 +3373,8 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     polarity_score_gain: polarity_choice[:score_gain],
     ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
     ecc_groups_used: u[:usable_count],
-    ecc_raw_usable_samples: u[:raw_usable_count]
+    ecc_raw_usable_samples: u[:raw_usable_count],
+    reference_anchor_trust: anchor_trust.round(4)
   }
 
   unless use_chunked
