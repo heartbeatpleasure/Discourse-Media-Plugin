@@ -62,6 +62,9 @@ module ::MediaGallery
     CHUNKED_RESYNC_MIN_TOTAL_SAMPLES = 12
     CHUNKED_RESYNC_MIN_LOCAL_USABLE = 4
 
+    FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
+    FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
+
     def normalize_filemode_time_budget_seconds(value)
       v = value.to_f
       v = FILEMODE_TIME_BUDGET_SECONDS.to_f if v <= 0.0
@@ -103,6 +106,14 @@ module ::MediaGallery
       sample_times ||= packaged_segment_midpoints_for(media_item: media_item)
 
       file_size_bytes = (File.size(file_path) rescue nil)
+      probed_duration_seconds = probe_duration_seconds(file_path)
+      effective_max_offset_segments = effective_filemode_max_offset_segments(
+        requested_max_offset_segments: max_offset_segments,
+        sample_times: sample_times,
+        duration_seconds: probed_duration_seconds,
+        segment_seconds: seg
+      )
+
       obs, match = identify_with_phase_search(
         media_item: media_item,
         file_path: file_path,
@@ -113,7 +124,7 @@ module ::MediaGallery
         file_size_bytes: file_size_bytes,
         started_at: started_at,
         time_budget_seconds: filemode_budget_seconds,
-        max_offset_segments: max_offset_segments
+        max_offset_segments: effective_max_offset_segments
       )
 
       if obs.blank? || match.blank?
@@ -134,7 +145,7 @@ module ::MediaGallery
           observed_confidences: obs[:confidences],
           observed_scores: obs[:scores],
           spec: spec,
-          max_offset_segments: max_offset_segments
+          max_offset_segments: effective_max_offset_segments
         )
       end
 
@@ -164,6 +175,8 @@ module ::MediaGallery
           effective_max_samples: obs[:effective_max_samples],
           configured_filemode_engine_time_budget_seconds: filemode_budget_seconds,
           filemode_budget_exhausted: (obs[:budget_exhausted] == true || match_meta[:phase_search_budget_exhausted] == true || match_meta[:budget_exhausted] == true),
+          requested_max_offset_segments: max_offset_segments.to_i,
+          effective_max_offset_segments: effective_max_offset_segments.to_i,
         }.merge(match_meta),
         observed: {
           variants: format_variant_sequence(obs[:variants]),
@@ -593,11 +606,68 @@ module ::MediaGallery
 
       cap = filemode_sample_cap_for(max_samples: max_samples, duration_seconds: duration_seconds, file_size_bytes: file_size_bytes)
       cap = 5 if cap < 5 && times_mid.length >= 5
-      times_mid = times_mid.first(cap) if cap > 0
+      times_mid = evenly_spaced_subset(times_mid, cap) if cap > 0
 
       [times_mid, cap]
     end
     private_class_method :build_filemode_sample_times
+
+    def evenly_spaced_subset(values, cap)
+      arr = Array(values)
+      return arr if cap.to_i <= 0 || arr.length <= cap.to_i
+      return [arr.first] if cap.to_i == 1
+
+      last_index = arr.length - 1
+      step = last_index.to_f / (cap.to_i - 1).to_f
+
+      picked = []
+      seen = {}
+      cap.to_i.times do |i|
+        idx = (i * step).round
+        idx = 0 if idx < 0
+        idx = last_index if idx > last_index
+        next if seen[idx]
+        seen[idx] = true
+        picked << arr[idx]
+      end
+
+      if picked.length < cap.to_i
+        arr.each_with_index do |val, idx|
+          next if seen[idx]
+          picked << val
+          seen[idx] = true
+          break if picked.length >= cap.to_i
+        end
+      end
+
+      picked.sort
+    end
+    private_class_method :evenly_spaced_subset
+
+    def effective_filemode_max_offset_segments(requested_max_offset_segments:, sample_times:, duration_seconds:, segment_seconds:)
+      requested = requested_max_offset_segments.to_i
+      requested = 0 if requested.negative?
+
+      total_segments = Array(sample_times).length
+      return requested if total_segments <= 0
+
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+
+      est_clip_segments = (duration_seconds.to_f / seg).floor
+      est_clip_segments = 1 if est_clip_segments < 1
+
+      max_possible = [total_segments - 1, 0].max
+      auto_needed = total_segments - est_clip_segments + FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS
+      auto_needed = 0 if auto_needed < 0
+      auto_needed = [auto_needed, max_possible].min
+
+      hard_cap = [FILEMODE_AUTO_MAX_OFFSET_HARD_CAP, max_possible].min
+      effective = [requested, auto_needed].max
+      effective = [effective, hard_cap].min
+      effective
+    end
+    private_class_method :effective_filemode_max_offset_segments
 
     def filemode_sample_cap_for(max_samples:, duration_seconds:, file_size_bytes: nil)
       cap = max_samples.to_i
