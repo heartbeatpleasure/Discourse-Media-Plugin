@@ -25,6 +25,8 @@ after_initialize do
   require_relative "lib/media_gallery/permissions"
   require_relative "lib/media_gallery/private_storage"
   require_relative "lib/media_gallery/test_downloads"
+  require_relative "lib/media_gallery/forensics_identify_tasks"
+  require_relative "lib/media_gallery/forensics_identify_file_runner"
   require_relative "lib/media_gallery/watermark"   # ✅ NEW
   require_relative "lib/media_gallery/forensics_identify"
 
@@ -44,6 +46,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/hls_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/library_controller.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_generate_test_download.rb", __dir__)
+  require_dependency File.expand_path("jobs/regular/media_gallery_forensics_identify_job.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
@@ -67,6 +70,8 @@ after_initialize do
     # Admin-only: upload a leaked copy to identify likely user/fingerprint.
     get "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#show"
     post "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#identify", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/forensics-identify/:public_id/queue" => "media_gallery/admin_forensics_identify#queue", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/forensics-identify/status/:task_id" => "media_gallery/admin_forensics_identify#status", defaults: { format: :json }
 
     # Admin-only helper to find media items by public_id/title/id.
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }

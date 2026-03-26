@@ -150,6 +150,10 @@ export default RouteTemplate(
             </div>
           </div>
 
+          {{#if @controller.statusMessage}}
+            <div class="alert alert-info" style="margin-top: 1rem;">{{@controller.statusMessage}}</div>
+          {{/if}}
+
           {{#if @controller.hasResult}}
             <h2 style="margin-top: 2rem;">{{i18n "admin.media_gallery.forensics_identify.result"}}</h2>
 

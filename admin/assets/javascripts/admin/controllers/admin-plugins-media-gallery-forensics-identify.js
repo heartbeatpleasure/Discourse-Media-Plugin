@@ -24,6 +24,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked result = null;
   @tracked resultJson = "";
   @tracked error = "";
+  @tracked statusMessage = "";
+  @tracked activeTaskId = null;
 
   get hasResult() {
     return !!this.result;
@@ -492,6 +494,12 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @action
   clear() {
     this.error = "";
+    this.statusMessage = "";
+    this.activeTaskId = null;
+    if (this._statusPollTimer) {
+      clearTimeout(this._statusPollTimer);
+      this._statusPollTimer = null;
+    }
     this.result = null;
     this.resultJson = "";
   }
@@ -523,9 +531,65 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return `HTTP ${response.status}`;
   }
 
+  _scheduleStatusPoll(statusUrl) {
+    if (this._statusPollTimer) {
+      clearTimeout(this._statusPollTimer);
+    }
+
+    this._statusPollTimer = setTimeout(() => {
+      this._statusPollTimer = null;
+      this._pollStatus(statusUrl);
+    }, 1500);
+  }
+
+  async _pollStatus(statusUrl) {
+    try {
+      const response = await fetch(statusUrl, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        const err = await this._extractError(response);
+        this.error = `HTTP ${response.status}: ${err}`;
+        this.statusMessage = "";
+        this.isRunning = false;
+        return;
+      }
+
+      const json = await response.json();
+      const status = json?.status || "queued";
+      this.activeTaskId = json?.task_id || this.activeTaskId;
+
+      if (status === "complete") {
+        this.result = json?.result || null;
+        this.resultJson = this.result ? JSON.stringify(this.result, null, 2) : "";
+        this.statusMessage = "Background analysis completed.";
+        this.isRunning = false;
+        return;
+      }
+
+      if (status === "failed") {
+        this.error = json?.error || "Background analysis failed.";
+        this.statusMessage = "";
+        this.isRunning = false;
+        return;
+      }
+
+      this.statusMessage = status === "working" ? "Background analysis running…" : "Background analysis queued…";
+      this._scheduleStatusPoll(statusUrl);
+    } catch (e) {
+      this.error = e?.message || String(e);
+      this.statusMessage = "";
+      this.isRunning = false;
+    }
+  }
+
   @action
   async identify() {
     this.error = "";
+    this.statusMessage = "";
     this.result = null;
     this.resultJson = "";
 
@@ -550,7 +614,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     if (hasFile) {
       form.append("file", this.file);
     }
-    if (hasUrl) {
+    if (hasUrl && !hasFile) {
       form.append("source_url", this.sourceUrl);
     }
 
@@ -561,13 +625,16 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     }
     form.append("auto_extend", this.autoExtend ? "1" : "0");
 
-    const url = `/admin/plugins/media-gallery/forensics-identify/${encodeURIComponent(
+    const syncUrl = `/admin/plugins/media-gallery/forensics-identify/${encodeURIComponent(
       this.publicId
     )}.json`;
+    const queueUrl = `/admin/plugins/media-gallery/forensics-identify/${encodeURIComponent(
+      this.publicId
+    )}/queue`;
 
     this.isRunning = true;
     try {
-      const response = await fetch(url, {
+      const response = await fetch(hasFile ? queueUrl : syncUrl, {
         method: "POST",
         headers: {
           ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
@@ -584,12 +651,31 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       }
 
       const json = await response.json();
+
+      if (hasFile) {
+        const statusUrl = json?.status_url;
+        this.activeTaskId = json?.task_id || null;
+        this.statusMessage = "Background analysis queued…";
+
+        if (!statusUrl) {
+          this.error = "Queue response did not include a status URL.";
+          this.isRunning = false;
+          return;
+        }
+
+        this._scheduleStatusPoll(statusUrl);
+        return;
+      }
+
       this.result = json;
       this.resultJson = JSON.stringify(json, null, 2);
     } catch (e) {
       this.error = e?.message || String(e);
     } finally {
-      this.isRunning = false;
+      if (!hasFile) {
+        this.isRunning = false;
+      }
     }
   }
 }
+

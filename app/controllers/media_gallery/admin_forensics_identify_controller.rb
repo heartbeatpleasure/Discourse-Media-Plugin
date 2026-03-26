@@ -86,6 +86,77 @@ module ::MediaGallery
       render html: html.html_safe, layout: "no_ember"
     end
 
+
+    # POST /admin/plugins/media-gallery/forensics-identify/:public_id/queue(.json)
+    # Queues file-mode identification in a background job to avoid web/proxy timeouts.
+    def queue
+      public_id = params[:public_id].to_s
+      public_id = public_id.sub(/\.(json|html)\z/i, "")
+      public_id = public_id.strip
+      item = MediaGallery::MediaItem.find_by(public_id: public_id)
+      if item.blank?
+        return render json: { ok: false, error: "unknown_public_id", error_class: "Discourse::NotFound" }, status: 422
+      end
+
+      file = params[:file]
+      return render json: { ok: false, error: "missing_file", error_class: "Discourse::InvalidParameters" }, status: 422 if file.blank?
+
+      max_samples = params[:max_samples].to_i
+      max_samples = 60 if max_samples <= 0
+      max_samples = [max_samples, 200].min
+
+      max_offset = params[:max_offset_segments].to_i
+      max_offset = 30 if max_offset.negative?
+      max_offset = [max_offset, 300].min
+
+      layout = params[:layout].to_s.presence
+
+      task_id = ::MediaGallery::ForensicsIdentifyTasks.create_file_task!(
+        public_id: item.public_id,
+        media_item_id: item.id,
+        upload: file,
+        max_samples: max_samples,
+        max_offset_segments: max_offset,
+        layout: layout,
+      )
+
+      ::Jobs.enqueue(:media_gallery_forensics_identify_job, task_id: task_id)
+
+      render_json_dump(
+        ok: true,
+        task_id: task_id,
+        status: "queued",
+        status_url: "/admin/plugins/media-gallery/forensics-identify/status/#{task_id}",
+      )
+    rescue => e
+      debug_id = "mgfiq_#{SecureRandom.hex(6)}"
+      begin
+        Rails.logger.error("[media_gallery] forensics identify queue failed debug_id=#{debug_id} public_id=#{params[:public_id]} #{e.class}: #{e.message}")
+        Rails.logger.error(Array(e.backtrace).first(20).join("
+")) if e.backtrace.present?
+      rescue
+        nil
+      end
+      render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name, debug_id: debug_id }, status: 500
+    end
+
+    # GET /admin/plugins/media-gallery/forensics-identify/status/:task_id(.json)
+    def status
+      task = ::MediaGallery::ForensicsIdentifyTasks.read_task(params[:task_id].to_s)
+      raise Discourse::NotFound if task.blank?
+
+      render_json_dump(
+        ok: true,
+        task_id: task["task_id"] || params[:task_id].to_s,
+        status: task["status"].presence || "queued",
+        result: task["result"],
+        error: task["error"],
+        public_id: task["public_id"],
+      )
+    rescue => e
+      render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name }, status: 404
+    end
+
     # POST /admin/plugins/media-gallery/forensics-identify/:public_id(.json)
     # Accepts either:
     # - file: uploaded leak copy
