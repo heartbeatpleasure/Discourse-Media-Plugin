@@ -66,6 +66,9 @@ module ::MediaGallery
     # instead of relying on one global agreement ratio only.
     CANDIDATE_EVIDENCE_CHUNK_SIZE = 8
     SHORTLIST_LIMIT = 10
+    SHORTLIST_VERIFY_LIMIT = 4
+    CANDIDATE_EVIDENCE_LOCAL_OFFSET_RADIUS = 6
+    CANDIDATE_EVIDENCE_LOCAL_OFFSET_PENALTY = 0.02
 
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
@@ -1813,7 +1816,147 @@ end
     end
     private_class_method :chunk_observation_entries
 
-    def build_candidate_evidence!(candidate:, observed_variants:, observed_confidences:, media_item_id:)
+    def score_candidate_chunk_at_offset(candidate:, chunk:, media_item_id:, offset:)
+      comp_w = 0.0
+      match_w = 0.0
+
+      chunk.each do |(idx, ov, weight)|
+        seg_idx = idx.to_i + offset.to_i
+        exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          fingerprint_id: candidate[:fingerprint_id],
+          media_item_id: media_item_id,
+          segment_index: seg_idx
+        )
+
+        comp_w += weight.to_f
+        match_w += weight.to_f if exp == ov
+      end
+
+      return nil if comp_w <= 0.0
+
+      ratio = match_w / comp_w
+      llr = comp_w * Math.log(([ratio, 1.0e-6].max) / 0.5)
+      {
+        ratio: ratio,
+        comp_w: comp_w,
+        llr: llr,
+      }
+    rescue
+      nil
+    end
+    private_class_method :score_candidate_chunk_at_offset
+
+    def best_candidate_chunk_alignment(candidate:, chunk:, media_item_id:, base_offset:, local_offset_radius:, offset_floor:, offset_ceil:)
+      floor = offset_floor.to_i
+      ceil = offset_ceil.to_i
+      floor = 0 if floor.negative?
+      ceil = floor if ceil < floor
+
+      base = base_offset.to_i
+      base = floor if base < floor
+      base = ceil if base > ceil
+
+      radius = local_offset_radius.to_i
+      radius = 0 if radius.negative?
+
+      lo = radius > 0 ? [base - radius, floor].max : base
+      hi = radius > 0 ? [base + radius, ceil].min : base
+      hi = lo if hi < lo
+
+      best = nil
+      (lo..hi).each do |offset|
+        scored = score_candidate_chunk_at_offset(
+          candidate: candidate,
+          chunk: chunk,
+          media_item_id: media_item_id,
+          offset: offset
+        )
+        next if scored.blank?
+
+        distance = (offset.to_i - base).abs
+        search_score = scored[:llr].to_f - (distance.to_f * CANDIDATE_EVIDENCE_LOCAL_OFFSET_PENALTY)
+        entry = scored.merge(
+          offset: offset.to_i,
+          search_score: search_score,
+          offset_distance: distance.to_i,
+        )
+
+        if best.nil? || entry[:search_score].to_f > best[:search_score].to_f ||
+             (entry[:search_score].to_f == best[:search_score].to_f && entry[:ratio].to_f > best[:ratio].to_f) ||
+             (entry[:search_score].to_f == best[:search_score].to_f && entry[:ratio].to_f == best[:ratio].to_f && entry[:comp_w].to_f > best[:comp_w].to_f)
+          best = entry
+        end
+      end
+
+      best
+    rescue
+      score_candidate_chunk_at_offset(
+        candidate: candidate,
+        chunk: chunk,
+        media_item_id: media_item_id,
+        offset: base_offset
+      )
+    end
+    private_class_method :best_candidate_chunk_alignment
+
+    def reference_candidate_match_stats(candidate:, usable_result:, media_item_id:, offset:)
+      usable = Array(usable_result[:usable])
+      comp_w = usable_result[:comp_w].to_f
+      return nil if usable.empty? || comp_w <= 0.0
+
+      mism_w = 0.0
+      mism = 0
+      comp = 0
+
+      usable.each do |(i, ov, w, _m, _r, _seg_idx, _raw_count)|
+        exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          fingerprint_id: candidate[:fingerprint_id],
+          media_item_id: media_item_id,
+          segment_index: i + offset.to_i
+        )
+        comp += 1
+        if exp != ov
+          mism += 1
+          mism_w += w.to_f
+        end
+      end
+
+      return nil if comp <= 0 || comp_w <= 0.0
+
+      ratio_w = 1.0 - (mism_w / comp_w)
+      llr = comp_w * Math.log(([ratio_w, 1.0e-6].max) / 0.5)
+
+      {
+        offset: offset.to_i,
+        mismatches: mism,
+        compared: comp,
+        mismatches_weighted: mism_w,
+        compared_weighted: comp_w,
+        match_ratio: 1.0 - (mism.to_f / comp.to_f),
+        match_ratio_weighted: ratio_w,
+        llr: llr,
+        usable_count: usable_result[:usable_count].to_i,
+        median_margin: usable_result[:median_margin].to_f,
+      }
+    rescue
+      nil
+    end
+    private_class_method :reference_candidate_match_stats
+
+    def candidate_local_offset_radius(max_off:, observed_count:)
+      return 0 if max_off.to_i <= 0 || observed_count.to_i < 8
+
+      radius = CANDIDATE_EVIDENCE_LOCAL_OFFSET_RADIUS.to_i
+      radius = 0 if radius.negative?
+      radius = [radius, max_off.to_i].min
+      radius = [radius, [observed_count.to_i / 2, 1].max].min
+      radius
+    rescue
+      0
+    end
+    private_class_method :candidate_local_offset_radius
+
+    def build_candidate_evidence!(candidate:, observed_variants:, observed_confidences:, media_item_id:, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil)
       entries = chunk_observation_entries(
         observed_variants: observed_variants,
         observed_confidences: observed_confidences
@@ -1824,33 +1967,34 @@ end
       chunk_size = CANDIDATE_EVIDENCE_CHUNK_SIZE.to_i
       chunk_size = 8 if chunk_size <= 0
 
+      max_offset = offset_ceil.nil? ? offset : offset_ceil.to_i
+      max_offset = offset if max_offset < offset
+
       chunk_scores = []
+      chosen_offsets = []
+      offset_distances = []
       entries.each_slice(chunk_size) do |chunk|
-        comp_w = 0.0
-        match_w = 0.0
+        alignment = best_candidate_chunk_alignment(
+          candidate: candidate,
+          chunk: chunk,
+          media_item_id: media_item_id,
+          base_offset: offset,
+          local_offset_radius: local_offset_radius,
+          offset_floor: offset_floor,
+          offset_ceil: max_offset
+        )
+        next if alignment.blank? || alignment[:comp_w].to_f <= 0.0
 
-        chunk.each do |(idx, ov, weight)|
-          seg_idx = idx.to_i + offset
-          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-            fingerprint_id: candidate[:fingerprint_id],
-            media_item_id: media_item_id,
-            segment_index: seg_idx
-          )
-
-          comp_w += weight.to_f
-          match_w += weight.to_f if exp == ov
-        end
-
-        next if comp_w <= 0.0
-
-        ratio = match_w / comp_w
-        llr = comp_w * Math.log(([ratio, 1.0e-6].max) / 0.5)
         chunk_scores << {
-          ratio: ratio,
-          comp_w: comp_w,
-          llr: llr,
+          ratio: alignment[:ratio].to_f,
+          comp_w: alignment[:comp_w].to_f,
+          llr: alignment[:llr].to_f,
           usable: chunk.length,
+          offset: alignment[:offset].to_i,
+          offset_distance: alignment[:offset_distance].to_i,
         }
+        chosen_offsets << alignment[:offset].to_i
+        offset_distances << alignment[:offset_distance].to_i
       end
 
       return candidate if chunk_scores.empty?
@@ -1859,7 +2003,27 @@ end
       total_llr = chunk_scores.sum { |row| row[:llr].to_f }
       consistent_chunks = chunk_scores.count { |row| row[:ratio].to_f >= 0.70 }
       weak_chunks = chunk_scores.count { |row| row[:ratio].to_f < 0.55 }
-      evidence_score = total_llr + (median(ratios).to_f * 2.0) + (consistent_chunks.to_f * 0.5) - (weak_chunks.to_f * 0.75)
+
+      local_offset_bonus = 0.0
+      stable_local_chunks = nil
+      if local_offset_radius.to_i > 0 && chosen_offsets.present?
+        median_offset = median(chosen_offsets).to_f
+        stable_local_chunks = chosen_offsets.count { |off| (off.to_f - median_offset).abs <= 1.0 }
+        spread = chosen_offsets.max.to_i - chosen_offsets.min.to_i
+        local_offset_bonus = (stable_local_chunks.to_f * 0.2) - ([spread - local_offset_radius.to_i, 0].max * 0.03)
+
+        candidate[:evidence_offset_mode] = "local_chunk_search"
+        candidate[:evidence_local_offset_radius] = local_offset_radius.to_i
+        candidate[:evidence_local_offsets] = chosen_offsets
+        candidate[:evidence_local_offset_median] = median_offset.round(2)
+        candidate[:evidence_local_offset_spread] = spread.to_i
+        candidate[:evidence_local_offset_stable_chunks] = stable_local_chunks.to_i
+        candidate[:evidence_local_offset_mean_distance] = median(offset_distances).to_f.round(2)
+      else
+        candidate[:evidence_offset_mode] = "fixed_offset"
+      end
+
+      evidence_score = total_llr + (median(ratios).to_f * 2.0) + (consistent_chunks.to_f * 0.5) - (weak_chunks.to_f * 0.75) + local_offset_bonus
 
       candidate[:evidence_chunks] = chunk_scores.length
       candidate[:evidence_consistent_chunks] = consistent_chunks
@@ -1869,13 +2033,19 @@ end
       candidate[:chunk_match_ratio_max] = ratios.max.to_f.round(4)
       candidate[:chunk_llr_total] = total_llr.round(4)
       candidate[:evidence_score] = evidence_score.round(4)
-      candidate[:why] = [
+
+      why_parts = [
         "score=#{candidate[:evidence_score]}",
         "llr=#{candidate[:chunk_llr_total]}",
         "median_chunk=#{candidate[:chunk_match_ratio_median]}",
         "stable_chunks=#{consistent_chunks}/#{chunk_scores.length}",
         "weighted_match=#{candidate[:match_ratio_weighted]}"
-      ].join(", ")
+      ]
+      if local_offset_radius.to_i > 0 && chosen_offsets.present?
+        why_parts << "local_offsets=#{chosen_offsets.uniq.join('/') }"
+        why_parts << "local_stable=#{stable_local_chunks}/#{chunk_scores.length}"
+      end
+      candidate[:why] = why_parts.join(", ")
 
       candidate
     rescue
@@ -1883,7 +2053,67 @@ end
     end
     private_class_method :build_candidate_evidence!
 
-    def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:)
+    def verify_shortlist_candidates_with_local_offsets!(candidates:, media_item:, build_usable:, polarity_flip:, max_off:, shortlist_limit: SHORTLIST_VERIFY_LIMIT)
+      arr = Array(candidates)
+      return arr if arr.empty?
+
+      limit = [shortlist_limit.to_i, arr.length].min
+      return arr if limit <= 0
+
+      arr.first(limit).each do |candidate|
+        original_offset = candidate[:best_offset_segments].to_i
+        best = nil
+
+        (0..max_off.to_i).each do |offset|
+          usable_result = build_usable.call(offset, polarity_flip)
+          next if usable_result.blank? || Array(usable_result[:usable]).empty? || usable_result[:comp_w].to_f <= 0.0
+
+          stats = reference_candidate_match_stats(
+            candidate: candidate,
+            usable_result: usable_result,
+            media_item_id: media_item.id,
+            offset: offset
+          )
+          next if stats.blank?
+
+          score = stats[:llr].to_f +
+            (stats[:match_ratio_weighted].to_f * 0.35) +
+            (stats[:usable_count].to_f * 0.02) +
+            (stats[:median_margin].to_f * 0.2) -
+            (offset.to_f * 0.0002)
+
+          entry = stats.merge(score: score)
+          if best.nil? || entry[:score].to_f > best[:score].to_f ||
+               (entry[:score].to_f == best[:score].to_f && entry[:match_ratio_weighted].to_f > best[:match_ratio_weighted].to_f) ||
+               (entry[:score].to_f == best[:score].to_f && entry[:match_ratio_weighted].to_f == best[:match_ratio_weighted].to_f && entry[:compared].to_i > best[:compared].to_i)
+            best = entry
+          end
+        end
+
+        next if best.blank?
+
+        candidate[:retrieval_offset_segments] = original_offset
+        candidate[:best_offset_segments] = best[:offset].to_i
+        candidate[:mismatches] = best[:mismatches].to_i
+        candidate[:compared] = best[:compared].to_i
+        candidate[:mismatches_weighted] = best[:mismatches_weighted].to_f.round(6)
+        candidate[:compared_weighted] = best[:compared_weighted].to_f.round(6)
+        candidate[:match_ratio] = best[:match_ratio].to_f.round(4)
+        candidate[:match_ratio_weighted] = best[:match_ratio_weighted].to_f.round(4)
+        candidate[:local_best_offset_segments] = best[:offset].to_i
+        candidate[:local_match_ratio] = best[:match_ratio_weighted].to_f.round(4)
+        candidate[:candidate_offset_llr] = best[:llr].to_f.round(4)
+        candidate[:candidate_offset_score] = best[:score].to_f.round(4)
+        candidate[:candidate_offset_shift] = (best[:offset].to_i - original_offset.to_i)
+      end
+
+      arr
+    rescue
+      Array(candidates)
+    end
+    private_class_method :verify_shortlist_candidates_with_local_offsets!
+
+    def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil)
       arr = Array(candidates)
       return arr if arr.empty?
 
@@ -1892,7 +2122,10 @@ end
           candidate: candidate,
           observed_variants: observed_variants,
           observed_confidences: observed_confidences,
-          media_item_id: media_item_id
+          media_item_id: media_item_id,
+          local_offset_radius: local_offset_radius,
+          offset_floor: offset_floor,
+          offset_ceil: offset_ceil
         )
       end
 
@@ -2545,7 +2778,14 @@ def sample_variants_batch_single(file_path:, times:, spec:)
 
   eps = 1e-6
 
+  usable_cache = {}
+
   build_usable = lambda do |offset, polarity_flip = false|
+    cache_key = [offset.to_i, polarity_flip ? 1 : 0]
+    if usable_cache.key?(cache_key)
+      return usable_cache[cache_key]
+    end
+
     usable = []
     ratios = []
     margins = []
@@ -2595,7 +2835,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       margins << margin
     end
 
-    ecc_grouped_reference_usable(usable: usable, offset: offset).merge(
+    usable_cache[cache_key] = ecc_grouped_reference_usable(usable: usable, offset: offset).merge(
       raw_usable_count: usable.length,
       raw_comp_w: comp_w.to_f
     )
@@ -2769,13 +3009,50 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       }
     end
 
-    enrich_candidates_with_evidence!(
-      candidates: candidates,
-      observed_variants: ref_obs,
-      observed_confidences: ref_conf,
-      media_item_id: media_item.id
-    )
+    candidates.sort_by! do |candidate|
+      [
+        -candidate[:match_ratio_weighted].to_f,
+        -candidate[:compared].to_i,
+        candidate[:mismatches].to_i,
+      ]
+    end
   end
+
+  local_evidence_radius = candidate_local_offset_radius(
+    max_off: max_off,
+    observed_count: u[:usable_count].to_i
+  )
+  shortlist_verification_used = false
+  shortlist_verification_reason = if use_chunked
+    "skipped_for_chunked_reference"
+  elsif candidates.blank?
+    "no_candidates"
+  elsif local_evidence_radius <= 0
+    "local_offset_radius_zero"
+  else
+    previous_top_user_id = candidates.first&.dig(:user_id)
+    verify_shortlist_candidates_with_local_offsets!(
+      candidates: candidates,
+      media_item: media_item,
+      build_usable: build_usable,
+      polarity_flip: best_polarity_flip,
+      max_off: max_off,
+      shortlist_limit: SHORTLIST_VERIFY_LIMIT
+    )
+    shortlist_verification_used = true
+    new_top_user_id = candidates.first&.dig(:user_id)
+    previous_top_user_id == new_top_user_id ? "candidate_specific_offset_verification_applied" : "top_candidate_changed_after_local_verification"
+  end
+
+  enrich_candidates_with_evidence!(
+    candidates: candidates,
+    observed_variants: ref_obs,
+    observed_confidences: ref_conf,
+    media_item_id: media_item.id,
+    local_offset_radius: (use_chunked ? 0 : local_evidence_radius),
+    offset_floor: 0,
+    offset_ceil: max_off
+  )
 
   top = candidates[0]
   second = candidates[1]
@@ -2834,6 +3111,11 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     meta[:chunked_resync_score] = chunked.dig(:meta, :chunked_resync_score)
     meta[:chunked_resync_reason] = "chunked_alignment_scored_better"
   end
+
+  meta[:shortlist_verification_used] = shortlist_verification_used
+  meta[:shortlist_verification_reason] = shortlist_verification_reason
+  meta[:shortlist_verification_candidates] = [SHORTLIST_VERIFY_LIMIT, candidates.length].min
+  meta[:shortlist_verification_local_offset_radius] = local_evidence_radius
 
   other_score = polarity_best_scores[!best_polarity_flip]
   if other_score && other_score.finite? && best_score && best_score.finite?
