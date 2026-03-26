@@ -435,6 +435,8 @@ module ::MediaGallery
         meta[:dense_samples] = Array(dense[:times]).length
         meta[:phase_search_refined] = (dense_step_seconds.to_f <= DENSE_SAMPLE_STEP_FINE.to_f)
         meta[:phase_search_budget_exhausted] = (dense[:budget_exhausted] == true)
+        meta[:phase_multiframe_points_per_segment] = obs[:phase_multiframe_points_per_segment].to_i
+        meta[:phase_multiframe_offset_seconds] = obs[:phase_multiframe_offset_seconds].to_f.round(3)
         match[:meta] = meta
 
         obs[:budget_exhausted] = (dense[:budget_exhausted] == true)
@@ -511,10 +513,17 @@ module ::MediaGallery
       scores = []
       used_times = []
       segment_indices = []
+      voting_points = 1
+      voting_offset_seconds = 0.0
 
       Array(base_points).each do |point|
         target_time = clamp_time(point[:time].to_f + phase_seconds.to_f, duration_seconds: duration_seconds)
-        sample = interpolate_dense_sample(dense: dense, target_time: target_time)
+        sample = aggregate_dense_phase_sample(
+          dense: dense,
+          target_time: target_time,
+          duration_seconds: duration_seconds,
+          segment_seconds: segment_seconds
+        )
         used_times << target_time.round(3)
         segment_indices << point[:segment_index].to_i
 
@@ -524,6 +533,9 @@ module ::MediaGallery
           scores << 0.0
           next
         end
+
+        voting_points = [voting_points, sample[:points_used].to_i].max
+        voting_offset_seconds = [voting_offset_seconds, sample[:offset_seconds].to_f].max
 
         score = sample[:score].to_f
         conf = sample[:confidence].to_f
@@ -554,9 +566,46 @@ module ::MediaGallery
         effective_max_samples: effective_max_samples,
         phase_seconds: phase_seconds.to_f,
         dense_step_seconds: dense[:dense_step_seconds].to_f,
+        phase_multiframe_points_per_segment: voting_points,
+        phase_multiframe_offset_seconds: voting_offset_seconds.round(3),
       }
     end
     private_class_method :build_phase_observation_from_dense
+
+    def aggregate_dense_phase_sample(dense:, target_time:, duration_seconds:, segment_seconds:)
+      offsets = dense_phase_vote_offsets(segment_seconds: segment_seconds, dense_step_seconds: dense[:dense_step_seconds])
+      samples = offsets.filter_map do |delta|
+        tt = clamp_time(target_time.to_f + delta.to_f, duration_seconds: duration_seconds)
+        interpolate_dense_sample(dense: dense, target_time: tt)
+      end
+      return nil if samples.empty?
+
+      {
+        score: median(samples.map { |sample| sample[:score].to_f }).to_f,
+        confidence: median(samples.map { |sample| sample[:confidence].to_f }).to_f,
+        points_used: samples.length,
+        offset_seconds: offsets.map(&:abs).max.to_f,
+      }
+    rescue
+      interpolate_dense_sample(dense: dense, target_time: target_time)
+    end
+    private_class_method :aggregate_dense_phase_sample
+
+    def dense_phase_vote_offsets(segment_seconds:, dense_step_seconds:)
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+      dense_step = dense_step_seconds.to_f
+      dense_step = DENSE_SAMPLE_STEP_DEFAULT.to_f if dense_step <= 0.0
+
+      offset = [seg * 0.18, dense_step].max
+      offset = [offset, seg * 0.32].min
+      offset = [offset, 0.25].max
+
+      [-offset.round(3), 0.0, offset.round(3)].uniq
+    rescue
+      [0.0]
+    end
+    private_class_method :dense_phase_vote_offsets
 
     def interpolate_dense_sample(dense:, target_time:)
       times = Array(dense[:times]).map(&:to_f)
@@ -1225,9 +1274,22 @@ module ::MediaGallery
     end
     private_class_method :select_polarity_result
 
-    def chunked_resync_position_windows(usable_by_offset:)
-      primary = Array(usable_by_offset.values).max_by { |u| Array(u[:usable]).length }
-      positions = Array(primary&.dig(:usable)).map { |entry| entry[0].to_i }.sort
+    def chunked_resync_position_windows(usable_by_offset:, observed_segment_indices: nil, scores_length: nil)
+      positions = Array(usable_by_offset.values)
+        .flat_map { |u| Array(u[:usable]).map { |entry| entry[1].to_i } }
+        .uniq
+        .sort
+
+      if positions.empty?
+        positions = Array(observed_segment_indices).each_with_index.filter_map do |seg_idx, obs_idx|
+          if seg_idx.present?
+            seg_idx.to_i
+          elsif scores_length.to_i > 0
+            obs_idx.to_i
+          end
+        end.uniq.sort
+      end
+
       return [] if positions.empty?
 
       win = CHUNKED_RESYNC_WINDOW_SEGMENTS.to_i
@@ -1245,7 +1307,7 @@ module ::MediaGallery
 
       wanted_set = wanted.each_with_object({}) { |idx, acc| acc[idx] = true }
       entries = Array(usable_entries).select do |entry|
-        wanted_set[entry[0].to_i]
+        wanted_set[entry[1].to_i] || wanted_set[entry[0].to_i]
       end
       return nil if entries.empty?
 
@@ -1277,7 +1339,7 @@ module ::MediaGallery
     end
     private_class_method :chunked_resync_score
 
-    def build_chunked_reference_result(fps:, media_item:, scores_length:, max_off:, polarity_flip:, build_usable:)
+    def build_chunked_reference_result(fps:, media_item:, scores_length:, max_off:, polarity_flip:, build_usable:, observed_segment_indices: nil)
       usable_by_offset = {}
       (0..max_off).each do |offset|
         u = build_usable.call(offset, polarity_flip)
@@ -1286,7 +1348,11 @@ module ::MediaGallery
       end
       return nil if usable_by_offset.empty?
 
-      windows = chunked_resync_position_windows(usable_by_offset: usable_by_offset)
+      windows = chunked_resync_position_windows(
+        usable_by_offset: usable_by_offset,
+        observed_segment_indices: observed_segment_indices,
+        scores_length: scores_length
+      )
       return nil if windows.length < 2
 
       chosen_chunks = []
@@ -1412,7 +1478,7 @@ module ::MediaGallery
         candidates: candidates,
         observed_variants: ref_obs,
         observed_confidences: ref_conf,
-        observed_segment_indices: Array.new(scores_length) { |idx| idx },
+        observed_segment_indices: Array(observed_segment_indices).presence || Array.new(scores_length) { |idx| idx },
         media_item_id: media_item.id
       )
       top = candidates[0]
@@ -2987,7 +3053,8 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       scores_length: scores.length,
       max_off: max_off,
       polarity_flip: best_polarity_flip,
-      build_usable: build_usable
+      build_usable: build_usable,
+      observed_segment_indices: seg_indices
     )
   end
 
