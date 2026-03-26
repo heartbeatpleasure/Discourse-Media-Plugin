@@ -904,7 +904,10 @@ module ::MediaGallery
       compared = top_cand["compared"].to_i
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
       top_evidence_score = top_cand["evidence_score"].to_f
+      meta_top_evidence_score = result.dig("meta", "shortlist_top_evidence_score").to_f
+      top_evidence_score = [top_evidence_score, meta_top_evidence_score].max
       top_consistent_chunks = top_cand["evidence_consistent_chunks"].to_i
+      top_consistent_chunks = result.dig("meta", "top_consistent_chunks").to_i if top_consistent_chunks <= 0
       shortlist_evidence_gap = result.dig("meta", "shortlist_evidence_gap").to_f
 
       strong_usable = setting_policy_min_usable_strong

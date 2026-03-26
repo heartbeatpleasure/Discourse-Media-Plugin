@@ -314,7 +314,8 @@ module ::MediaGallery
         segment_seconds: segment_seconds,
         sample_times: sample_times,
         max_samples: max_samples,
-        file_size_bytes: file_size_bytes
+        file_size_bytes: file_size_bytes,
+        time_budget_seconds: time_budget_seconds
       )
       return [nil, nil] if base_times.blank?
 
@@ -674,7 +675,7 @@ module ::MediaGallery
       return { run: false, reason: "missing_sample_times" } if times.blank?
 
       remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds)
-      return { run: false, reason: "insufficient_time_budget" } if remaining < 12.0
+      return { run: false, reason: "insufficient_time_budget" } if remaining < 8.0
 
       meta = match[:meta] || {}
       cands = Array(match[:candidates])
@@ -847,7 +848,7 @@ module ::MediaGallery
     end
     private_class_method :maybe_refine_filemode_observations
 
-    def build_filemode_sample_times(duration_seconds:, segment_seconds:, sample_times:, max_samples:, file_size_bytes: nil)
+    def build_filemode_sample_times(duration_seconds:, segment_seconds:, sample_times:, max_samples:, file_size_bytes: nil, time_budget_seconds: nil)
       seg = segment_seconds.to_i
       seg = 6 if seg <= 0
 
@@ -867,7 +868,12 @@ module ::MediaGallery
         times_mid = sample_count.times.map { |i| (i + 0.5) * seg }
       end
 
-      cap = filemode_sample_cap_for(max_samples: max_samples, duration_seconds: duration_seconds, file_size_bytes: file_size_bytes)
+      cap = filemode_sample_cap_for(
+        max_samples: max_samples,
+        duration_seconds: duration_seconds,
+        file_size_bytes: file_size_bytes,
+        time_budget_seconds: time_budget_seconds
+      )
       cap = 5 if cap < 5 && times_mid.length >= 5
       times_mid = evenly_spaced_subset(times_mid, cap) if cap > 0
 
@@ -932,32 +938,35 @@ module ::MediaGallery
     end
     private_class_method :effective_filemode_max_offset_segments
 
-    def filemode_sample_cap_for(max_samples:, duration_seconds:, file_size_bytes: nil)
+    def filemode_sample_cap_for(max_samples:, duration_seconds:, file_size_bytes: nil, time_budget_seconds: nil)
       cap = max_samples.to_i
       cap = 0 if cap.negative?
 
+      budget = normalize_filemode_time_budget_seconds(time_budget_seconds)
+      relaxed_budget = budget >= 150.0
+
       if duration_seconds.to_f > 0
         if duration_seconds.to_f > 900
-          cap = [cap, 24].min
+          cap = [cap, (relaxed_budget ? 32 : 24)].min
         elsif duration_seconds.to_f > 480
-          cap = [cap, 32].min
+          cap = [cap, (relaxed_budget ? 45 : 32)].min
         elsif duration_seconds.to_f > 240
-          cap = [cap, 45].min
+          cap = [cap, (relaxed_budget ? 55 : 45)].min
         elsif duration_seconds.to_f > 120
-          cap = [cap, 50].min
+          cap = [cap, (relaxed_budget ? 60 : 50)].min
         end
       end
 
       fs = file_size_bytes.to_i
       if fs > 0
         if fs > 250 * 1024 * 1024
-          cap = [cap, 24].min
+          cap = [cap, (relaxed_budget ? 36 : 24)].min
         elsif fs > 150 * 1024 * 1024
-          cap = [cap, 32].min
+          cap = [cap, (relaxed_budget ? 45 : 32)].min
         elsif fs > 100 * 1024 * 1024
-          cap = [cap, 40].min
+          cap = [cap, (relaxed_budget ? 50 : 40)].min
         elsif fs > 70 * 1024 * 1024
-          cap = [cap, 45].min
+          cap = [cap, (relaxed_budget ? 55 : 45)].min
         end
       end
 
@@ -1434,7 +1443,8 @@ module ::MediaGallery
     segment_seconds: seg,
     sample_times: sample_times,
     max_samples: max_samples,
-    file_size_bytes: file_size_bytes
+    file_size_bytes: file_size_bytes,
+    time_budget_seconds: time_budget_seconds
   )
 
   pass1 = []
@@ -2709,53 +2719,8 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     ref_obs = chunked.dig(:meta, :reference_observed_variants) || Array.new(scores.length)
     ref_conf = chunked.dig(:meta, :reference_observed_confidences) || Array.new(scores.length, 0.0)
   else
-    candidates = []
-    fps.each do |rec|
-    mism_w = 0.0
-    mism = 0
-    comp = 0
-
-    u[:usable].each do |(i, ov, w, _m, _r, _seg_idx, _raw_count)|
-      exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
-        fingerprint_id: rec.fingerprint_id,
-        media_item_id: media_item.id,
-        segment_index: i + best_offset
-      )
-      comp += 1
-      if exp != ov
-        mism += 1
-        mism_w += w
-      end
-    end
-
-    next if comp == 0 || u[:comp_w] <= 0.0
-
-    candidates << {
-      user_id: rec.user_id,
-      username: rec.user&.username,
-      fingerprint_id: rec.fingerprint_id,
-      best_offset_segments: best_offset,
-      mismatches: mism,
-      compared: comp,
-      mismatches_weighted: mism_w.round(6),
-      compared_weighted: u[:comp_w].round(6),
-      match_ratio: (1.0 - (mism.to_f / comp.to_f)).round(4),
-      match_ratio_weighted: (1.0 - (mism_w / u[:comp_w])).round(4),
-      local_best_offset_segments: best_offset,
-      local_match_ratio: (1.0 - (mism_w / u[:comp_w])).round(4),
-      polarity_flip_used: best_polarity_flip,
-      variant_polarity: (best_polarity_flip ? "inverted" : "normal"),
-    }
-  end
-
-  enrich_candidates_with_evidence!(
-    candidates: candidates,
-    observed_variants: ref_obs,
-    observed_confidences: ref_conf,
-    media_item_id: media_item.id
-  )
-
-    # Reference-derived observed variants/confidences (for UI).
+    # Build reference-derived observed variants/confidences first so evidence scoring
+    # can use the same calibrated sequence that is shown in the admin UI.
     ref_obs = Array.new(scores.length)
     ref_conf = Array.new(scores.length, 0.0)
     u[:usable].each do |(i, ov, _w, margin, ratio, _seg_idx, _raw_count)|
@@ -2764,6 +2729,52 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       c *= 0.5 if ratio.to_f > 1.0
       ref_conf[i] = c.round(4)
     end
+
+    candidates = []
+    fps.each do |rec|
+      mism_w = 0.0
+      mism = 0
+      comp = 0
+
+      u[:usable].each do |(i, ov, w, _m, _r, _seg_idx, _raw_count)|
+        exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          fingerprint_id: rec.fingerprint_id,
+          media_item_id: media_item.id,
+          segment_index: i + best_offset
+        )
+        comp += 1
+        if exp != ov
+          mism += 1
+          mism_w += w
+        end
+      end
+
+      next if comp == 0 || u[:comp_w] <= 0.0
+
+      candidates << {
+        user_id: rec.user_id,
+        username: rec.user&.username,
+        fingerprint_id: rec.fingerprint_id,
+        best_offset_segments: best_offset,
+        mismatches: mism,
+        compared: comp,
+        mismatches_weighted: mism_w.round(6),
+        compared_weighted: u[:comp_w].round(6),
+        match_ratio: (1.0 - (mism.to_f / comp.to_f)).round(4),
+        match_ratio_weighted: (1.0 - (mism_w / u[:comp_w])).round(4),
+        local_best_offset_segments: best_offset,
+        local_match_ratio: (1.0 - (mism_w / u[:comp_w])).round(4),
+        polarity_flip_used: best_polarity_flip,
+        variant_polarity: (best_polarity_flip ? "inverted" : "normal"),
+      }
+    end
+
+    enrich_candidates_with_evidence!(
+      candidates: candidates,
+      observed_variants: ref_obs,
+      observed_confidences: ref_conf,
+      media_item_id: media_item.id
+    )
   end
 
   top = candidates[0]
