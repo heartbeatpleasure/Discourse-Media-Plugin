@@ -105,6 +105,12 @@ module ::MediaGallery
     PAIRWISE_CHUNK_DECODER_MIN_REMAINING_SECONDS = 12.0
     DISCRIMINATIVE_SHORTLIST_MIN_REMAINING_SECONDS = 8.0
     PAIRWISE_CHUNK_DECODER_MAX_CANDIDATES = 3
+    TARGETED_FILL_MIN_REMAINING_SECONDS = 5.0
+    TARGETED_FILL_MAX_SEGMENTS = 15
+    TARGETED_FILL_MIN_IMPROVEMENT = 0.12
+    TARGETED_FILL_LOW_CONFIDENCE = 0.42
+    TARGETED_FILL_NEIGHBORHOOD = 1
+    TARGETED_FILL_MIN_DIFF_POSITIONS = 4
 
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
@@ -217,6 +223,23 @@ module ::MediaGallery
       if refined.present?
         obs = refined[:obs] if refined[:obs].present?
         match = refined[:match] if refined[:match].present?
+      end
+
+      targeted_fill = maybe_targeted_fill_filemode_observations(
+        media_item: media_item,
+        file_path: file_path,
+        obs: obs,
+        match: match,
+        segment_seconds: seg,
+        spec: spec,
+        sample_times: sample_times,
+        started_at: started_at,
+        time_budget_seconds: filemode_budget_seconds,
+        max_offset_segments: effective_max_offset_segments
+      )
+      if targeted_fill.present?
+        obs = targeted_fill[:obs] if targeted_fill[:obs].present?
+        match = targeted_fill[:match] if targeted_fill[:match].present?
       end
 
       match[:meta] ||= {}
@@ -958,6 +981,325 @@ module ::MediaGallery
       nil
     end
     private_class_method :maybe_refine_filemode_observations
+
+    def targeted_fill_result_score(match:, observed_variants: nil)
+      meta = match[:meta] || {}
+      cands = Array(match[:candidates])
+      top = cands[0] || {}
+      second = cands[1] || {}
+      rank_gap = meta[:shortlist_rank_gap].to_f
+      ev_gap = meta[:shortlist_evidence_gap].to_f
+      top_rank = top[:rank_score].to_f
+      top_rank = top[:evidence_score].to_f if top_rank <= 0.0
+      hard_delta = top[:match_ratio_weighted].to_f - second[:match_ratio_weighted].to_f
+      hard_delta = top[:match_ratio].to_f - second[:match_ratio].to_f if hard_delta == 0.0
+      usable = Array(observed_variants).count { |v| v.present? }
+      (rank_gap * 0.75) + (ev_gap * 0.45) + (hard_delta * 1.8) + (top_rank * 0.03) + (usable * 0.02)
+    rescue
+      -Float::INFINITY
+    end
+    private_class_method :targeted_fill_result_score
+
+    def should_run_targeted_filemode_fill?(obs:, match:, started_at:, budget_seconds:)
+      return { run: false, reason: "missing_observation_or_match" } if obs.blank? || match.blank?
+
+      remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds)
+      return { run: false, reason: "insufficient_time_budget" } if remaining < TARGETED_FILL_MIN_REMAINING_SECONDS
+
+      cands = Array(match[:candidates])
+      return { run: false, reason: "too_few_candidates" } if cands.length < 2
+
+      variants = Array(obs[:variants])
+      confidences = Array(obs[:confidences])
+      nil_or_weak = variants.each_index.count do |i|
+        variants[i].blank? || confidences[i].to_f < TARGETED_FILL_LOW_CONFIDENCE
+      end
+      return { run: false, reason: "too_few_uncertain_positions" } if nil_or_weak < 4
+
+      meta = match[:meta] || {}
+      rank_gap = meta[:shortlist_rank_gap].to_f
+      ev_gap = meta[:shortlist_evidence_gap].to_f
+      hard_delta = cands[0][:match_ratio].to_f - cands[1][:match_ratio].to_f
+
+      run = rank_gap < 3.2 || ev_gap < 1.4 || hard_delta.abs < 0.16
+      {
+        run: run,
+        reason: (run ? "weak_separation_with_missing_signal" : "current_result_already_separated"),
+        remaining_seconds: remaining.round(3),
+        uncertain_positions: nil_or_weak,
+      }
+    rescue
+      { run: false, reason: "targeted_fill_decision_failed" }
+    end
+    private_class_method :should_run_targeted_filemode_fill?
+
+    def expected_variant_for_candidate_local_segment(candidate:, media_item_id:, local_segment_index:)
+      fp = candidate[:fingerprint_id].to_s
+      return nil if fp.blank?
+      offset = candidate[:best_offset_segments].to_i
+      variant = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+        fingerprint_id: fp,
+        media_item_id: media_item_id,
+        segment_index: local_segment_index.to_i + offset
+      )
+      if candidate[:polarity_flip_used] == true || candidate[:variant_polarity].to_s == "inverted"
+        variant = invert_variant(variant)
+      end
+      variant
+    rescue
+      nil
+    end
+    private_class_method :expected_variant_for_candidate_local_segment
+
+    def build_targeted_fill_segment_indices(obs:, match:, media_item:, segment_seconds:, sample_times: nil)
+      cands = Array(match[:candidates])
+      top = cands[0] || {}
+      second = cands[1] || {}
+      return [] if top.blank? || second.blank?
+
+      duration = obs[:duration_seconds].to_f
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+      total_segments = if sample_times.is_a?(Array) && sample_times.present?
+        Array(sample_times).each_with_index.count { |t, _i| t.to_f < duration + 0.05 }
+      else
+        (duration / seg).floor
+      end
+      return [] if total_segments <= 0
+
+      conf_by_seg = {}
+      Array(obs[:segment_indices]).each_with_index do |seg_idx, idx|
+        next if seg_idx.blank?
+        conf_by_seg[seg_idx.to_i] = [conf_by_seg[seg_idx.to_i].to_f, Array(obs[:confidences])[idx].to_f].max
+      end
+
+      priorities = []
+      total_segments.times do |local_seg|
+        top_v = expected_variant_for_candidate_local_segment(candidate: top, media_item_id: media_item.id, local_segment_index: local_seg)
+        second_v = expected_variant_for_candidate_local_segment(candidate: second, media_item_id: media_item.id, local_segment_index: local_seg)
+        next if top_v.blank? || second_v.blank? || top_v == second_v
+
+        conf = conf_by_seg[local_seg].to_f
+        next if conf >= 0.75
+
+        score = 5.0 - (conf * 4.0)
+        score += 1.0 if conf <= 0.0
+        score += 0.5 if (local_seg % [Array(match.dig(:meta, :phase_candidates_seconds)).length, 4].max).zero? rescue false
+        priorities << [score, local_seg]
+      end
+
+      return [] if priorities.length < TARGETED_FILL_MIN_DIFF_POSITIONS
+
+      selected = []
+      seen = {}
+      priorities.sort_by { |score, seg_idx| [-score, seg_idx] }.each do |_score, seg_idx|
+        ((seg_idx - TARGETED_FILL_NEIGHBORHOOD)..(seg_idx + TARGETED_FILL_NEIGHBORHOOD)).each do |probe|
+          next if probe < 0 || probe >= total_segments
+          next if seen[probe]
+          seen[probe] = true
+          selected << probe
+          break if selected.length >= TARGETED_FILL_MAX_SEGMENTS
+        end
+        break if selected.length >= TARGETED_FILL_MAX_SEGMENTS
+      end
+
+      selected.sort
+    rescue
+      []
+    end
+    private_class_method :build_targeted_fill_segment_indices
+
+    def extract_targeted_filemode_segments(file_path:, segment_indices:, segment_seconds:, spec:, duration_seconds:, phase_seconds:, started_at:, time_budget_seconds:)
+      segs = Array(segment_indices).map(&:to_i).uniq.sort
+      return nil if segs.blank?
+
+      budget = normalize_filemode_time_budget_seconds(time_budget_seconds)
+      remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget)
+      return nil if remaining < TARGETED_FILL_MIN_REMAINING_SECONDS
+
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+      delta = [[seg * 0.18, 0.35].max, 0.90].min
+      chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
+      chunk_size = 15 if chunk_size <= 0
+
+      times = []
+      mapping = []
+      segs.each do |seg_idx|
+        mid = ((seg_idx.to_f + 0.5) * seg) + phase_seconds.to_f
+        mid = clamp_time(mid, duration_seconds: duration_seconds)
+        [mid, clamp_time(mid - delta, duration_seconds: duration_seconds), clamp_time(mid + delta, duration_seconds: duration_seconds)].each_with_index do |tt, point_idx|
+          times << tt
+          mapping << [seg_idx, point_idx, mid]
+        end
+      end
+
+      sampled = []
+      used_mapping = []
+      times.each_slice(chunk_size).with_index do |chunk, batch_idx|
+        break if time_remaining_seconds(started_at: started_at, budget_seconds: budget) <= 1.0
+        res = sample_variants_batch_single(file_path: file_path, times: chunk, spec: spec)
+        sampled.concat(Array(res))
+        start = batch_idx * chunk_size
+        used_mapping.concat(mapping[start, Array(res).length])
+      end
+      return nil if sampled.blank?
+
+      per_seg_scores = Hash.new { |h, k| h[k] = [] }
+      per_seg_confs = Hash.new { |h, k| h[k] = [] }
+      per_seg_mid = {}
+      used_mapping.each_with_index do |entry, idx|
+        seg_idx, _point_idx, mid = entry
+        r = sampled[idx] || {}
+        per_seg_scores[seg_idx] << r[:score].to_f
+        per_seg_confs[seg_idx] << r[:confidence].to_f
+        per_seg_mid[seg_idx] ||= mid
+      end
+
+      variants = []
+      confidences = []
+      scores = []
+      mids = []
+      out_indices = []
+      segs.each do |seg_idx|
+        sc = per_seg_scores[seg_idx]
+        cf = per_seg_confs[seg_idx]
+        next if sc.blank?
+        med_score = median(sc).to_f
+        med_conf = median(cf).to_f.round(4)
+        variant = med_score >= 0.0 ? "a" : "b"
+        variant = nil if med_conf < MIN_CONFIDENCE
+        variants << variant
+        confidences << med_conf
+        scores << med_score.round(4)
+        mids << per_seg_mid[seg_idx].to_f.round(3)
+        out_indices << seg_idx
+      end
+
+      return nil if out_indices.blank?
+
+      {
+        duration_seconds: duration_seconds,
+        variants: variants,
+        confidences: confidences,
+        scores: scores,
+        times: mids,
+        segment_indices: out_indices,
+        layout: spec[:layout].to_s,
+        truncated: false,
+        effective_max_samples: out_indices.length,
+        budget_exhausted: false,
+        targeted_fill_points_per_segment: 3,
+      }
+    rescue
+      nil
+    end
+    private_class_method :extract_targeted_filemode_segments
+
+    def merge_filemode_observations(base_obs:, extra_obs:)
+      combined = {}
+
+      [base_obs, extra_obs].each do |src|
+        Array(src[:segment_indices]).each_with_index do |seg_idx, idx|
+          next if seg_idx.blank?
+          key = seg_idx.to_i
+          entry = {
+            segment_index: key,
+            variant: Array(src[:variants])[idx],
+            confidence: Array(src[:confidences])[idx].to_f,
+            score: Array(src[:scores])[idx].to_f,
+            time: Array(src[:times])[idx].to_f,
+          }
+          current = combined[key]
+          if current.nil? || entry[:confidence].to_f > current[:confidence].to_f || (current[:variant].blank? && entry[:variant].present?)
+            combined[key] = entry
+          end
+        end
+      end
+
+      ordered = combined.keys.sort.map { |k| combined[k] }
+      return nil if ordered.blank?
+
+      {
+        duration_seconds: extra_obs[:duration_seconds].presence || base_obs[:duration_seconds],
+        variants: ordered.map { |e| e[:variant] },
+        confidences: ordered.map { |e| e[:confidence].round(4) },
+        scores: ordered.map { |e| e[:score] },
+        times: ordered.map { |e| e[:time].round(3) },
+        segment_indices: ordered.map { |e| e[:segment_index] },
+        layout: extra_obs[:layout].presence || base_obs[:layout],
+        truncated: (base_obs[:truncated] == true || extra_obs[:truncated] == true),
+        elapsed_seconds: base_obs[:elapsed_seconds],
+        effective_max_samples: [Array(base_obs[:segment_indices]).length, ordered.length].max,
+        budget_exhausted: (base_obs[:budget_exhausted] == true || extra_obs[:budget_exhausted] == true),
+      }
+    rescue
+      nil
+    end
+    private_class_method :merge_filemode_observations
+
+    def maybe_targeted_fill_filemode_observations(media_item:, file_path:, obs:, match:, segment_seconds:, spec:, sample_times:, started_at:, time_budget_seconds:, max_offset_segments:)
+      decision = should_run_targeted_filemode_fill?(obs: obs, match: match, started_at: started_at, budget_seconds: time_budget_seconds)
+      return nil unless decision[:run]
+
+      positions = build_targeted_fill_segment_indices(
+        obs: obs,
+        match: match,
+        media_item: media_item,
+        segment_seconds: segment_seconds,
+        sample_times: sample_times
+      )
+      return nil if positions.blank?
+
+      extra_obs = extract_targeted_filemode_segments(
+        file_path: file_path,
+        segment_indices: positions,
+        segment_seconds: segment_seconds,
+        spec: spec,
+        duration_seconds: obs[:duration_seconds],
+        phase_seconds: match.dig(:meta, :chosen_phase_seconds).to_f,
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds
+      )
+      return nil if extra_obs.blank?
+
+      merged_obs = merge_filemode_observations(base_obs: obs, extra_obs: extra_obs)
+      return nil if merged_obs.blank?
+
+      merged_match = match_fingerprints(
+        media_item: media_item,
+        observed_variants: merged_obs[:variants],
+        observed_confidences: merged_obs[:confidences],
+        observed_scores: merged_obs[:scores],
+        observed_segment_indices: merged_obs[:segment_indices],
+        spec: spec,
+        max_offset_segments: max_offset_segments,
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds
+      )
+
+      orig_score = targeted_fill_result_score(match: match, observed_variants: obs[:variants])
+      merged_score = targeted_fill_result_score(match: merged_match, observed_variants: merged_obs[:variants])
+      use_merged = merged_score >= (orig_score + TARGETED_FILL_MIN_IMPROVEMENT)
+
+      chosen_obs = use_merged ? merged_obs : obs
+      chosen_match = use_merged ? merged_match : match
+      chosen_meta = chosen_match[:meta] || {}
+      chosen_meta[:targeted_fill_used] = true
+      chosen_meta[:targeted_fill_applied] = use_merged
+      chosen_meta[:targeted_fill_reason] = decision[:reason]
+      chosen_meta[:targeted_fill_segments_added] = positions.length
+      chosen_meta[:targeted_fill_positions] = positions
+      chosen_meta[:targeted_fill_score_gain] = (merged_score - orig_score).round(4)
+      chosen_meta[:targeted_fill_points_per_segment] = extra_obs[:targeted_fill_points_per_segment].to_i
+      chosen_meta[:targeted_fill_rejected_reason] = (use_merged ? nil : "original_result_better")
+      chosen_match[:meta] = chosen_meta
+
+      { obs: chosen_obs, match: chosen_match }
+    rescue
+      nil
+    end
+    private_class_method :maybe_targeted_fill_filemode_observations
 
     def build_filemode_sample_points(duration_seconds:, segment_seconds:, sample_times:, max_samples:, file_size_bytes: nil, time_budget_seconds: nil)
       seg = segment_seconds.to_i
@@ -3282,6 +3624,86 @@ end
     end
     private_class_method :sample_variant_robust
 
+    def robust_pair_channel_metrics(diffs)
+      arr = Array(diffs).map { |v| v.to_f }
+      return { score: 0.0, confidence: 0.0, consensus: 0.0, strength: 0.0 } if arr.empty?
+
+      abs_vals = arr.map(&:abs)
+      med_abs = median(abs_vals).to_f
+      mean_abs = (abs_vals.sum.to_f / [abs_vals.length, 1].max.to_f)
+      strong_floor = [med_abs * 0.60, mean_abs * 0.45, 2.0].max
+      kept = arr.select { |d| d.abs >= strong_floor }
+      min_keep = [[(arr.length * 0.5).ceil, 3].max, arr.length].min
+      if kept.length < min_keep
+        kept = arr.sort_by { |d| d.abs }.last(min_keep)
+      end
+      kept = arr if kept.blank?
+
+      pos_w = kept.select { |d| d >= 0.0 }.sum { |d| d.abs }
+      neg_w = kept.select { |d| d < 0.0 }.sum { |d| d.abs }
+      total_w = pos_w + neg_w
+      total_w = 1.0 if total_w <= 0.0
+
+      consensus = (pos_w - neg_w) / total_w
+      vote_margin = ((kept.count { |d| d >= 0.0 } - kept.count { |d| d < 0.0 }).abs.to_f / [kept.length, 1].max.to_f)
+      strength = median(kept.map { |d| d.abs }).to_f
+      conf = ((strength / 255.0) * (0.45 + (consensus.abs * 0.35) + (vote_margin * 0.20))).round(4)
+      score = (consensus * strength * kept.length.to_f).round(4)
+
+      {
+        score: score,
+        confidence: conf,
+        consensus: consensus.to_f.round(4),
+        strength: strength.to_f.round(4),
+      }
+    rescue
+      { score: 0.0, confidence: 0.0, consensus: 0.0, strength: 0.0 }
+    end
+    private_class_method :robust_pair_channel_metrics
+
+    def decode_pair_frame_bytes(bytes:, main_pair_count:, total_pairs:)
+      total = total_pairs.to_i
+      total = 0 if total.negative?
+      main_count = main_pair_count.to_i
+      main_count = 0 if main_count.negative?
+      main_count = [main_count, total].min
+
+      main_diffs = []
+      sync_diffs = []
+      total.times do |i|
+        left = bytes[i * 2].to_i
+        right = bytes[i * 2 + 1].to_i
+        diff = left - right
+        if i < main_count
+          main_diffs << diff
+        else
+          sync_diffs << diff
+        end
+      end
+
+      main_metrics = robust_pair_channel_metrics(main_diffs)
+      sync_metrics = robust_pair_channel_metrics(sync_diffs)
+      score = main_metrics[:score].to_f + (sync_metrics[:score].to_f * 0.35)
+      variant = score >= 0.0 ? "a" : "b"
+      variant = main_metrics[:score].to_f >= 0.0 ? "a" : "b" if main_metrics[:score].to_f != 0.0
+
+      confidence = main_metrics[:confidence].to_f
+      confidence += [sync_metrics[:confidence].to_f * 0.12, 0.06].min if sync_diffs.present?
+      confidence = [confidence, 1.0].min.round(4)
+
+      {
+        variant: variant,
+        confidence: confidence,
+        score: score.round(4),
+        main_score: main_metrics[:score].to_f.round(4),
+        sync_score: sync_metrics[:score].to_f.round(4),
+        main_consensus: main_metrics[:consensus],
+      }
+    rescue
+      { variant: nil, confidence: 0.0, score: 0.0, main_score: 0.0, sync_score: 0.0, main_consensus: 0.0 }
+    end
+    private_class_method :decode_pair_frame_bytes
+
     # --------------------- batch sampling ---------------------------------
 
     
@@ -3310,21 +3732,9 @@ end
 
         out = []
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          main_score = 0
-          sync_score = 0
-          pairs.length.times do |i|
-            left = bytes[i * 2]
-            right = bytes[i * 2 + 1]
-            diff = (left - right)
-            if i < main_pairs.length
-              main_score += diff
-            else
-              sync_score += diff
-            end
-          end
-          score = main_score + sync_score
-          out << score
-          { variant: nil, confidence: 0.0, score: score }
+          decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, total_pairs: pairs.length)
+          out << decoded[:score].to_f
+          { variant: nil, confidence: decoded[:confidence].to_f, score: decoded[:score].to_f }
         end
         out
       else
@@ -3381,23 +3791,10 @@ def sample_variants_batch_single(file_path:, times:, spec:)
         )
 
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          main_score = 0
-          sync_score = 0
-          pairs.length.times do |i|
-            left = bytes[i * 2]
-            right = bytes[i * 2 + 1]
-            diff = (left - right)
-            if i < main_pairs.length
-              main_score += diff
-            else
-              sync_score += diff
-            end
-          end
-          score = main_score + sync_score
-          conf = (main_score.abs.to_f / ([main_pairs.length, 1].max * 255.0)).round(4)
-          variant = main_score >= 0 ? "a" : "b"
-          variant = nil if conf < MIN_CONFIDENCE
-          { variant: variant, confidence: conf, score: score }
+          decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, total_pairs: pairs.length)
+          variant = decoded[:variant]
+          variant = nil if decoded[:confidence].to_f < MIN_CONFIDENCE
+          { variant: variant, confidence: decoded[:confidence].to_f, score: decoded[:score].to_f }
         end
       else
         tiles = spec[:tiles] || []
