@@ -98,6 +98,77 @@ module ::MediaGallery
       CODEBOOK_REPEAT_INTERLEAVE_V1
     end
 
+
+    def ecc_profile(codebook: nil, layout: nil)
+      scheme = codebook_scheme_for(codebook: codebook, layout: layout)
+
+      if scheme.to_s == CODEBOOK_LOCAL_WINDOW_V2
+        {
+          logical_bits: LOCAL_V2_LOGICAL_BITS,
+          repeat: LOCAL_V2_REPEAT,
+          block_span: LOCAL_V2_BLOCK_SPAN,
+          scheme: CODEBOOK_LOCAL_WINDOW_V2
+        }
+      else
+        {
+          logical_bits: ECC_LOGICAL_BITS,
+          repeat: ECC_REPEAT,
+          block_span: ECC_BLOCK_SPAN,
+          scheme: CODEBOOK_REPEAT_INTERLEAVE_V1
+        }
+      end
+    rescue
+      {
+        logical_bits: ECC_LOGICAL_BITS,
+        repeat: ECC_REPEAT,
+        block_span: ECC_BLOCK_SPAN,
+        scheme: CODEBOOK_REPEAT_INTERLEAVE_V1
+      }
+    end
+
+    def logical_slot_for_segment(segment_index:, codebook: nil, layout: nil)
+      idx = segment_index.to_i
+      idx = 0 if idx.negative?
+
+      profile = ecc_profile(codebook: codebook, layout: layout)
+      block_span = [profile[:block_span].to_i, 1].max
+      logical_bits = [profile[:logical_bits].to_i, 1].max
+
+      {
+        block_index: idx / block_span,
+        logical_index: idx % logical_bits,
+        block_span: block_span,
+        repeat: [profile[:repeat].to_i, 1].max,
+        logical_bits: logical_bits,
+        scheme: profile[:scheme].to_s
+      }
+    rescue
+      {
+        block_index: 0,
+        logical_index: 0,
+        block_span: ECC_BLOCK_SPAN,
+        repeat: ECC_REPEAT,
+        logical_bits: ECC_LOGICAL_BITS,
+        scheme: CODEBOOK_REPEAT_INTERLEAVE_V1
+      }
+    end
+
+    def v2_local_codelet_sequence(fingerprint_id:, media_item_id:, block_index:)
+      msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|b=#{block_index}|codelets=v2"
+      digest = OpenSSL::HMAC.digest("SHA256", secret, msg)
+      slots = (LOCAL_V2_LOGICAL_BITS.to_f / 6.0).ceil
+      seq = +""
+
+      slots.times do |i|
+        byte = digest.getbyte(i % digest.bytesize).to_i
+        seq << LOCAL_V2_CODELETS[byte % LOCAL_V2_CODELETS.length]
+      end
+
+      seq[0, LOCAL_V2_LOGICAL_BITS]
+    rescue
+      ("ab" * (LOCAL_V2_LOGICAL_BITS / 2 + 1))[0, LOCAL_V2_LOGICAL_BITS]
+    end
+
     def expected_logical_variant(fingerprint_id:, media_item_id:, block_index:, logical_index:, codebook: nil, layout: nil)
       profile = ecc_profile(codebook: codebook, layout: layout)
       block = block_index.to_i

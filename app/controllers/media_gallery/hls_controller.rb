@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "digest/sha1"
+require "json"
 
 module ::MediaGallery
   class HlsController < ::ApplicationController
@@ -272,7 +273,6 @@ def set_playlist_headers!
     def rewrite_master_playlist(raw, public_id:, token:)
       out = []
       seg_counter = 0
-      codebook_scheme = packaged_codebook_scheme_for(public_id)
       raw.to_s.each_line do |line|
         l = line.rstrip
         if l.blank? || l.start_with?("#")
@@ -296,6 +296,7 @@ def set_playlist_headers!
     def rewrite_variant_playlist(raw, public_id:, variant:, token:, fingerprint_id: nil, media_item_id: nil)
       out = []
       seg_counter = 0
+      codebook_scheme = packaged_codebook_scheme_for(public_id)
       raw.to_s.each_line do |line|
         l = line.rstrip
         if l.blank? || l.start_with?("#")
