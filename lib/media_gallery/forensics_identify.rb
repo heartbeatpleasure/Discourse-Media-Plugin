@@ -111,6 +111,8 @@ module ::MediaGallery
     TARGETED_FILL_LOW_CONFIDENCE = 0.42
     TARGETED_FILL_NEIGHBORHOOD = 1
     TARGETED_FILL_MIN_DIFF_POSITIONS = 4
+    TARGETED_FILL_TAIL_RESERVE = 4
+    TARGETED_FILL_TAIL_FRACTION = 0.28
 
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
@@ -200,6 +202,8 @@ module ::MediaGallery
           observed_variants: obs[:variants],
           observed_confidences: obs[:confidences],
           observed_scores: obs[:scores],
+          observed_sync_variants: obs[:sync_variants],
+          observed_sync_confidences: obs[:sync_confidences],
           observed_segment_indices: obs[:segment_indices],
           spec: spec,
           max_offset_segments: effective_max_offset_segments,
@@ -492,6 +496,8 @@ module ::MediaGallery
           observed_variants: obs[:variants],
           observed_confidences: obs[:confidences],
           observed_scores: obs[:scores],
+          observed_sync_variants: obs[:sync_variants],
+          observed_sync_confidences: obs[:sync_confidences],
           observed_segment_indices: obs[:segment_indices],
           spec: spec,
           max_offset_segments: max_offset_segments,
@@ -953,6 +959,8 @@ module ::MediaGallery
         observed_variants: refined_obs[:variants],
         observed_confidences: refined_obs[:confidences],
         observed_scores: refined_obs[:scores],
+        observed_sync_variants: refined_obs[:sync_variants],
+        observed_sync_confidences: refined_obs[:sync_confidences],
         observed_segment_indices: refined_obs[:segment_indices],
         spec: spec,
         max_offset_segments: max_offset_segments,
@@ -1103,6 +1111,20 @@ module ::MediaGallery
         break if selected.length >= TARGETED_FILL_MAX_SEGMENTS
       end
 
+      tail_start = [(total_segments * (1.0 - TARGETED_FILL_TAIL_FRACTION)).floor, 0].max
+      tail_added = 0
+      tail_candidates = (tail_start...total_segments).to_a.reverse
+      tail_candidates.each do |seg_idx|
+        break if selected.length >= TARGETED_FILL_MAX_SEGMENTS
+        break if tail_added >= TARGETED_FILL_TAIL_RESERVE
+        next if seen[seg_idx]
+        conf = conf_by_seg[seg_idx].to_f
+        next if conf >= TARGETED_FILL_LOW_CONFIDENCE
+        seen[seg_idx] = true
+        selected << seg_idx
+        tail_added += 1
+      end
+
       selected.sort
     rescue
       []
@@ -1147,18 +1169,25 @@ module ::MediaGallery
 
       per_seg_scores = Hash.new { |h, k| h[k] = [] }
       per_seg_confs = Hash.new { |h, k| h[k] = [] }
+      per_seg_sync_scores = Hash.new { |h, k| h[k] = [] }
+      per_seg_sync_confs = Hash.new { |h, k| h[k] = [] }
       per_seg_mid = {}
       used_mapping.each_with_index do |entry, idx|
         seg_idx, _point_idx, mid = entry
         r = sampled[idx] || {}
         per_seg_scores[seg_idx] << r[:score].to_f
         per_seg_confs[seg_idx] << r[:confidence].to_f
+        per_seg_sync_scores[seg_idx] << r[:sync_score].to_f
+        per_seg_sync_confs[seg_idx] << r[:sync_confidence].to_f
         per_seg_mid[seg_idx] ||= mid
       end
 
       variants = []
       confidences = []
       scores = []
+      sync_scores = []
+      sync_confidences = []
+      sync_variants = []
       mids = []
       out_indices = []
       segs.each do |seg_idx|
@@ -1172,6 +1201,11 @@ module ::MediaGallery
         variants << variant
         confidences << med_conf
         scores << med_score.round(4)
+        med_sync_score = median(per_seg_sync_scores[seg_idx]).to_f
+        med_sync_conf = median(per_seg_sync_confs[seg_idx]).to_f.round(4)
+        sync_scores << med_sync_score.round(4)
+        sync_confidences << med_sync_conf
+        sync_variants << (med_sync_conf >= MIN_CONFIDENCE ? (med_sync_score >= 0.0 ? "a" : "b") : nil)
         mids << per_seg_mid[seg_idx].to_f.round(3)
         out_indices << seg_idx
       end
@@ -1183,6 +1217,9 @@ module ::MediaGallery
         variants: variants,
         confidences: confidences,
         scores: scores,
+        sync_scores: sync_scores,
+        sync_confidences: sync_confidences,
+        sync_variants: sync_variants,
         times: mids,
         segment_indices: out_indices,
         layout: spec[:layout].to_s,
@@ -1208,6 +1245,9 @@ module ::MediaGallery
             variant: Array(src[:variants])[idx],
             confidence: Array(src[:confidences])[idx].to_f,
             score: Array(src[:scores])[idx].to_f,
+            sync_score: Array(src[:sync_scores])[idx].to_f,
+            sync_confidence: Array(src[:sync_confidences])[idx].to_f,
+            sync_variant: Array(src[:sync_variants])[idx],
             time: Array(src[:times])[idx].to_f,
           }
           current = combined[key]
@@ -1225,6 +1265,9 @@ module ::MediaGallery
         variants: ordered.map { |e| e[:variant] },
         confidences: ordered.map { |e| e[:confidence].round(4) },
         scores: ordered.map { |e| e[:score] },
+        sync_scores: ordered.map { |e| e[:sync_score].to_f.round(4) },
+        sync_confidences: ordered.map { |e| e[:sync_confidence].to_f.round(4) },
+        sync_variants: ordered.map { |e| e[:sync_variant] },
         times: ordered.map { |e| e[:time].round(3) },
         segment_indices: ordered.map { |e| e[:segment_index] },
         layout: extra_obs[:layout].presence || base_obs[:layout],
@@ -1271,6 +1314,8 @@ module ::MediaGallery
         observed_variants: merged_obs[:variants],
         observed_confidences: merged_obs[:confidences],
         observed_scores: merged_obs[:scores],
+        observed_sync_variants: merged_obs[:sync_variants],
+        observed_sync_confidences: merged_obs[:sync_confidences],
         observed_segment_indices: merged_obs[:segment_indices],
         spec: spec,
         max_offset_segments: max_offset_segments,
@@ -1358,28 +1403,52 @@ module ::MediaGallery
       return [arr.first] if cap.to_i == 1
 
       last_index = arr.length - 1
-      step = last_index.to_f / (cap.to_i - 1).to_f
-
-      picked = []
+      pick_indices = []
       seen = {}
-      cap.to_i.times do |i|
-        idx = (i * step).round
+
+      add_index = lambda do |idx|
+        idx = idx.to_i
         idx = 0 if idx < 0
         idx = last_index if idx > last_index
-        next if seen[idx]
+        return if seen[idx]
         seen[idx] = true
-        picked << arr[idx]
+        pick_indices << idx
       end
 
-      if picked.length < cap.to_i
-        arr.each_with_index do |val, idx|
-          next if seen[idx]
-          picked << val
-          seen[idx] = true
-          break if picked.length >= cap.to_i
+      if cap.to_i >= 16 && arr.length >= (cap.to_i + 8)
+        tail_cap = [[(cap.to_f * 0.28).round, 3].max, cap.to_i - 4].min
+        base_cap = [cap.to_i - tail_cap, 2].max
+
+        base_step = last_index.to_f / (base_cap - 1).to_f
+        base_cap.times do |i|
+          add_index.call((i * base_step).round)
+        end
+
+        tail_start = (last_index * 0.68).floor
+        tail_span = [last_index - tail_start, 1].max
+        if tail_cap > 0
+          tail_step = tail_span.to_f / [tail_cap, 1].max.to_f
+          tail_cap.times do |i|
+            add_index.call(tail_start + (i * tail_step).round)
+          end
+        end
+      else
+        step = last_index.to_f / (cap.to_i - 1).to_f
+        cap.to_i.times do |i|
+          add_index.call((i * step).round)
         end
       end
 
+      if pick_indices.length < cap.to_i
+        arr.each_with_index do |_val, idx|
+          add_index.call(idx)
+          break if pick_indices.length >= cap.to_i
+        end
+      elsif pick_indices.length > cap.to_i
+        pick_indices = pick_indices.sort.first(cap.to_i)
+      end
+
+      picked = pick_indices.sort.map { |idx| arr[idx] }
       picked.sort_by do |val|
         if val.is_a?(Hash)
           val[:time].to_f
@@ -1987,6 +2056,9 @@ module ::MediaGallery
   variants = pass1.map { |r| r[:variant] }
   confidences = pass1.map { |r| r[:confidence] }
   scores = pass1.map { |r| r[:score] }
+  sync_scores = pass1.map { |r| r[:sync_score].to_f }
+  sync_confidences = pass1.map { |r| r[:sync_confidence].to_f }
+  sync_variants = pass1.map { |r| r[:sync_variant] }
 
   # Pass 2: for weak samples, resample within the same segment and aggregate.
   weak_idxs = []
@@ -2025,23 +2097,31 @@ module ::MediaGallery
 
     per_seg_scores = Hash.new { |h, k| h[k] = [] }
     per_seg_confs = Hash.new { |h, k| h[k] = [] }
+    per_seg_sync_scores = Hash.new { |h, k| h[k] = [] }
+    per_seg_sync_confs = Hash.new { |h, k| h[k] = [] }
 
     resample_times.each_with_index do |tt, idx|
       key = tt.to_f.round(3)
       seg_idxs = resample_map[key] || []
       next if seg_idxs.empty?
       seg_idxs.each do |si|
-        per_seg_scores[si] << pass2[idx][:score].to_i
+        per_seg_scores[si] << pass2[idx][:score].to_f
         per_seg_confs[si] << pass2[idx][:confidence].to_f
+        per_seg_sync_scores[si] << pass2[idx][:sync_score].to_f
+        per_seg_sync_confs[si] << pass2[idx][:sync_confidence].to_f
       end
     end
 
     weak_idxs.each do |i|
-      all_scores = [scores[i].to_i] + per_seg_scores[i]
+      all_scores = [scores[i].to_f] + per_seg_scores[i]
       all_confs = [confidences[i].to_f] + per_seg_confs[i]
+      all_sync_scores = [sync_scores[i].to_f] + per_seg_sync_scores[i]
+      all_sync_confs = [sync_confidences[i].to_f] + per_seg_sync_confs[i]
 
-      med_score = median(all_scores)
+      med_score = median(all_scores).to_f
       med_conf = median(all_confs).to_f.round(4)
+      med_sync_score = median(all_sync_scores).to_f
+      med_sync_conf = median(all_sync_confs).to_f.round(4)
 
       v = med_score >= 0 ? "a" : "b"
       v = nil if med_conf < MIN_CONFIDENCE
@@ -2049,6 +2129,9 @@ module ::MediaGallery
       variants[i] = v
       confidences[i] = med_conf
       scores[i] = med_score
+      sync_scores[i] = med_sync_score
+      sync_confidences[i] = med_sync_conf
+      sync_variants[i] = (med_sync_conf >= MIN_CONFIDENCE ? (med_sync_score >= 0 ? "a" : "b") : nil)
     end
   end
 
@@ -2062,6 +2145,9 @@ module ::MediaGallery
     variants: variants,
     confidences: confidences,
     scores: scores,
+    sync_scores: sync_scores,
+    sync_confidences: sync_confidences,
+    sync_variants: sync_variants,
     times: used_times,
     segment_indices: used_segment_indices,
     layout: spec[:layout].to_s,
@@ -3239,7 +3325,7 @@ end
     end
     private_class_method :apply_shortlist_meta!
 
-    def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, observed_segment_indices: nil, spec: nil, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
+    def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, observed_sync_variants: nil, observed_sync_confidences: nil, observed_segment_indices: nil, spec: nil, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
       fps = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).includes(:user).to_a
       return { candidates: [], meta: { offset_strategy: "global" } } if fps.empty?
 
@@ -3266,6 +3352,9 @@ end
               scores: observed_scores,
               confidences: (observed_confidences.is_a?(Array) ? observed_confidences : []),
               observed_segment_indices: (observed_segment_indices.is_a?(Array) ? observed_segment_indices : []),
+              sync_variants: (observed_sync_variants.is_a?(Array) ? observed_sync_variants : []),
+              sync_confidences: (observed_sync_confidences.is_a?(Array) ? observed_sync_confidences : []),
+              spec: spec,
               ref_thr: ref[:thr],
               ref_delta: ref[:delta],
               delta_median: ref[:delta_median].to_f,
@@ -3626,7 +3715,7 @@ end
 
     def robust_pair_channel_metrics(diffs)
       arr = Array(diffs).map { |v| v.to_f }
-      return { score: 0.0, confidence: 0.0, consensus: 0.0, strength: 0.0 } if arr.empty?
+      return { score: 0.0, confidence: 0.0, consensus: 0.0, strength: 0.0, kept_count: 0 } if arr.empty?
 
       abs_vals = arr.map(&:abs)
       med_abs = median(abs_vals).to_f
@@ -3655,9 +3744,10 @@ end
         confidence: conf,
         consensus: consensus.to_f.round(4),
         strength: strength.to_f.round(4),
+        kept_count: kept.length,
       }
     rescue
-      { score: 0.0, confidence: 0.0, consensus: 0.0, strength: 0.0 }
+      { score: 0.0, confidence: 0.0, consensus: 0.0, strength: 0.0, kept_count: 0 }
     end
     private_class_method :robust_pair_channel_metrics
 
@@ -3683,24 +3773,34 @@ end
 
       main_metrics = robust_pair_channel_metrics(main_diffs)
       sync_metrics = robust_pair_channel_metrics(sync_diffs)
-      score = main_metrics[:score].to_f + (sync_metrics[:score].to_f * 0.35)
-      variant = score >= 0.0 ? "a" : "b"
-      variant = main_metrics[:score].to_f >= 0.0 ? "a" : "b" if main_metrics[:score].to_f != 0.0
 
-      confidence = main_metrics[:confidence].to_f
-      confidence += [sync_metrics[:confidence].to_f * 0.12, 0.06].min if sync_diffs.present?
-      confidence = [confidence, 1.0].min.round(4)
+      payload_score = main_metrics[:score].to_f
+      payload_variant = payload_score >= 0.0 ? "a" : "b"
+      payload_confidence = main_metrics[:confidence].to_f
+      payload_confidence += [sync_metrics[:confidence].to_f * 0.05, 0.025].min if sync_diffs.present? && main_metrics[:strength].to_f > 0.0
+      payload_confidence = [payload_confidence, 1.0].min.round(4)
+
+      sync_score = sync_metrics[:score].to_f
+      sync_variant = nil
+      if sync_diffs.present? && sync_metrics[:strength].to_f > 0.0
+        sync_variant = sync_score >= 0.0 ? "a" : "b"
+        sync_variant = nil if sync_metrics[:confidence].to_f < MIN_CONFIDENCE
+      end
 
       {
-        variant: variant,
-        confidence: confidence,
-        score: score.round(4),
-        main_score: main_metrics[:score].to_f.round(4),
-        sync_score: sync_metrics[:score].to_f.round(4),
+        variant: payload_variant,
+        confidence: payload_confidence,
+        score: payload_score.round(4),
+        payload_score: payload_score.round(4),
+        payload_confidence: payload_confidence,
+        sync_score: sync_score.round(4),
+        sync_confidence: sync_metrics[:confidence].to_f.round(4),
+        sync_variant: sync_variant,
         main_consensus: main_metrics[:consensus],
+        sync_consensus: sync_metrics[:consensus],
       }
     rescue
-      { variant: nil, confidence: 0.0, score: 0.0, main_score: 0.0, sync_score: 0.0, main_consensus: 0.0 }
+      { variant: nil, confidence: 0.0, score: 0.0, payload_score: 0.0, payload_confidence: 0.0, sync_score: 0.0, sync_confidence: 0.0, sync_variant: nil, main_consensus: 0.0, sync_consensus: 0.0 }
     end
     private_class_method :decode_pair_frame_bytes
 
@@ -3733,8 +3833,8 @@ end
         out = []
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
           decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, total_pairs: pairs.length)
-          out << decoded[:score].to_f
-          { variant: nil, confidence: decoded[:confidence].to_f, score: decoded[:score].to_f }
+          out << decoded[:payload_score].to_f
+          { variant: nil, confidence: decoded[:payload_confidence].to_f, score: decoded[:payload_score].to_f }
         end
         out
       else
@@ -3793,8 +3893,15 @@ def sample_variants_batch_single(file_path:, times:, spec:)
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
           decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, total_pairs: pairs.length)
           variant = decoded[:variant]
-          variant = nil if decoded[:confidence].to_f < MIN_CONFIDENCE
-          { variant: variant, confidence: decoded[:confidence].to_f, score: decoded[:score].to_f }
+          variant = nil if decoded[:payload_confidence].to_f < MIN_CONFIDENCE
+          {
+            variant: variant,
+            confidence: decoded[:payload_confidence].to_f,
+            score: decoded[:payload_score].to_f,
+            sync_score: decoded[:sync_score].to_f,
+            sync_confidence: decoded[:sync_confidence].to_f,
+            sync_variant: decoded[:sync_variant]
+          }
         end
       else
         tiles = spec[:tiles] || []
@@ -3893,7 +4000,70 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     private_class_method :build_tile_filter
 
     
-    def match_fingerprints_with_reference(fps:, media_item:, scores:, confidences:, observed_segment_indices:, ref_thr:, ref_delta:, delta_median:, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
+    def expected_sync_variant_for_segment(segment_index:, spec:)
+      pattern = Array(spec.is_a?(Hash) ? spec[:sync_pattern] : nil).map { |v| v.to_s }
+      return nil if pattern.blank?
+      idx = segment_index.to_i
+      idx = 0 if idx.negative?
+      variant = pattern[idx % pattern.length]
+      return nil unless %w[a b].include?(variant)
+      variant
+    rescue
+      nil
+    end
+    private_class_method :expected_sync_variant_for_segment
+
+    def build_sync_offset_prior(sync_variants:, sync_confidences:, observed_segment_indices:, spec:, max_offset_segments:)
+      pattern = Array(spec.is_a?(Hash) ? spec[:sync_pattern] : nil)
+      return nil if pattern.blank?
+
+      seg_indices = Array(observed_segment_indices)
+      obs = Array(sync_variants)
+      confs = Array(sync_confidences)
+      return nil if obs.blank?
+
+      by_offset = []
+      (0..max_offset_segments.to_i).each do |offset|
+        agree = 0.0
+        disagree = 0.0
+        obs.each_with_index do |v, i|
+          next if v.blank?
+          conf = confs[i].to_f
+          next if conf <= 0.0
+          base_seg_idx = seg_indices[i].present? ? seg_indices[i].to_i : i
+          exp = expected_sync_variant_for_segment(segment_index: base_seg_idx + offset, spec: spec)
+          next if exp.blank?
+          if exp == v.to_s
+            agree += conf
+          else
+            disagree += conf
+          end
+        end
+        total = agree + disagree
+        ratio = total > 0.0 ? (agree / total) : 0.0
+        by_offset << { offset: offset, ratio: ratio, total: total }
+      end
+
+      usable = by_offset.select { |e| e[:total].to_f > 0.0 }
+      return nil if usable.blank?
+      sorted = usable.sort_by { |e| [-e[:ratio].to_f, -e[:total].to_f, e[:offset].to_i] }
+      top = sorted[0]
+      second = sorted[1]
+      delta = top[:ratio].to_f - second.to_h[:ratio].to_f
+      trust = [[delta * 1.8, 0.0].max, 0.65].min
+      {
+        best_offset: top[:offset].to_i,
+        best_ratio: top[:ratio].to_f,
+        second_ratio: second.to_h[:ratio].to_f,
+        delta: delta.to_f,
+        trust: trust.to_f.round(4),
+      }
+    rescue
+      nil
+    end
+    private_class_method :build_sync_offset_prior
+
+    def match_fingerprints_with_reference(fps:, media_item:, scores:, confidences:, observed_segment_indices:, sync_variants: nil, sync_confidences: nil, spec: nil, ref_thr:, ref_delta:, delta_median:, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
   ::MediaGallery::Fingerprinting.with_expected_variant_cache do
   max_off = max_offset_segments.to_i
   max_off = 0 if max_off.negative?
@@ -3986,6 +4156,14 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     )
   end
 
+  sync_prior = build_sync_offset_prior(
+    sync_variants: sync_variants,
+    sync_confidences: sync_confidences,
+    observed_segment_indices: seg_indices,
+    spec: spec,
+    max_offset_segments: max_off
+  )
+
   best_offset = 0
   best_polarity_flip = false
   best_score = nil
@@ -4027,7 +4205,14 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       second_ratio = second ? second[:ratio_w].to_f : 0.0
       delta = top[:ratio_w].to_f - second_ratio
 
-      score = delta + (top[:ratio_w].to_f * 0.03) + (u[:median_margin].to_f * 0.02) - (offset.to_f * 0.0002) - (polarity_flip ? 0.0025 : 0.0)
+      sync_anchor_bonus = 0.0
+      if sync_prior.present? && sync_prior[:trust].to_f > 0.0
+        dist = (offset.to_i - sync_prior[:best_offset].to_i).abs
+        local = [1.0 - (dist.to_f / 6.0), 0.0].max
+        sync_anchor_bonus = local * (0.035 + (sync_prior[:delta].to_f * 0.08)) * sync_prior[:trust].to_f
+      end
+
+      score = delta + (top[:ratio_w].to_f * 0.03) + (u[:median_margin].to_f * 0.02) + sync_anchor_bonus - (offset.to_f * 0.0002) - (polarity_flip ? 0.0025 : 0.0)
       polarity_best_scores[polarity_flip] = score if score > polarity_best_scores[polarity_flip]
 
       current_best = best_by_polarity[polarity_flip]
@@ -4275,7 +4460,13 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
     ecc_groups_used: u[:usable_count],
     ecc_raw_usable_samples: u[:raw_usable_count],
-    reference_anchor_trust: anchor_trust.round(4)
+    reference_anchor_trust: anchor_trust.round(4),
+    sync_anchor_used: sync_prior.present?,
+    sync_anchor_offset_segments: sync_prior.to_h[:best_offset],
+    sync_anchor_best_ratio: sync_prior.to_h[:best_ratio].to_f.round(4),
+    sync_anchor_second_ratio: sync_prior.to_h[:second_ratio].to_f.round(4),
+    sync_anchor_delta: sync_prior.to_h[:delta].to_f.round(4),
+    sync_anchor_trust: sync_prior.to_h[:trust].to_f.round(4)
   }
 
   unless use_chunked

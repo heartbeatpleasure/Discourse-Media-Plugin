@@ -262,6 +262,7 @@ plugins:
       - v4_pairs
       - v5_screen_safe
       - v6_local_sync
+      - v7_high_separation
     client: false
 
 
