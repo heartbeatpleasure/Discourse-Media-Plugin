@@ -88,6 +88,9 @@ module ::MediaGallery
     PAIRWISE_CHUNK_DECODER_MARGIN_WEIGHT = 0.9
     PAIRWISE_CHUNK_DECODER_WIN_WEIGHT = 0.22
     PAIRWISE_CHUNK_DECODER_LOSS_WEIGHT = 0.18
+    PAIRWISE_OVERTURN_MIN_CHUNKS = 4
+    PAIRWISE_OVERTURN_MIN_MARGIN = 1.35
+    PAIRWISE_OVERTURN_MAX_EVIDENCE_GAP = 0.08
 
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
@@ -1401,7 +1404,10 @@ module ::MediaGallery
 
         usable_by_offset.each do |offset, u|
           summary = summarize_reference_window(usable_entries: u[:usable], positions: positions)
-          next if summary.blank? || summary[:usable_count].to_i < CHUNKED_RESYNC_MIN_LOCAL_USABLE.to_i
+          min_local_usable = CHUNKED_RESYNC_MIN_LOCAL_USABLE.to_i
+          min_local_usable = 3 if u[:usable_count].to_i <= 12
+          min_local_usable = [min_local_usable, 3].min if u[:usable_count].to_i <= 18
+          next if summary.blank? || summary[:usable_count].to_i < min_local_usable
 
           top = nil
           second = nil
@@ -2447,6 +2453,15 @@ end
       chunks = pairwise_chunk_decoder_chunks(entries: entries)
       return { used: false, reason: "not_enough_chunks" } if chunks.length < PAIRWISE_CHUNK_DECODER_MIN_CHUNKS.to_i
 
+      original_order = arr.map { |candidate| candidate[:fingerprint_id] }
+      evidence_top = arr[0]
+      evidence_second = arr[1]
+      evidence_gap = if evidence_top && evidence_second
+        evidence_top[:evidence_score].to_f - evidence_second[:evidence_score].to_f
+      else
+        0.0
+      end
+
       per_candidate_rows = {}
       arr.each do |candidate|
         base_offset = candidate[:best_offset_segments].to_i
@@ -2540,6 +2555,46 @@ end
           candidate[:mismatches].to_i,
         ]
       end
+
+      top = arr[0]
+      second = arr[1]
+      if evidence_top.present? && top.present? && top[:fingerprint_id] != evidence_top[:fingerprint_id]
+        top_chunks = [top[:pairwise_chunks_won].to_i + top[:pairwise_chunks_lost].to_i + top[:pairwise_chunks_tied].to_i, 0].max
+        top_margin = top[:pairwise_chunk_margin_total].to_f
+        evidence_anchor_dist = evidence_top[:anchor_offset_distance].to_i
+        top_anchor_dist = top[:anchor_offset_distance].to_i
+
+        evidence_should_prevail =
+          top_chunks < PAIRWISE_OVERTURN_MIN_CHUNKS.to_i ||
+          top_margin < PAIRWISE_OVERTURN_MIN_MARGIN.to_f ||
+          evidence_gap > PAIRWISE_OVERTURN_MAX_EVIDENCE_GAP.to_f ||
+          top[:pairwise_chunks_won].to_i <= top[:pairwise_chunks_lost].to_i ||
+          (anchor_trust.to_f >= 0.55 && evidence_anchor_dist <= top_anchor_dist)
+
+        if evidence_should_prevail
+          arr.sort_by! do |candidate|
+            [
+              -candidate[:evidence_score].to_f,
+              -candidate[:match_ratio_weighted].to_f,
+              -(candidate[:candidate_offset_llr].to_f),
+              candidate[:anchor_offset_distance].to_i,
+              -candidate[:compared].to_i,
+              candidate[:mismatches].to_i,
+              original_order.index(candidate[:fingerprint_id]) || 9999,
+            ]
+          end
+          arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
+          return {
+            used: false,
+            reason: "pairwise_overturn_blocked_evidence_preferred",
+            chunks: chunks.length,
+            top_margin: top ? top[:pairwise_chunk_margin_total].to_f.round(4) : 0.0,
+            second_margin: second ? second[:pairwise_chunk_margin_total].to_f.round(4) : 0.0,
+            top_bonus: top ? top[:pairwise_chunk_score_bonus].to_f.round(4) : 0.0,
+          }
+        end
+      end
+
       arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
 
       top = arr[0]

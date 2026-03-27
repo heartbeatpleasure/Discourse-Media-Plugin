@@ -16,10 +16,10 @@ module ::MediaGallery
 
     ASYNC_MIN_SOFT_BUDGET_MB_1 = 120
     ASYNC_MIN_ENGINE_BUDGET_MB_1 = 105
-    ASYNC_MIN_SOFT_BUDGET_MB_2 = 180
-    ASYNC_MIN_ENGINE_BUDGET_MB_2 = 165
-    ASYNC_MIN_SOFT_BUDGET_MB_3 = 300
-    ASYNC_MIN_ENGINE_BUDGET_MB_3 = 285
+    ASYNC_MIN_SOFT_BUDGET_MB_2 = 300
+    ASYNC_MIN_ENGINE_BUDGET_MB_2 = 285
+    ASYNC_MIN_SOFT_BUDGET_MB_3 = 420
+    ASYNC_MIN_ENGINE_BUDGET_MB_3 = 390
 
     DEFAULT_POLICY_MIN_USABLE_STRONG = 12
     DEFAULT_POLICY_MIN_MATCH_STRONG = 0.85
@@ -50,11 +50,11 @@ module ::MediaGallery
 
       capped_max_samples = max_samples
       if file_mb >= FILEMODE_AUTOCAP_MB_3
-        capped_max_samples = [capped_max_samples, 25].min
+        capped_max_samples = [capped_max_samples, (async_mode ? 55 : 25)].min
       elsif file_mb >= FILEMODE_AUTOCAP_MB_2
-        capped_max_samples = [capped_max_samples, 35].min
+        capped_max_samples = [capped_max_samples, (async_mode ? 60 : 35)].min
       elsif file_mb >= FILEMODE_AUTOCAP_MB_1
-        capped_max_samples = [capped_max_samples, 45].min
+        capped_max_samples = [capped_max_samples, (async_mode ? 55 : 45)].min
       end
 
       base_meta = {
