@@ -76,6 +76,19 @@ module ::MediaGallery
     CANDIDATE_ANCHOR_SHIFT_PENALTY = 0.05
     CANDIDATE_POLARITY_REVIEW_MAX_SCORE_DELTA = 0.02
 
+    # Standard chunk-comparison decoder for file-mode: instead of relying only on
+    # absolute per-candidate evidence, compare shortlist candidates chunk-by-chunk
+    # and aggregate the relative margins. This is especially helpful when two users
+    # look globally close but separate better in local windows.
+    PAIRWISE_CHUNK_DECODER_MIN_ENTRIES = 10
+    PAIRWISE_CHUNK_DECODER_CHUNK_SIZE = 8
+    PAIRWISE_CHUNK_DECODER_CHUNK_STEP = 4
+    PAIRWISE_CHUNK_DECODER_MIN_CHUNKS = 2
+    PAIRWISE_CHUNK_DECODER_LOCAL_OFFSET_RADIUS = 10
+    PAIRWISE_CHUNK_DECODER_MARGIN_WEIGHT = 0.9
+    PAIRWISE_CHUNK_DECODER_WIN_WEIGHT = 0.22
+    PAIRWISE_CHUNK_DECODER_LOSS_WEIGHT = 0.18
+
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
 
@@ -1281,27 +1294,45 @@ module ::MediaGallery
     private_class_method :select_polarity_result
 
     def chunked_resync_position_windows(usable_by_offset:, observed_segment_indices: nil, scores_length: nil)
-      positions = Array(usable_by_offset.values)
-        .flat_map { |u| Array(u[:usable]).map { |entry| entry[1].to_i } }
-        .uniq
-        .sort
+      positions = Array(observed_segment_indices).each_with_index.filter_map do |seg_idx, obs_idx|
+        if seg_idx.present?
+          seg_idx.to_i
+        elsif scores_length.to_i > 0
+          obs_idx.to_i
+        end
+      end.uniq.sort
 
       if positions.empty?
-        positions = Array(observed_segment_indices).each_with_index.filter_map do |seg_idx, obs_idx|
-          if seg_idx.present?
-            seg_idx.to_i
-          elsif scores_length.to_i > 0
-            obs_idx.to_i
-          end
-        end.uniq.sort
+        positions = Array(usable_by_offset.values)
+          .flat_map { |u| Array(u[:usable]).map { |entry| entry[1].to_i } }
+          .uniq
+          .sort
       end
 
       return [] if positions.empty?
 
       win = CHUNKED_RESYNC_WINDOW_SEGMENTS.to_i
       win = 8 if win <= 0
+      win = [win, positions.length].min
+      step = [win / 2, 1].max
 
-      positions.each_slice(win).map(&:dup)
+      windows = []
+      start = 0
+      while start < positions.length
+        slice = positions.slice(start, win)
+        break if slice.blank?
+        windows << slice.dup
+        break if start + win >= positions.length
+        start += step
+      end
+
+      if windows.length < 2 && positions.length >= [CHUNKED_RESYNC_MIN_LOCAL_USABLE.to_i, 4].max
+        tail_start = [positions.length - win, 0].max
+        tail = positions.slice(tail_start, win)
+        windows << tail.dup if tail.present?
+      end
+
+      windows.uniq { |slice| [slice.first, slice.last, slice.length] }
     rescue
       []
     end
@@ -2370,6 +2401,162 @@ end
     end
     private_class_method :verify_shortlist_candidates_with_local_offsets!
 
+    def pairwise_chunk_decoder_chunks(entries:)
+      arr = Array(entries)
+      return [] if arr.length < [PAIRWISE_CHUNK_DECODER_MIN_ENTRIES / 2, 4].max
+
+      chunk_size = PAIRWISE_CHUNK_DECODER_CHUNK_SIZE.to_i
+      chunk_size = 8 if chunk_size <= 0
+      chunk_size = [chunk_size, arr.length].min
+
+      step = PAIRWISE_CHUNK_DECODER_CHUNK_STEP.to_i
+      step = [chunk_size / 2, 1].max if step <= 0
+
+      chunks = []
+      start = 0
+      while start < arr.length
+        chunk = arr.slice(start, chunk_size)
+        break if chunk.blank?
+        chunks << chunk
+        break if start + chunk_size >= arr.length
+        start += step
+      end
+
+      chunks.uniq { |chunk| [chunk.first[0], chunk.last[0], chunk.length] }
+    rescue
+      []
+    end
+    private_class_method :pairwise_chunk_decoder_chunks
+
+    def pairwise_chunk_decoder_should_run?(candidates:, entries:)
+      Array(candidates).length >= 2 && Array(entries).length >= PAIRWISE_CHUNK_DECODER_MIN_ENTRIES.to_i
+    rescue
+      false
+    end
+    private_class_method :pairwise_chunk_decoder_should_run?
+
+    def apply_pairwise_chunk_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, max_off:, anchor_offset:, anchor_trust: 0.0, observed_polarity_flip: false)
+      arr = Array(candidates)
+      entries = chunk_observation_entries(
+        observed_variants: observed_variants,
+        observed_confidences: observed_confidences,
+        observed_segment_indices: observed_segment_indices
+      )
+      return { used: false, reason: "not_enough_entries_or_candidates" } unless pairwise_chunk_decoder_should_run?(candidates: arr, entries: entries)
+
+      chunks = pairwise_chunk_decoder_chunks(entries: entries)
+      return { used: false, reason: "not_enough_chunks" } if chunks.length < PAIRWISE_CHUNK_DECODER_MIN_CHUNKS.to_i
+
+      per_candidate_rows = {}
+      arr.each do |candidate|
+        base_offset = candidate[:best_offset_segments].to_i
+        bounds = shortlist_offset_search_bounds(
+          anchor_offset: base_offset,
+          anchor_trust: anchor_trust,
+          max_off: max_off
+        )
+        local_radius = [PAIRWISE_CHUNK_DECODER_LOCAL_OFFSET_RADIUS.to_i, max_off.to_i].min
+        local_radius = [local_radius, [chunks.first.length / 2, 2].max].max
+
+        rows = chunks.map do |chunk|
+          best_candidate_chunk_alignment(
+            candidate: candidate,
+            chunk: chunk,
+            media_item_id: media_item_id,
+            base_offset: base_offset,
+            local_offset_radius: local_radius,
+            offset_floor: bounds[:floor].to_i,
+            offset_ceil: bounds[:ceil].to_i,
+            observed_polarity_flip: observed_polarity_flip
+          )
+        end
+
+        per_candidate_rows[candidate[:fingerprint_id]] = rows
+      end
+
+      return { used: false, reason: "no_chunk_alignments" } if per_candidate_rows.blank?
+
+      arr.each do |candidate|
+        rows = Array(per_candidate_rows[candidate[:fingerprint_id]])
+        next if rows.blank?
+
+        margins = []
+        won = 0
+        lost = 0
+        tied = 0
+        used_rows = []
+
+        rows.each_with_index do |row, idx|
+          next if row.blank?
+
+          competitors = arr.filter_map do |other|
+            next if other[:fingerprint_id] == candidate[:fingerprint_id]
+            other_row = Array(per_candidate_rows[other[:fingerprint_id]])[idx]
+            other_row.present? ? other_row[:search_score].to_f : nil
+          end
+          next if competitors.empty?
+
+          best_other = competitors.max.to_f
+          margin = row[:search_score].to_f - best_other
+          margins << margin
+          used_rows << row
+
+          if margin > 0.05
+            won += 1
+          elsif margin < -0.05
+            lost += 1
+          else
+            tied += 1
+          end
+        end
+
+        next if used_rows.empty?
+
+        pairwise_margin_total = margins.sum.to_f
+        pairwise_margin_median = median(margins).to_f
+        pairwise_bonus = (pairwise_margin_total * PAIRWISE_CHUNK_DECODER_MARGIN_WEIGHT.to_f) +
+          (won.to_f * PAIRWISE_CHUNK_DECODER_WIN_WEIGHT.to_f) -
+          (lost.to_f * PAIRWISE_CHUNK_DECODER_LOSS_WEIGHT.to_f)
+
+        candidate[:base_rank_score] = candidate[:rank_score].to_f.round(4)
+        candidate[:pairwise_chunk_margin_total] = pairwise_margin_total.round(4)
+        candidate[:pairwise_chunk_margin_median] = pairwise_margin_median.round(4)
+        candidate[:pairwise_chunks_won] = won
+        candidate[:pairwise_chunks_lost] = lost
+        candidate[:pairwise_chunks_tied] = tied
+        candidate[:pairwise_chunk_offsets] = used_rows.map { |row| row[:offset].to_i }
+        candidate[:pairwise_chunk_score_bonus] = pairwise_bonus.round(4)
+        candidate[:rank_score] = (candidate[:rank_score].to_f + pairwise_bonus).round(4)
+        candidate[:why] = [candidate[:why].to_s.presence, "pairwise_margin=#{candidate[:pairwise_chunk_margin_total]}", "pairwise_wins=#{won}/#{used_rows.length}", ("pairwise_losses=#{lost}" if lost > 0)].compact.join(", ")
+      end
+
+      arr.sort_by! do |candidate|
+        [
+          -candidate[:rank_score].to_f,
+          -candidate[:pairwise_chunk_margin_total].to_f,
+          -candidate[:evidence_score].to_f,
+          -candidate[:match_ratio_weighted].to_f,
+          -candidate[:compared].to_i,
+          candidate[:mismatches].to_i,
+        ]
+      end
+      arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
+
+      top = arr[0]
+      second = arr[1]
+      {
+        used: true,
+        reason: "pairwise_chunk_margin_applied",
+        chunks: chunks.length,
+        top_margin: top ? top[:pairwise_chunk_margin_total].to_f.round(4) : 0.0,
+        second_margin: second ? second[:pairwise_chunk_margin_total].to_f.round(4) : 0.0,
+        top_bonus: top ? top[:pairwise_chunk_score_bonus].to_f.round(4) : 0.0,
+      }
+    rescue
+      { used: false, reason: "pairwise_chunk_decoder_failed" }
+    end
+    private_class_method :apply_pairwise_chunk_decoder!
+
     def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil, anchor_offset: nil, anchor_trust: 0.0, observed_polarity_flip: false)
       arr = Array(candidates)
       return arr if arr.empty?
@@ -2413,7 +2600,7 @@ end
       arr = Array(candidates)
       top = arr[0]
       second = arr[1]
-      meta[:shortlist_metric] = "rank_score"
+      meta[:shortlist_metric] = meta[:shortlist_metric].presence || "rank_score"
       meta[:shortlist_count] = arr.length
       meta[:shortlist_top_rank_score] = top ? top[:rank_score].to_f.round(4) : 0.0
       meta[:shortlist_second_rank_score] = second ? second[:rank_score].to_f.round(4) : 0.0
@@ -3347,6 +3534,22 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     observed_polarity_flip: best_polarity_flip
   )
 
+  pairwise_chunk_decoder = if use_chunked
+    { used: false, reason: "skipped_for_chunked_reference" }
+  else
+    apply_pairwise_chunk_decoder!(
+      candidates: candidates,
+      observed_variants: ref_obs,
+      observed_confidences: ref_conf,
+      observed_segment_indices: seg_indices,
+      media_item_id: media_item.id,
+      max_off: max_off,
+      anchor_offset: best_offset,
+      anchor_trust: anchor_trust,
+      observed_polarity_flip: best_polarity_flip
+    )
+  end
+
   top = candidates[0]
   second = candidates[1]
 
@@ -3410,12 +3613,19 @@ def sample_variants_batch_single(file_path:, times:, spec:)
   meta[:shortlist_verification_reason] = shortlist_verification_reason
   meta[:shortlist_verification_candidates] = [SHORTLIST_VERIFY_LIMIT, candidates.length].min
   meta[:shortlist_verification_local_offset_radius] = local_evidence_radius
+  meta[:pairwise_chunk_decoder_used] = (pairwise_chunk_decoder[:used] == true)
+  meta[:pairwise_chunk_decoder_reason] = pairwise_chunk_decoder[:reason]
+  meta[:pairwise_chunk_decoder_chunks] = pairwise_chunk_decoder[:chunks] if pairwise_chunk_decoder[:chunks]
+  meta[:pairwise_chunk_decoder_top_margin] = pairwise_chunk_decoder[:top_margin] if pairwise_chunk_decoder.key?(:top_margin)
+  meta[:pairwise_chunk_decoder_second_margin] = pairwise_chunk_decoder[:second_margin] if pairwise_chunk_decoder.key?(:second_margin)
+  meta[:pairwise_chunk_decoder_top_bonus] = pairwise_chunk_decoder[:top_bonus] if pairwise_chunk_decoder.key?(:top_bonus)
 
   other_score = polarity_best_scores[!best_polarity_flip]
   if other_score && other_score.finite? && best_score && best_score.finite?
     meta[:polarity_score_delta] = (best_score - other_score).round(4)
   end
 
+  meta[:shortlist_metric] = "pairwise_chunk_rank_score" if pairwise_chunk_decoder[:used] == true
   annotate_candidate_debugs!(candidates: candidates, observed_variants: ref_obs, observed_segment_indices: seg_indices, media_item_id: media_item.id)
   apply_shortlist_meta!(meta: meta, candidates: candidates)
   apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
