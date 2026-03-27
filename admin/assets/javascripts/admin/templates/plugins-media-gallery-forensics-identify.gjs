@@ -102,6 +102,7 @@ export default RouteTemplate(
                   <option value="v3_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v3_pairs"}}</option>
                   <option value="v4_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v4_pairs"}}</option>
                   <option value="v5_screen_safe">{{i18n "admin.media_gallery.forensics_identify.layout_v5_screen_safe"}}</option>
+                  <option value="v6_local_sync">{{i18n "admin.media_gallery.forensics_identify.layout_v6_local_sync"}}</option>
                 </select>
               </div>
             </div>

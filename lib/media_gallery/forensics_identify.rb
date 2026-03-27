@@ -102,6 +102,9 @@ module ::MediaGallery
     DISCRIMINATIVE_SHORTLIST_MAX_EVIDENCE_GAP = 4.0
     DISCRIMINATIVE_SHORTLIST_MAX_RANK_GAP = 6.0
     DISCRIMINATIVE_SHORTLIST_OVERTURN_MIN_MARGIN = 0.9
+    PAIRWISE_CHUNK_DECODER_MIN_REMAINING_SECONDS = 12.0
+    DISCRIMINATIVE_SHORTLIST_MIN_REMAINING_SECONDS = 8.0
+    PAIRWISE_CHUNK_DECODER_MAX_CANDIDATES = 3
 
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
@@ -193,7 +196,9 @@ module ::MediaGallery
           observed_scores: obs[:scores],
           observed_segment_indices: obs[:segment_indices],
           spec: spec,
-          max_offset_segments: effective_max_offset_segments
+          max_offset_segments: effective_max_offset_segments,
+          started_at: started_at,
+          time_budget_seconds: filemode_budget_seconds
         )
       end
 
@@ -466,7 +471,9 @@ module ::MediaGallery
           observed_scores: obs[:scores],
           observed_segment_indices: obs[:segment_indices],
           spec: spec,
-          max_offset_segments: max_offset_segments
+          max_offset_segments: max_offset_segments,
+          started_at: started_at,
+          time_budget_seconds: time_budget_seconds
         )
 
         meta = match[:meta] || {}
@@ -925,7 +932,9 @@ module ::MediaGallery
         observed_scores: refined_obs[:scores],
         observed_segment_indices: refined_obs[:segment_indices],
         spec: spec,
-        max_offset_segments: max_offset_segments
+        max_offset_segments: max_offset_segments,
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds
       )
 
       orig_score = phase_result_score(match: match)
@@ -2435,6 +2444,24 @@ end
     end
     private_class_method :verify_shortlist_candidates_with_local_offsets!
 
+    def heavy_decoder_time_allows?(started_at:, budget_seconds:, min_remaining_seconds:)
+      return true if started_at.blank? || budget_seconds.to_f <= 0.0
+      time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds) >= min_remaining_seconds.to_f
+    rescue
+      true
+    end
+    private_class_method :heavy_decoder_time_allows?
+
+    def heavy_decoder_ranking_pool(candidates:, max_candidates:)
+      arr = Array(candidates)
+      limit = max_candidates.to_i
+      return [arr, []] if limit <= 0 || arr.length <= limit
+      [arr.first(limit), arr.drop(limit)]
+    rescue
+      [Array(candidates), []]
+    end
+    private_class_method :heavy_decoder_ranking_pool
+
     def pairwise_chunk_decoder_chunks(entries:)
       arr = Array(entries)
       return [] if arr.length < [PAIRWISE_CHUNK_DECODER_MIN_ENTRIES / 2, 4].max
@@ -2469,8 +2496,12 @@ end
     end
     private_class_method :pairwise_chunk_decoder_should_run?
 
-    def apply_pairwise_chunk_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, max_off:, anchor_offset:, anchor_trust: 0.0, observed_polarity_flip: false)
-      arr = Array(candidates)
+    def apply_pairwise_chunk_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, max_off:, anchor_offset:, anchor_trust: 0.0, observed_polarity_flip: false, started_at: nil, budget_seconds: nil)
+      return { used: false, reason: "skipped_low_remaining_time" } unless heavy_decoder_time_allows?(started_at: started_at, budget_seconds: budget_seconds, min_remaining_seconds: PAIRWISE_CHUNK_DECODER_MIN_REMAINING_SECONDS)
+
+      full_arr = Array(candidates)
+      ranking_pool, ranking_tail = heavy_decoder_ranking_pool(candidates: full_arr, max_candidates: PAIRWISE_CHUNK_DECODER_MAX_CANDIDATES)
+      arr = ranking_pool
       entries = chunk_observation_entries(
         observed_variants: observed_variants,
         observed_confidences: observed_confidences,
@@ -2611,7 +2642,9 @@ end
               original_order.index(candidate[:fingerprint_id]) || 9999,
             ]
           end
-          arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
+          combined = arr + ranking_tail
+          full_arr.replace(combined)
+          full_arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
           return {
             used: false,
             reason: "pairwise_overturn_blocked_evidence_preferred",
@@ -2623,7 +2656,9 @@ end
         end
       end
 
-      arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
+      combined = arr + ranking_tail
+      full_arr.replace(combined)
+      full_arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
 
       top = arr[0]
       second = arr[1]
@@ -2640,7 +2675,9 @@ end
     end
     private_class_method :apply_pairwise_chunk_decoder!
 
-    def apply_discriminative_shortlist_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, observed_polarity_flip: false)
+    def apply_discriminative_shortlist_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, observed_polarity_flip: false, started_at: nil, budget_seconds: nil)
+      return { used: false, reason: "skipped_low_remaining_time" } unless heavy_decoder_time_allows?(started_at: started_at, budget_seconds: budget_seconds, min_remaining_seconds: DISCRIMINATIVE_SHORTLIST_MIN_REMAINING_SECONDS)
+
       arr = Array(candidates)
       return { used: false, reason: "not_enough_candidates" } if arr.length < 2
 
@@ -2860,7 +2897,7 @@ end
     end
     private_class_method :apply_shortlist_meta!
 
-    def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, observed_segment_indices: nil, spec: nil, max_offset_segments:)
+    def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, observed_segment_indices: nil, spec: nil, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
       fps = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).includes(:user).to_a
       return { candidates: [], meta: { offset_strategy: "global" } } if fps.empty?
 
@@ -2890,7 +2927,9 @@ end
               ref_thr: ref[:thr],
               ref_delta: ref[:delta],
               delta_median: ref[:delta_median].to_f,
-              max_offset_segments: max_offset_segments.to_i
+              max_offset_segments: max_offset_segments.to_i,
+              started_at: started_at,
+              time_budget_seconds: time_budget_seconds
             )
           end
         rescue
@@ -3457,7 +3496,8 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     private_class_method :build_tile_filter
 
     
-    def match_fingerprints_with_reference(fps:, media_item:, scores:, confidences:, observed_segment_indices:, ref_thr:, ref_delta:, delta_median:, max_offset_segments:)
+    def match_fingerprints_with_reference(fps:, media_item:, scores:, confidences:, observed_segment_indices:, ref_thr:, ref_delta:, delta_median:, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
+  ::MediaGallery::Fingerprinting.with_expected_variant_cache do
   max_off = max_offset_segments.to_i
   max_off = 0 if max_off.negative?
 
@@ -3790,7 +3830,9 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       max_off: max_off,
       anchor_offset: best_offset,
       anchor_trust: anchor_trust,
-      observed_polarity_flip: best_polarity_flip
+      observed_polarity_flip: best_polarity_flip,
+      started_at: started_at,
+      budget_seconds: time_budget_seconds
     )
   end
 
@@ -3803,7 +3845,9 @@ def sample_variants_batch_single(file_path:, times:, spec:)
       observed_confidences: ref_conf,
       observed_segment_indices: seg_indices,
       media_item_id: media_item.id,
-      observed_polarity_flip: best_polarity_flip
+      observed_polarity_flip: best_polarity_flip,
+      started_at: started_at,
+      budget_seconds: time_budget_seconds
     )
   end
 
@@ -3894,6 +3938,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
   apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
 
   { candidates: candidates, meta: meta }
+  end
 end
 
     private_class_method :match_fingerprints_with_reference

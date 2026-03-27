@@ -81,6 +81,21 @@ module ::MediaGallery
       Thread.current[:media_gallery_fingerprint_codebook_scheme] = previous
     end
 
+
+    def current_expected_variant_cache
+      Thread.current[:media_gallery_expected_variant_cache]
+    rescue
+      nil
+    end
+
+    def with_expected_variant_cache
+      previous = Thread.current[:media_gallery_expected_variant_cache]
+      Thread.current[:media_gallery_expected_variant_cache] = previous || {}
+      yield
+    ensure
+      Thread.current[:media_gallery_expected_variant_cache] = previous
+    end
+
     def codebook_scheme_for(layout: nil, codebook: nil)
       explicit = codebook.to_s.presence
       return explicit if explicit.present?
@@ -154,6 +169,10 @@ module ::MediaGallery
     end
 
     def v2_local_codelet_sequence(fingerprint_id:, media_item_id:, block_index:)
+      cache = current_expected_variant_cache
+      cache_key = [:v2_codelet, fingerprint_id.to_s, media_item_id.to_i, block_index.to_i]
+      return cache[cache_key] if cache && cache.key?(cache_key)
+
       msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|b=#{block_index}|codelets=v2"
       digest = OpenSSL::HMAC.digest("SHA256", secret, msg)
       slots = (LOCAL_V2_LOGICAL_BITS.to_f / 6.0).ceil
@@ -164,7 +183,9 @@ module ::MediaGallery
         seq << LOCAL_V2_CODELETS[byte % LOCAL_V2_CODELETS.length]
       end
 
-      seq[0, LOCAL_V2_LOGICAL_BITS]
+      result = seq[0, LOCAL_V2_LOGICAL_BITS]
+      cache[cache_key] = result if cache
+      result
     rescue
       ("ab" * (LOCAL_V2_LOGICAL_BITS / 2 + 1))[0, LOCAL_V2_LOGICAL_BITS]
     end
@@ -199,15 +220,22 @@ module ::MediaGallery
     # contain multiple observations of the same logical bit, allowing the matcher to
     # majority-vote away isolated bit flips from screen recordings.
     def expected_variant_for_segment(fingerprint_id:, media_item_id:, segment_index:, codebook: nil, layout: nil)
-      slot = logical_slot_for_segment(segment_index: segment_index, codebook: codebook, layout: layout)
-      expected_logical_variant(
+      scheme = codebook_scheme_for(codebook: codebook, layout: layout)
+      cache = current_expected_variant_cache
+      cache_key = [:expected_variant, fingerprint_id.to_s, media_item_id.to_i, segment_index.to_i, scheme.to_s]
+      return cache[cache_key] if cache && cache.key?(cache_key)
+
+      slot = logical_slot_for_segment(segment_index: segment_index, codebook: scheme, layout: layout)
+      result = expected_logical_variant(
         fingerprint_id: fingerprint_id,
         media_item_id: media_item_id,
         block_index: slot[:block_index],
         logical_index: slot[:logical_index],
-        codebook: codebook,
+        codebook: scheme,
         layout: layout
       )
+      cache[cache_key] = result if cache
+      result
     rescue
       "a"
     end
