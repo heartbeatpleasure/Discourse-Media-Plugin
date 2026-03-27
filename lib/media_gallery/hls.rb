@@ -181,6 +181,7 @@ module ::MediaGallery
         meta["ab_layout"] = "hls/{a|b}/#{variant}/seg_XXXXX.ts"
         wm_spec = MediaGallery::FingerprintWatermark.spec_for(media_item_id: item.id)
         wm_layout = wm_spec[:layout].to_s
+        codebook_scheme = ::MediaGallery::Fingerprinting.ecc_profile(layout: wm_layout)[:scheme]
         meta["watermark"] = {
           "type" => wm_layout,
           "opacity" => wm_spec[:opacity],
@@ -189,6 +190,7 @@ module ::MediaGallery
           "count" => (wm_spec[:pairs] || wm_spec[:tiles] || []).length,
           "sync_count" => Array(wm_spec[:sync_pairs]).length,
           "sync_period" => wm_spec[:sync_period],
+          "codebook_scheme" => codebook_scheme,
         }
 
         # Persist minimal metadata in the HLS folder so later forensic tooling can
@@ -198,6 +200,7 @@ module ::MediaGallery
             File.join(final_root, "fingerprint_meta.json"),
             JSON.pretty_generate({
               "layout" => wm_layout,
+              "codebook_scheme" => codebook_scheme,
               "segment_seconds" => segment_duration_seconds,
               "watermark_spec" => {
                 "layout" => wm_layout,

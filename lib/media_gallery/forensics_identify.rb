@@ -92,6 +92,17 @@ module ::MediaGallery
     PAIRWISE_OVERTURN_MIN_MARGIN = 1.35
     PAIRWISE_OVERTURN_MAX_EVIDENCE_GAP = 0.08
 
+    DISCRIMINATIVE_SHORTLIST_MAX_CANDIDATES = 2
+    DISCRIMINATIVE_SHORTLIST_MIN_ENTRIES = 10
+    DISCRIMINATIVE_SHORTLIST_MIN_DIFF_POSITIONS = 6
+    DISCRIMINATIVE_SHORTLIST_MARGIN_WEIGHT = 1.15
+    DISCRIMINATIVE_SHORTLIST_WIN_WEIGHT = 0.28
+    DISCRIMINATIVE_SHORTLIST_LOSS_WEIGHT = 0.22
+    DISCRIMINATIVE_SHORTLIST_TIE_THRESHOLD = 0.04
+    DISCRIMINATIVE_SHORTLIST_MAX_EVIDENCE_GAP = 4.0
+    DISCRIMINATIVE_SHORTLIST_MAX_RANK_GAP = 6.0
+    DISCRIMINATIVE_SHORTLIST_OVERTURN_MIN_MARGIN = 0.9
+
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
 
@@ -128,12 +139,18 @@ module ::MediaGallery
           ::MediaGallery::FingerprintWatermark.spec_for(media_item_id: media_item.id, layout: layout)
         end
 
-      # When available, prefer the *packaged* HLS playlist timing for sampling.
-      # Real HLS segments are not always exactly `segment_seconds` long (frame rounding),
-      # and drift can cause us to sample near boundaries (hurts A/B detection).
-      #
-      # Using playlist-derived midpoints tends to reduce bit flips and increase separation.
-      sample_times ||= packaged_segment_midpoints_for(media_item: media_item)
+      codebook_scheme = ::MediaGallery::Fingerprinting.codebook_scheme_for(
+        layout: spec[:layout].to_s.presence || layout.to_s
+      )
+      previous_codebook_scheme = ::MediaGallery::Fingerprinting.current_thread_codebook_scheme
+      Thread.current[:media_gallery_fingerprint_codebook_scheme] = codebook_scheme
+      begin
+        # When available, prefer the *packaged* HLS playlist timing for sampling.
+        # Real HLS segments are not always exactly `segment_seconds` long (frame rounding),
+        # and drift can cause us to sample near boundaries (hurts A/B detection).
+        #
+        # Using playlist-derived midpoints tends to reduce bit flips and increase separation.
+        sample_times ||= packaged_segment_midpoints_for(media_item: media_item)
 
       file_size_bytes = (File.size(file_path) rescue nil)
       probed_duration_seconds = probe_duration_seconds(file_path)
@@ -234,7 +251,7 @@ module ::MediaGallery
           layout: spec[:layout].to_s.presence || layout,
           sync_period: Array(spec[:sync_pattern]).length,
           sync_pairs_count: Array(spec[:sync_pairs]).length,
-          ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
+          ecc_scheme: codebook_scheme.to_s.presence || (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
           duration_seconds: obs[:duration_seconds],
           samples: obs[:variants].length,
           usable_samples: obs[:variants].count { |v| v.present? },
@@ -260,6 +277,9 @@ module ::MediaGallery
       # result["meta"] without creating duplicate :meta and "meta" hashes.
       result = result.deep_stringify_keys if result.respond_to?(:deep_stringify_keys)
       result
+      ensure
+        Thread.current[:media_gallery_fingerprint_codebook_scheme] = previous_codebook_scheme
+      end
     end
 
     # ----------------------------------------------------------------------
@@ -1253,6 +1273,14 @@ module ::MediaGallery
       Array(arr).map { |v| invert_variant(v) }
     end
     private_class_method :invert_variant_sequence
+
+    def candidate_observed_variant(candidate:, observed_variant:, observed_polarity_flip: false)
+      flip = candidate[:polarity_flip_used] ? true : false
+      flip == observed_polarity_flip ? observed_variant.to_s : invert_variant(observed_variant)
+    rescue
+      observed_variant.to_s
+    end
+    private_class_method :candidate_observed_variant
 
     def select_polarity_result(normal_result:, inverted_result:)
       normal_diag = normal_result.is_a?(Hash) ? (normal_result[:diag] || {}) : {}
@@ -2612,6 +2640,167 @@ end
     end
     private_class_method :apply_pairwise_chunk_decoder!
 
+    def apply_discriminative_shortlist_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, observed_polarity_flip: false)
+      arr = Array(candidates)
+      return { used: false, reason: "not_enough_candidates" } if arr.length < 2
+
+      top = arr[0]
+      second = arr[1]
+      rank_gap = (top[:rank_score].to_f - second[:rank_score].to_f)
+      evidence_gap = (top[:evidence_score].to_f - second[:evidence_score].to_f)
+      if evidence_gap > DISCRIMINATIVE_SHORTLIST_MAX_EVIDENCE_GAP.to_f && rank_gap > DISCRIMINATIVE_SHORTLIST_MAX_RANK_GAP.to_f
+        return { used: false, reason: "existing_separation_already_sufficient" }
+      end
+
+      entries = chunk_observation_entries(
+        observed_variants: observed_variants,
+        observed_confidences: observed_confidences,
+        observed_segment_indices: observed_segment_indices
+      )
+      return { used: false, reason: "not_enough_entries" } if entries.length < DISCRIMINATIVE_SHORTLIST_MIN_ENTRIES.to_i
+
+      chunks = pairwise_chunk_decoder_chunks(entries: entries)
+      return { used: false, reason: "not_enough_chunks" } if chunks.length < 2
+
+      candidate_a = top
+      candidate_b = second
+      offsets_a = Array(candidate_a[:evidence_local_offsets])
+      offsets_b = Array(candidate_b[:evidence_local_offsets])
+      base_a = candidate_a[:local_best_offset_segments].presence || candidate_a[:best_offset_segments]
+      base_b = candidate_b[:local_best_offset_segments].presence || candidate_b[:best_offset_segments]
+
+      margins = []
+      diff_positions = 0
+      chunk_offsets_a = []
+      chunk_offsets_b = []
+      won = 0
+      lost = 0
+      tied = 0
+
+      chunks.each_with_index do |chunk, idx|
+        off_a = (offsets_a[idx].presence || base_a).to_i
+        off_b = (offsets_b[idx].presence || base_b).to_i
+        chunk_offsets_a << off_a
+        chunk_offsets_b << off_b
+
+        chunk_margin = 0.0
+        chunk_comp_w = 0.0
+
+        chunk.each do |(_obs_idx, base_seg_idx, ov, weight)|
+          exp_a = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: candidate_a[:fingerprint_id],
+            media_item_id: media_item_id,
+            segment_index: base_seg_idx.to_i + off_a
+          )
+          exp_b = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+            fingerprint_id: candidate_b[:fingerprint_id],
+            media_item_id: media_item_id,
+            segment_index: base_seg_idx.to_i + off_b
+          )
+          next if exp_a == exp_b
+
+          obs_a = candidate_observed_variant(candidate: candidate_a, observed_variant: ov, observed_polarity_flip: observed_polarity_flip)
+          obs_b = candidate_observed_variant(candidate: candidate_b, observed_variant: ov, observed_polarity_flip: observed_polarity_flip)
+          w = weight.to_f
+          next if w <= 0.0
+
+          diff_positions += 1
+          chunk_comp_w += w
+          if obs_a == exp_a && obs_b != exp_b
+            chunk_margin += w
+          elsif obs_b == exp_b && obs_a != exp_a
+            chunk_margin -= w
+          end
+        end
+
+        next if chunk_comp_w <= 0.0
+        norm_margin = chunk_margin / chunk_comp_w
+        margins << norm_margin
+        if norm_margin > DISCRIMINATIVE_SHORTLIST_TIE_THRESHOLD.to_f
+          won += 1
+        elsif norm_margin < -DISCRIMINATIVE_SHORTLIST_TIE_THRESHOLD.to_f
+          lost += 1
+        else
+          tied += 1
+        end
+      end
+
+      return { used: false, reason: "not_enough_discriminative_positions" } if diff_positions < DISCRIMINATIVE_SHORTLIST_MIN_DIFF_POSITIONS.to_i || margins.empty?
+
+      total_margin = margins.sum.to_f
+      median_margin = median(margins).to_f
+      bonus = (total_margin * DISCRIMINATIVE_SHORTLIST_MARGIN_WEIGHT.to_f) +
+        (won.to_f * DISCRIMINATIVE_SHORTLIST_WIN_WEIGHT.to_f) -
+        (lost.to_f * DISCRIMINATIVE_SHORTLIST_LOSS_WEIGHT.to_f)
+
+      candidate_a[:discriminative_margin_total] = total_margin.round(4)
+      candidate_a[:discriminative_margin_median] = median_margin.round(4)
+      candidate_a[:discriminative_positions] = diff_positions
+      candidate_a[:discriminative_chunks_won] = won
+      candidate_a[:discriminative_chunks_lost] = lost
+      candidate_a[:discriminative_chunks_tied] = tied
+      candidate_a[:discriminative_chunk_offsets] = chunk_offsets_a
+      candidate_a[:discriminative_bonus] = bonus.round(4)
+      candidate_a[:rank_score] = (candidate_a[:rank_score].to_f + bonus).round(4)
+      candidate_a[:why] = [candidate_a[:why].to_s.presence, "disc_margin=#{candidate_a[:discriminative_margin_total]}", "disc_diff=#{diff_positions}", "disc_wins=#{won}/#{margins.length}", ("disc_losses=#{lost}" if lost > 0)].compact.join(", ")
+
+      candidate_b[:discriminative_margin_total] = (-total_margin).round(4)
+      candidate_b[:discriminative_margin_median] = (-median_margin).round(4)
+      candidate_b[:discriminative_positions] = diff_positions
+      candidate_b[:discriminative_chunks_won] = lost
+      candidate_b[:discriminative_chunks_lost] = won
+      candidate_b[:discriminative_chunks_tied] = tied
+      candidate_b[:discriminative_chunk_offsets] = chunk_offsets_b
+      candidate_b[:discriminative_bonus] = (-bonus).round(4)
+      candidate_b[:rank_score] = (candidate_b[:rank_score].to_f - bonus).round(4)
+      candidate_b[:why] = [candidate_b[:why].to_s.presence, "disc_margin=#{candidate_b[:discriminative_margin_total]}", "disc_diff=#{diff_positions}", "disc_wins=#{lost}/#{margins.length}", ("disc_losses=#{won}" if won > 0)].compact.join(", ")
+
+      original_top_id = top[:fingerprint_id]
+      arr.sort_by! do |candidate|
+        [
+          -candidate[:rank_score].to_f,
+          -candidate[:discriminative_margin_total].to_f,
+          -candidate[:evidence_score].to_f,
+          -candidate[:match_ratio_weighted].to_f,
+          -candidate[:compared].to_i,
+          candidate[:mismatches].to_i,
+        ]
+      end
+
+      new_top = arr[0]
+      if new_top && new_top[:fingerprint_id] != original_top_id && total_margin.abs < DISCRIMINATIVE_SHORTLIST_OVERTURN_MIN_MARGIN.to_f
+        arr.sort_by! do |candidate|
+          [
+            -candidate[:evidence_score].to_f,
+            -candidate[:rank_score].to_f,
+            -candidate[:match_ratio_weighted].to_f,
+            -candidate[:compared].to_i,
+            candidate[:mismatches].to_i,
+          ]
+        end
+        arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
+        return {
+          used: false,
+          reason: "discriminative_overturn_blocked_margin_too_small",
+          diff_positions: diff_positions,
+          total_margin: total_margin.round(4),
+          bonus: bonus.round(4),
+        }
+      end
+
+      arr.each_with_index { |candidate, idx| candidate[:shortlist_rank] = idx + 1 }
+      {
+        used: true,
+        reason: "discriminative_shortlist_margin_applied",
+        diff_positions: diff_positions,
+        total_margin: total_margin.round(4),
+        bonus: bonus.round(4),
+      }
+    rescue
+      { used: false, reason: "discriminative_shortlist_decoder_failed" }
+    end
+    private_class_method :apply_discriminative_shortlist_decoder!
+
     def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil, anchor_offset: nil, anchor_trust: 0.0, observed_polarity_flip: false)
       arr = Array(candidates)
       return arr if arr.empty?
@@ -3605,6 +3794,19 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     )
   end
 
+  discriminative_shortlist_decoder = if use_chunked
+    { used: false, reason: "skipped_for_chunked_reference" }
+  else
+    apply_discriminative_shortlist_decoder!(
+      candidates: candidates,
+      observed_variants: ref_obs,
+      observed_confidences: ref_conf,
+      observed_segment_indices: seg_indices,
+      media_item_id: media_item.id,
+      observed_polarity_flip: best_polarity_flip
+    )
+  end
+
   top = candidates[0]
   second = candidates[1]
 
@@ -3674,6 +3876,11 @@ def sample_variants_batch_single(file_path:, times:, spec:)
   meta[:pairwise_chunk_decoder_top_margin] = pairwise_chunk_decoder[:top_margin] if pairwise_chunk_decoder.key?(:top_margin)
   meta[:pairwise_chunk_decoder_second_margin] = pairwise_chunk_decoder[:second_margin] if pairwise_chunk_decoder.key?(:second_margin)
   meta[:pairwise_chunk_decoder_top_bonus] = pairwise_chunk_decoder[:top_bonus] if pairwise_chunk_decoder.key?(:top_bonus)
+  meta[:discriminative_shortlist_decoder_used] = (discriminative_shortlist_decoder[:used] == true)
+  meta[:discriminative_shortlist_decoder_reason] = discriminative_shortlist_decoder[:reason]
+  meta[:discriminative_shortlist_diff_positions] = discriminative_shortlist_decoder[:diff_positions] if discriminative_shortlist_decoder[:diff_positions]
+  meta[:discriminative_shortlist_total_margin] = discriminative_shortlist_decoder[:total_margin] if discriminative_shortlist_decoder.key?(:total_margin)
+  meta[:discriminative_shortlist_bonus] = discriminative_shortlist_decoder[:bonus] if discriminative_shortlist_decoder.key?(:bonus)
 
   other_score = polarity_best_scores[!best_polarity_flip]
   if other_score && other_score.finite? && best_score && best_score.finite?
@@ -3681,6 +3888,7 @@ def sample_variants_batch_single(file_path:, times:, spec:)
   end
 
   meta[:shortlist_metric] = "pairwise_chunk_rank_score" if pairwise_chunk_decoder[:used] == true
+  meta[:shortlist_metric] = "discriminative_shortlist_rank_score" if discriminative_shortlist_decoder[:used] == true
   annotate_candidate_debugs!(candidates: candidates, observed_variants: ref_obs, observed_segment_indices: seg_indices, media_item_id: media_item.id)
   apply_shortlist_meta!(meta: meta, candidates: candidates)
   apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)

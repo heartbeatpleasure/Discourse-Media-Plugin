@@ -88,10 +88,12 @@ module ::MediaGallery
       if MediaGallery::Fingerprinting.enabled? && payload["fingerprint_id"].present? && ab.present?
         seg_idx = MediaGallery::Fingerprinting.segment_index_from_filename(segment)
         if seg_idx.present?
+          codebook_scheme = packaged_codebook_scheme_for(item.public_id)
           expected = MediaGallery::Fingerprinting.expected_variant_for_segment(
             fingerprint_id: payload["fingerprint_id"],
             media_item_id: item.id,
-            segment_index: seg_idx
+            segment_index: seg_idx,
+            codebook: codebook_scheme
           )
           deny!(:ab_mismatch, token: token) if expected.to_s != ab.to_s
         end
@@ -231,6 +233,21 @@ def resolve_segment_rel_path(public_id, variant, segment, ab: nil)
       MediaGallery::PrivateStorage.hls_segment_abs_path(public_id, variant, segment)
     end
 
+    def packaged_codebook_scheme_for(public_id)
+      root = MediaGallery::PrivateStorage.hls_root_abs_dir(public_id)
+      meta_path = File.join(root, "fingerprint_meta.json")
+      return nil unless File.exist?(meta_path)
+
+      meta = JSON.parse(File.read(meta_path)) rescue nil
+      return nil unless meta.is_a?(Hash)
+
+      meta["codebook_scheme"].to_s.presence ||
+        ::MediaGallery::Fingerprinting.codebook_scheme_for(layout: meta["layout"].to_s)
+    rescue
+      nil
+    end
+
+
 def set_playlist_headers!
       response.headers["Cache-Control"] = "no-store"
       response.headers["X-Content-Type-Options"] = "nosniff"
@@ -255,6 +272,7 @@ def set_playlist_headers!
     def rewrite_master_playlist(raw, public_id:, token:)
       out = []
       seg_counter = 0
+      codebook_scheme = packaged_codebook_scheme_for(public_id)
       raw.to_s.each_line do |line|
         l = line.rstrip
         if l.blank? || l.start_with?("#")
@@ -308,7 +326,8 @@ def set_playlist_headers!
             ab = MediaGallery::Fingerprinting.expected_variant_for_segment(
               fingerprint_id: fingerprint_id,
               media_item_id: media_item_id,
-              segment_index: idx
+              segment_index: idx,
+              codebook: codebook_scheme
             )
           end
 

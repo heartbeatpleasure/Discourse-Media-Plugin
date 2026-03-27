@@ -32,6 +32,21 @@ module ::MediaGallery
       DEFAULT_RETENTION_HOURS
     end
 
+
+    def packaged_codebook_scheme_for(item)
+      root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+      meta_path = File.join(root, "fingerprint_meta.json")
+      return nil unless File.exist?(meta_path)
+
+      meta = JSON.parse(File.read(meta_path)) rescue nil
+      return nil unless meta.is_a?(Hash)
+
+      meta["codebook_scheme"].to_s.presence ||
+        ::MediaGallery::Fingerprinting.codebook_scheme_for(layout: meta["layout"].to_s)
+    rescue
+      nil
+    end
+
     def ensure_root!
       FileUtils.mkdir_p(root_path)
       test = File.join(root_path, ".writable_test_#{SecureRandom.hex(4)}")
@@ -212,6 +227,7 @@ module ::MediaGallery
       )
 
       fingerprint_id = ::MediaGallery::Fingerprinting.fingerprint_id_for(user_id: user_id.to_i, media_item_id: item.id)
+      codebook_scheme = packaged_codebook_scheme_for(item)
 
       paths = selection[:chosen_segment_names].map do |filename|
         seg_idx = ::MediaGallery::Fingerprinting.segment_index_from_filename(filename)
@@ -221,6 +237,7 @@ module ::MediaGallery
           fingerprint_id: fingerprint_id,
           media_item_id: item.id,
           segment_index: seg_idx,
+          codebook: codebook_scheme,
         )
 
         base = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)

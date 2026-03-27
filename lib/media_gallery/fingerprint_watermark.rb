@@ -25,6 +25,7 @@ module ::MediaGallery
     LAYOUT_V3 = "v3_pairs"
     LAYOUT_V4 = "v4_pairs"
     LAYOUT_V5 = "v5_screen_safe"
+    LAYOUT_V6 = "v6_local_sync"
 
     # Conservative defaults; intentionally subtle.
     V1_BOX_COUNT = 6
@@ -45,6 +46,9 @@ module ::MediaGallery
     V5_PAIR_COUNT = 20
     V5_BOX_SIZE_FRAC = 0.058
 
+    V6_PAIR_COUNT = 24
+    V6_BOX_SIZE_FRAC = 0.054
+
     # Periodic sync beacons, identical in A and B, used to make reference-based
     # alignment more robust without sacrificing user-specific A/B capacity.
     #
@@ -59,10 +63,15 @@ module ::MediaGallery
     V5_SYNC_OPACITY = 0.0085
     V5_SYNC_PATTERN = %w[a a b b a b a a].freeze
 
+    V6_SYNC_PAIR_COUNT = 8
+    V6_SYNC_OPACITY = 0.0092
+    V6_SYNC_PATTERN = %w[a a b b a b a a b a b b].freeze
+
     V2_OPACITY = 0.006 # 0.6% alpha
     V3_OPACITY = 0.010 # 1.0% alpha
     V4_OPACITY = 0.010 # 1.0% alpha
     V5_OPACITY = 0.011 # 1.1% alpha
+    V6_OPACITY = 0.0115 # 1.15% alpha
 
     # Keep away from the borders so mild crops don't remove everything.
     V1_MARGIN = 0.06
@@ -70,9 +79,10 @@ module ::MediaGallery
     V3_MARGIN = 0.08
     V4_MARGIN = 0.07
     V5_MARGIN = 0.065
+    V6_MARGIN = 0.06
 
     def allowed_layouts
-      [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5]
+      [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5, LAYOUT_V6]
     end
     private_class_method :allowed_layouts
 
@@ -92,7 +102,7 @@ module ::MediaGallery
       v = "a" unless %w[a b].include?(v)
 
       mode = layout_mode
-      if mode == LAYOUT_V2 || mode == LAYOUT_V3 || mode == LAYOUT_V4 || mode == LAYOUT_V5
+      if mode == LAYOUT_V2 || mode == LAYOUT_V3 || mode == LAYOUT_V4 || mode == LAYOUT_V5 || mode == LAYOUT_V6
         vf_pairs(media_item_id: media_item_id, variant: v, layout: mode)
       else
         vf_tiles(media_item_id: media_item_id, variant: v)
@@ -152,6 +162,20 @@ module ::MediaGallery
           sync_opacity: V5_SYNC_OPACITY,
           sync_box_size_frac: V5_BOX_SIZE_FRAC
         }
+      when LAYOUT_V6
+        {
+          layout: mode,
+          kind: "pairs",
+          opacity: V6_OPACITY,
+          box_size_frac: V6_BOX_SIZE_FRAC,
+          margin: V6_MARGIN,
+          pairs: v6_pairs_for(media_item_id: media_item_id),
+          sync_pairs: v6_sync_pairs,
+          sync_pattern: v6_sync_pattern,
+          sync_period: v6_sync_pattern.length,
+          sync_opacity: V6_SYNC_OPACITY,
+          sync_box_size_frac: V6_BOX_SIZE_FRAC
+        }
       else
         {
           layout: mode,
@@ -207,9 +231,11 @@ module ::MediaGallery
 
     def vf_pairs(media_item_id:, variant:, layout:)
       layout = layout.to_s
-      layout = LAYOUT_V2 unless [LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5].include?(layout)
+      layout = LAYOUT_V2 unless [LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5, LAYOUT_V6].include?(layout)
 
-      alpha = if layout == LAYOUT_V5
+      alpha = if layout == LAYOUT_V6
+        V6_OPACITY
+      elsif layout == LAYOUT_V5
         V5_OPACITY
       elsif layout == LAYOUT_V4
         V4_OPACITY
@@ -218,7 +244,9 @@ module ::MediaGallery
       else
         V2_OPACITY
       end
-      box = if layout == LAYOUT_V5
+      box = if layout == LAYOUT_V6
+        V6_BOX_SIZE_FRAC
+      elsif layout == LAYOUT_V5
         V5_BOX_SIZE_FRAC
       elsif layout == LAYOUT_V4
         V4_BOX_SIZE_FRAC
@@ -227,7 +255,9 @@ module ::MediaGallery
       else
         V2_BOX_SIZE_FRAC
       end
-      pairs = if layout == LAYOUT_V5
+      pairs = if layout == LAYOUT_V6
+        v6_pairs_for(media_item_id: media_item_id)
+      elsif layout == LAYOUT_V5
         v5_pairs_for(media_item_id: media_item_id)
       elsif layout == LAYOUT_V4
         v4_pairs_for(media_item_id: media_item_id)
@@ -257,7 +287,7 @@ module ::MediaGallery
         filters << "drawbox=x=iw*#{(x + w).round(6)}:y=ih*#{y}:w=iw*#{w}:h=ih*#{h}:color=#{right_color}@#{alpha}:t=fill"
       end
 
-      if layout == LAYOUT_V4 || layout == LAYOUT_V5
+      if layout == LAYOUT_V4 || layout == LAYOUT_V5 || layout == LAYOUT_V6
         filters.concat(sync_filters_for_layout(layout: layout, box: box))
       end
 
@@ -465,6 +495,75 @@ module ::MediaGallery
     end
     private_class_method :v5_pairs_for
 
+    def v6_pairs_for(media_item_id:)
+      secret = fingerprint_secret
+      seed_bytes = prng_bytes(secret, "wm|#{SALT}|#{media_item_id}|v6", V6_PAIR_COUNT * 12)
+
+      box = V6_BOX_SIZE_FRAC
+      pair_w = (box * 2.0)
+      margin = V6_MARGIN
+
+      excluded = visible_watermark_exclusion_rects(box: box, pair_w: pair_w)
+      excluded += v6_sync_pairs.map { |p| { x: p[:x], y: p[:y], w: pair_w, h: box } }
+
+      bands = [
+        { x_min: margin, x_max: 0.34 - pair_w, y_min: margin, y_max: 0.18 - box },
+        { x_min: 0.40, x_max: 0.60 - pair_w, y_min: margin, y_max: 0.18 - box },
+        { x_min: 0.66, x_max: 1.0 - margin - pair_w, y_min: margin, y_max: 0.18 - box },
+        { x_min: margin, x_max: 0.22 - pair_w, y_min: 0.28, y_max: 0.48 - box },
+        { x_min: 0.78, x_max: 1.0 - margin - pair_w, y_min: 0.28, y_max: 0.48 - box },
+        { x_min: margin, x_max: 0.22 - pair_w, y_min: 0.58, y_max: 0.80 - box },
+        { x_min: 0.78, x_max: 1.0 - margin - pair_w, y_min: 0.58, y_max: 0.80 - box },
+        { x_min: margin, x_max: 0.34 - pair_w, y_min: 0.84 - box, y_max: 1.0 - margin - box },
+        { x_min: 0.40, x_max: 0.60 - pair_w, y_min: 0.84 - box, y_max: 1.0 - margin - box },
+        { x_min: 0.66, x_max: 1.0 - margin - pair_w, y_min: 0.84 - box, y_max: 1.0 - margin - box }
+      ].map do |band|
+        band.merge(
+          x_max: [band[:x_max], band[:x_min] + 0.001].max,
+          y_max: [band[:y_max], band[:y_min] + 0.001].max
+        )
+      end
+
+      occupied = []
+      out = []
+
+      V6_PAIR_COUNT.times do |i|
+        placed = false
+        18.times do |try|
+          off = (i * 12) + ((try % 3) * 4)
+          band = bands[(i + try) % bands.length]
+          x_r = u32_to_unit(seed_bytes, off)
+          y_r = u32_to_unit(seed_bytes, off + 4)
+
+          span_x = [band[:x_max] - band[:x_min], 0.001].max
+          span_y = [band[:y_max] - band[:y_min], 0.001].max
+          x = (band[:x_min] + span_x * x_r).round(6)
+          y = (band[:y_min] + span_y * y_r).round(6)
+          rect = { x: x, y: y, w: pair_w, h: box }
+          next if rect_overlaps_any?(rect, excluded)
+
+          pad = (box * 0.16).round(6)
+          padded = { x: (x - pad), y: (y - pad), w: (pair_w + 2 * pad), h: (box + 2 * pad) }
+          next if rect_overlaps_any?(padded, occupied)
+
+          occupied << rect
+          out << { x: x, y: y }
+          placed = true
+          break
+        end
+
+        next if placed
+
+        band = bands[i % bands.length]
+        x = (band[:x_min] + ([band[:x_max] - band[:x_min], 0.001].max * 0.5)).round(6)
+        y = (band[:y_min] + ([band[:y_max] - band[:y_min], 0.001].max * 0.5)).round(6)
+        out << { x: x, y: y }
+      end
+
+      out
+    end
+    private_class_method :v6_pairs_for
+
     def v4_sync_pairs
       [
         { x: 0.16, y: 0.17 },
@@ -499,25 +598,63 @@ module ::MediaGallery
         { x: 0.68, y: 0.80 }
       ]
     end
+
+    def v6_sync_pairs
+      [
+        { x: 0.10, y: 0.12 },
+        { x: 0.42, y: 0.12 },
+        { x: 0.74, y: 0.12 },
+        { x: 0.06, y: 0.42 },
+        { x: 0.82, y: 0.42 },
+        { x: 0.06, y: 0.78 },
+        { x: 0.42, y: 0.78 },
+        { x: 0.74, y: 0.78 }
+      ]
+    end
     private_class_method :v5_sync_pairs
 
     def v5_sync_pattern
       V5_SYNC_PATTERN
     end
+
+    def v6_sync_pattern
+      V6_SYNC_PATTERN
+    end
     private_class_method :v5_sync_pattern
 
     def sync_pairs_for_layout(layout)
-      layout.to_s == LAYOUT_V5 ? v5_sync_pairs : v4_sync_pairs
+      case layout.to_s
+      when LAYOUT_V6
+        v6_sync_pairs
+      when LAYOUT_V5
+        v5_sync_pairs
+      else
+        v4_sync_pairs
+      end
     end
     private_class_method :sync_pairs_for_layout
 
     def sync_pattern_for_layout(layout)
-      layout.to_s == LAYOUT_V5 ? v5_sync_pattern : v4_sync_pattern
+      case layout.to_s
+      when LAYOUT_V6
+        v6_sync_pattern
+      when LAYOUT_V5
+        v5_sync_pattern
+      else
+        v4_sync_pattern
+      end
     end
     private_class_method :sync_pattern_for_layout
 
     def sync_opacity_for_layout(layout)
-      layout.to_s == LAYOUT_V5 ? V5_SYNC_OPACITY : V4_SYNC_OPACITY
+      case layout.to_s
+      when LAYOUT_V6
+        V6_SYNC_OPACITY
+      when LAYOUT_V5
+        V5_SYNC_OPACITY
+      else
+        V4_SYNC_OPACITY
+      end
     end
     private_class_method :sync_opacity_for_layout
 

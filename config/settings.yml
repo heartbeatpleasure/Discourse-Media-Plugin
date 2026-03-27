@@ -261,6 +261,7 @@ plugins:
       - v3_pairs
       - v4_pairs
       - v5_screen_safe
+      - v6_local_sync
     client: false
 
 

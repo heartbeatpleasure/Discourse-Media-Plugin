@@ -20,9 +20,26 @@ module ::MediaGallery
 
     SALT = "media_gallery_fingerprint_v1"
 
+    CODEBOOK_REPEAT_INTERLEAVE_V1 = "repeat_interleave_v1"
+    CODEBOOK_LOCAL_WINDOW_V2 = "local_window_codelets_v2"
+
     ECC_LOGICAL_BITS = 16
     ECC_REPEAT = 4
     ECC_BLOCK_SPAN = ECC_LOGICAL_BITS * ECC_REPEAT
+
+    LOCAL_V2_LOGICAL_BITS = 24
+    LOCAL_V2_REPEAT = 3
+    LOCAL_V2_BLOCK_SPAN = LOCAL_V2_LOGICAL_BITS * LOCAL_V2_REPEAT
+    LOCAL_V2_CODELETS = %w[
+      ababba
+      baabab
+      abbaba
+      baabba
+      aabbab
+      bbaaba
+      abbaab
+      babbaa
+    ].freeze
 
     def enabled?
       SiteSetting.respond_to?(:media_gallery_fingerprint_enabled) && SiteSetting.media_gallery_fingerprint_enabled
@@ -49,38 +66,57 @@ module ::MediaGallery
       OpenSSL::HMAC.hexdigest("SHA256", secret, msg)[0, 32]
     end
 
-    def ecc_profile
-      {
-        logical_bits: ECC_LOGICAL_BITS,
-        repeat: ECC_REPEAT,
-        block_span: ECC_BLOCK_SPAN,
-        scheme: "repeat_interleave_v1"
-      }
+
+    def current_thread_codebook_scheme
+      Thread.current[:media_gallery_fingerprint_codebook_scheme].to_s.presence
+    rescue
+      nil
     end
 
-    def logical_slot_for_segment(segment_index:)
-      idx = segment_index.to_i
-      idx = 0 if idx.negative?
-
-      {
-        block_index: idx / ECC_BLOCK_SPAN,
-        logical_index: idx % ECC_LOGICAL_BITS,
-        block_span: ECC_BLOCK_SPAN,
-        repeat: ECC_REPEAT,
-        logical_bits: ECC_LOGICAL_BITS
-      }
+    def with_codebook_scheme(codebook)
+      previous = Thread.current[:media_gallery_fingerprint_codebook_scheme]
+      Thread.current[:media_gallery_fingerprint_codebook_scheme] = codebook.to_s.presence
+      yield
+    ensure
+      Thread.current[:media_gallery_fingerprint_codebook_scheme] = previous
     end
 
-    def expected_logical_variant(fingerprint_id:, media_item_id:, block_index:, logical_index:)
+    def codebook_scheme_for(layout: nil, codebook: nil)
+      explicit = codebook.to_s.presence
+      return explicit if explicit.present?
+
+      threaded = current_thread_codebook_scheme
+      return threaded if threaded.present?
+
+      case layout.to_s
+      when "v6_local_sync"
+        CODEBOOK_LOCAL_WINDOW_V2
+      else
+        CODEBOOK_REPEAT_INTERLEAVE_V1
+      end
+    rescue
+      CODEBOOK_REPEAT_INTERLEAVE_V1
+    end
+
+    def expected_logical_variant(fingerprint_id:, media_item_id:, block_index:, logical_index:, codebook: nil, layout: nil)
+      profile = ecc_profile(codebook: codebook, layout: layout)
       block = block_index.to_i
       block = 0 if block.negative?
       logical = logical_index.to_i
       logical = 0 if logical.negative?
-      logical %= ECC_LOGICAL_BITS
+      logical %= [profile[:logical_bits].to_i, 1].max
 
-      msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|b=#{block}|l=#{logical}"
-      byte0 = OpenSSL::HMAC.digest("SHA256", secret, msg).getbyte(0)
-      (byte0 & 1) == 1 ? "b" : "a"
+      if profile[:scheme].to_s == CODEBOOK_LOCAL_WINDOW_V2
+        v2_local_codelet_sequence(
+          fingerprint_id: fingerprint_id,
+          media_item_id: media_item_id,
+          block_index: block
+        )[logical].to_s == "b" ? "b" : "a"
+      else
+        msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|b=#{block}|l=#{logical}"
+        byte0 = OpenSSL::HMAC.digest("SHA256", secret, msg).getbyte(0)
+        (byte0 & 1) == 1 ? "b" : "a"
+      end
     rescue
       "a"
     end
@@ -91,13 +127,15 @@ module ::MediaGallery
     # independent per-segment bits. This acts as lightweight ECC: short leaks often
     # contain multiple observations of the same logical bit, allowing the matcher to
     # majority-vote away isolated bit flips from screen recordings.
-    def expected_variant_for_segment(fingerprint_id:, media_item_id:, segment_index:)
-      slot = logical_slot_for_segment(segment_index: segment_index)
+    def expected_variant_for_segment(fingerprint_id:, media_item_id:, segment_index:, codebook: nil, layout: nil)
+      slot = logical_slot_for_segment(segment_index: segment_index, codebook: codebook, layout: layout)
       expected_logical_variant(
         fingerprint_id: fingerprint_id,
         media_item_id: media_item_id,
         block_index: slot[:block_index],
-        logical_index: slot[:logical_index]
+        logical_index: slot[:logical_index],
+        codebook: codebook,
+        layout: layout
       )
     rescue
       "a"
