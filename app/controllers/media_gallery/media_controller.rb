@@ -15,7 +15,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                   only: [:index, :plugin_config, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :retry_processing, :update, :destroy]
+                   only: [:index, :plugin_config, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :retry_processing, :destroy, :update]
 
     before_action :ensure_can_upload, only: [:create]
 
@@ -188,7 +188,8 @@ module ::MediaGallery
         return render_json_error("private_storage_unavailable", status: 500, message: "private_storage_unavailable: #{e.message}"[0, 300])
       end
 
-      tags = normalized_tags_param(params[:tags])
+      tags = params[:tags]
+      tags = tags.is_a?(Array) ? tags : tags.to_s.split(",") if tags.present?
 
       extra_metadata = params[:extra_metadata]
       extra_metadata = {} if extra_metadata.blank?
@@ -222,7 +223,7 @@ module ::MediaGallery
         watermark_enabled: watermark_enabled,
         watermark_preset_id: watermark_preset_id,
         gender: subject.presence,
-        tags: tags,
+        tags: (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq,
         original_upload_id: upload.id,
         status: status,
         processed_upload_id: (status == "ready" && !private_storage ? upload.id : nil),
@@ -270,23 +271,34 @@ module ::MediaGallery
         return render_json_error("invalid_gender")
       end
 
-      item.assign_attributes(
-        title: title,
-        description: params[:description].to_s.strip.presence,
-        gender: subject.presence,
-        tags: normalized_tags_param(params[:tags])
-      )
-      item.save!
+      description = params[:description].to_s.strip
+      tags =
+        begin
+          raw = params[:tags]
+          arr = raw.is_a?(Array) ? raw : raw.to_s.split(",")
+          arr.map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
+        end
 
-      render_json_dump(media_item: serialize_data(item, MediaGallery::MediaItemSerializer, root: false))
+      item.update!(
+        title: title,
+        description: description.presence,
+        gender: subject,
+        tags: tags
+      )
+
+      item.reload
+      render_json_dump(serialize_data(item, MediaGallery::MediaItemSerializer, root: false))
     rescue ActiveRecord::RecordInvalid => e
       Rails.logger.warn(
         "[media_gallery] update validation failed request_id=#{request.request_id} public_id=#{params[:public_id]} errors=#{e.record.errors.full_messages.join(", ")}"
       )
       render_json_error("validation_error", status: 422, extra: { details: e.record.errors.full_messages })
+    rescue Discourse::NotFound
+      raise
     rescue => e
       Rails.logger.error(
-        "[media_gallery] update failed request_id=#{request.request_id} public_id=#{params[:public_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}"
+        "[media_gallery] update failed request_id=#{request.request_id} public_id=#{params[:public_id]} error=#{e.class}: #{e.message}
+#{e.backtrace&.first(40)&.join("\n")}"
       )
       render_json_error("internal_error", status: 500)
     end
@@ -759,12 +771,6 @@ module ::MediaGallery
       }
       payload.merge!(extra) if extra.is_a?(Hash)
       render json: payload, status: status
-    end
-
-    def normalized_tags_param(raw_tags)
-      tags = raw_tags
-      tags = tags.is_a?(Array) ? tags : tags.to_s.split(",") if tags.present?
-      (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
     end
 
     def preflight_private_storage!
