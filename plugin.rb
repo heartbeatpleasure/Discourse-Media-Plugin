@@ -106,6 +106,8 @@ after_initialize do
     post "/media" => "media_gallery/media#create", defaults: { format: :json }
 
     get "/media/:public_id" => "media_gallery/media#show", defaults: { format: :json }
+    put "/media/:public_id" => "media_gallery/media#update", defaults: { format: :json }
+    patch "/media/:public_id" => "media_gallery/media#update", defaults: { format: :json }
     delete "/media/:public_id" => "media_gallery/media#destroy", defaults: { format: :json }
 
     get "/media/:public_id/status" => "media_gallery/media#status", defaults: { format: :json }
