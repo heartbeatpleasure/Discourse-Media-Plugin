@@ -811,6 +811,13 @@ module ::MediaGallery
           store = ::MediaGallery::StorageSettingsResolver.build_store(role["backend"])
           store&.delete(role["key"].to_s)
         end
+
+        hls_role = ::MediaGallery::AssetManifest.role_for(item, "hls")
+        if hls_role.present? && %w[local s3].include?(hls_role["backend"].to_s)
+          store = ::MediaGallery::StorageSettingsResolver.build_store(hls_role["backend"])
+          prefix = hls_role["key_prefix"].presence || hls_role["key"].presence || ::MediaGallery::PrivateStorage.hls_root_rel_dir(public_id)
+          store&.delete_prefix(prefix.to_s) if prefix.present?
+        end
       rescue => e
         Rails.logger.warn("[media_gallery] failed to delete managed assets public_id=#{public_id}: #{e.class}: #{e.message}")
       end

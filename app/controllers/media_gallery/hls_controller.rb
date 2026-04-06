@@ -25,10 +25,8 @@ module ::MediaGallery
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
 
-      path = MediaGallery::PrivateStorage.hls_master_abs_path(item)
-      raise Discourse::NotFound unless path.present? && File.exist?(path)
-
-      data = File.read(path)
+      role = hls_role_for(item)
+      data = read_master_playlist!(item, role: role)
       data = rewrite_master_playlist(data, public_id: item.public_id, token: token)
 
       set_playlist_headers!
@@ -48,11 +46,9 @@ module ::MediaGallery
       variant = params[:variant].to_s
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
 
-      path = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
-      raise Discourse::NotFound unless path.present? && File.exist?(path)
-
-      data = File.read(path)
-      data = rewrite_variant_playlist(data, public_id: item.public_id, variant: variant, token: token, fingerprint_id: payload["fingerprint_id"], media_item_id: item.id)
+      role = hls_role_for(item)
+      data = read_variant_playlist!(item, variant: variant, role: role)
+      data = rewrite_variant_playlist(data, item: item, variant: variant, token: token, fingerprint_id: payload["fingerprint_id"], media_item_id: item.id)
 
       set_playlist_headers!
       send_data(data, type: m3u8_content_type, disposition: "inline")
@@ -76,7 +72,6 @@ module ::MediaGallery
         deny!(:ab_not_allowed, token: token)
       end
 
-      # If fingerprinting is enabled for this token, require an explicit a|b in the path.
       if MediaGallery::Fingerprinting.enabled? && payload["fingerprint_id"].present? && ab.blank?
         deny!(:missing_ab_variant, token: token)
       end
@@ -85,11 +80,10 @@ module ::MediaGallery
       segment = File.basename(segment)
       deny!(:invalid_segment_name, token: token) unless segment =~ /\A[\w\-.]+\.(ts|m4s)\z/i
 
-      # Enforce that users cannot request the "other" segment variant (A/B) for their fingerprint.
       if MediaGallery::Fingerprinting.enabled? && payload["fingerprint_id"].present? && ab.present?
         seg_idx = MediaGallery::Fingerprinting.segment_index_from_filename(segment)
         if seg_idx.present?
-          codebook_scheme = packaged_codebook_scheme_for(item.public_id)
+          codebook_scheme = packaged_codebook_scheme_for(item)
           expected = MediaGallery::Fingerprinting.expected_variant_for_segment(
             fingerprint_id: payload["fingerprint_id"],
             media_item_id: item.id,
@@ -100,11 +94,19 @@ module ::MediaGallery
         end
       end
 
-      # Prefer A/B-specific files when they exist, otherwise fallback to legacy single-set packaging.
-      abs = resolve_segment_abs_path(item.public_id, variant, segment, ab: ab)
-      raise Discourse::NotFound unless abs.present? && File.exist?(abs)
+      role = hls_role_for(item)
+      delivery = resolve_segment_delivery(item, variant: variant, segment: segment, ab: ab, role: role)
+      raise Discourse::NotFound if delivery.blank?
 
-      set_segment_headers!
+      set_segment_headers!(segment)
+
+      if delivery[:mode] == :redirect
+        response.headers["Cache-Control"] = "no-store"
+        return redirect_to(delivery[:redirect_url], allow_other_host: true, status: 307)
+      end
+
+      abs = delivery[:local_path]
+      raise Discourse::NotFound unless abs.present? && File.exist?(abs)
 
       if SiteSetting.respond_to?(:media_gallery_hls_x_accel_enabled) && SiteSetting.media_gallery_hls_x_accel_enabled
         internal = SiteSetting.media_gallery_hls_x_accel_internal_location.to_s.strip
@@ -117,7 +119,7 @@ module ::MediaGallery
         return head :ok
       end
 
-      send_file(abs, type: segment_content_type, disposition: "inline")
+      send_file(abs, type: segment_content_type(segment), disposition: "inline")
     end
 
     private
@@ -203,7 +205,83 @@ module ::MediaGallery
         "[media_gallery] HLS denied reason=#{reason} token=#{token_fingerprint(token)} ip=#{request.remote_ip} user_id=#{current_user&.id} request_id=#{request.request_id}"
       )
     rescue
-      # ignore
+    end
+
+    def hls_role_for(item)
+      role = ::MediaGallery::Hls.managed_role_for(item)
+      return nil unless role.present?
+      return nil unless ::MediaGallery::Hls.managed_role_ready?(item, role)
+      role.deep_stringify_keys
+    rescue
+      nil
+    end
+
+    def hls_store_for(role)
+      return nil unless role.is_a?(Hash)
+      backend = role["backend"].to_s
+      return nil if backend.blank? || backend == "local"
+      ::MediaGallery::StorageSettingsResolver.build_store(backend)
+    rescue
+      nil
+    end
+
+    def read_master_playlist!(item, role: nil)
+      if role.present? && role["backend"].to_s == "s3"
+        store = hls_store_for(role)
+        raise Discourse::NotFound if store.blank?
+        begin
+          return store.read(::MediaGallery::Hls.master_key_for(item, role: role))
+        rescue
+          raise Discourse::NotFound
+        end
+      end
+
+      path = MediaGallery::PrivateStorage.hls_master_abs_path(item)
+      raise Discourse::NotFound unless path.present? && File.exist?(path)
+      File.read(path)
+    end
+
+    def read_variant_playlist!(item, variant:, role: nil)
+      if role.present? && role["backend"].to_s == "s3"
+        store = hls_store_for(role)
+        raise Discourse::NotFound if store.blank?
+        begin
+          return store.read(::MediaGallery::Hls.variant_playlist_key_for(item, variant, role: role))
+        rescue
+          raise Discourse::NotFound
+        end
+      end
+
+      path = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
+      raise Discourse::NotFound unless path.present? && File.exist?(path)
+      File.read(path)
+    end
+
+    def resolve_segment_delivery(item, variant:, segment:, ab:, role: nil)
+      if role.present? && role["backend"].to_s == "s3"
+        store = hls_store_for(role)
+        raise Discourse::NotFound if store.blank?
+
+        key = ::MediaGallery::Hls.segment_key_for(item, variant, segment, ab: ab, role: role)
+        raise Discourse::NotFound if key.blank?
+
+        ttl = ::MediaGallery::StorageSettingsResolver.s3_options[:presign_ttl_seconds].to_i
+        ttl = 300 if ttl <= 0
+
+        return {
+          mode: :redirect,
+          redirect_url: store.presigned_get_url(
+            key,
+            expires_in: ttl,
+            response_content_type: segment_content_type(segment),
+            response_content_disposition: "inline"
+          )
+        }
+      end
+
+      abs = resolve_segment_abs_path(item.public_id, variant, segment, ab: ab)
+      raise Discourse::NotFound unless abs.present? && File.exist?(abs)
+      { mode: :local, local_path: abs }
     end
 
     def segment_rel_from_abs(abs_path)
@@ -215,7 +293,7 @@ module ::MediaGallery
       p
     end
 
-def resolve_segment_rel_path(public_id, variant, segment, ab: nil)
+    def resolve_segment_rel_path(public_id, variant, segment, ab: nil)
       seg = segment.to_s
       if ab.present?
         File.join(public_id.to_s, "hls", ab.to_s, variant.to_s, seg)
@@ -225,7 +303,6 @@ def resolve_segment_rel_path(public_id, variant, segment, ab: nil)
     end
 
     def resolve_segment_abs_path(public_id, variant, segment, ab: nil)
-      # Try A/B path first (future), then fallback to the legacy single folder (today).
       if ab.present?
         ab_abs = File.join(MediaGallery::PrivateStorage.private_root, resolve_segment_rel_path(public_id, variant, segment, ab: ab))
         return ab_abs if File.exist?(ab_abs)
@@ -234,8 +311,21 @@ def resolve_segment_rel_path(public_id, variant, segment, ab: nil)
       MediaGallery::PrivateStorage.hls_segment_abs_path(public_id, variant, segment)
     end
 
-    def packaged_codebook_scheme_for(public_id)
-      root = MediaGallery::PrivateStorage.hls_root_abs_dir(public_id)
+    def packaged_codebook_scheme_for(item)
+      role = hls_role_for(item)
+      if role.present? && role["backend"].to_s == "s3"
+        key = ::MediaGallery::Hls.fingerprint_meta_key_for(item, role: role)
+        store = hls_store_for(role)
+        if key.present? && store.present? && store.exists?(key)
+          meta = JSON.parse(store.read(key)) rescue nil
+          if meta.is_a?(Hash)
+            return meta["codebook_scheme"].to_s.presence ||
+              ::MediaGallery::Fingerprinting.codebook_scheme_for(layout: meta["layout"].to_s)
+          end
+        end
+      end
+
+      root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
       meta_path = File.join(root, "fingerprint_meta.json")
       return nil unless File.exist?(meta_path)
 
@@ -248,31 +338,29 @@ def resolve_segment_rel_path(public_id, variant, segment, ab: nil)
       nil
     end
 
-
-def set_playlist_headers!
+    def set_playlist_headers!
       response.headers["Cache-Control"] = "no-store"
       response.headers["X-Content-Type-Options"] = "nosniff"
     end
 
-    def set_segment_headers!
+    def set_segment_headers!(segment)
       response.headers["Cache-Control"] = "no-store"
       response.headers["X-Content-Type-Options"] = "nosniff"
-      response.headers["Content-Type"] = segment_content_type
+      response.headers["Content-Type"] = segment_content_type(segment)
     end
 
     def m3u8_content_type
       "application/vnd.apple.mpegurl"
     end
 
-    def segment_content_type
+    def segment_content_type(segment = nil)
+      ext = File.extname(segment.to_s).downcase
+      return "video/iso.segment" if ext == ".m4s"
       "video/MP2T"
     end
 
-    # Master playlists produced by our packager reference the variant playlists as relative paths.
-    # We rewrite those lines to point at our authenticated variant endpoint.
     def rewrite_master_playlist(raw, public_id:, token:)
       out = []
-      seg_counter = 0
       raw.to_s.each_line do |line|
         l = line.rstrip
         if l.blank? || l.start_with?("#")
@@ -280,7 +368,6 @@ def set_playlist_headers!
           next
         end
 
-        # Expect something like: v0/index.m3u8
         variant = l.split("/").first.to_s
         if MediaGallery::Hls.variant_allowed?(variant)
           out << "/media/hls/#{public_id}/v/#{variant}/index.m3u8?token=#{token}"
@@ -291,16 +378,15 @@ def set_playlist_headers!
       out.join("\n") + "\n"
     end
 
-    # Variant playlists reference segments as relative paths.
-    # We rewrite those lines to point at our authenticated segment endpoint.
-    def rewrite_variant_playlist(raw, public_id:, variant:, token:, fingerprint_id: nil, media_item_id: nil)
+    def rewrite_variant_playlist(raw, item:, variant:, token:, fingerprint_id: nil, media_item_id: nil)
       out = []
       seg_counter = 0
-      codebook_scheme = packaged_codebook_scheme_for(public_id)
+      public_id = item.public_id.to_s
+      codebook_scheme = packaged_codebook_scheme_for(item)
+
       raw.to_s.each_line do |line|
         l = line.rstrip
         if l.blank? || l.start_with?("#")
-          # Also handle EXT-X-MAP URI for fMP4 (future-proof)
           if l.include?("URI=\"")
             out << l.gsub(/URI=\"([^\"]+)\"/) do
               uri = Regexp.last_match(1).to_s
@@ -319,7 +405,6 @@ def set_playlist_headers!
 
         seg = File.basename(l)
         if seg =~ /\A[\w\-.]+\.(ts|m4s)\z/i
-          # Segment-level A/B fingerprinting (pattern derived from token -> fingerprint_id).
           ab = nil
           if MediaGallery::Fingerprinting.enabled? && fingerprint_id.present? && media_item_id.present?
             idx = MediaGallery::Fingerprinting.segment_index_from_filename(seg)

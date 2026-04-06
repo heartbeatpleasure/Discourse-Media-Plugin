@@ -30,6 +30,10 @@ module ::MediaGallery
       raise NotImplementedError
     end
 
+    def list_prefix(prefix, limit: nil)
+      raise NotImplementedError
+    end
+
     def presigned_get_url(key, expires_in:, response_content_type: nil, response_content_disposition: nil)
       raise NotImplementedError
     end

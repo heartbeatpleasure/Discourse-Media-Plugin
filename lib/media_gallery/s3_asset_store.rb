@@ -16,12 +16,14 @@ module ::MediaGallery
     end
 
     def ensure_available!
+      return true if defined?(@available) && @available
       raise "s3_endpoint_missing" if options[:endpoint].to_s.blank?
       raise "s3_bucket_missing" if options[:bucket].to_s.blank?
       raise "s3_access_key_id_missing" if options[:access_key_id].to_s.blank?
       raise "s3_secret_access_key_missing" if options[:secret_access_key].to_s.blank?
 
       head_bucket!
+      @available = true
       true
     end
 
@@ -93,6 +95,35 @@ module ::MediaGallery
       false
     end
 
+    def list_prefix(prefix, limit: nil)
+      pref = normalized_key(prefix)
+      keys = []
+      continuation_token = nil
+      max_keys = nil
+      if limit.present? && limit.to_i > 0
+        max_keys = [limit.to_i, 1000].min
+      end
+
+      loop do
+        result = client.list_objects_v2(
+          bucket: bucket,
+          prefix: pref,
+          continuation_token: continuation_token,
+          max_keys: max_keys,
+        )
+
+        Array(result.contents).each do |obj|
+          keys << denormalized_key(obj.key)
+          return keys if limit.present? && limit.to_i > 0 && keys.length >= limit.to_i
+        end
+
+        break unless result.is_truncated
+        continuation_token = result.next_continuation_token
+      end
+
+      keys
+    end
+
     def presigned_get_url(key, expires_in:, response_content_type: nil, response_content_disposition: nil)
       params = { bucket: bucket, key: normalized_key(key) }
       params[:response_content_type] = response_content_type if response_content_type.present?
@@ -136,12 +167,24 @@ module ::MediaGallery
 
     def normalized_key(key)
       rel = key.to_s.sub(%r{\A/+}, "")
-      pref = options[:prefix].to_s.sub(%r{\A/+}, "").sub(%r{/+\z}, "")
+      pref = normalized_prefix
       return rel if pref.blank?
       return rel if rel == pref || rel.start_with?("#{pref}/")
       return pref if rel.blank?
 
       "#{pref}/#{rel}"
+    end
+
+    def denormalized_key(key)
+      full = key.to_s.sub(%r{\A/+}, "")
+      pref = normalized_prefix
+      return full if pref.blank?
+      return "" if full == pref
+      full.sub(%r{\A#{Regexp.escape(pref)}/*}, "")
+    end
+
+    def normalized_prefix
+      options[:prefix].to_s.sub(%r{\A/+}, "").sub(%r{/+\z}, "")
     end
 
     def stringify_metadata(metadata)

@@ -17,12 +17,14 @@ module ::MediaGallery
     end
 
     def ensure_available!
+      return true if defined?(@available) && @available
       raise "local_asset_root_path_missing" if @root_path.blank?
 
       FileUtils.mkdir_p(@root_path)
       test_path = File.join(@root_path, ".write_test_#{SecureRandom.hex(6)}")
       File.write(test_path, "ok")
       FileUtils.rm_f(test_path)
+      @available = true
       true
     end
 
@@ -62,6 +64,21 @@ module ::MediaGallery
       true
     rescue
       false
+    end
+
+    def list_prefix(prefix, limit: nil)
+      dir = absolute_path_for(prefix)
+      return [] unless Dir.exist?(dir)
+
+      entries = []
+      Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).sort.each do |path|
+        next if File.directory?(path)
+        next if File.basename(path).start_with?(".")
+
+        entries << relative_key_for(path)
+        break if limit.present? && limit.to_i > 0 && entries.length >= limit.to_i
+      end
+      entries
     end
 
     def presigned_get_url(key, expires_in:, response_content_type: nil, response_content_disposition: nil)

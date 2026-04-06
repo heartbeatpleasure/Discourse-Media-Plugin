@@ -120,7 +120,12 @@ module Jobs
             input_for_hls = processed_tmp
             hls_meta = MediaGallery::Hls.package_video!(item, input_path: input_for_hls)
             if hls_meta.present?
-              persist_hls_local_role!(item, hls_meta: hls_meta)
+              hls_role = MediaGallery::Hls.publish_packaged_video!(
+                item,
+                store: ::MediaGallery::StorageSettingsResolver.build_store,
+                hls_meta: hls_meta
+              )
+              persist_hls_role!(item, hls_role: hls_role)
               meta = (item.extra_metadata || {}).dup
               meta["hls"] = hls_meta
               item.extra_metadata = meta
@@ -383,15 +388,8 @@ module Jobs
       item.save!
     end
 
-    def persist_hls_local_role!(item, hls_meta:)
-      hls_role = {
-        backend: "local",
-        key: ::MediaGallery::PrivateStorage.hls_root_rel_dir(item.public_id),
-        content_type: "application/vnd.apple.mpegurl",
-        ready: true,
-        segment_duration_seconds: hls_meta["segment_duration_seconds"],
-        generated_at: hls_meta["generated_at"]
-      }
+    def persist_hls_role!(item, hls_role:)
+      return if hls_role.blank?
 
       manifest = item.storage_manifest_hash.deep_dup
       manifest = { "roles" => {} } unless manifest.is_a?(Hash)

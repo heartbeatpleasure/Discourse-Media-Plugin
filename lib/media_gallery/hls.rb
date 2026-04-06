@@ -4,14 +4,18 @@ require "fileutils"
 require "securerandom"
 require "time"
 require "json"
+require "digest"
 
 require_relative "fingerprint_watermark"
 
 module ::MediaGallery
-  # HLS packaging + simple readiness helpers.
+  # HLS packaging + readiness + managed-store publishing.
   #
-  # Milestone 1: single variant (v0) without A/B fingerprinting.
-  # Future: store multiple variants and dynamically assemble playlists.
+  # Safe rollout strategy for this iteration:
+  # - packaging still happens locally into the plugin-managed private root
+  # - local HLS remains available for backwards compatibility / admin tools
+  # - when the active managed backend is S3, the finalized HLS package is also
+  #   uploaded to S3 and playback resolves from the manifest/backend
   module Hls
     module_function
 
@@ -35,14 +39,12 @@ module ::MediaGallery
         s = 0
       end
 
-      # Clamp to a sane range.
       s = 6 if s <= 0
       s = 2 if s < 2
       s = 10 if s > 10
       s
     end
 
-    # For now, a single packaged set.
     def variants
       [DEFAULT_VARIANT]
     end
@@ -51,48 +53,65 @@ module ::MediaGallery
       variants.include?(variant.to_s)
     end
 
-    # Readiness is file-based (avoids depending on DB metadata).
-    def ready?(item)
-      return false unless enabled?
-      return false unless MediaGallery::PrivateStorage.enabled?
-      return false unless item&.public_id.present?
-
-      master = MediaGallery::PrivateStorage.hls_master_abs_path(item)
-      complete = MediaGallery::PrivateStorage.hls_complete_abs_path(item.public_id)
-
-      return false if master.blank? || complete.blank?
-      return false unless File.exist?(master) && File.exist?(complete)
-
-      # Extra safety checks (prevents advertising HLS when only the marker exists).
-      variants.all? do |v|
-        pl = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, v)
-        next false if pl.blank? || !File.exist?(pl)
-
-        vdir = MediaGallery::PrivateStorage.hls_variant_abs_dir(item.public_id, v)
-        next false if vdir.blank? || !Dir.exist?(vdir)
-
-        if fingerprinting_enabled?
-          # When fingerprinting is enabled, segments live under: /hls/a/<variant>/ and /hls/b/<variant>/
-          hls_root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-          a_dir = File.join(hls_root, "a", v.to_s)
-          b_dir = File.join(hls_root, "b", v.to_s)
-
-          next false unless a_dir.present? && b_dir.present?
-          next false unless Dir.exist?(a_dir) && Dir.exist?(b_dir)
-
-          a_has = Dir.glob(File.join(a_dir, "*.ts")).any? || Dir.glob(File.join(a_dir, "*.m4s")).any?
-          b_has = Dir.glob(File.join(b_dir, "*.ts")).any? || Dir.glob(File.join(b_dir, "*.m4s")).any?
-          a_has && b_has
-        else
-          # Legacy single-set packaging (segments live directly under /hls/<variant>/)
-          Dir.glob(File.join(vdir, "*.ts")).any? || Dir.glob(File.join(vdir, "*.m4s")).any?
-        end
-      end
+    def managed_role_for(item)
+      role = ::MediaGallery::AssetManifest.role_for(item, "hls")
+      return nil unless role.is_a?(Hash)
+      role.deep_stringify_keys
+    rescue
+      nil
     end
 
-    # Generates HLS files
-    # Generates HLS files for a processed MP4.
-    # Returns metadata Hash on success, nil on failure.
+    def managed_role_ready?(item, role)
+      return false unless role.is_a?(Hash)
+      backend = role["backend"].to_s
+      case backend
+      when "s3"
+        store = ::MediaGallery::StorageSettingsResolver.build_store("s3")
+        return false if store.blank?
+
+        master_key = master_key_for(item, role: role)
+        complete_key = complete_key_for(item, role: role)
+        return false if master_key.blank? || complete_key.blank?
+        return false unless store.exists?(master_key) && store.exists?(complete_key)
+
+        role_variants = role_variants_for(role)
+        role_variants.all? do |v|
+          playlist_key = variant_playlist_key_for(item, v, role: role)
+          next false if playlist_key.blank? || !store.exists?(playlist_key)
+
+          if role_uses_ab_layout?(role)
+            a_prefix = ab_variant_prefix_for(item, v, "a", role: role)
+            b_prefix = ab_variant_prefix_for(item, v, "b", role: role)
+            next false if a_prefix.blank? || b_prefix.blank?
+
+            a_has = store.list_prefix(a_prefix, limit: 1).any?
+            b_has = store.list_prefix(b_prefix, limit: 1).any?
+            a_has && b_has
+          else
+            seg_prefix = segment_prefix_for(item, v, role: role)
+            seg_prefix.present? && store.list_prefix(seg_prefix, limit: 1).any?
+          end
+        end
+      when "local"
+        local_role_ready?(item, role)
+      else
+        false
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] HLS managed readiness check failed public_id=#{item&.public_id} backend=#{backend} error=#{e.class}: #{e.message}")
+      false
+    end
+
+    def ready?(item)
+      return false unless enabled?
+      return false unless item&.public_id.present?
+
+      role = managed_role_for(item)
+      return true if managed_role_ready?(item, role)
+
+      legacy_local_ready?(item)
+    end
+
     def package_video!(item, input_path:)
       return nil unless enabled?
       return nil unless MediaGallery::PrivateStorage.enabled?
@@ -105,19 +124,15 @@ module ::MediaGallery
       final_root = MediaGallery::PrivateStorage.hls_root_abs_dir(public_id)
       item_root = MediaGallery::PrivateStorage.item_private_dir(public_id)
 
-      # Build into a temp folder first. This avoids destroying a previously valid HLS
-      # set when repackaging fails (e.g. ffmpeg error, disk full).
       MediaGallery::PrivateStorage.ensure_dir!(item_root)
       tmp_root = File.join(item_root, "hls__tmp_#{SecureRandom.hex(8)}")
 
       FileUtils.rm_rf(tmp_root) if Dir.exist?(tmp_root)
 
       if fingerprinting_enabled?
-        # Template playlist lives in /hls/<variant>/index.m3u8
         tmp_variant_dir = File.join(tmp_root, variant)
         MediaGallery::PrivateStorage.ensure_dir!(tmp_variant_dir)
 
-        # Actual segment sets live in /hls/a/<variant>/ and /hls/b/<variant>/
         tmp_a_dir = File.join(tmp_root, "a", variant)
         tmp_b_dir = File.join(tmp_root, "b", variant)
         MediaGallery::PrivateStorage.ensure_dir!(tmp_a_dir)
@@ -139,7 +154,6 @@ module ::MediaGallery
           audio_bitrate_kbps: SiteSetting.media_gallery_audio_bitrate_kbps.to_i
         )
 
-        # Use the A playlist as the template (segment names + durations).
         a_pl = File.join(tmp_a_dir, "index.m3u8")
         tmp_variant_pl = File.join(tmp_variant_dir, "index.m3u8")
         raise "hls_ab_playlist_missing" unless File.exist?(a_pl)
@@ -161,7 +175,6 @@ module ::MediaGallery
       tmp_complete = File.join(tmp_root, ".complete")
       File.write(tmp_complete, Time.now.utc.iso8601)
 
-      # Sanity check before swapping into place.
       tmp_variant_pl = File.join(tmp_root, variant, "index.m3u8")
       unless File.exist?(tmp_master) && File.exist?(tmp_variant_pl) && File.exist?(tmp_complete)
         raise "hls_outputs_incomplete"
@@ -193,8 +206,6 @@ module ::MediaGallery
           "codebook_scheme" => codebook_scheme,
         }
 
-        # Persist minimal metadata in the HLS folder so later forensic tooling can
-        # decode the correct watermark layout even if the SiteSetting changes.
         begin
           File.write(
             File.join(final_root, "fingerprint_meta.json"),
@@ -230,7 +241,6 @@ module ::MediaGallery
     rescue => e
       Rails.logger.warn("[media_gallery] HLS packaging failed public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
 
-      # Best-effort cleanup of temp folders (if any).
       begin
         if item&.public_id.present?
           item_root = MediaGallery::PrivateStorage.item_private_dir(item.public_id)
@@ -239,21 +249,129 @@ module ::MediaGallery
           end
         end
       rescue
-        # ignore
       end
 
       nil
     end
 
-    # Cleanup temp/old build artifacts left behind by repackaging.
-    # Called by a scheduled job (hourly).
+    # Publish the finalized local HLS package into the target managed store and
+    # return the manifest role that playback should use.
+    def publish_packaged_video!(item, store:, hls_meta:)
+      raise "managed_store_unavailable" if store.blank?
+      raise "hls_meta_missing" unless hls_meta.is_a?(Hash)
+
+      final_root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+      raise "hls_final_root_missing" unless final_root.present? && Dir.exist?(final_root)
+
+      if store.backend.to_s == "local"
+        return build_role_for_store(item, backend: "local", hls_meta: hls_meta)
+      end
+
+      store.ensure_available!
+
+      each_packaged_file(final_root) do |abs_path, rel_path|
+        key = File.join(item.public_id.to_s, "hls", rel_path)
+        store.put_file!(
+          abs_path,
+          key: key,
+          content_type: content_type_for_rel_path(rel_path),
+          metadata: {
+            "media_item_id" => item.id,
+            "public_id" => item.public_id,
+            "role" => "hls"
+          }
+        )
+      end
+
+      build_role_for_store(item, backend: store.backend, hls_meta: hls_meta)
+    end
+
+    def master_key_for(item, role: nil)
+      role ||= managed_role_for(item)
+      return role["master_key"].to_s if role.is_a?(Hash) && role["master_key"].present?
+      File.join(item.public_id.to_s, "hls", "master.m3u8")
+    end
+
+    def complete_key_for(item, role: nil)
+      role ||= managed_role_for(item)
+      return role["complete_key"].to_s if role.is_a?(Hash) && role["complete_key"].present?
+      File.join(item.public_id.to_s, "hls", ".complete")
+    end
+
+    def fingerprint_meta_key_for(item, role: nil)
+      role ||= managed_role_for(item)
+      return role["fingerprint_meta_key"].to_s if role.is_a?(Hash) && role["fingerprint_meta_key"].present?
+      File.join(item.public_id.to_s, "hls", "fingerprint_meta.json")
+    end
+
+    def variant_playlist_key_for(item, variant, role: nil)
+      role ||= managed_role_for(item)
+      if role.is_a?(Hash) && role["variant_playlist_key_template"].present?
+        return format_template(role["variant_playlist_key_template"], variant: variant)
+      end
+      File.join(item.public_id.to_s, "hls", variant.to_s, "index.m3u8")
+    end
+
+    def segment_key_for(item, variant, segment, ab: nil, role: nil)
+      role ||= managed_role_for(item)
+      if ab.present?
+        if role.is_a?(Hash) && role["ab_segment_key_template"].present?
+          return format_template(role["ab_segment_key_template"], variant: variant, segment: segment, ab: ab)
+        end
+        return File.join(item.public_id.to_s, "hls", ab.to_s, variant.to_s, segment.to_s)
+      end
+
+      if role.is_a?(Hash) && role["segment_key_template"].present?
+        return format_template(role["segment_key_template"], variant: variant, segment: segment)
+      end
+      File.join(item.public_id.to_s, "hls", variant.to_s, segment.to_s)
+    end
+
+    def segment_prefix_for(item, variant, role: nil)
+      key = segment_key_for(item, variant, "__probe__.ts", role: role)
+      key.to_s.sub(%r{/__probe__\.ts\z}, "")
+    end
+
+    def ab_variant_prefix_for(item, variant, ab, role: nil)
+      key = segment_key_for(item, variant, "__probe__.ts", ab: ab, role: role)
+      key.to_s.sub(%r{/__probe__\.ts\z}, "")
+    end
+
+    def role_variants_for(role)
+      arr = Array(role.is_a?(Hash) ? role["variants"] : nil).map(&:to_s).reject(&:blank?)
+      arr.present? ? arr : variants
+    end
+
+    def role_uses_ab_layout?(role)
+      return false unless role.is_a?(Hash)
+      ActiveModel::Type::Boolean.new.cast(role["ab_fingerprint"]) || role["ab_segment_key_template"].present?
+    rescue
+      role["ab_fingerprint"].to_s == "true"
+    end
+
+    def content_type_for_rel_path(rel_path)
+      case File.extname(rel_path.to_s).downcase
+      when ".m3u8"
+        "application/vnd.apple.mpegurl"
+      when ".ts"
+        "video/MP2T"
+      when ".m4s"
+        "video/iso.segment"
+      when ".mp4"
+        "video/mp4"
+      when ".json"
+        "application/json"
+      else
+        "application/octet-stream"
+      end
+    end
+
     def cleanup_build_artifacts!
       return unless MediaGallery::PrivateStorage.enabled?
 
       root = MediaGallery::PrivateStorage.private_root.to_s
       return if root.blank? || !Dir.exist?(root)
 
-      # Keep old HLS folders around long enough for in-flight tokens to finish.
       ttl = SiteSetting.media_gallery_stream_token_ttl_minutes.to_i * 60
       keep_seconds = [ttl + 300, 30.minutes.to_i].max
       cutoff = Time.now - keep_seconds
@@ -284,8 +402,6 @@ module ::MediaGallery
       false
     end
 
-    
-    # Rough estimate from the already-processed MP4 size + duration, to avoid extreme re-encodes.
     def estimate_video_bitrate_kbps(item)
       dur = item&.duration_seconds.to_f
       bytes = item&.filesize_processed_bytes.to_i
@@ -300,6 +416,102 @@ module ::MediaGallery
       5000
     end
 
+    def legacy_local_ready?(item)
+      return false unless MediaGallery::PrivateStorage.enabled?
+
+      master = MediaGallery::PrivateStorage.hls_master_abs_path(item)
+      complete = MediaGallery::PrivateStorage.hls_complete_abs_path(item.public_id)
+
+      return false if master.blank? || complete.blank?
+      return false unless File.exist?(master) && File.exist?(complete)
+
+      variants.all? do |v|
+        pl = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, v)
+        next false if pl.blank? || !File.exist?(pl)
+
+        vdir = MediaGallery::PrivateStorage.hls_variant_abs_dir(item.public_id, v)
+        next false if vdir.blank? || !Dir.exist?(vdir)
+
+        if fingerprinting_enabled?
+          hls_root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+          a_dir = File.join(hls_root, "a", v.to_s)
+          b_dir = File.join(hls_root, "b", v.to_s)
+
+          next false unless a_dir.present? && b_dir.present?
+          next false unless Dir.exist?(a_dir) && Dir.exist?(b_dir)
+
+          a_has = Dir.glob(File.join(a_dir, "*.ts")).any? || Dir.glob(File.join(a_dir, "*.m4s")).any?
+          b_has = Dir.glob(File.join(b_dir, "*.ts")).any? || Dir.glob(File.join(b_dir, "*.m4s")).any?
+          a_has && b_has
+        else
+          Dir.glob(File.join(vdir, "*.ts")).any? || Dir.glob(File.join(vdir, "*.m4s")).any?
+        end
+      end
+    end
+    private_class_method :legacy_local_ready?
+
+    def local_role_ready?(item, role)
+      master = MediaGallery::PrivateStorage.hls_master_abs_path(item)
+      complete = MediaGallery::PrivateStorage.hls_complete_abs_path(item.public_id)
+      return false unless File.exist?(master) && File.exist?(complete)
+
+      role_variants_for(role).all? do |v|
+        pl = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, v)
+        next false unless File.exist?(pl)
+
+        if role_uses_ab_layout?(role)
+          a_dir = File.join(MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id), "a", v.to_s)
+          b_dir = File.join(MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id), "b", v.to_s)
+          next false unless Dir.exist?(a_dir) && Dir.exist?(b_dir)
+          a_has = Dir.glob(File.join(a_dir, "*.ts")).any? || Dir.glob(File.join(a_dir, "*.m4s")).any?
+          b_has = Dir.glob(File.join(b_dir, "*.ts")).any? || Dir.glob(File.join(b_dir, "*.m4s")).any?
+          a_has && b_has
+        else
+          vdir = MediaGallery::PrivateStorage.hls_variant_abs_dir(item.public_id, v)
+          Dir.exist?(vdir) && (Dir.glob(File.join(vdir, "*.ts")).any? || Dir.glob(File.join(vdir, "*.m4s")).any?)
+        end
+      end
+    end
+    private_class_method :local_role_ready?
+
+    def each_packaged_file(final_root)
+      Dir.glob(File.join(final_root, "**", "*"), File::FNM_DOTMATCH).sort.each do |abs_path|
+        next if File.directory?(abs_path)
+        rel_path = abs_path.sub(%r{\A#{Regexp.escape(final_root.to_s.chomp('/'))}/?}, "")
+        next if rel_path.blank?
+        yield abs_path, rel_path
+      end
+    end
+    private_class_method :each_packaged_file
+
+    def build_role_for_store(item, backend:, hls_meta:)
+      key_prefix = File.join(item.public_id.to_s, "hls")
+      role = {
+        backend: backend.to_s,
+        key_prefix: key_prefix,
+        master_key: File.join(key_prefix, "master.m3u8"),
+        complete_key: File.join(key_prefix, ".complete"),
+        variant_playlist_key_template: File.join(key_prefix, "%{variant}", "index.m3u8"),
+        segment_key_template: File.join(key_prefix, "%{variant}", "%{segment}"),
+        variants: variants,
+        ready: true,
+        segment_duration_seconds: hls_meta["segment_duration_seconds"],
+        generated_at: hls_meta["generated_at"]
+      }
+
+      if File.exist?(File.join(MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id), "fingerprint_meta.json"))
+        role[:fingerprint_meta_key] = File.join(key_prefix, "fingerprint_meta.json")
+      end
+
+      if hls_meta["ab_fingerprint"]
+        role[:ab_fingerprint] = true
+        role[:ab_layout] = hls_meta["ab_layout"]
+        role[:ab_segment_key_template] = File.join(key_prefix, "%{ab}", "%{variant}", "%{segment}")
+      end
+
+      role.deep_stringify_keys
+    end
+    private_class_method :build_role_for_store
 
     def swap_in_packaged_hls!(final_root:, tmp_root:, item_root:)
       return if final_root.blank? || tmp_root.blank? || item_root.blank?
@@ -313,19 +525,23 @@ module ::MediaGallery
       FileUtils.mv(tmp_root, final_root)
       true
     rescue => e
-      # If the swap fails, try to restore the previous HLS folder.
       begin
         FileUtils.rm_rf(final_root) if final_root.present? && Dir.exist?(final_root)
         FileUtils.mv(old_root, final_root) if old_root.present? && Dir.exist?(old_root)
       rescue
-        # ignore
       end
       raise e
     end
     private_class_method :swap_in_packaged_hls!
 
+    def format_template(template, variant:, segment: nil, ab: nil)
+      format(template.to_s, variant: variant.to_s, segment: segment.to_s, ab: ab.to_s)
+    rescue KeyError
+      template.to_s
+    end
+    private_class_method :format_template
+
     def master_playlist_content(item:, variant:)
-      # Best-effort bandwidth estimation.
       dur = item.duration_seconds.to_i
       bytes = item.filesize_processed_bytes.to_i
       bps = (dur > 0 && bytes > 0) ? ((bytes * 8) / dur) : 5_000_000
@@ -335,8 +551,6 @@ module ::MediaGallery
       h = item.height.to_i
       res = (w > 0 && h > 0) ? "RESOLUTION=#{w}x#{h}," : ""
 
-      # Master playlist references the variant playlist via a relative path.
-      # Our controller rewrites that URI into an authenticated endpoint.
       <<~M3U
         #EXTM3U
         #EXT-X-VERSION:3
