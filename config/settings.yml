@@ -237,6 +237,13 @@ plugins:
     max: 3600
     client: false
 
+  # Processing hardening. Leave disabled to avoid Sidekiq retry-loops that can
+  # repeatedly upload the same processed assets when a late-stage step fails.
+  media_gallery_processing_raise_to_sidekiq_retry:
+    default: false
+    client: false
+
+
   # Base folder inside the container for private (processed) media. Must be writable by the discourse user.
   media_gallery_private_root_path:
     default: "/shared/media_gallery/private"

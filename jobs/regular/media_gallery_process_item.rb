@@ -11,25 +11,20 @@ module Jobs
     sidekiq_options queue: "default"
 
     def execute(args)
+      @current_processing_stage = "boot"
       item = MediaGallery::MediaItem.find_by(id: args[:media_item_id])
       return if item.blank?
 
-      # Only process queued/processing items
-      return unless item.status == "queued" || item.status == "processing"
-
-      item.update!(status: "processing", error_message: nil)
-
       with_processing_mutex do
+        item.reload
+        return if item.blank? || item.ready?
+        return unless processable_now?(item, args)
+
+        mark_processing_started!(item, force_run: ActiveModel::Type::Boolean.new.cast(args[:force_run]))
         process_item!(item)
       end
     rescue => e
-      if item&.persisted?
-        # Preserve any explicit failure reason set during processing (e.g. duration policy, type mismatch).
-        if item.status != "failed" || item.error_message.blank?
-          item.update!(status: "failed", error_message: e.message.to_s.truncate(1000))
-        end
-      end
-      raise e
+      handle_processing_failure!(item, e)
     end
 
     private
@@ -43,9 +38,95 @@ module Jobs
       end
     end
 
+    def processable_now?(item, args)
+      return true if item.status == "queued" || item.status == "processing"
+      return true if ActiveModel::Type::Boolean.new.cast(args[:force_run]) && item.status == "failed"
+
+      false
+    end
+
+    def mark_processing_started!(item, force_run: false)
+      @current_processing_stage = "started"
+
+      meta = processing_meta_for(item)
+      meta["attempt_count"] = meta["attempt_count"].to_i + 1
+      meta["current_stage"] = @current_processing_stage
+      meta["last_started_at"] = Time.now.utc.iso8601
+      meta["last_force_run"] = force_run
+      meta.delete("last_error_class")
+      meta.delete("last_error_message")
+      meta.delete("last_error_at")
+      meta.delete("last_failed_stage")
+      meta.delete("last_backtrace")
+
+      assign_processing_meta!(item, meta)
+      item.status = "processing"
+      item.error_message = nil
+      item.save!
+    end
+
+    def mark_processing_succeeded!(item)
+      @current_processing_stage = "ready"
+      meta = processing_meta_for(item)
+      meta["current_stage"] = @current_processing_stage
+      meta["last_succeeded_at"] = Time.now.utc.iso8601
+      meta["last_finished_at"] = meta["last_succeeded_at"]
+      assign_processing_meta!(item, meta)
+      item.update!(status: "ready", error_message: nil)
+    end
+
+    def handle_processing_failure!(item, error)
+      backtrace_lines = Array(error.backtrace).first(40)
+      Rails.logger.error(
+        <<~LOG
+          [media_gallery] processing failed item_id=#{item&.id} public_id=#{item&.public_id} stage=#{@current_processing_stage} error=#{error.class}: #{error.message}
+          #{backtrace_lines.join("\n")}
+        LOG
+      )
+
+      if item&.persisted?
+        item.reload
+        meta = processing_meta_for(item)
+        meta["current_stage"] = "failed"
+        meta["last_failed_stage"] = @current_processing_stage.to_s
+        meta["last_error_class"] = error.class.to_s
+        meta["last_error_message"] = error.message.to_s.truncate(1000)
+        meta["last_error_at"] = Time.now.utc.iso8601
+        meta["last_finished_at"] = meta["last_error_at"]
+        backtrace = Array(error.backtrace).first(8)
+        meta["last_backtrace"] = backtrace if backtrace.present?
+        assign_processing_meta!(item, meta)
+
+        # Preserve any explicit failure reason set during processing (e.g. duration policy, type mismatch).
+        if item.status != "failed" || item.error_message.blank?
+          item.status = "failed"
+          item.error_message = error.message.to_s.truncate(1000)
+          item.save!
+        else
+          item.save!
+        end
+      end
+
+      raise error if SiteSetting.respond_to?(:media_gallery_processing_raise_to_sidekiq_retry) && SiteSetting.media_gallery_processing_raise_to_sidekiq_retry
+      nil
+    end
+
+    def processing_meta_for(item)
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      value = meta["processing"]
+      value.is_a?(Hash) ? value.deep_dup : {}
+    end
+
+    def assign_processing_meta!(item, processing_meta)
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      meta["processing"] = processing_meta
+      item.extra_metadata = meta
+    end
+
     def process_item!(item)
       raise "missing_original_upload" if item.original_upload.blank?
 
+      @current_processing_stage = "load_original"
       original_upload = item.original_upload
       managed_mode = ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
       ::MediaGallery::StorageSettingsResolver.validate_active_backend! if managed_mode
@@ -61,6 +142,7 @@ module Jobs
       item.save!
 
       ::MediaGallery::ProcessingWorkspace.open do |workspace|
+        @current_processing_stage = "source_acquired"
         tmp_input = ::MediaGallery::SourceAcquirer.new.acquire!(upload: original_upload, workspace: workspace)
 
         processed_tmp = nil
@@ -92,6 +174,7 @@ module Jobs
           raise e if e.message.to_s == "file_content_mismatch"
         end
 
+        @current_processing_stage = "transcoding"
         case media_type
         when "video"
           processed_tmp, thumb_tmp = process_video_tmp!(item, workspace.root, tmp_input)
@@ -105,6 +188,7 @@ module Jobs
 
         raise "processed_output_missing" if processed_tmp.blank? || !File.exist?(processed_tmp)
 
+        @current_processing_stage = "store_outputs"
         if managed_mode
           store_managed_outputs!(item, processed_tmp: processed_tmp, thumb_tmp: thumb_tmp)
         else
@@ -117,6 +201,7 @@ module Jobs
              SiteSetting.respond_to?(:media_gallery_hls_enabled) &&
              SiteSetting.media_gallery_hls_enabled
           begin
+            @current_processing_stage = "package_hls"
             input_for_hls = processed_tmp
             hls_meta = MediaGallery::Hls.package_video!(item, input_path: input_for_hls)
             if hls_meta.present?
@@ -137,6 +222,7 @@ module Jobs
         end
 
         # Export + delete original upload (Option A)
+        @current_processing_stage = "finalize_original"
         if SiteSetting.media_gallery_delete_original_on_success
           export_result = maybe_export_original!(item, original_upload, tmp_input)
 
@@ -154,7 +240,7 @@ module Jobs
           end
         end
 
-        item.update!(status: "ready", error_message: nil)
+        mark_processing_succeeded!(item)
       end
     end
 
