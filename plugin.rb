@@ -10,8 +10,6 @@ add_admin_route "admin.media_gallery.title", "mediaGallery"
 
 enabled_site_setting :media_gallery_enabled
 
-gem "aws-sdk-s3", ">= 1.0", require: false
-
 module ::MediaGallery
   PLUGIN_NAME = "Discourse-Media-Plugin"
 end
