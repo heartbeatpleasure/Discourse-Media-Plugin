@@ -70,5 +70,14 @@ module ::MediaGallery
     def queued_or_processing?
       status == "queued" || status == "processing"
     end
+
+    def managed_storage_backend_effective
+      managed_storage_backend.presence || ::MediaGallery::StorageSettingsResolver.active_backend
+    end
+
+    def storage_manifest_hash
+      value = storage_manifest
+      value.is_a?(Hash) ? value : {}
+    end
   end
 end

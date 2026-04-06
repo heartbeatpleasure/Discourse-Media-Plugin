@@ -172,6 +172,71 @@ plugins:
     default: true
     client: false
 
+  # Managed storage backend for plugin-owned processed assets.
+  # Blank/legacy installs still fall back to local managed storage when private storage is enabled.
+  # Leave empty to keep the legacy/private-storage behaviour controlled by
+  # media_gallery_private_storage_enabled. Set to local or s3 to opt into
+  # the explicit managed-storage backend.
+  media_gallery_asset_storage_backend:
+    default: ""
+    client: false
+
+  # Scratch workspace used while transcoding / packaging. Leave empty to use the OS temp dir.
+  media_gallery_processing_root_path:
+    default: "/shared/media_gallery/tmp"
+    client: false
+
+  # Managed local asset root. Defaults to media_gallery_private_root_path when left blank.
+  media_gallery_local_asset_root_path:
+    default: "/shared/media_gallery/private"
+    client: false
+
+  # Default delivery behaviour for managed assets.
+  # local: stream/x_accel, s3: redirect. For thumbnails we still proxy via Rails.
+  media_gallery_delivery_mode_default:
+    default: "stream"
+    type: enum
+    choices:
+      - stream
+      - x_accel
+      - redirect
+    client: false
+
+  media_gallery_s3_endpoint:
+    default: ""
+    client: false
+
+  media_gallery_s3_region:
+    default: "auto"
+    client: false
+
+  media_gallery_s3_bucket:
+    default: ""
+    client: false
+
+  media_gallery_s3_prefix:
+    default: ""
+    client: false
+
+  media_gallery_s3_access_key_id:
+    default: ""
+    client: false
+
+  media_gallery_s3_secret_access_key:
+    default: ""
+    client: false
+
+  media_gallery_s3_force_path_style:
+    default: false
+    client: false
+
+  media_gallery_s3_presign_ttl_seconds:
+    default: 300
+    type: integer
+    min: 30
+    max: 3600
+    client: false
+
   # Base folder inside the container for private (processed) media. Must be writable by the discourse user.
   media_gallery_private_root_path:
     default: "/shared/media_gallery/private"

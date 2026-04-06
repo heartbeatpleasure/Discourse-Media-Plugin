@@ -2,6 +2,7 @@
 
 require "fileutils"
 require "tmpdir"
+require "time"
 
 module Jobs
   class MediaGalleryProcessItem < ::Jobs::Base
@@ -46,9 +47,8 @@ module Jobs
       raise "missing_original_upload" if item.original_upload.blank?
 
       original_upload = item.original_upload
-      input_path = MediaGallery::UploadPath.local_path_for(original_upload)
-      raise "original_upload_not_on_local_disk" if input_path.blank?
-      raise "original_file_missing: #{input_path}" unless File.exist?(input_path)
+      managed_mode = ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
+      ::MediaGallery::StorageSettingsResolver.validate_active_backend! if managed_mode
 
       item.filesize_original_bytes ||= original_upload.filesize
 
@@ -60,12 +60,8 @@ module Jobs
       item.media_type = declared_type
       item.save!
 
-      private_mode = MediaGallery::PrivateStorage.enabled?
-
-      Dir.mktmpdir("media-gallery") do |dir|
-        ext = safe_extension(original_upload.original_filename)
-        tmp_input = File.join(dir, "in#{ext}")
-        FileUtils.cp(input_path, tmp_input)
+      ::MediaGallery::ProcessingWorkspace.open do |workspace|
+        tmp_input = ::MediaGallery::SourceAcquirer.new.acquire!(upload: original_upload, workspace: workspace)
 
         processed_tmp = nil
         thumb_tmp = nil
@@ -98,32 +94,33 @@ module Jobs
 
         case media_type
         when "video"
-          processed_tmp, thumb_tmp = process_video_tmp!(item, dir, tmp_input)
+          processed_tmp, thumb_tmp = process_video_tmp!(item, workspace.root, tmp_input)
         when "audio"
-          processed_tmp = process_audio_tmp!(item, dir, tmp_input)
+          processed_tmp = process_audio_tmp!(item, workspace.root, tmp_input)
         when "image"
-          processed_tmp, thumb_tmp = process_image_tmp!(item, dir, tmp_input, force_jpg: private_mode)
+          processed_tmp, thumb_tmp = process_image_tmp!(item, workspace.root, tmp_input, force_jpg: managed_mode)
         else
           raise "unsupported_file_type"
         end
 
         raise "processed_output_missing" if processed_tmp.blank? || !File.exist?(processed_tmp)
 
-        if private_mode
-          store_private_outputs!(item, processed_tmp: processed_tmp, thumb_tmp: thumb_tmp)
+        if managed_mode
+          store_managed_outputs!(item, processed_tmp: processed_tmp, thumb_tmp: thumb_tmp)
         else
           store_as_uploads!(item, processed_tmp: processed_tmp, thumb_tmp: thumb_tmp)
         end
 
         # Optional: package video into HLS (milestone 1). Best-effort.
-        if private_mode &&
+        if managed_mode &&
              item.media_type.to_s == "video" &&
              SiteSetting.respond_to?(:media_gallery_hls_enabled) &&
              SiteSetting.media_gallery_hls_enabled
           begin
-            input_for_hls = MediaGallery::PrivateStorage.processed_abs_path(item)
+            input_for_hls = processed_tmp
             hls_meta = MediaGallery::Hls.package_video!(item, input_path: input_for_hls)
             if hls_meta.present?
+              persist_hls_local_role!(item, hls_meta: hls_meta)
               meta = (item.extra_metadata || {}).dup
               meta["hls"] = hls_meta
               item.extra_metadata = meta
@@ -136,12 +133,12 @@ module Jobs
 
         # Export + delete original upload (Option A)
         if SiteSetting.media_gallery_delete_original_on_success
-          export_result = maybe_export_original!(item, original_upload, input_path)
+          export_result = maybe_export_original!(item, original_upload, tmp_input)
 
           # If we intended to retain originals (retention_hours > 0) but export failed,
           # keep the original upload to avoid data loss (fail-open).
           keep_original =
-            MediaGallery::PrivateStorage.enabled? &&
+            ::MediaGallery::StorageSettingsResolver.managed_storage_enabled? &&
               MediaGallery::PrivateStorage.original_retention_hours > 0 &&
               export_result == :failed
 
@@ -157,7 +154,7 @@ module Jobs
     end
 
     def maybe_export_original!(item, upload, input_path)
-      return :skipped unless MediaGallery::PrivateStorage.enabled?
+      return :skipped unless ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
 
       hours = MediaGallery::PrivateStorage.original_retention_hours
       return :skipped if hours <= 0
@@ -341,35 +338,92 @@ module Jobs
 
     # --- Storage backends ---
 
-    def store_private_outputs!(item, processed_tmp:, thumb_tmp:)
-      # Move into /shared (private, not /uploads)
-      MediaGallery::PrivateStorage.ensure_dir!(MediaGallery::PrivateStorage.item_private_dir(item.public_id))
+    def store_managed_outputs!(item, processed_tmp:, thumb_tmp:)
+      store = ::MediaGallery::StorageSettingsResolver.build_store
+      raise "managed_store_unavailable" if store.blank?
+      store.ensure_available!
 
-      final_main = MediaGallery::PrivateStorage.processed_abs_path(item)
-      FileUtils.rm_f(final_main)
-      FileUtils.mv(processed_tmp, final_main)
+      main_key = ::MediaGallery::PrivateStorage.processed_rel_path(item)
+      thumb_key = ::MediaGallery::PrivateStorage.thumbnail_rel_path(item)
+      main_content_type = processed_content_type_for(item)
 
-      final_thumb = nil
+      main_role = store.put_file!(processed_tmp, key: main_key, content_type: main_content_type)
+      thumb_role = nil
       if thumb_tmp.present? && File.exist?(thumb_tmp)
-        final_thumb = MediaGallery::PrivateStorage.thumbnail_abs_path(item)
-        FileUtils.rm_f(final_thumb)
-        FileUtils.mv(thumb_tmp, final_thumb)
+        thumb_role = store.put_file!(thumb_tmp, key: thumb_key, content_type: "image/jpeg")
       end
 
-      # Persist metadata (do not rely on Upload rows)
       item.processed_upload_id = nil
       item.thumbnail_upload_id = nil
+      item.managed_storage_backend = store.backend
+      item.managed_storage_profile = ::MediaGallery::StorageSettingsResolver.active_profile_key
+      item.delivery_mode = delivery_mode_for_backend(store.backend)
+      item.storage_schema_version = ::MediaGallery::AssetManifest::SCHEMA_VERSION
+      item.filesize_processed_bytes = main_role[:bytes].to_i
+      enrich_dimensions_and_duration!(item, processed_tmp)
 
-      item.filesize_processed_bytes = File.size?(final_main).to_i
-      enrich_dimensions_and_duration!(item, final_main)
+      manifest = ::MediaGallery::AssetManifest.build(
+        item: item,
+        main_role: main_role,
+        thumbnail_role: thumb_role,
+        hls_role: existing_manifest_role(item, "hls")
+      )
+      item.storage_manifest = manifest
 
       meta = (item.extra_metadata || {}).dup
-      meta["storage"] = "private"
-      meta["processed_rel_path"] = MediaGallery::PrivateStorage.processed_rel_path(item)
-      meta["thumbnail_rel_path"] = MediaGallery::PrivateStorage.thumbnail_rel_path(item) if final_thumb.present?
+      meta["storage"] = store.backend
+      meta["processed_rel_path"] = main_key
+      if thumb_role.present?
+        meta["thumbnail_rel_path"] = thumb_key
+      else
+        meta.delete("thumbnail_rel_path")
+      end
       item.extra_metadata = meta
 
       item.save!
+    end
+
+    def persist_hls_local_role!(item, hls_meta:)
+      hls_role = {
+        backend: "local",
+        key: ::MediaGallery::PrivateStorage.hls_root_rel_dir(item.public_id),
+        content_type: "application/vnd.apple.mpegurl",
+        ready: true,
+        segment_duration_seconds: hls_meta["segment_duration_seconds"],
+        generated_at: hls_meta["generated_at"]
+      }
+
+      manifest = item.storage_manifest_hash.deep_dup
+      manifest = { "roles" => {} } unless manifest.is_a?(Hash)
+      manifest["schema_version"] = ::MediaGallery::AssetManifest::SCHEMA_VERSION
+      manifest["public_id"] = item.public_id.to_s
+      manifest["generated_at"] = Time.now.utc.iso8601
+      manifest["roles"] ||= {}
+      manifest["roles"]["hls"] = hls_role.deep_stringify_keys
+      item.storage_manifest = manifest
+      item.save!
+    end
+
+    def existing_manifest_role(item, role_name)
+      ::MediaGallery::AssetManifest.role_for(item, role_name)
+    end
+
+    def processed_content_type_for(item)
+      case item.media_type.to_s
+      when "video" then "video/mp4"
+      when "audio" then "audio/mpeg"
+      when "image" then "image/jpeg"
+      else "application/octet-stream"
+      end
+    end
+
+    def delivery_mode_for_backend(backend)
+      if backend.to_s == "s3"
+        "s3_redirect"
+      else
+        mode = ::MediaGallery::StorageSettingsResolver.default_delivery_mode
+        mode == "x_accel" ? "x_accel" : "local_stream"
+      end
     end
 
     def store_as_uploads!(item, processed_tmp:, thumb_tmp:)
@@ -389,6 +443,12 @@ module Jobs
         thumb = create_upload_for_user(item.user_id, thumb_tmp)
         item.thumbnail_upload_id = thumb.id
       end
+
+      item.managed_storage_backend = nil
+      item.managed_storage_profile = nil
+      item.delivery_mode = nil
+      item.storage_manifest = {}
+      item.storage_schema_version = ::MediaGallery::AssetManifest::SCHEMA_VERSION
 
       # Best-effort duration probing from processed file
       item.duration_seconds ||= probe_duration_seconds(MediaGallery::UploadPath.local_path_for(processed))

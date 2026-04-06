@@ -36,7 +36,17 @@ module ::MediaGallery
       kind = payload["kind"].to_s
       kind = "main" if kind.blank?
 
-      local_path, content_type, filename = resolve_file(item, payload, kind)
+      delivery = resolve_file(item, payload, kind)
+      raise Discourse::NotFound if delivery.blank?
+
+      if delivery[:mode] == :redirect
+        response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
+        return redirect_to(delivery[:redirect_url], allow_other_host: true, status: 307)
+      end
+
+      local_path = delivery[:local_path]
+      content_type = delivery[:content_type]
+      filename = delivery[:filename]
       raise Discourse::NotFound if local_path.blank? || !File.exist?(local_path)
 
       file_size = File.size(local_path)
@@ -121,28 +131,22 @@ module ::MediaGallery
           end
         content_type = "application/octet-stream" if content_type.blank?
 
-        return [local_path, content_type, filename]
+        return { mode: :local, local_path: local_path, content_type: content_type, filename: filename }
       end
 
-      # New mode: resolve from private storage (no Upload records).
-      raise Discourse::NotFound unless MediaGallery::PrivateStorage.enabled?
+      raise Discourse::NotFound unless ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
 
-      case kind
-      when "thumbnail", "thumb"
-        local_path = MediaGallery::PrivateStorage.thumbnail_abs_path(item)
-        filename = "media-#{item.public_id}-thumb.jpg"
-        content_type = "image/jpeg"
-      when "main"
-        local_path = MediaGallery::PrivateStorage.processed_abs_path(item)
-        ext = MediaGallery::PrivateStorage.processed_ext_for_type(item.media_type)
-        filename = "media-#{item.public_id}.#{ext}"
-        content_type = (defined?(Rack::Mime) ? Rack::Mime.mime_type(".#{ext}") : "application/octet-stream")
-        content_type = "application/octet-stream" if content_type.blank?
-      else
-        raise Discourse::NotFound
-      end
+      role_name = %w[thumbnail thumb].include?(kind.to_s) ? "thumbnail" : "main"
+      delivery = ::MediaGallery::DeliveryResolver.new(item, role_name).resolve
+      raise Discourse::NotFound if delivery.blank?
 
-      [local_path, content_type, filename]
+      {
+        mode: delivery.mode,
+        local_path: delivery.local_path,
+        redirect_url: delivery.redirect_url,
+        content_type: delivery.content_type,
+        filename: delivery.filename
+      }
     end
 
     def ensure_plugin_enabled

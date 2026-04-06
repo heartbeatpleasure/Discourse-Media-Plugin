@@ -5,8 +5,7 @@ module ::Jobs
     every 1.hour
 
     def execute(args)
-      return unless SiteSetting.respond_to?(:media_gallery_private_storage_enabled)
-      return unless SiteSetting.media_gallery_private_storage_enabled
+      return unless ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
 
       MediaGallery::PrivateStorage.cleanup_exported_originals!
 

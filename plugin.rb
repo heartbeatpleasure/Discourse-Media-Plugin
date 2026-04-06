@@ -10,12 +10,22 @@ add_admin_route "admin.media_gallery.title", "mediaGallery"
 
 enabled_site_setting :media_gallery_enabled
 
+gem "aws-sdk-s3", ">= 1.0", require: false
+
 module ::MediaGallery
   PLUGIN_NAME = "Discourse-Media-Plugin"
 end
 
 after_initialize do
   require_relative "lib/media_gallery/token"
+  require_relative "lib/media_gallery/storage_settings_resolver"
+  require_relative "lib/media_gallery/processing_workspace"
+  require_relative "lib/media_gallery/source_acquirer"
+  require_relative "lib/media_gallery/asset_store"
+  require_relative "lib/media_gallery/local_asset_store"
+  require_relative "lib/media_gallery/s3_asset_store"
+  require_relative "lib/media_gallery/asset_manifest"
+  require_relative "lib/media_gallery/delivery_resolver"
   require_relative "lib/media_gallery/security"
   require_relative "lib/media_gallery/ffmpeg"
   require_relative "lib/media_gallery/hls"

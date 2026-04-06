@@ -12,16 +12,13 @@ module ::MediaGallery
     # When enabled, processed media + thumbnails are stored outside /uploads (not publicly guessable)
     # and streamed via /media/stream/:token only.
     def enabled?
-      SiteSetting.respond_to?(:media_gallery_private_storage_enabled) &&
-        SiteSetting.media_gallery_private_storage_enabled
+      ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
     end
 
     # --- Roots ----------------------------------------------------------------
 
     def private_root
-      p = SiteSetting.media_gallery_private_root_path.to_s.strip
-      p = "/shared/media_gallery/private" if p.blank?
-      p
+      ::MediaGallery::StorageSettingsResolver.local_asset_root_path
     end
 
     # Keep BOTH method names for backwards compatibility.

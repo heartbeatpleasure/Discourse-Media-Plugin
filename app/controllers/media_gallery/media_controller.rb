@@ -201,9 +201,9 @@ module ::MediaGallery
           false
         end
 
-      private_storage = MediaGallery::PrivateStorage.enabled?
+      managed_storage = ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
       needs_processing =
-        if private_storage
+        if managed_storage
           true
         elsif media_type == "image"
           transcode_images || watermark_enabled
@@ -226,13 +226,16 @@ module ::MediaGallery
         tags: (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq,
         original_upload_id: upload.id,
         status: status,
-        processed_upload_id: (status == "ready" && !private_storage ? upload.id : nil),
-        thumbnail_upload_id: (status == "ready" && !private_storage ? upload.id : nil),
-        width: (status == "ready" && !private_storage ? upload.width : nil),
-        height: (status == "ready" && !private_storage ? upload.height : nil),
+        processed_upload_id: (status == "ready" && !managed_storage ? upload.id : nil),
+        thumbnail_upload_id: (status == "ready" && !managed_storage ? upload.id : nil),
+        width: (status == "ready" && !managed_storage ? upload.width : nil),
+        height: (status == "ready" && !managed_storage ? upload.height : nil),
         duration_seconds: nil,
         filesize_original_bytes: upload.filesize,
-        filesize_processed_bytes: (status == "ready" && !private_storage ? upload.filesize : nil)
+        filesize_processed_bytes: (status == "ready" && !managed_storage ? upload.filesize : nil),
+        managed_storage_backend: (managed_storage ? ::MediaGallery::StorageSettingsResolver.active_backend : nil),
+        managed_storage_profile: (managed_storage ? ::MediaGallery::StorageSettingsResolver.active_profile_key : nil),
+        delivery_mode: (managed_storage ? (::MediaGallery::StorageSettingsResolver.active_backend == "s3" ? "s3_redirect" : "local_stream") : nil)
       )
 
       if status == "queued"
@@ -321,8 +324,8 @@ module ::MediaGallery
 
         uploads = upload_ids.present? ? ::Upload.where(id: upload_ids).to_a : []
 
-        # Remove private-storage outputs (safe no-op if not present)
-        delete_private_storage_dirs_safely!(public_id)
+        # Remove managed assets (safe no-op if not present)
+        delete_managed_assets_safely!(item)
 
         # Remove uploads (safe no-op if already deleted)
         uploads.each do |u|
@@ -438,13 +441,11 @@ module ::MediaGallery
       end
 
       if upload_id.blank?
-        return render_json_error("private_storage_disabled", status: 500) unless MediaGallery::PrivateStorage.enabled?
+        return render_json_error("private_storage_disabled", status: 500) unless ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
 
-        # For HLS playback we only need the packaged playlists/segments.
-        # (We keep the processed MP4 today, but future iterations might not.)
         unless use_hls
-          processed_path = MediaGallery::PrivateStorage.processed_abs_path(item)
-          return render_json_error("processed_file_missing", status: 404) unless File.exist?(processed_path)
+          delivery = ::MediaGallery::DeliveryResolver.new(item, "main").resolve
+          return render_json_error("processed_file_missing", status: 404) if delivery.blank?
         end
       end
 
@@ -662,38 +663,53 @@ module ::MediaGallery
       # We still require a logged-in user + view permission (before_action), but the response
       # itself is cacheable in the user's browser (private cache).
 
-      local_path, content_type, filename = resolve_thumbnail_file!(item)
-
-      if local_path.blank? || !File.exist?(local_path)
-        return render_default_thumbnail(item)
-      end
-
-      file_mtime = File.mtime(local_path).utc
-      file_size = File.size(local_path).to_i
-      etag = Digest::SHA1.hexdigest("thumb|#{item.public_id}|#{file_size}|#{file_mtime.to_i}")
+      thumb = resolve_thumbnail_file!(item)
+      return render_default_thumbnail(item) if thumb.blank?
 
       max_age = thumbnail_cache_max_age_seconds
       response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age)
       response.headers["X-Content-Type-Options"] = "nosniff"
 
+      if thumb[:mode] == :memory
+        data = thumb[:data].to_s.b
+        file_size = data.bytesize
+        file_mtime = thumb[:last_modified] || item.updated_at || Time.now
+        etag = Digest::SHA1.hexdigest("thumb|#{item.public_id}|#{file_size}|#{file_mtime.to_i}")
+
+        return unless stale?(etag: etag, last_modified: file_mtime, public: false)
+
+        response.headers["Content-Disposition"] = "inline; filename=\"#{thumb[:filename]}\""
+        response.headers["Content-Type"] = thumb[:content_type]
+        if request.head?
+          response.headers["Content-Length"] = file_size.to_s
+          return head :ok
+        end
+
+        response.headers["Content-Length"] = file_size.to_s
+        return send_data(data, disposition: "inline", filename: thumb[:filename], type: thumb[:content_type])
+      end
+
+      local_path = thumb[:local_path]
+      return render_default_thumbnail(item) if local_path.blank? || !File.exist?(local_path)
+
+      file_mtime = File.mtime(local_path).utc
+      file_size = File.size(local_path).to_i
+      etag = Digest::SHA1.hexdigest("thumb|#{item.public_id}|#{file_size}|#{file_mtime.to_i}")
+
       # Handle conditional GET/HEAD (ETag + Last-Modified)
       return unless stale?(etag: etag, last_modified: file_mtime, public: false)
 
-      response.headers["Content-Disposition"] = "inline; filename=\"#{filename}\""
-      response.headers["Content-Type"] = content_type
+      response.headers["Content-Disposition"] = "inline; filename=\"#{thumb[:filename]}\""
+      response.headers["Content-Type"] = thumb[:content_type]
 
       if request.head?
         response.headers["Content-Length"] = file_size.to_s
         return head :ok
       end
 
-      # Hardening: prefer send_data over send_file for thumbnails.
-      # Some proxy setups (Rack::Sendfile / X-Accel-Redirect) can behave oddly for
-      # small/private files served through Rails. Reading and sending bytes directly
-      # avoids those edge-cases.
       data = File.binread(local_path)
       response.headers["Content-Length"] = data.bytesize.to_s
-      send_data(data, disposition: "inline", filename: filename, type: content_type)
+      send_data(data, disposition: "inline", filename: thumb[:filename], type: thumb[:content_type])
     end
 
     def like
@@ -774,13 +790,31 @@ module ::MediaGallery
     end
 
     def preflight_private_storage!
-      return unless MediaGallery::PrivateStorage.enabled?
+      return unless ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
 
+      ::MediaGallery::StorageSettingsResolver.validate_active_backend!
+      store = ::MediaGallery::StorageSettingsResolver.build_store
+      store&.ensure_available!
       MediaGallery::PrivateStorage.ensure_private_root!
       MediaGallery::PrivateStorage.ensure_original_export_root!
     end
 
-    def delete_private_storage_dirs_safely!(public_id)
+    def delete_managed_assets_safely!(item)
+      public_id = item.public_id.to_s
+
+      begin
+        ["main", "thumbnail"].each do |role_name|
+          role = ::MediaGallery::AssetManifest.role_for(item, role_name)
+          next if role.blank?
+          next unless %w[local s3].include?(role["backend"].to_s)
+
+          store = ::MediaGallery::StorageSettingsResolver.build_store(role["backend"])
+          store&.delete(role["key"].to_s)
+        end
+      rescue => e
+        Rails.logger.warn("[media_gallery] failed to delete managed assets public_id=#{public_id}: #{e.class}: #{e.message}")
+      end
+
       begin
         dir = MediaGallery::PrivateStorage.item_private_dir(public_id)
         FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
@@ -809,13 +843,12 @@ module ::MediaGallery
     end
 
     def resolve_thumbnail_file!(item)
-      # Upload-backed thumbnail (private storage off)
       if item.thumbnail_upload_id.present?
         upload = item.thumbnail_upload
-        return [nil, nil, nil] if upload.blank?
+        return nil if upload.blank?
 
         local_path = MediaGallery::UploadPath.local_path_for(upload)
-        return [nil, nil, nil] if local_path.blank?
+        return nil if local_path.blank?
 
         ext = upload.extension.to_s.downcase
         filename = "media-#{item.public_id}-thumb"
@@ -831,17 +864,35 @@ module ::MediaGallery
           end
         content_type = "image/jpeg" if content_type.blank?
 
-        return [local_path, content_type, filename]
+        return { mode: :local, local_path: local_path, content_type: content_type, filename: filename }
       end
 
-      # Private storage thumbnail (default)
-      return [nil, nil, nil] unless MediaGallery::PrivateStorage.enabled?
+      return nil unless ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
 
-      local_path = MediaGallery::PrivateStorage.thumbnail_abs_path(item)
-      filename = "media-#{item.public_id}-thumb.jpg"
-      content_type = "image/jpeg"
+      delivery = ::MediaGallery::DeliveryResolver.new(item, "thumbnail").resolve
+      return nil if delivery.blank?
 
-      [local_path, content_type, filename]
+      if delivery.mode == :local
+        return { mode: :local, local_path: delivery.local_path, content_type: delivery.content_type, filename: delivery.filename }
+      end
+
+      role = ::MediaGallery::AssetManifest.role_for(item, "thumbnail")
+      return nil if role.blank?
+
+      store = ::MediaGallery::StorageSettingsResolver.build_store(role["backend"])
+      return nil if store.blank?
+
+      data = store.read(role["key"].to_s)
+      {
+        mode: :memory,
+        data: data,
+        content_type: role["content_type"].presence || "image/jpeg",
+        filename: delivery.filename,
+        last_modified: item.updated_at || Time.now
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] thumbnail resolve failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
+      nil
     end
 
     def thumbnail_cache_max_age_seconds
