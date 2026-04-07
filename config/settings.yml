@@ -237,28 +237,56 @@ plugins:
     max: 3600
     client: false
 
+  # Optional target profile for future migrations and storage health probes.
+  # These settings do not affect current uploads or playback unless code
+  # explicitly asks for the target profile.
+  media_gallery_target_asset_storage_backend:
+    default: ""
+    client: false
+
+  media_gallery_target_local_asset_root_path:
+    default: ""
+    client: false
+
+  media_gallery_target_s3_endpoint:
+    default: ""
+    client: false
+
+  media_gallery_target_s3_region:
+    default: "auto"
+    client: false
+
+  media_gallery_target_s3_bucket:
+    default: ""
+    client: false
+
+  media_gallery_target_s3_prefix:
+    default: ""
+    client: false
+
+  media_gallery_target_s3_access_key_id:
+    default: ""
+    client: false
+
+  media_gallery_target_s3_secret_access_key:
+    default: ""
+    client: false
+
+  media_gallery_target_s3_force_path_style:
+    default: false
+    client: false
+
+  media_gallery_target_s3_presign_ttl_seconds:
+    default: 300
+    type: integer
+    min: 30
+    max: 3600
+    client: false
+
   # Processing hardening. Leave disabled to avoid Sidekiq retry-loops that can
   # repeatedly upload the same processed assets when a late-stage step fails.
   media_gallery_processing_raise_to_sidekiq_retry:
     default: false
-    client: false
-
-  # Consider a processing run stale after this many minutes. A stale run can be
-  # manually reset/retried by an admin without creating duplicate upload loops.
-  media_gallery_processing_stale_after_minutes:
-    default: 240
-    type: integer
-    min: 10
-    max: 1440
-    client: false
-
-  # Hard cap on automatic processing attempts for a single item. Manual retry
-  # with force can still be used by admins after diagnostics.
-  media_gallery_processing_max_attempts:
-    default: 5
-    type: integer
-    min: 1
-    max: 20
     client: false
 
 

@@ -81,10 +81,33 @@ module ::MediaGallery
     end
 
     def active_profile_key
-      case active_backend
-      when "s3" then "active_s3"
-      when "local" then "active_local"
+      profile_key("active")
+    end
+
+    def target_backend
+      value = site_setting_string(:media_gallery_target_asset_storage_backend)
+      BACKENDS.include?(value) ? value : nil
+    end
+
+    def target_profile_key
+      profile_key("target")
+    end
+
+    def profile_key(profile)
+      backend = profile_backend(profile)
+      case [profile.to_s, backend]
+      when ["active", "s3"] then "active_s3"
+      when ["active", "local"] then "active_local"
+      when ["target", "s3"] then "target_s3"
+      when ["target", "local"] then "target_local"
       else nil
+      end
+    end
+
+    def profile_backend(profile)
+      case profile.to_s
+      when "target" then target_backend
+      else active_backend
       end
     end
 
@@ -96,6 +119,23 @@ module ::MediaGallery
         ::MediaGallery::S3AssetStore.new(s3_options)
       else
         nil
+      end
+    end
+
+    def build_store_for_profile(profile)
+      case profile.to_s
+      when "target"
+        backend = target_backend
+        case backend
+        when "local"
+          ::MediaGallery::LocalAssetStore.new(root_path: target_local_asset_root_path)
+        when "s3"
+          ::MediaGallery::S3AssetStore.new(target_s3_options)
+        else
+          nil
+        end
+      else
+        build_store(active_backend)
       end
     end
 
@@ -112,26 +152,70 @@ module ::MediaGallery
       }
     end
 
+    def target_local_asset_root_path
+      value = site_setting_string(:media_gallery_target_local_asset_root_path)
+      value.presence || local_asset_root_path
+    end
+
+    def target_s3_options
+      {
+        endpoint: site_setting_string(:media_gallery_target_s3_endpoint),
+        region: site_setting_string(:media_gallery_target_s3_region).presence || "auto",
+        bucket: site_setting_string(:media_gallery_target_s3_bucket),
+        prefix: normalize_prefix(site_setting_string(:media_gallery_target_s3_prefix)),
+        access_key_id: site_setting_string(:media_gallery_target_s3_access_key_id),
+        secret_access_key: site_setting_string(:media_gallery_target_s3_secret_access_key),
+        force_path_style: site_setting_bool(:media_gallery_target_s3_force_path_style, default: false),
+        presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_presign_ttl_seconds, default: 300)
+      }
+    end
+
     def s3_ready?
-      opts = s3_options
-      opts[:endpoint].present? &&
-        opts[:bucket].present? &&
-        opts[:access_key_id].present? &&
-        opts[:secret_access_key].present?
+      s3_options_ready?(s3_options)
+    end
+
+    def target_s3_ready?
+      s3_options_ready?(target_s3_options)
+    end
+
+    def profile_summary(profile)
+      backend = profile_backend(profile)
+      {
+        profile: profile.to_s,
+        backend: backend,
+        profile_key: profile_key(profile),
+        config: sanitized_config_for(profile),
+      }
+    end
+
+    def validate_profile(profile)
+      backend = profile_backend(profile)
+      errors = []
+
+      if backend.blank?
+        errors << "backend_not_configured"
+        return errors
+      end
+
+      case backend
+      when "local"
+        root = profile.to_s == "target" ? target_local_asset_root_path : local_asset_root_path
+        errors << "local_asset_root_path_missing" if root.blank?
+      when "s3"
+        opts = profile.to_s == "target" ? target_s3_options : s3_options
+        errors.concat(validate_s3_options(opts))
+      else
+        errors << "unknown_asset_storage_backend"
+      end
+
+      errors
     end
 
     def validate_active_backend!
       return true unless managed_storage_enabled?
 
-      case active_backend
-      when "local"
-        root = local_asset_root_path
-        raise "local_asset_root_path_missing" if root.blank?
-      when "s3"
-        raise "s3_backend_incomplete" unless s3_ready?
-      else
-        raise "unknown_asset_storage_backend"
-      end
+      errors = validate_profile("active")
+      raise(errors.first || "unknown_asset_storage_backend") if errors.present?
 
       true
     end
@@ -178,6 +262,55 @@ module ::MediaGallery
     rescue
       default
     end
+
+    def sanitized_config_for(profile)
+      backend = profile_backend(profile)
+      case backend
+      when "local"
+        {
+          local_asset_root_path: profile.to_s == "target" ? target_local_asset_root_path : local_asset_root_path,
+        }
+      when "s3"
+        opts = profile.to_s == "target" ? target_s3_options : s3_options
+        {
+          endpoint: opts[:endpoint],
+          region: opts[:region],
+          bucket: opts[:bucket],
+          prefix: opts[:prefix],
+          force_path_style: !!opts[:force_path_style],
+          presign_ttl_seconds: opts[:presign_ttl_seconds].to_i,
+          access_key_id_last4: redact_tail(opts[:access_key_id]),
+          secret_access_key_present: opts[:secret_access_key].present?,
+        }
+      else
+        {}
+      end
+    end
+    private_class_method :sanitized_config_for
+
+    def redact_tail(value)
+      raw = value.to_s
+      return nil if raw.blank?
+      return raw if raw.length <= 4
+
+      raw[-4, 4]
+    end
+    private_class_method :redact_tail
+
+    def s3_options_ready?(opts)
+      validate_s3_options(opts).empty?
+    end
+    private_class_method :s3_options_ready?
+
+    def validate_s3_options(opts)
+      errors = []
+      errors << "s3_endpoint_missing" if opts[:endpoint].to_s.blank?
+      errors << "s3_bucket_missing" if opts[:bucket].to_s.blank?
+      errors << "s3_access_key_id_missing" if opts[:access_key_id].to_s.blank?
+      errors << "s3_secret_access_key_missing" if opts[:secret_access_key].to_s.blank?
+      errors
+    end
+    private_class_method :validate_s3_options
 
     def normalize_prefix(value)
       value.to_s.strip.sub(%r{\A/+}, "").sub(%r{/+\z}, "")

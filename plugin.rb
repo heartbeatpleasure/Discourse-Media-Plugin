@@ -17,6 +17,7 @@ end
 after_initialize do
   require_relative "lib/media_gallery/token"
   require_relative "lib/media_gallery/storage_settings_resolver"
+  require_relative "lib/media_gallery/storage_health"
   require_relative "lib/media_gallery/processing_workspace"
   require_relative "lib/media_gallery/source_acquirer"
   require_relative "lib/media_gallery/asset_store"
@@ -48,6 +49,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_media_items_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_storage_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
@@ -83,8 +85,9 @@ after_initialize do
 
     # Admin-only helper to find media items by public_id/title/id.
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/storage/health" => "media_gallery/admin_storage#health", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/storage/probe" => "media_gallery/admin_storage#probe", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/diagnostics" => "media_gallery/admin_media_items#diagnostics", defaults: { format: :json }
-    post "/admin/plugins/media-gallery/media-items/:public_id/reset-processing" => "media_gallery/admin_media_items#reset_processing", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
 
     # Admin-only: generate temporary personalized remux/clip downloads for testing.
