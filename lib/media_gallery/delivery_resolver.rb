@@ -51,11 +51,11 @@ module ::MediaGallery
     end
 
     def resolve_local_role(role)
-      store = ::MediaGallery::StorageSettingsResolver.build_store("local")
+      store = managed_store_for_role(role, expected_backend: "local")
       return nil if store.blank?
 
       path = store.absolute_path_for(role["key"].to_s)
-      return nil unless File.exist?(path)
+      return nil unless path.present? && File.exist?(path)
 
       Result.new(
         mode: :local,
@@ -69,12 +69,12 @@ module ::MediaGallery
     end
 
     def resolve_s3_role(role, expires_in: nil)
-      store = ::MediaGallery::StorageSettingsResolver.build_store("s3")
+      store = managed_store_for_role(role, expected_backend: "s3")
       return nil if store.blank?
       return nil unless store.exists?(role["key"].to_s)
 
       ttl = expires_in.to_i
-      ttl = ::MediaGallery::StorageSettingsResolver.s3_options[:presign_ttl_seconds].to_i if ttl <= 0
+      ttl = ::MediaGallery::StorageSettingsResolver.presign_ttl_for_profile_key(managed_profile_key) if ttl <= 0
       ttl = 300 if ttl <= 0
 
       Result.new(
@@ -93,6 +93,25 @@ module ::MediaGallery
       )
     rescue => e
       Rails.logger.warn("[media_gallery] delivery resolve s3 failed item_id=#{@item&.id} role=#{@role_name} error=#{e.class}: #{e.message}")
+      nil
+    end
+
+    def managed_profile_key
+      @item.try(:managed_storage_profile).to_s.presence
+    end
+
+    def managed_store_for_role(role, expected_backend: nil)
+      backend = expected_backend.to_s.presence || role["backend"].to_s
+      store = if managed_profile_key.present?
+        ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(managed_profile_key)
+      end
+      store ||= ::MediaGallery::StorageSettingsResolver.build_store(backend)
+      return nil if store.blank?
+      return nil if backend.present? && store.backend.to_s != backend.to_s
+
+      store
+    rescue => e
+      Rails.logger.warn("[media_gallery] delivery managed store resolve failed item_id=#{@item&.id} role=#{@role_name} backend=#{backend} profile_key=#{managed_profile_key} error=#{e.class}: #{e.message}")
       nil
     end
 

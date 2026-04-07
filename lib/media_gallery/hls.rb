@@ -64,42 +64,52 @@ module ::MediaGallery
     def managed_role_ready?(item, role)
       return false unless role.is_a?(Hash)
       backend = role["backend"].to_s
-      case backend
-      when "s3"
-        store = ::MediaGallery::StorageSettingsResolver.build_store("s3")
-        return false if store.blank?
+      return false if backend.blank?
 
-        master_key = master_key_for(item, role: role)
-        complete_key = complete_key_for(item, role: role)
-        return false if master_key.blank? || complete_key.blank?
-        return false unless store.exists?(master_key) && store.exists?(complete_key)
+      store = store_for_managed_role(item, role)
+      return false if store.blank?
 
-        role_variants = role_variants_for(role)
-        role_variants.all? do |v|
-          playlist_key = variant_playlist_key_for(item, v, role: role)
-          next false if playlist_key.blank? || !store.exists?(playlist_key)
+      master_key = master_key_for(item, role: role)
+      complete_key = complete_key_for(item, role: role)
+      return false if master_key.blank? || complete_key.blank?
+      return false unless store.exists?(master_key) && store.exists?(complete_key)
 
-          if role_uses_ab_layout?(role)
-            a_prefix = ab_variant_prefix_for(item, v, "a", role: role)
-            b_prefix = ab_variant_prefix_for(item, v, "b", role: role)
-            next false if a_prefix.blank? || b_prefix.blank?
+      role_variants = role_variants_for(role)
+      role_variants.all? do |v|
+        playlist_key = variant_playlist_key_for(item, v, role: role)
+        next false if playlist_key.blank? || !store.exists?(playlist_key)
 
-            a_has = store.list_prefix(a_prefix, limit: 1).any?
-            b_has = store.list_prefix(b_prefix, limit: 1).any?
-            a_has && b_has
-          else
-            seg_prefix = segment_prefix_for(item, v, role: role)
-            seg_prefix.present? && store.list_prefix(seg_prefix, limit: 1).any?
-          end
+        if role_uses_ab_layout?(role)
+          a_prefix = ab_variant_prefix_for(item, v, "a", role: role)
+          b_prefix = ab_variant_prefix_for(item, v, "b", role: role)
+          next false if a_prefix.blank? || b_prefix.blank?
+
+          a_has = store.list_prefix(a_prefix, limit: 1).any?
+          b_has = store.list_prefix(b_prefix, limit: 1).any?
+          a_has && b_has
+        else
+          seg_prefix = segment_prefix_for(item, v, role: role)
+          seg_prefix.present? && store.list_prefix(seg_prefix, limit: 1).any?
         end
-      when "local"
-        local_role_ready?(item, role)
-      else
-        false
       end
     rescue => e
       Rails.logger.warn("[media_gallery] HLS managed readiness check failed public_id=#{item&.public_id} backend=#{backend} error=#{e.class}: #{e.message}")
       false
+    end
+
+    def store_for_managed_role(item, role)
+      return nil unless role.is_a?(Hash)
+
+      profile_key = item.try(:managed_storage_profile).to_s.presence
+      store = profile_key.present? ? ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key) : nil
+      store ||= ::MediaGallery::StorageSettingsResolver.build_store(role["backend"].to_s)
+      return nil if store.blank?
+      return nil if role["backend"].to_s.present? && store.backend.to_s != role["backend"].to_s
+
+      store
+    rescue => e
+      Rails.logger.warn("[media_gallery] HLS managed store resolve failed public_id=#{item&.public_id} backend=#{role['backend']} profile_key=#{profile_key} error=#{e.class}: #{e.message}")
+      nil
     end
 
     def ready?(item)

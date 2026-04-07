@@ -43,7 +43,7 @@ module ::MediaGallery
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/diagnostics.json
     def diagnostics
-      item = find_item!
+      item = load_item!
       render_json_dump(
         id: item.id,
         public_id: item.public_id,
@@ -56,15 +56,15 @@ module ::MediaGallery
         roles: diagnostics_roles(item),
         processing: processing_metadata(item),
         migration_copy: ::MediaGallery::MigrationCopy.copy_state_for(item),
+        migration_switch: ::MediaGallery::MigrationSwitch.switch_state_for(item),
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
       )
     end
 
-
     # POST /admin/plugins/media-gallery/media-items/:public_id/reset-processing.json
     def reset_processing
-      item = find_item!
+      item = load_item!
       unless item.queued_or_processing? || item.status == "failed"
         return render_json_error("item_not_resettable", status: 422)
       end
@@ -85,23 +85,24 @@ module ::MediaGallery
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/migration-plan.json
     def migration_plan
-      item = find_item!
+      item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
       render_json_dump(::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile))
     end
 
-
     # POST /admin/plugins/media-gallery/media-items/:public_id/copy-to-target.json
     def copy_to_target
-      item = find_item!
+      item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
       force = ActiveModel::Type::Boolean.new.cast(params[:force])
+      auto_switch = ActiveModel::Type::Boolean.new.cast(params[:auto_switch])
 
       state = ::MediaGallery::MigrationCopy.enqueue_copy!(
         item,
         target_profile: target_profile,
         requested_by: current_user.username,
-        force: force
+        force: force,
+        auto_switch: auto_switch
       )
 
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
@@ -109,9 +110,25 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
+    # POST /admin/plugins/media-gallery/media-items/:public_id/switch-to-target.json
+    def switch_to_target
+      item = load_item!
+      target_profile = params[:target_profile].to_s.presence || "target"
+      state = ::MediaGallery::MigrationSwitch.switch!(
+        item,
+        target_profile: target_profile,
+        requested_by: current_user.username,
+        mode: "manual"
+      )
+
+      render_json_dump(ok: true, public_id: item.public_id, migration_switch: state)
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
     # POST /admin/plugins/media-gallery/media-items/:public_id/retry-processing.json
     def retry_processing
-      item = find_item!
+      item = load_item!
       force = ActiveModel::Type::Boolean.new.cast(params[:force])
 
       unless item.status == "failed" || (force && item.queued_or_processing?)
@@ -139,10 +156,12 @@ module ::MediaGallery
 
     private
 
-    def find_item!
-      item = ::MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
-      raise Discourse::NotFound if item.blank?
-      item
+    def load_item!
+      @current_item ||= begin
+        item = ::MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
+        raise Discourse::NotFound if item.blank?
+        item
+      end
     end
 
     def processing_metadata(item)
@@ -150,8 +169,6 @@ module ::MediaGallery
       value = meta["processing"]
       value.is_a?(Hash) ? value : {}
     end
-
-
 
     def processing_stale?(item)
       meta = processing_metadata(item)
@@ -197,21 +214,13 @@ module ::MediaGallery
       case role["backend"].to_s
       when "upload"
         ::Upload.exists?(id: role["upload_id"].to_i)
-      when "local"
-        if role_name == "hls"
-          prefix = role["key"].to_s
-          store = ::MediaGallery::LocalAssetStore.new(root_path: ::MediaGallery::StorageSettingsResolver.local_root_path)
-          store.list_prefix(prefix, limit: 1).any?
-        else
-          store = ::MediaGallery::LocalAssetStore.new(root_path: ::MediaGallery::StorageSettingsResolver.local_root_path)
-          store.exists?(role["key"])
-        end
-      when "s3"
-        store = ::MediaGallery::StorageSettingsResolver.build_store("s3")
+      when "local", "s3"
+        store = managed_store_for_role(role)
         return false if store.blank?
 
         if role_name == "hls"
-          store.list_prefix(role["key"].to_s, limit: 1).any?
+          prefix = role["key_prefix"].to_s.presence || role["key"].to_s
+          store.list_prefix(prefix, limit: 1).any?
         else
           store.exists?(role["key"])
         end
@@ -220,6 +229,16 @@ module ::MediaGallery
       end
     rescue => e
       "error: #{e.class}: #{e.message}"
+    end
+
+    def managed_store_for_role(role)
+      profile_key = @current_item&.managed_storage_profile.to_s.presence
+      store = profile_key.present? ? ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key) : nil
+      store ||= ::MediaGallery::StorageSettingsResolver.build_store(role["backend"].to_s)
+      return nil if store.blank?
+      return nil if role["backend"].to_s.present? && store.backend.to_s != role["backend"].to_s
+
+      store
     end
   end
 end

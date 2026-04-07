@@ -122,6 +122,31 @@ module ::MediaGallery
       end
     end
 
+    def build_store_for_profile_key(profile_key)
+      case profile_key.to_s
+      when "active_local", "active_s3"
+        build_store_for_profile("active")
+      when "target_local", "target_s3"
+        build_store_for_profile("target")
+      else
+        nil
+      end
+    end
+
+    def s3_options_for_profile_key(profile_key)
+      case profile_key.to_s
+      when "target_s3"
+        target_s3_options
+      else
+        s3_options
+      end
+    end
+
+    def presign_ttl_for_profile_key(profile_key)
+      ttl = s3_options_for_profile_key(profile_key)[:presign_ttl_seconds].to_i
+      ttl.positive? ? ttl : 300
+    end
+
     def build_store_for_profile(profile)
       case profile.to_s
       when "target"

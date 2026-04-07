@@ -10,7 +10,7 @@ module ::MediaGallery
 
     COPY_STATE_KEY = "migration_copy"
 
-    def enqueue_copy!(item, target_profile: "target", requested_by: nil, force: false)
+    def enqueue_copy!(item, target_profile: "target", requested_by: nil, force: false, auto_switch: false)
       raise "media_item_required" if item.blank?
       raise "item_not_ready" unless item.ready?
 
@@ -23,15 +23,22 @@ module ::MediaGallery
       end
 
       token = SecureRandom.hex(10)
-      state = build_queued_state(plan: plan, requested_by: requested_by, run_token: token, force: force)
+      state = build_queued_state(plan: plan, requested_by: requested_by, run_token: token, force: force, auto_switch: auto_switch)
       save_copy_state!(item, state)
 
-      ::Jobs.enqueue(:media_gallery_copy_item_to_target, media_item_id: item.id, target_profile: target_profile.to_s, run_token: token, force: force)
+      ::Jobs.enqueue(
+        :media_gallery_copy_item_to_target,
+        media_item_id: item.id,
+        target_profile: target_profile.to_s,
+        run_token: token,
+        force: force,
+        auto_switch: auto_switch
+      )
 
       state
     end
 
-    def perform_copy!(item, target_profile: "target", run_token: nil, force: false)
+    def perform_copy!(item, target_profile: "target", run_token: nil, force: false, auto_switch: nil)
       raise "media_item_required" if item.blank?
       raise "item_not_ready" unless item.ready?
 
@@ -42,6 +49,7 @@ module ::MediaGallery
       if current_state["status"].to_s == "copying" && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token && !force
         raise "copy_already_in_progress"
       end
+      auto_switch = current_state["auto_switch"] if auto_switch.nil?
 
       source_store = store_for_summary(plan[:source] || plan["source"])
       target_store = store_for_summary(plan[:target] || plan["target"])
@@ -53,6 +61,7 @@ module ::MediaGallery
 
       objects = flatten_plan_objects(plan)
       state = build_copying_state(plan: plan, prior_state: current_state, run_token: run_token.presence || current_state["run_token"], object_count: objects.length)
+      state["auto_switch"] = !!auto_switch
       save_copy_state!(item, state)
 
       copied = 0
@@ -91,9 +100,8 @@ module ::MediaGallery
 
       verification = ::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile)
       remaining = verification.dig(:totals, :missing_on_target_count).to_i
-      if remaining.positive?
-        raise "copy_verification_incomplete:#{remaining}"
-      end
+      remaining = verification.dig("totals", "missing_on_target_count").to_i if remaining <= 0 && verification.is_a?(Hash)
+      raise "copy_verification_incomplete:#{remaining}" if remaining.positive?
 
       state = copy_state_for(item)
       state["status"] = "copied"
@@ -106,6 +114,24 @@ module ::MediaGallery
       state["verification_missing_on_target_count"] = remaining
       state["last_error"] = nil
       save_copy_state!(item, state)
+
+      if auto_switch
+        item.reload
+        switch_state = ::MediaGallery::MigrationSwitch.switch!(
+          item,
+          target_profile: target_profile,
+          requested_by: state["requested_by"],
+          mode: "auto_after_copy"
+        )
+        state = copy_state_for(item)
+        state["status"] = "switched"
+        state["switched_at"] = switch_state["switched_at"]
+        state["switched_backend"] = switch_state["target_backend"]
+        state["switched_profile_key"] = switch_state["target_profile_key"]
+        state["last_error"] = nil
+        save_copy_state!(item, state)
+      end
+
       state
     rescue => e
       state = copy_state_for(item)
@@ -131,7 +157,7 @@ module ::MediaGallery
     def validate_plan_for_copy!(plan)
       raise "migration_plan_missing" unless plan.is_a?(Hash)
       target = plan[:target] || plan["target"]
-      raise "target_profile_not_configured" if target.blank? || target[:backend].blank? && target["backend"].blank?
+      raise "target_profile_not_configured" if target.blank? || (target[:backend].blank? && target["backend"].blank?)
 
       source = plan[:source] || plan["source"]
       source_key = source[:profile_key].presence || source["profile_key"].presence
@@ -145,7 +171,7 @@ module ::MediaGallery
     end
     private_class_method :validate_plan_for_copy!
 
-    def build_queued_state(plan:, requested_by:, run_token:, force:)
+    def build_queued_state(plan:, requested_by:, run_token:, force:, auto_switch:)
       {
         "status" => "queued",
         "queued_at" => Time.now.utc.iso8601,
@@ -159,6 +185,7 @@ module ::MediaGallery
         "source_bytes" => plan.dig(:totals, :source_bytes).to_i.nonzero? || plan.dig("totals", "source_bytes").to_i,
         "run_token" => run_token,
         "force" => !!force,
+        "auto_switch" => !!auto_switch,
         "last_error" => nil
       }
     end
@@ -227,10 +254,8 @@ module ::MediaGallery
       summary = summary.is_a?(Hash) ? summary.deep_symbolize_keys : {}
       profile_key = summary[:profile_key].to_s
       case profile_key
-      when "active_local", "active_s3"
-        ::MediaGallery::StorageSettingsResolver.build_store_for_profile("active")
-      when "target_local", "target_s3"
-        ::MediaGallery::StorageSettingsResolver.build_store_for_profile("target")
+      when "active_local", "active_s3", "target_local", "target_s3"
+        ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
       else
         backend = summary[:backend].to_s
         case backend

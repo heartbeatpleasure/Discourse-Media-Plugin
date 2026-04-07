@@ -216,18 +216,15 @@ module ::MediaGallery
       nil
     end
 
-    def hls_store_for(role)
-      return nil unless role.is_a?(Hash)
-      backend = role["backend"].to_s
-      return nil if backend.blank? || backend == "local"
-      ::MediaGallery::StorageSettingsResolver.build_store(backend)
+    def hls_store_for(item, role)
+      ::MediaGallery::Hls.store_for_managed_role(item, role)
     rescue
       nil
     end
 
     def read_master_playlist!(item, role: nil)
-      if role.present? && role["backend"].to_s == "s3"
-        store = hls_store_for(role)
+      if role.present?
+        store = hls_store_for(item, role)
         raise Discourse::NotFound if store.blank?
         begin
           return store.read(::MediaGallery::Hls.master_key_for(item, role: role))
@@ -242,8 +239,8 @@ module ::MediaGallery
     end
 
     def read_variant_playlist!(item, variant:, role: nil)
-      if role.present? && role["backend"].to_s == "s3"
-        store = hls_store_for(role)
+      if role.present?
+        store = hls_store_for(item, role)
         raise Discourse::NotFound if store.blank?
         begin
           return store.read(::MediaGallery::Hls.variant_playlist_key_for(item, variant, role: role))
@@ -258,25 +255,31 @@ module ::MediaGallery
     end
 
     def resolve_segment_delivery(item, variant:, segment:, ab:, role: nil)
-      if role.present? && role["backend"].to_s == "s3"
-        store = hls_store_for(role)
+      if role.present?
+        store = hls_store_for(item, role)
         raise Discourse::NotFound if store.blank?
 
         key = ::MediaGallery::Hls.segment_key_for(item, variant, segment, ab: ab, role: role)
         raise Discourse::NotFound if key.blank?
 
-        ttl = ::MediaGallery::StorageSettingsResolver.s3_options[:presign_ttl_seconds].to_i
-        ttl = 300 if ttl <= 0
+        if role["backend"].to_s == "s3"
+          ttl = ::MediaGallery::StorageSettingsResolver.presign_ttl_for_profile_key(item.managed_storage_profile)
+          ttl = 300 if ttl <= 0
 
-        return {
-          mode: :redirect,
-          redirect_url: store.presigned_get_url(
-            key,
-            expires_in: ttl,
-            response_content_type: segment_content_type(segment),
-            response_content_disposition: "inline"
-          )
-        }
+          return {
+            mode: :redirect,
+            redirect_url: store.presigned_get_url(
+              key,
+              expires_in: ttl,
+              response_content_type: segment_content_type(segment),
+              response_content_disposition: "inline"
+            )
+          }
+        end
+
+        abs = store.absolute_path_for(key)
+        raise Discourse::NotFound unless abs.present? && File.exist?(abs)
+        return { mode: :local, local_path: abs }
       end
 
       abs = resolve_segment_abs_path(item.public_id, variant, segment, ab: ab)
@@ -313,9 +316,9 @@ module ::MediaGallery
 
     def packaged_codebook_scheme_for(item)
       role = hls_role_for(item)
-      if role.present? && role["backend"].to_s == "s3"
+      if role.present?
         key = ::MediaGallery::Hls.fingerprint_meta_key_for(item, role: role)
-        store = hls_store_for(role)
+        store = hls_store_for(item, role)
         if key.present? && store.present? && store.exists?(key)
           meta = JSON.parse(store.read(key)) rescue nil
           if meta.is_a?(Hash)
