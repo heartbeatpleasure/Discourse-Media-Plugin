@@ -55,7 +55,31 @@ module ::MediaGallery
         delivery_mode: item.delivery_mode,
         roles: diagnostics_roles(item),
         processing: processing_metadata(item),
+        processing_stale: processing_stale?(item),
+        processing_stale_after_minutes: processing_stale_after_minutes,
       )
+    end
+
+
+    # POST /admin/plugins/media-gallery/media-items/:public_id/reset-processing.json
+    def reset_processing
+      item = find_item!
+      unless item.queued_or_processing? || item.status == "failed"
+        return render_json_error("item_not_resettable", status: 422)
+      end
+
+      processing = processing_metadata(item).deep_dup
+      clear_current_run_state!(processing)
+      processing["current_stage"] = "failed"
+      processing["manual_reset_at"] = Time.now.utc.iso8601
+      processing["manual_reset_by"] = current_user.username
+
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      meta["processing"] = processing
+
+      item.update!(status: "failed", error_message: (item.error_message.presence || "processing_reset_by_admin"), extra_metadata: meta)
+
+      render_json_dump(ok: true, public_id: item.public_id, status: item.status, processing: processing)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/retry-processing.json
@@ -77,6 +101,7 @@ module ::MediaGallery
       processing.delete("last_error_at")
       processing.delete("last_failed_stage")
       processing.delete("last_backtrace")
+      clear_current_run_state!(processing) if force
       meta["processing"] = processing
 
       item.update!(status: "queued", error_message: nil, extra_metadata: meta)
@@ -97,6 +122,35 @@ module ::MediaGallery
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
       value = meta["processing"]
       value.is_a?(Hash) ? value : {}
+    end
+
+
+
+    def processing_stale?(item)
+      meta = processing_metadata(item)
+      started_at = meta["current_run_started_at"].presence || meta["last_started_at"].presence
+      return false if started_at.blank? || item.status != "processing"
+
+      Time.iso8601(started_at) < processing_stale_after_minutes.minutes.ago
+    rescue ArgumentError, TypeError
+      false
+    end
+
+    def processing_stale_after_minutes
+      if SiteSetting.respond_to?(:media_gallery_processing_stale_after_minutes)
+        value = SiteSetting.media_gallery_processing_stale_after_minutes.to_i
+        value.positive? ? value : 240
+      else
+        240
+      end
+    end
+
+    def clear_current_run_state!(processing)
+      processing.delete("current_run_token")
+      processing.delete("current_run_started_at")
+      processing.delete("current_run_stale_after_minutes")
+      processing.delete("current_run_recovered_stale_processing")
+      processing.delete("current_run_job_class")
     end
 
     def diagnostics_roles(item)

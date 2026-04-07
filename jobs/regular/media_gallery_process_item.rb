@@ -12,6 +12,7 @@ module Jobs
 
     def execute(args)
       @current_processing_stage = "boot"
+      @current_run_token = SecureRandom.hex(16)
       item = MediaGallery::MediaItem.find_by(id: args[:media_item_id])
       return if item.blank?
 
@@ -20,7 +21,13 @@ module Jobs
         return if item.blank? || item.ready?
         return unless processable_now?(item, args)
 
-        mark_processing_started!(item, force_run: ActiveModel::Type::Boolean.new.cast(args[:force_run]))
+        stale_recovery = item.status == "processing" && processing_stale?(item)
+        mark_processing_started!(
+          item,
+          force_run: ActiveModel::Type::Boolean.new.cast(args[:force_run]),
+          run_token: @current_run_token,
+          recovered_stale_processing: stale_recovery
+        )
         process_item!(item)
       end
     rescue => e
@@ -39,20 +46,35 @@ module Jobs
     end
 
     def processable_now?(item, args)
-      return true if item.status == "queued" || item.status == "processing"
-      return true if ActiveModel::Type::Boolean.new.cast(args[:force_run]) && item.status == "failed"
+      force_run = ActiveModel::Type::Boolean.new.cast(args[:force_run])
+
+      if attempt_limit_reached?(item, force_run: force_run)
+        mark_attempt_limit_reached!(item)
+        return false
+      end
+
+      return true if item.status == "queued"
+      return true if force_run && item.status == "failed"
+      return true if item.status == "processing" && processing_stale?(item)
 
       false
     end
 
-    def mark_processing_started!(item, force_run: false)
+    def mark_processing_started!(item, force_run: false, run_token: nil, recovered_stale_processing: false)
       @current_processing_stage = "started"
+      now = Time.now.utc.iso8601
 
       meta = processing_meta_for(item)
       meta["attempt_count"] = meta["attempt_count"].to_i + 1
       meta["current_stage"] = @current_processing_stage
-      meta["last_started_at"] = Time.now.utc.iso8601
+      meta["last_started_at"] = now
       meta["last_force_run"] = force_run
+      meta["current_run_token"] = run_token if run_token.present?
+      meta["current_run_started_at"] = now
+      meta["current_run_stale_after_minutes"] = processing_stale_after_minutes
+      meta["current_run_recovered_stale_processing"] = recovered_stale_processing
+      meta["current_run_job_class"] = self.class.name
+      meta.delete("attempt_limit_reached_at")
       meta.delete("last_error_class")
       meta.delete("last_error_message")
       meta.delete("last_error_at")
@@ -71,6 +93,7 @@ module Jobs
       meta["current_stage"] = @current_processing_stage
       meta["last_succeeded_at"] = Time.now.utc.iso8601
       meta["last_finished_at"] = meta["last_succeeded_at"]
+      clear_current_run_state!(meta)
       assign_processing_meta!(item, meta)
       item.update!(status: "ready", error_message: nil)
     end
@@ -95,6 +118,7 @@ module Jobs
         meta["last_finished_at"] = meta["last_error_at"]
         backtrace = Array(error.backtrace).first(8)
         meta["last_backtrace"] = backtrace if backtrace.present?
+        clear_current_run_state!(meta)
         assign_processing_meta!(item, meta)
 
         # Preserve any explicit failure reason set during processing (e.g. duration policy, type mismatch).
@@ -121,6 +145,60 @@ module Jobs
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
       meta["processing"] = processing_meta
       item.extra_metadata = meta
+    end
+
+
+    def processing_stale?(item)
+      meta = processing_meta_for(item)
+      started_at = meta["current_run_started_at"].presence || meta["last_started_at"].presence
+      return false if started_at.blank?
+
+      started_time = Time.iso8601(started_at)
+      started_time < processing_stale_after_minutes.minutes.ago
+    rescue ArgumentError, TypeError
+      false
+    end
+
+    def processing_stale_after_minutes
+      if SiteSetting.respond_to?(:media_gallery_processing_stale_after_minutes)
+        value = SiteSetting.media_gallery_processing_stale_after_minutes.to_i
+        value.positive? ? value : 240
+      else
+        240
+      end
+    end
+
+    def processing_max_attempts
+      if SiteSetting.respond_to?(:media_gallery_processing_max_attempts)
+        value = SiteSetting.media_gallery_processing_max_attempts.to_i
+        value.positive? ? value : 5
+      else
+        5
+      end
+    end
+
+    def attempt_limit_reached?(item, force_run: false)
+      return false if force_run
+
+      processing_meta_for(item)["attempt_count"].to_i >= processing_max_attempts
+    end
+
+    def mark_attempt_limit_reached!(item)
+      meta = processing_meta_for(item)
+      meta["current_stage"] = "failed"
+      meta["attempt_limit_reached_at"] = Time.now.utc.iso8601
+      meta["attempt_limit"] = processing_max_attempts
+      clear_current_run_state!(meta)
+      assign_processing_meta!(item, meta)
+      item.update!(status: "failed", error_message: "processing_attempt_limit_reached") unless item.status == "failed" && item.error_message == "processing_attempt_limit_reached"
+    end
+
+    def clear_current_run_state!(processing_meta)
+      processing_meta.delete("current_run_token")
+      processing_meta.delete("current_run_started_at")
+      processing_meta.delete("current_run_stale_after_minutes")
+      processing_meta.delete("current_run_recovered_stale_processing")
+      processing_meta.delete("current_run_job_class")
     end
 
     def process_item!(item)

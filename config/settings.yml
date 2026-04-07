@@ -243,6 +243,24 @@ plugins:
     default: false
     client: false
 
+  # Consider a processing run stale after this many minutes. A stale run can be
+  # manually reset/retried by an admin without creating duplicate upload loops.
+  media_gallery_processing_stale_after_minutes:
+    default: 240
+    type: integer
+    min: 10
+    max: 1440
+    client: false
+
+  # Hard cap on automatic processing attempts for a single item. Manual retry
+  # with force can still be used by admins after diagnostics.
+  media_gallery_processing_max_attempts:
+    default: 5
+    type: integer
+    min: 1
+    max: 20
+    client: false
+
 
   # Base folder inside the container for private (processed) media. Must be writable by the discourse user.
   media_gallery_private_root_path:

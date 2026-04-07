@@ -84,6 +84,7 @@ after_initialize do
     # Admin-only helper to find media items by public_id/title/id.
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/diagnostics" => "media_gallery/admin_media_items#diagnostics", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/reset-processing" => "media_gallery/admin_media_items#reset_processing", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
 
     # Admin-only: generate temporary personalized remux/clip downloads for testing.
