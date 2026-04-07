@@ -109,6 +109,8 @@ module ::MediaGallery
         }
       end
 
+      warnings << "hls_role_has_no_objects_on_source" if role_name.to_s == "hls" && object_rows.empty?
+
       {
         name: role_name,
         backend: role["backend"].to_s,
@@ -179,20 +181,26 @@ module ::MediaGallery
       backend = summary[:backend].to_s
       profile_key = summary[:profile_key].to_s
 
-      case profile_key
-      when "active_local", "active_s3"
-        ::MediaGallery::StorageSettingsResolver.build_store_for_profile("active")
-      when "target_local", "target_s3"
-        ::MediaGallery::StorageSettingsResolver.build_store_for_profile("target")
-      else
-        case backend
-        when "local"
-          ::MediaGallery::LocalAssetStore.new(root_path: ::MediaGallery::StorageSettingsResolver.local_asset_root_path)
-        when "s3"
-          ::MediaGallery::StorageSettingsResolver.build_store_for_profile("active")
+      if profile_key.present?
+        store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
+        return store if store.present?
+      end
+
+      case backend
+      when "local"
+        if summary.dig(:config, :local_asset_root_path).present?
+          ::MediaGallery::LocalAssetStore.new(root_path: summary.dig(:config, :local_asset_root_path))
         else
-          nil
+          ::MediaGallery::LocalAssetStore.new(root_path: ::MediaGallery::StorageSettingsResolver.local_asset_root_path)
         end
+      when "s3"
+        if profile_key == "target_s3"
+          ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key("target_s3")
+        else
+          ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key("active_s3")
+        end
+      else
+        nil
       end
     rescue
       nil

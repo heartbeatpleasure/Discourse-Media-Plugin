@@ -98,7 +98,12 @@ module ::MediaGallery
       raise "source_and_target_same_profile" if source[:profile_key].present? && source[:profile_key] == target[:profile_key]
 
       warnings = Array(plan[:warnings] || plan["warnings"]).map(&:to_s)
-      unsupported = warnings.find { |w| w.include?("upload") || w == "source_store_unavailable" || w == "target_store_missing" }
+      unsupported = warnings.find do |w|
+        w.include?("upload") ||
+          w == "source_store_unavailable" ||
+          w == "target_store_missing" ||
+          w == "hls_role_has_no_objects_on_source"
+      end
       raise(unsupported) if unsupported.present?
 
       missing = (plan.dig(:totals, :missing_on_target_count) || plan.dig("totals", "missing_on_target_count") || 0).to_i
