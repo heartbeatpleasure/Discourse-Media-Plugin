@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "digest"
+require "fileutils"
 
 module ::MediaGallery
   class S3AssetStore < AssetStore
@@ -85,6 +86,15 @@ module ::MediaGallery
         key: key.to_s.sub(%r{\A/+}, ""),
         error: "#{e.class}: #{e.message}"
       }
+    end
+
+
+    def download_to_file!(key, destination_path)
+      FileUtils.mkdir_p(File.dirname(destination_path.to_s))
+      File.open(destination_path, "wb") do |file|
+        client.get_object(bucket: bucket, key: normalized_key(key), response_target: file)
+      end
+      destination_path
     end
 
     def delete(key)

@@ -55,6 +55,7 @@ module ::MediaGallery
         delivery_mode: item.delivery_mode,
         roles: diagnostics_roles(item),
         processing: processing_metadata(item),
+        migration_copy: ::MediaGallery::MigrationCopy.copy_state_for(item),
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
       )
@@ -87,6 +88,25 @@ module ::MediaGallery
       item = find_item!
       target_profile = params[:target_profile].to_s.presence || "target"
       render_json_dump(::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile))
+    end
+
+
+    # POST /admin/plugins/media-gallery/media-items/:public_id/copy-to-target.json
+    def copy_to_target
+      item = find_item!
+      target_profile = params[:target_profile].to_s.presence || "target"
+      force = ActiveModel::Type::Boolean.new.cast(params[:force])
+
+      state = ::MediaGallery::MigrationCopy.enqueue_copy!(
+        item,
+        target_profile: target_profile,
+        requested_by: current_user.username,
+        force: force
+      )
+
+      render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
+    rescue => e
+      render_json_error(e.message, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/retry-processing.json

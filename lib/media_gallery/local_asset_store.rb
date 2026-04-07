@@ -71,6 +71,16 @@ module ::MediaGallery
       }
     end
 
+
+    def download_to_file!(key, destination_path)
+      abs = absolute_path_for(key)
+      raise Errno::ENOENT, abs unless File.exist?(abs)
+
+      FileUtils.mkdir_p(File.dirname(destination_path.to_s))
+      FileUtils.cp(abs, destination_path)
+      destination_path
+    end
+
     def delete(key)
       abs = absolute_path_for(key)
       FileUtils.rm_f(abs)

@@ -26,6 +26,10 @@ module ::MediaGallery
       raise NotImplementedError
     end
 
+    def download_to_file!(key, destination_path)
+      raise NotImplementedError
+    end
+
     def delete(key)
       raise NotImplementedError
     end

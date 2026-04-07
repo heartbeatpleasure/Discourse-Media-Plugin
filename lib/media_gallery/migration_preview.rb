@@ -53,7 +53,8 @@ module ::MediaGallery
           missing_on_target_count: source_object_count - target_existing_count
         },
         warnings: warnings,
-        roles: role_previews
+        roles: role_previews,
+        copy_state: ::MediaGallery::MigrationCopy.copy_state_for(item)
       }
     end
 
