@@ -65,6 +65,28 @@ module ::MediaGallery
       false
     end
 
+
+    def object_info(key)
+      response = client.head_object(bucket: bucket, key: normalized_key(key))
+      {
+        exists: true,
+        backend: backend,
+        key: key.to_s.sub(%r{\A/+}, ""),
+        bytes: response.content_length.to_i,
+        content_type: response.content_type.to_s.presence,
+        etag: response.etag.to_s.delete('"')
+      }
+    rescue ::Aws::S3::Errors::NotFound, ::Aws::S3::Errors::NoSuchKey
+      { exists: false, backend: backend, key: key.to_s.sub(%r{\A/+}, "") }
+    rescue => e
+      {
+        exists: false,
+        backend: backend,
+        key: key.to_s.sub(%r{\A/+}, ""),
+        error: "#{e.class}: #{e.message}"
+      }
+    end
+
     def delete(key)
       client.delete_object(bucket: bucket, key: normalized_key(key))
       true

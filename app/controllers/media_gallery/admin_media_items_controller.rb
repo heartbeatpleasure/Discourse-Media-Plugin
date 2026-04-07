@@ -82,6 +82,13 @@ module ::MediaGallery
       render_json_dump(ok: true, public_id: item.public_id, status: item.status, processing: processing)
     end
 
+    # GET /admin/plugins/media-gallery/media-items/:public_id/migration-plan.json
+    def migration_plan
+      item = find_item!
+      target_profile = params[:target_profile].to_s.presence || "target"
+      render_json_dump(::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile))
+    end
+
     # POST /admin/plugins/media-gallery/media-items/:public_id/retry-processing.json
     def retry_processing
       item = find_item!

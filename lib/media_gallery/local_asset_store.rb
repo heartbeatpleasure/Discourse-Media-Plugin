@@ -49,6 +49,28 @@ module ::MediaGallery
       File.exist?(absolute_path_for(key))
     end
 
+
+    def object_info(key)
+      abs = absolute_path_for(key)
+      return { exists: false, backend: backend, key: key.to_s.sub(%r{\A/+}, "") } unless File.exist?(abs)
+
+      {
+        exists: true,
+        backend: backend,
+        key: key.to_s.sub(%r{\A/+}, ""),
+        bytes: File.size(abs),
+        content_type: nil,
+        checksum_sha256: Digest::SHA256.file(abs).hexdigest
+      }
+    rescue => e
+      {
+        exists: false,
+        backend: backend,
+        key: key.to_s.sub(%r{\A/+}, ""),
+        error: "#{e.class}: #{e.message}"
+      }
+    end
+
     def delete(key)
       abs = absolute_path_for(key)
       FileUtils.rm_f(abs)

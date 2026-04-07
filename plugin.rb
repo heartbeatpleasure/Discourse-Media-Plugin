@@ -18,6 +18,7 @@ after_initialize do
   require_relative "lib/media_gallery/token"
   require_relative "lib/media_gallery/storage_settings_resolver"
   require_relative "lib/media_gallery/storage_health"
+  require_relative "lib/media_gallery/migration_preview"
   require_relative "lib/media_gallery/processing_workspace"
   require_relative "lib/media_gallery/source_acquirer"
   require_relative "lib/media_gallery/asset_store"
@@ -88,6 +89,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/storage/health" => "media_gallery/admin_storage#health", defaults: { format: :json }
     post "/admin/plugins/media-gallery/storage/probe" => "media_gallery/admin_storage#probe", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/diagnostics" => "media_gallery/admin_media_items#diagnostics", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/media-items/:public_id/migration-plan" => "media_gallery/admin_media_items#migration_plan", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
 
     # Admin-only: generate temporary personalized remux/clip downloads for testing.

@@ -22,6 +22,10 @@ module ::MediaGallery
       raise NotImplementedError
     end
 
+    def object_info(key)
+      raise NotImplementedError
+    end
+
     def delete(key)
       raise NotImplementedError
     end
