@@ -31,11 +31,11 @@ module ::MediaGallery
         "source_backend" => source[:backend].to_s,
         "source_profile" => source[:profile].to_s,
         "source_profile_key" => source[:profile_key].to_s,
-        "source_location_fingerprint" => ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(source[:profile_key].to_s),
+        "source_location_fingerprint" => stringify_fingerprint(::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(source[:profile_key].to_s)),
         "target_backend" => target_backend,
         "target_profile" => target[:profile].to_s,
         "target_profile_key" => target_profile_key,
-        "target_location_fingerprint" => ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(target_profile_key),
+        "target_location_fingerprint" => stringify_fingerprint(::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(target_profile_key)),
         "object_count" => (plan.dig(:totals, :object_count) || plan.dig("totals", "object_count") || 0).to_i,
         "source_bytes" => (plan.dig(:totals, :source_bytes) || plan.dig("totals", "source_bytes") || 0).to_i,
         "verification_missing_on_target_count" => (plan.dig(:totals, :missing_on_target_count) || plan.dig("totals", "missing_on_target_count") || 0).to_i,
@@ -66,6 +66,23 @@ module ::MediaGallery
 
       switch_state
     end
+
+
+    def stringify_fingerprint(value)
+      return nil if value.blank?
+
+      case value
+      when Hash
+        value.each_with_object({}) do |(k, v), acc|
+          acc[k.to_s] = stringify_fingerprint(v)
+        end
+      when Array
+        value.map { |v| stringify_fingerprint(v) }
+      else
+        value
+      end
+    end
+    private_class_method :stringify_fingerprint
 
     def switch_state_for(item)
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}

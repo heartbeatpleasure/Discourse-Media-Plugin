@@ -60,13 +60,13 @@ module ::MediaGallery
 
       expected_source_fingerprint = switch_state["source_location_fingerprint"]
       current_source_fingerprint = ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(source_profile_key)
-      if expected_source_fingerprint.present? && current_source_fingerprint.present? && expected_source_fingerprint != current_source_fingerprint
+      if fingerprints_differ?(expected_source_fingerprint, current_source_fingerprint)
         raise "cleanup_source_profile_changed_since_switch"
       end
 
       expected_target_fingerprint = switch_state["target_location_fingerprint"]
       current_target_fingerprint = ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(target_profile_key.to_s)
-      if expected_target_fingerprint.present? && current_target_fingerprint.present? && expected_target_fingerprint != current_target_fingerprint
+      if fingerprints_differ?(expected_target_fingerprint, current_target_fingerprint)
         raise "cleanup_target_profile_changed_since_switch"
       end
 
@@ -192,6 +192,30 @@ module ::MediaGallery
     private_class_method :update_progress!
 
 
+
+    def fingerprints_differ?(left, right)
+      return false if left.blank? || right.blank?
+
+      normalize_fingerprint(left) != normalize_fingerprint(right)
+    end
+    private_class_method :fingerprints_differ?
+
+    def normalize_fingerprint(value)
+      return nil if value.blank?
+
+      case value
+      when Hash
+        value.each_with_object({}) do |(k, v), acc|
+          acc[k.to_s] = normalize_fingerprint(v)
+        end
+      when Array
+        value.map { |v| normalize_fingerprint(v) }
+      else
+        value.to_s
+      end
+    end
+    private_class_method :normalize_fingerprint
+
     def cleanup_state_matches_current_switch?(state, item, switch_state)
       return false unless state.is_a?(Hash)
 
@@ -208,11 +232,11 @@ module ::MediaGallery
       switch_source_fp = switch_state["source_location_fingerprint"]
       switch_target_fp = switch_state["target_location_fingerprint"]
 
-      if state_source_fp.present? && switch_source_fp.present? && state_source_fp != switch_source_fp
+      if fingerprints_differ?(state_source_fp, switch_source_fp)
         return false
       end
 
-      if state_target_fp.present? && switch_target_fp.present? && state_target_fp != switch_target_fp
+      if fingerprints_differ?(state_target_fp, switch_target_fp)
         return false
       end
 
