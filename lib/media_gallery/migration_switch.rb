@@ -45,6 +45,7 @@ module ::MediaGallery
 
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
       meta[SWITCH_STATE_KEY] = switch_state
+      meta.delete(::MediaGallery::MigrationCleanup::CLEANUP_STATE_KEY)
 
       item.storage_manifest = manifest
       item.managed_storage_backend = target_backend

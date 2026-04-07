@@ -18,10 +18,11 @@ module ::MediaGallery
       validate_switch_for_cleanup!(item, switch_state)
 
       state = cleanup_state_for(item)
-      if state["status"].to_s == "cleaning" && !force
+      cleanup_matches_current_switch = cleanup_state_matches_current_switch?(state, item, switch_state)
+      if state["status"].to_s == "cleaning" && !force && cleanup_matches_current_switch
         raise "cleanup_already_in_progress"
       end
-      if state["status"].to_s == "cleaned" && !force
+      if state["status"].to_s == "cleaned" && !force && cleanup_matches_current_switch
         return state
       end
 
@@ -41,10 +42,11 @@ module ::MediaGallery
       validate_switch_for_cleanup!(item, switch_state)
 
       current_state = cleanup_state_for(item)
-      if current_state["status"].to_s == "cleaning" && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token && !force
+      cleanup_matches_current_switch = cleanup_state_matches_current_switch?(current_state, item, switch_state)
+      if current_state["status"].to_s == "cleaning" && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token && !force && cleanup_matches_current_switch
         raise "cleanup_already_in_progress"
       end
-      return current_state if current_state["status"].to_s == "cleaned" && !force
+      return current_state if current_state["status"].to_s == "cleaned" && !force && cleanup_matches_current_switch
 
       source_profile_key = switch_state["source_profile_key"].to_s
       target_profile_key = switch_state["target_profile_key"].presence || item.managed_storage_profile
@@ -147,6 +149,8 @@ module ::MediaGallery
         "source_profile_key" => switch_state["source_profile_key"].to_s,
         "target_backend" => item.managed_storage_backend.to_s,
         "target_profile_key" => item.managed_storage_profile.to_s,
+        "source_location_fingerprint" => switch_state["source_location_fingerprint"],
+        "target_location_fingerprint" => switch_state["target_location_fingerprint"],
         "last_error" => nil
       }
     end
@@ -163,6 +167,8 @@ module ::MediaGallery
         "source_profile_key" => switch_state["source_profile_key"].to_s,
         "target_backend" => item.managed_storage_backend.to_s,
         "target_profile_key" => item.managed_storage_profile.to_s,
+        "source_location_fingerprint" => switch_state["source_location_fingerprint"],
+        "target_location_fingerprint" => switch_state["target_location_fingerprint"],
         "object_count" => source_objects.length,
         "last_error" => nil
       }
@@ -184,6 +190,35 @@ module ::MediaGallery
       save_cleanup_state!(item, latest)
     end
     private_class_method :update_progress!
+
+
+    def cleanup_state_matches_current_switch?(state, item, switch_state)
+      return false unless state.is_a?(Hash)
+
+      same_source = state["source_backend"].to_s == switch_state["source_backend"].to_s &&
+        state["source_profile_key"].to_s == switch_state["source_profile_key"].to_s
+
+      same_target = state["target_backend"].to_s == item.managed_storage_backend.to_s &&
+        state["target_profile_key"].to_s == item.managed_storage_profile.to_s
+
+      return false unless same_source && same_target
+
+      state_source_fp = state["source_location_fingerprint"]
+      state_target_fp = state["target_location_fingerprint"]
+      switch_source_fp = switch_state["source_location_fingerprint"]
+      switch_target_fp = switch_state["target_location_fingerprint"]
+
+      if state_source_fp.present? && switch_source_fp.present? && state_source_fp != switch_source_fp
+        return false
+      end
+
+      if state_target_fp.present? && switch_target_fp.present? && state_target_fp != switch_target_fp
+        return false
+      end
+
+      true
+    end
+    private_class_method :cleanup_state_matches_current_switch?
 
     def validate_switch_for_cleanup!(item, switch_state)
       raise "switch_state_missing" unless switch_state.is_a?(Hash) && switch_state["status"].to_s == "switched"
