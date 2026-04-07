@@ -38,6 +38,18 @@ module ::MediaGallery
       raise NotImplementedError
     end
 
+    def purge_key!(key)
+      raise NotImplementedError
+    end
+
+    def purge_prefix!(prefix)
+      raise NotImplementedError
+    end
+
+    def same_location?(other)
+      raise NotImplementedError
+    end
+
     def list_prefix(prefix, limit: nil)
       raise NotImplementedError
     end

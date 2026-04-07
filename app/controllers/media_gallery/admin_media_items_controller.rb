@@ -57,6 +57,7 @@ module ::MediaGallery
         processing: processing_metadata(item),
         migration_copy: ::MediaGallery::MigrationCopy.copy_state_for(item),
         migration_switch: ::MediaGallery::MigrationSwitch.switch_state_for(item),
+        migration_cleanup: ::MediaGallery::MigrationCleanup.cleanup_state_for(item),
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
       )
@@ -96,13 +97,15 @@ module ::MediaGallery
       target_profile = params[:target_profile].to_s.presence || "target"
       force = ActiveModel::Type::Boolean.new.cast(params[:force])
       auto_switch = ActiveModel::Type::Boolean.new.cast(params[:auto_switch])
+      auto_cleanup = ActiveModel::Type::Boolean.new.cast(params[:auto_cleanup])
 
       state = ::MediaGallery::MigrationCopy.enqueue_copy!(
         item,
         target_profile: target_profile,
         requested_by: current_user.username,
         force: force,
-        auto_switch: auto_switch
+        auto_switch: auto_switch,
+        auto_cleanup: auto_cleanup
       )
 
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
@@ -114,14 +117,26 @@ module ::MediaGallery
     def switch_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
+      auto_cleanup = ActiveModel::Type::Boolean.new.cast(params[:auto_cleanup])
       state = ::MediaGallery::MigrationSwitch.switch!(
         item,
         target_profile: target_profile,
         requested_by: current_user.username,
-        mode: "manual"
+        mode: "manual",
+        auto_cleanup: auto_cleanup
       )
 
       render_json_dump(ok: true, public_id: item.public_id, migration_switch: state)
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
+    # POST /admin/plugins/media-gallery/media-items/:public_id/cleanup-source.json
+    def cleanup_source
+      item = load_item!
+      force = ActiveModel::Type::Boolean.new.cast(params[:force])
+      state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: current_user.username, force: force)
+      render_json_dump(ok: true, public_id: item.public_id, migration_cleanup: state)
     rescue => e
       render_json_error(e.message, status: 422)
     end

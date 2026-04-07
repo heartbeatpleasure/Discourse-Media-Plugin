@@ -9,7 +9,7 @@ module ::MediaGallery
     SWITCH_STATE_KEY = "migration_switch"
     SWITCHABLE_ROLE_NAMES = %w[main thumbnail hls].freeze
 
-    def switch!(item, target_profile: "target", requested_by: nil, mode: "manual")
+    def switch!(item, target_profile: "target", requested_by: nil, mode: "manual", auto_cleanup: false)
       raise "media_item_required" if item.blank?
       raise "item_not_ready" unless item.ready?
 
@@ -31,13 +31,16 @@ module ::MediaGallery
         "source_backend" => source[:backend].to_s,
         "source_profile" => source[:profile].to_s,
         "source_profile_key" => source[:profile_key].to_s,
+        "source_location_fingerprint" => ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(source[:profile_key].to_s),
         "target_backend" => target_backend,
         "target_profile" => target[:profile].to_s,
         "target_profile_key" => target_profile_key,
+        "target_location_fingerprint" => ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(target_profile_key),
         "object_count" => (plan.dig(:totals, :object_count) || plan.dig("totals", "object_count") || 0).to_i,
         "source_bytes" => (plan.dig(:totals, :source_bytes) || plan.dig("totals", "source_bytes") || 0).to_i,
         "verification_missing_on_target_count" => (plan.dig(:totals, :missing_on_target_count) || plan.dig("totals", "missing_on_target_count") || 0).to_i,
-        "warnings" => Array(plan[:warnings] || plan["warnings"])
+        "warnings" => Array(plan[:warnings] || plan["warnings"]),
+        "auto_cleanup" => !!auto_cleanup
       }
 
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
@@ -51,6 +54,14 @@ module ::MediaGallery
       item.migration_error = nil if item.respond_to?(:migration_error)
       item.extra_metadata = meta
       item.save!
+
+      if auto_cleanup
+        cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: requested_by, force: false)
+        switch_state["cleanup_enqueued_at"] = cleanup_state["queued_at"] if cleanup_state.is_a?(Hash)
+        meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+        meta[SWITCH_STATE_KEY] = switch_state
+        item.update_columns(extra_metadata: meta, updated_at: Time.now)
+      end
 
       switch_state
     end

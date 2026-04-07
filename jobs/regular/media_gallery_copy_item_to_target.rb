@@ -12,6 +12,7 @@ module Jobs
       run_token = args[:run_token].to_s.presence
       force = ActiveModel::Type::Boolean.new.cast(args[:force])
       auto_switch = ActiveModel::Type::Boolean.new.cast(args[:auto_switch])
+      auto_cleanup = ActiveModel::Type::Boolean.new.cast(args[:auto_cleanup])
 
       mutex_key = "media_gallery_copy_item_#{item.id}"
       if defined?(::DistributedMutex)
@@ -22,7 +23,8 @@ module Jobs
             target_profile: target_profile,
             run_token: run_token,
             force: force,
-            auto_switch: auto_switch
+            auto_switch: auto_switch,
+            auto_cleanup: auto_cleanup
           )
         end
       else
@@ -31,7 +33,8 @@ module Jobs
           target_profile: target_profile,
           run_token: run_token,
           force: force,
-          auto_switch: auto_switch
+          auto_switch: auto_switch,
+          auto_cleanup: auto_cleanup
         )
       end
     end

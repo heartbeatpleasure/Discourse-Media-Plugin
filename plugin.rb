@@ -21,6 +21,7 @@ after_initialize do
   require_relative "lib/media_gallery/migration_preview"
   require_relative "lib/media_gallery/migration_copy"
   require_relative "lib/media_gallery/migration_switch"
+  require_relative "lib/media_gallery/migration_cleanup"
   require_relative "lib/media_gallery/processing_workspace"
   require_relative "lib/media_gallery/source_acquirer"
   require_relative "lib/media_gallery/asset_store"
@@ -62,6 +63,7 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_forensics_identify_job.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_copy_item_to_target.rb", __dir__)
+  require_dependency File.expand_path("jobs/regular/media_gallery_cleanup_source_after_switch.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
 
@@ -95,6 +97,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/:public_id/migration-plan" => "media_gallery/admin_media_items#migration_plan", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/copy-to-target" => "media_gallery/admin_media_items#copy_to_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/switch-to-target" => "media_gallery/admin_media_items#switch_to_target", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/cleanup-source" => "media_gallery/admin_media_items#cleanup_source", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
 
     # Admin-only: generate temporary personalized remux/clip downloads for testing.

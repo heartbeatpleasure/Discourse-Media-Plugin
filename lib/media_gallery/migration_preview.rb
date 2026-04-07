@@ -6,6 +6,20 @@ module ::MediaGallery
 
     SUPPORTED_ROLE_NAMES = %w[main thumbnail hls].freeze
 
+
+    def objects_for_item(item, store: nil)
+      raise "media_item_required" if item.blank?
+
+      SUPPORTED_ROLE_NAMES.flat_map do |role_name|
+        role = ::MediaGallery::AssetManifest.role_for(item, role_name)
+        next [] if role.blank?
+
+        enumerate_role_objects(item: item, role_name: role_name, role: role, source_store: store).map do |obj|
+          obj.merge(role_name: role_name.to_s)
+        end
+      end.reject { |row| row[:key].to_s.blank? }.uniq { |row| row[:key].to_s }
+    end
+
     def preview(item, target_profile: "target")
       raise "media_item_required" if item.blank?
 
@@ -186,14 +200,10 @@ module ::MediaGallery
     private_class_method :build_store_from_summary
 
     def sanitized_config_for_profile_key(profile_key, backend)
-      case profile_key.to_s
-      when "active_local", "active_s3"
-        ::MediaGallery::StorageSettingsResolver.profile_summary("active").deep_symbolize_keys[:config]
-      when "target_local", "target_s3"
-        ::MediaGallery::StorageSettingsResolver.profile_summary("target").deep_symbolize_keys[:config]
-      else
-        { backend: backend }
-      end
+      config = ::MediaGallery::StorageSettingsResolver.sanitized_config_for_profile_key(profile_key)
+      return config.deep_symbolize_keys if config.present?
+
+      { backend: backend }
     end
     private_class_method :sanitized_config_for_profile_key
 

@@ -127,6 +127,25 @@ module ::MediaGallery
       false
     end
 
+    def purge_key!(key)
+      normalized = normalized_key(key)
+      purge_entries!(keys: [normalized], prefix: nil).merge(key: denormalized_key(normalized))
+    end
+
+    def purge_prefix!(prefix)
+      normalized = normalized_key(prefix)
+      purge_entries!(keys: nil, prefix: normalized).merge(prefix: denormalized_key(normalized))
+    end
+
+    def same_location?(other)
+      return false unless other.respond_to?(:backend) && other.respond_to?(:options)
+      return false unless backend == other.backend.to_s
+
+      comparable_options == other.send(:comparable_options)
+    rescue
+      false
+    end
+
     def list_prefix(prefix, limit: nil)
       pref = normalized_key(prefix)
       keys = []
@@ -166,7 +185,138 @@ module ::MediaGallery
 
     private
 
+    def purge_entries!(keys:, prefix:)
+      ensure_available!
+
+      version_entries, version_scan_supported = collect_version_entries(keys: keys, prefix: prefix)
+      deleted_versions = 0
+      deleted_delete_markers = 0
+      deleted_current = 0
+
+      if version_scan_supported
+        version_entries.each do |entry|
+          client.delete_object(bucket: bucket, key: entry[:key], version_id: entry[:version_id])
+          if entry[:delete_marker]
+            deleted_delete_markers += 1
+          else
+            deleted_versions += 1
+          end
+        end
+      else
+        keys_to_delete = keys || list_all_current_keys(prefix)
+        keys_to_delete.each do |key_name|
+          client.delete_object(bucket: bucket, key: key_name)
+          deleted_current += 1
+        end
+      end
+
+      if version_scan_supported
+        remaining_versions = collect_version_entries(keys: keys, prefix: prefix).first.length
+        remaining_current = list_remaining_current_count(keys: keys, prefix: prefix)
+      else
+        remaining_versions = 0
+        remaining_current = list_remaining_current_count(keys: keys, prefix: prefix)
+      end
+
+      {
+        ok: remaining_current.zero? && remaining_versions.zero?,
+        backend: backend,
+        deleted_current: deleted_current,
+        deleted_versions: deleted_versions,
+        deleted_delete_markers: deleted_delete_markers,
+        remaining_current_count: remaining_current,
+        remaining_version_entries: remaining_versions,
+        version_purge_supported: version_scan_supported,
+      }
+    rescue => e
+      {
+        ok: false,
+        backend: backend,
+        deleted_current: deleted_current || 0,
+        deleted_versions: deleted_versions || 0,
+        deleted_delete_markers: deleted_delete_markers || 0,
+        remaining_current_count: nil,
+        remaining_version_entries: nil,
+        version_purge_supported: version_scan_supported.nil? ? false : version_scan_supported,
+        error: "#{e.class}: #{e.message}"
+      }
+    end
+
+    def collect_version_entries(keys:, prefix:)
+      entries = []
+      key_filter = Array(keys).presence&.to_set
+      return [entries, false] unless client.respond_to?(:list_object_versions)
+
+      opts = { bucket: bucket }
+      opts[:prefix] = prefix if prefix.present?
+      key_marker = nil
+      version_id_marker = nil
+
+      loop do
+        request = opts.dup
+        request[:key_marker] = key_marker if key_marker.present?
+        request[:version_id_marker] = version_id_marker if version_id_marker.present?
+        result = client.list_object_versions(request)
+
+        Array(result.versions).each do |version|
+          next if key_filter.present? && !key_filter.include?(version.key.to_s)
+          entries << { key: version.key.to_s, version_id: version.version_id.to_s, delete_marker: false }
+        end
+
+        Array(result.delete_markers).each do |marker|
+          next if key_filter.present? && !key_filter.include?(marker.key.to_s)
+          entries << { key: marker.key.to_s, version_id: marker.version_id.to_s, delete_marker: true }
+        end
+
+        break unless result.is_truncated
+        key_marker = result.next_key_marker
+        version_id_marker = result.next_version_id_marker
+      end
+
+      [entries, true]
+    rescue ::Aws::S3::Errors::NotImplemented, ::Aws::S3::Errors::InvalidArgument, ::Aws::S3::Errors::MethodNotAllowed, ::Aws::S3::Errors::NoSuchBucket
+      [[], false]
+    rescue ::Aws::S3::Errors::ServiceError => e
+      # Providers without version listing support may surface provider-specific service errors.
+      if e.message.to_s =~ /(not implemented|unsupported|invalid request)/i
+        [[], false]
+      else
+        raise
+      end
+    end
+
+    def list_all_current_keys(prefix)
+      continuation_token = nil
+      keys = []
+      loop do
+        result = client.list_objects_v2(bucket: bucket, prefix: prefix, continuation_token: continuation_token)
+        keys.concat(Array(result.contents).map(&:key))
+        break unless result.is_truncated
+        continuation_token = result.next_continuation_token
+      end
+      keys.uniq
+    end
+
+    def list_remaining_current_count(keys:, prefix:)
+      if keys.present?
+        Array(keys).count { |key_name| exists?(denormalized_key(key_name)) }
+      else
+        list_prefix(denormalized_key(prefix), limit: 1_000_000).length
+      end
+    end
+
+    def comparable_options
+      {
+        endpoint: options[:endpoint].to_s.sub(%r{/+\z}, ""),
+        region: options[:region].to_s,
+        bucket: bucket,
+        prefix: options[:prefix].to_s.sub(%r{\A/+}, "").sub(%r{/+\z}, ""),
+        force_path_style: !!options[:force_path_style],
+      }
+    end
+
     def ensure_sdk_loaded!
+      require "set"
       require "aws-sdk-s3"
     rescue LoadError
       raise "missing_aws_sdk_s3_gem"

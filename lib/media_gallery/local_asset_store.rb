@@ -113,6 +113,58 @@ module ::MediaGallery
       entries
     end
 
+
+    def purge_key!(key)
+      abs = absolute_path_for(key)
+      existed = File.exist?(abs)
+      FileUtils.rm_f(abs)
+      cleanup_empty_parents(File.dirname(abs))
+
+      {
+        ok: true,
+        backend: backend,
+        key: key.to_s.sub(%r{\A/+}, ""),
+        existed: existed,
+        deleted_current: existed ? 1 : 0,
+        deleted_versions: 0,
+        deleted_delete_markers: 0,
+        remaining_current_count: exists?(key) ? 1 : 0,
+        remaining_version_entries: 0,
+        version_purge_supported: true,
+      }
+    rescue => e
+      { ok: false, backend: backend, key: key.to_s.sub(%r{\A/+}, ""), error: "#{e.class}: #{e.message}" }
+    end
+
+    def purge_prefix!(prefix)
+      dir = absolute_path_for(prefix)
+      existing_files = Dir.exist?(dir) ? Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).count { |p| File.file?(p) && !File.basename(p).start_with?(".") } : 0
+      FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+      cleanup_empty_parents(File.dirname(dir)) if dir.present?
+
+      {
+        ok: true,
+        backend: backend,
+        prefix: prefix.to_s.sub(%r{\A/+}, ""),
+        existed: existing_files.positive?,
+        deleted_current: existing_files,
+        deleted_versions: 0,
+        deleted_delete_markers: 0,
+        remaining_current_count: list_prefix(prefix, limit: 1).length,
+        remaining_version_entries: 0,
+        version_purge_supported: true,
+      }
+    rescue => e
+      { ok: false, backend: backend, prefix: prefix.to_s.sub(%r{\A/+}, ""), error: "#{e.class}: #{e.message}" }
+    end
+
+    def same_location?(other)
+      return false unless other.respond_to?(:backend) && other.respond_to?(:root_path)
+      backend == other.backend.to_s && File.expand_path(root_path.to_s) == File.expand_path(other.root_path.to_s)
+    rescue
+      false
+    end
+
     def presigned_get_url(key, expires_in:, response_content_type: nil, response_content_disposition: nil)
       nil
     end

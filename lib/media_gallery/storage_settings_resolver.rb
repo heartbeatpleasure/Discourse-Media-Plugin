@@ -124,12 +124,46 @@ module ::MediaGallery
 
     def build_store_for_profile_key(profile_key)
       case profile_key.to_s
-      when "active_local", "active_s3"
-        build_store_for_profile("active")
-      when "target_local", "target_s3"
-        build_store_for_profile("target")
+      when "active_local"
+        ::MediaGallery::LocalAssetStore.new(root_path: local_asset_root_path)
+      when "active_s3"
+        ::MediaGallery::S3AssetStore.new(s3_options)
+      when "target_local"
+        ::MediaGallery::LocalAssetStore.new(root_path: target_local_asset_root_path)
+      when "target_s3"
+        ::MediaGallery::S3AssetStore.new(target_s3_options)
       else
         nil
+      end
+    end
+
+    def profile_key_location_fingerprint(profile_key)
+      case profile_key.to_s
+      when "active_local"
+        { backend: "local", root_path: File.expand_path(local_asset_root_path.to_s) }
+      when "active_s3"
+        s3_location_fingerprint(s3_options)
+      when "target_local"
+        { backend: "local", root_path: File.expand_path(target_local_asset_root_path.to_s) }
+      when "target_s3"
+        s3_location_fingerprint(target_s3_options)
+      else
+        nil
+      end
+    end
+
+    def sanitized_config_for_profile_key(profile_key)
+      case profile_key.to_s
+      when "active_local"
+        { local_asset_root_path: local_asset_root_path }
+      when "active_s3"
+        sanitized_s3_config_for_options(s3_options)
+      when "target_local"
+        { local_asset_root_path: target_local_asset_root_path }
+      when "target_s3"
+        sanitized_s3_config_for_options(target_s3_options)
+      else
+        {}
       end
     end
 
@@ -289,29 +323,40 @@ module ::MediaGallery
     end
 
     def sanitized_config_for(profile)
-      backend = profile_backend(profile)
-      case backend
-      when "local"
-        {
-          local_asset_root_path: profile.to_s == "target" ? target_local_asset_root_path : local_asset_root_path,
-        }
-      when "s3"
-        opts = profile.to_s == "target" ? target_s3_options : s3_options
-        {
-          endpoint: opts[:endpoint],
-          region: opts[:region],
-          bucket: opts[:bucket],
-          prefix: opts[:prefix],
-          force_path_style: !!opts[:force_path_style],
-          presign_ttl_seconds: opts[:presign_ttl_seconds].to_i,
-          access_key_id_last4: redact_tail(opts[:access_key_id]),
-          secret_access_key_present: opts[:secret_access_key].present?,
-        }
+      case profile.to_s
+      when "target"
+        sanitized_config_for_profile_key(target_profile_key)
       else
-        {}
+        sanitized_config_for_profile_key(active_profile_key)
       end
     end
     private_class_method :sanitized_config_for
+
+    def sanitized_s3_config_for_options(opts)
+      {
+        endpoint: opts[:endpoint],
+        region: opts[:region],
+        bucket: opts[:bucket],
+        prefix: opts[:prefix],
+        force_path_style: !!opts[:force_path_style],
+        presign_ttl_seconds: opts[:presign_ttl_seconds].to_i,
+        access_key_id_last4: redact_tail(opts[:access_key_id]),
+        secret_access_key_present: opts[:secret_access_key].present?,
+      }
+    end
+    private_class_method :sanitized_s3_config_for_options
+
+    def s3_location_fingerprint(opts)
+      {
+        backend: "s3",
+        endpoint: opts[:endpoint].to_s.sub(%r{/+\z}, ""),
+        region: opts[:region].to_s,
+        bucket: opts[:bucket].to_s,
+        prefix: opts[:prefix].to_s,
+        force_path_style: !!opts[:force_path_style],
+      }
+    end
+    private_class_method :s3_location_fingerprint
 
     def redact_tail(value)
       raw = value.to_s
