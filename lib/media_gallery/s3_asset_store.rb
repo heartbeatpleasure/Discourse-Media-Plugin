@@ -195,7 +195,17 @@ module ::MediaGallery
 
       if version_scan_supported
         version_entries.each do |entry|
-          client.delete_object(bucket: bucket, key: entry[:key], version_id: entry[:version_id])
+          begin
+            client.delete_object(bucket: bucket, key: entry[:key], version_id: entry[:version_id])
+          rescue ::Aws::S3::Errors::AccessDenied => e
+            raise_version_cleanup_not_entitled!(operation: "DeleteObject(versionId)", original: e)
+          rescue ::Aws::S3::Errors::ServiceError => e
+            if e.message.to_s =~ /(not entitled|access denied|forbidden)/i
+              raise_version_cleanup_not_entitled!(operation: "DeleteObject(versionId)", original: e)
+            end
+            raise
+          end
+
           if entry[:delete_marker]
             deleted_delete_markers += 1
           else
@@ -276,10 +286,14 @@ module ::MediaGallery
       [entries, true]
     rescue ::Aws::S3::Errors::NotImplemented, ::Aws::S3::Errors::InvalidArgument, ::Aws::S3::Errors::MethodNotAllowed, ::Aws::S3::Errors::NoSuchBucket
       [[], false]
+    rescue ::Aws::S3::Errors::AccessDenied => e
+      raise_version_cleanup_not_entitled!(operation: "ListObjectVersions", original: e)
     rescue ::Aws::S3::Errors::ServiceError => e
       # Providers without version listing support may surface provider-specific service errors.
       if e.message.to_s =~ /(not implemented|unsupported|invalid request)/i
         [[], false]
+      elsif e.message.to_s =~ /(not entitled|access denied|forbidden)/i
+        raise_version_cleanup_not_entitled!(operation: "ListObjectVersions", original: e)
       else
         raise
       end
@@ -303,6 +317,21 @@ module ::MediaGallery
       else
         list_prefix(denormalized_key(prefix), limit: 1_000_000).length
       end
+    end
+
+
+    def raise_version_cleanup_not_entitled!(operation:, original:)
+      provider_hint = if backblaze_b2_endpoint?
+        "Backblaze B2 denied version-aware cleanup for #{operation}. For B2, create a new S3-compatible Application Key for this same bucket/prefix with Type of Access = Read and Write and enable 'Allow List All Bucket Names', then update the Media Gallery S3 credentials and retry cleanup. Without those permissions the plugin cannot remove hidden historical versions."
+      else
+        "The configured S3 credentials are allowed to access objects but are not entitled to list and/or delete object versions for #{operation}. Update the S3 credentials so the plugin can list object versions and delete specific versions, then retry cleanup."
+      end
+
+      raise RuntimeError, "s3_version_cleanup_not_entitled: #{provider_hint} Original error: #{original.class}: #{original.message}"
+    end
+
+    def backblaze_b2_endpoint?
+      options[:endpoint].to_s.include?("backblazeb2.com")
     end
 
     def comparable_options
