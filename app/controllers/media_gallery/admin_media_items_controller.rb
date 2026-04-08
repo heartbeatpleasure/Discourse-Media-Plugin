@@ -8,64 +8,12 @@ module ::MediaGallery
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
     # Returns a small list for quickly selecting a public_id in the admin UI.
     def search
-      q = params[:q].to_s.strip
-      limit = params[:limit].to_i
-      limit = 20 if limit <= 0
-      limit = 100 if limit > 100
-
-      scope = ::MediaGallery::MediaItem.includes(:user).order(created_at: :desc)
-
-      if q.present?
-        if q =~ /\A\d+\z/
-          scope = scope.where(id: q.to_i)
-        else
-          like = "%#{q}%"
-          scope = scope.where(
-            "public_id ILIKE :q OR title ILIKE :q OR media_type ILIKE :q",
-            q: like
-          )
-        end
-      end
-
-      backend = params[:backend].to_s.strip
-      if %w[local s3].include?(backend)
-        scope = scope.where(managed_storage_backend: backend)
-      end
-
-      status = params[:status].to_s.strip
-      if status.present?
-        scope = scope.where(status: status)
-      end
-
-      media_type = params[:media_type].to_s.strip
-      if %w[audio image video].include?(media_type)
-        scope = scope.where(media_type: media_type)
-      end
-
-      has_hls_filter = params[:has_hls].to_s.strip
-
-      items = scope.limit(limit).map do |item|
+      items = filtered_search_scope.limit(search_limit).map do |item|
         has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
         next if has_hls_filter == "true" && !has_hls
         next if has_hls_filter == "false" && has_hls
 
-        {
-          id: item.id,
-          public_id: item.public_id,
-          title: item.title,
-          status: item.status,
-          created_at: item.created_at,
-          user_id: item.user_id,
-          username: item.user&.username,
-          media_type: item.media_type,
-          filesize_processed_bytes: item.filesize_processed_bytes,
-          error_message: item.error_message,
-          thumbnail_url: "/media/#{item.public_id}/thumbnail",
-          managed_storage_backend: item.managed_storage_backend,
-          managed_storage_profile: item.managed_storage_profile,
-          delivery_mode: item.delivery_mode,
-          has_hls: has_hls,
-        }
+        serialize_search_item(item, has_hls: has_hls)
       end.compact
 
       render_json_dump(items: items)
@@ -93,9 +41,14 @@ module ::MediaGallery
         migration_copy: ::MediaGallery::MigrationCopy.copy_state_for(item),
         migration_switch: ::MediaGallery::MigrationSwitch.switch_state_for(item),
         migration_cleanup: ::MediaGallery::MigrationCleanup.cleanup_state_for(item),
+        migration_verify: ::MediaGallery::MigrationVerify.verify_state_for(item),
+        migration_rollback: ::MediaGallery::MigrationRollback.rollback_state_for(item),
+        migration_finalize: ::MediaGallery::MigrationFinalize.finalize_state_for(item),
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
       )
+    rescue => e
+      render_json_error(e.message, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/reset-processing.json
@@ -128,21 +81,27 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
+    # GET /admin/plugins/media-gallery/media-items/:public_id/verify-target.json
+    def verify_target
+      item = load_item!
+      target_profile = params[:target_profile].to_s.presence || "target"
+      result = ::MediaGallery::MigrationVerify.verify!(item, target_profile: target_profile, requested_by: current_user.username)
+      render_json_dump(result)
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
     # POST /admin/plugins/media-gallery/media-items/:public_id/copy-to-target.json
     def copy_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
-      force = ActiveModel::Type::Boolean.new.cast(params[:force])
-      auto_switch = ActiveModel::Type::Boolean.new.cast(params[:auto_switch])
-      auto_cleanup = ActiveModel::Type::Boolean.new.cast(params[:auto_cleanup])
-
       state = ::MediaGallery::MigrationCopy.enqueue_copy!(
         item,
         target_profile: target_profile,
         requested_by: current_user.username,
-        force: force,
-        auto_switch: auto_switch,
-        auto_cleanup: auto_cleanup
+        force: boolean_param(:force),
+        auto_switch: boolean_param(:auto_switch),
+        auto_cleanup: boolean_param(:auto_cleanup)
       )
 
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
@@ -154,13 +113,12 @@ module ::MediaGallery
     def switch_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
-      auto_cleanup = ActiveModel::Type::Boolean.new.cast(params[:auto_cleanup])
       state = ::MediaGallery::MigrationSwitch.switch!(
         item,
         target_profile: target_profile,
         requested_by: current_user.username,
         mode: "manual",
-        auto_cleanup: auto_cleanup
+        auto_cleanup: boolean_param(:auto_cleanup)
       )
 
       render_json_dump(ok: true, public_id: item.public_id, migration_switch: state)
@@ -171,9 +129,68 @@ module ::MediaGallery
     # POST /admin/plugins/media-gallery/media-items/:public_id/cleanup-source.json
     def cleanup_source
       item = load_item!
-      force = ActiveModel::Type::Boolean.new.cast(params[:force])
-      state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: current_user.username, force: force)
+      state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: current_user.username, force: boolean_param(:force))
       render_json_dump(ok: true, public_id: item.public_id, migration_cleanup: state)
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
+    # POST /admin/plugins/media-gallery/media-items/:public_id/rollback-to-source.json
+    def rollback_to_source
+      item = load_item!
+      state = ::MediaGallery::MigrationRollback.rollback!(item, requested_by: current_user.username, force: boolean_param(:force))
+      render_json_dump(ok: true, public_id: item.public_id, migration_rollback: state)
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
+    # POST /admin/plugins/media-gallery/media-items/:public_id/finalize-migration.json
+    def finalize_migration
+      item = load_item!
+      state = ::MediaGallery::MigrationFinalize.finalize!(item, requested_by: current_user.username, force: boolean_param(:force))
+      render_json_dump(ok: true, public_id: item.public_id, migration_finalize: state)
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
+    # POST /admin/plugins/media-gallery/media-items/bulk-migrate.json
+    def bulk_migrate
+      target_profile = params[:target_profile].to_s.presence || "target"
+      items = filtered_search_scope.limit(search_limit).to_a
+      results = []
+      queued = 0
+      skipped = 0
+
+      items.each do |item|
+        has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
+        next if has_hls_filter == "true" && !has_hls
+        next if has_hls_filter == "false" && has_hls
+
+        begin
+          state = ::MediaGallery::MigrationCopy.enqueue_copy!(
+            item,
+            target_profile: target_profile,
+            requested_by: current_user.username,
+            force: boolean_param(:force),
+            auto_switch: boolean_param(:auto_switch),
+            auto_cleanup: boolean_param(:auto_cleanup)
+          )
+          queued += 1
+          results << { public_id: item.public_id, status: state["status"].to_s.presence || "queued" }
+        rescue => e
+          skipped += 1
+          results << { public_id: item.public_id, status: "skipped", error: e.message }
+        end
+      end
+
+      render_json_dump(
+        ok: true,
+        target_profile: target_profile,
+        requested_count: queued + skipped,
+        queued_count: queued,
+        skipped_count: skipped,
+        items: results
+      )
     rescue => e
       render_json_error(e.message, status: 422)
     end
@@ -181,7 +198,7 @@ module ::MediaGallery
     # POST /admin/plugins/media-gallery/media-items/:public_id/retry-processing.json
     def retry_processing
       item = load_item!
-      force = ActiveModel::Type::Boolean.new.cast(params[:force])
+      force = boolean_param(:force)
 
       unless item.status == "failed" || (force && item.queued_or_processing?)
         return render_json_error("item_not_retryable", status: 422)
@@ -214,6 +231,69 @@ module ::MediaGallery
         raise Discourse::NotFound if item.blank?
         item
       end
+    end
+
+    def filtered_search_scope
+      scope = ::MediaGallery::MediaItem.includes(:user).order(created_at: :desc)
+      q = params[:q].to_s.strip
+
+      if q.present?
+        if q =~ /\A\d+\z/
+          scope = scope.where(id: q.to_i)
+        else
+          like = "%#{q}%"
+          scope = scope.where(
+            "public_id ILIKE :q OR title ILIKE :q OR media_type ILIKE :q",
+            q: like
+          )
+        end
+      end
+
+      backend = params[:backend].to_s.strip
+      scope = scope.where(managed_storage_backend: backend) if %w[local s3].include?(backend)
+
+      status = params[:status].to_s.strip
+      scope = scope.where(status: status) if status.present?
+
+      media_type = params[:media_type].to_s.strip
+      scope = scope.where(media_type: media_type) if %w[audio image video].include?(media_type)
+
+      scope
+    end
+
+    def search_limit
+      limit = params[:limit].to_i
+      limit = 20 if limit <= 0
+      limit = 100 if limit > 100
+      limit
+    end
+
+    def has_hls_filter
+      params[:has_hls].to_s.strip
+    end
+
+    def boolean_param(name)
+      ActiveModel::Type::Boolean.new.cast(params[name])
+    end
+
+    def serialize_search_item(item, has_hls:)
+      {
+        id: item.id,
+        public_id: item.public_id,
+        title: item.title,
+        status: item.status,
+        created_at: item.created_at,
+        user_id: item.user_id,
+        username: item.user&.username,
+        media_type: item.media_type,
+        filesize_processed_bytes: item.filesize_processed_bytes,
+        error_message: item.error_message,
+        thumbnail_url: "/media/#{item.public_id}/thumbnail",
+        managed_storage_backend: item.managed_storage_backend,
+        managed_storage_profile: item.managed_storage_profile,
+        delivery_mode: item.delivery_mode,
+        has_hls: has_hls,
+      }
     end
 
     def processing_metadata(item)

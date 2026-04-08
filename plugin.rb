@@ -22,6 +22,9 @@ after_initialize do
   require_relative "lib/media_gallery/migration_copy"
   require_relative "lib/media_gallery/migration_switch"
   require_relative "lib/media_gallery/migration_cleanup"
+  require_relative "lib/media_gallery/migration_verify"
+  require_relative "lib/media_gallery/migration_rollback"
+  require_relative "lib/media_gallery/migration_finalize"
   require_relative "lib/media_gallery/processing_workspace"
   require_relative "lib/media_gallery/source_acquirer"
   require_relative "lib/media_gallery/asset_store"
@@ -99,6 +102,10 @@ after_initialize do
     post "/admin/plugins/media-gallery/media-items/:public_id/copy-to-target" => "media_gallery/admin_media_items#copy_to_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/switch-to-target" => "media_gallery/admin_media_items#switch_to_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/cleanup-source" => "media_gallery/admin_media_items#cleanup_source", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/media-items/:public_id/verify-target" => "media_gallery/admin_media_items#verify_target", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/rollback-to-source" => "media_gallery/admin_media_items#rollback_to_source", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/finalize-migration" => "media_gallery/admin_media_items#finalize_migration", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/bulk-migrate" => "media_gallery/admin_media_items#bulk_migrate", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
 
     # Admin-only: generate temporary personalized remux/clip downloads for testing.
