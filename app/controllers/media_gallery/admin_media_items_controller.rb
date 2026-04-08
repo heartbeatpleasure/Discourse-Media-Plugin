@@ -21,7 +21,7 @@ module ::MediaGallery
         else
           like = "%#{q}%"
           scope = scope.where(
-            "public_id ILIKE :q OR title ILIKE :q",
+            "public_id ILIKE :q OR title ILIKE :q OR media_type ILIKE :q",
             q: like
           )
         end
@@ -35,6 +35,11 @@ module ::MediaGallery
       status = params[:status].to_s.strip
       if status.present?
         scope = scope.where(status: status)
+      end
+
+      media_type = params[:media_type].to_s.strip
+      if %w[audio image video].include?(media_type)
+        scope = scope.where(media_type: media_type)
       end
 
       has_hls_filter = params[:has_hls].to_s.strip
@@ -52,6 +57,10 @@ module ::MediaGallery
           created_at: item.created_at,
           user_id: item.user_id,
           username: item.user&.username,
+          media_type: item.media_type,
+          filesize_processed_bytes: item.filesize_processed_bytes,
+          error_message: item.error_message,
+          thumbnail_url: "/media/#{item.public_id}/thumbnail",
           managed_storage_backend: item.managed_storage_backend,
           managed_storage_profile: item.managed_storage_profile,
           delivery_mode: item.delivery_mode,
@@ -70,6 +79,11 @@ module ::MediaGallery
         public_id: item.public_id,
         title: item.title,
         status: item.status,
+        created_at: item.created_at,
+        user_id: item.user_id,
+        username: item.user&.username,
+        media_type: item.media_type,
+        thumbnail_url: "/media/#{item.public_id}/thumbnail",
         error_message: item.error_message,
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: item.managed_storage_profile,
@@ -110,6 +124,8 @@ module ::MediaGallery
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
       render_json_dump(::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile))
+    rescue => e
+      render_json_error(e.message, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/copy-to-target.json

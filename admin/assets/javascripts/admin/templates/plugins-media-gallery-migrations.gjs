@@ -149,7 +149,8 @@ export default RouteTemplate(
 
         .mg-migrations__actions,
         .mg-migrations__toggle-row,
-        .mg-migrations__inline-actions {
+        .mg-migrations__inline-actions,
+        .mg-migrations__filters-actions {
           display: flex;
           flex-wrap: wrap;
           gap: 0.75rem;
@@ -561,6 +562,16 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-migrations__field">
+            <label>Type</label>
+            <select value={{@controller.mediaTypeFilter}} {{on "change" @controller.onMediaTypeFilterChange}}>
+              <option value="all">all</option>
+              <option value="audio">audio</option>
+              <option value="image">image</option>
+              <option value="video">video</option>
+            </select>
+          </div>
+
+          <div class="mg-migrations__field">
             <label>{{i18n "admin.media_gallery.migrations.hls_filter"}}</label>
             <select value={{@controller.hlsFilter}} {{on "change" @controller.onHlsFilterChange}}>
               <option value="all">all</option>
@@ -589,9 +600,14 @@ export default RouteTemplate(
 
         <div class="mg-migrations__filters-footer">
           <span class="mg-migrations__muted">{{@controller.searchInfo}}</span>
-          <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
-            {{if @controller.isSearching "Searching…" (i18n "admin.media_gallery.migrations.search_button")}}
-          </button>
+          <div class="mg-migrations__filters-actions">
+            <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
+              {{if @controller.isSearching "Searching…" (i18n "admin.media_gallery.migrations.search_button")}}
+            </button>
+            <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isSearching}}>
+              Reset
+            </button>
+          </div>
         </div>
 
         {{#if @controller.searchError}}
@@ -620,6 +636,7 @@ export default RouteTemplate(
                     <div class="mg-migrations__result-meta mg-migrations__muted">{{item.metaLabel}}</div>
                     <div class="mg-migrations__result-tags">
                       <span class={{item.statusClass}}>{{item.statusLabel}}</span>
+                      <span class={{item.mediaTypeClass}}>{{item.mediaTypeLabel}}</span>
                       <span class="mg-migrations__badge">{{item.backendLabel}} · {{item.profileLabel}}</span>
                       <span class={{item.hlsClass}}>{{item.hasHlsLabel}}</span>
                     </div>
@@ -765,12 +782,15 @@ export default RouteTemplate(
                 <div class="mg-migrations__summary-card">
                   <div class="mg-migrations__summary-label">Objects</div>
                   <div class="mg-migrations__summary-title">{{@controller.selectedPlanSummary.objectCountLabel}}</div>
+                  <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.objectCountCaption}}</span>
                   <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.sourceBytesLabel}}</span>
                 </div>
                 <div class="mg-migrations__summary-card">
                   <div class="mg-migrations__summary-label">Target readiness</div>
-                  <div class="mg-migrations__card-header" style="margin: 0.35rem 0 0;">
-                    <span class="mg-migrations__summary-title">{{@controller.selectedPlanSummary.targetExistingLabel}} present</span>
+                  <div class="mg-migrations__summary-title">{{@controller.selectedPlanSummary.targetExistingLabel}}</div>
+                  <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.targetExistingCaption}}</span>
+                  <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.targetExistingBytesLabel}}</span>
+                  <div class="mg-migrations__warning-list" style="margin-top: 0.65rem;">
                     <span class={{@controller.selectedPlanSummary.missingBadgeClass}}>{{@controller.selectedPlanSummary.missingCountLabel}} missing</span>
                   </div>
                   <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.switchReadinessLabel}}</span>
@@ -783,6 +803,10 @@ export default RouteTemplate(
                     <span class="mg-migrations__badge is-warning">{{warning}}</span>
                   {{/each}}
                 </div>
+              {{/if}}
+
+              {{#if @controller.selectedPlanError}}
+                <div class="alert alert-warning" style="margin-top: 1rem;">{{@controller.selectedPlanError}}</div>
               {{/if}}
 
               <div class="mg-migrations__role-grid" style="margin-top: 1rem;">
@@ -805,6 +829,8 @@ export default RouteTemplate(
                   </div>
                 {{/each}}
               </div>
+            {{else if @controller.selectedPlanError}}
+              <div class="alert alert-warning" style="margin-top: 1rem;">{{@controller.selectedPlanError}}</div>
             {{/if}}
 
             <details class="mg-migrations__details">

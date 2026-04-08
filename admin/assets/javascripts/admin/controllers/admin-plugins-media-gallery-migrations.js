@@ -133,6 +133,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked searchQuery = "";
   @tracked backendFilter = "all";
   @tracked statusFilter = "all";
+  @tracked mediaTypeFilter = "all";
   @tracked hlsFilter = "all";
   @tracked limit = 50;
   @tracked sortBy = "created_at_desc";
@@ -147,6 +148,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked selectedPlan = null;
   @tracked selectedDiagnostics = null;
   @tracked selectedError = "";
+  @tracked selectedPlanError = "";
   @tracked isLoadingSelection = false;
 
   @tracked lastActionMessage = "";
@@ -169,6 +171,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.searchQuery = "";
     this.backendFilter = "all";
     this.statusFilter = "all";
+    this.mediaTypeFilter = "all";
     this.hlsFilter = "all";
     this.limit = 50;
     this.sortBy = "created_at_desc";
@@ -181,6 +184,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.selectedPlan = null;
     this.selectedDiagnostics = null;
     this.selectedError = "";
+    this.selectedPlanError = "";
     this.isLoadingSelection = false;
     this.lastActionMessage = "";
     this.actionError = "";
@@ -232,7 +236,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       const isSelected = this.selectedPublicId === item.public_id;
       const mediaType = item.media_type ? titleCase(item.media_type) : "Media";
       const username = item.username ? `by ${item.username}` : "";
-      const metaParts = [mediaType, username, formatDateTime(item.created_at)].filter(Boolean);
+      const metaParts = [username, formatDateTime(item.created_at)].filter(Boolean);
 
       return {
         ...item,
@@ -244,6 +248,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         profileLabel: normalizeText(item.managed_storage_profile),
         statusLabel: titleCase(item.status || "unknown"),
         statusClass: badgeClassForStatus(item.status),
+        mediaTypeLabel: mediaType,
+        mediaTypeClass: "mg-migrations__badge",
         hasHlsLabel: item.has_hls ? "HLS ready" : "No HLS",
         hlsClass: badgeClassForStatus(item.has_hls ? "ok" : "neutral"),
         metaLabel: metaParts.join(" • "),
@@ -291,8 +297,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
     return [
       buildSummaryRow("Public ID", this.selectedPublicId),
-      buildSummaryRow("Uploaded by", item.username),
-      buildSummaryRow("Created", item.created_at ? formatDateTime(item.created_at) : diagnostics.created_at),
+      buildSummaryRow("Type", titleCase(diagnostics.media_type || item.media_type || "unknown")),
+      buildSummaryRow("Uploaded by", diagnostics.username || item.username),
+      buildSummaryRow("Created", item.created_at ? formatDateTime(item.created_at) : (diagnostics.created_at ? formatDateTime(diagnostics.created_at) : null)),
       buildSummaryRow("Backend / profile", `${normalizeText(diagnostics.managed_storage_backend || item.managed_storage_backend)} / ${normalizeText(diagnostics.managed_storage_profile || item.managed_storage_profile)}`),
       buildSummaryRow("Delivery", diagnostics.delivery_mode),
       buildSummaryRow("Status", titleCase(diagnostics.status || item.status || "unknown")),
@@ -384,8 +391,11 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       sourceLabel: `${titleCase(source.backend || "unknown")} / ${normalizeText(source.profile_key)}`,
       targetLabel: `${titleCase(target.backend || "unknown")} / ${normalizeText(target.profile_key)}`,
       objectCountLabel: String(totals.object_count || 0),
+      objectCountCaption: "Objects on source",
       sourceBytesLabel: formatBytes(totals.source_bytes),
       targetExistingLabel: String(totals.target_existing_count || 0),
+      targetExistingCaption: "Objects already on target",
+      targetExistingBytesLabel: formatBytes(totals.target_existing_bytes),
       missingCountLabel: String(missingCount),
       missingBadgeClass: badgeClassForStatus(missingCount === 0 ? "ok" : "warning"),
       switchReadinessLabel: missingCount === 0 ? "Ready to switch" : "Copy still missing target objects",
@@ -511,6 +521,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @action onSearchInput(event) { this.searchQuery = event?.target?.value || ""; }
   @action onBackendFilterChange(event) { this.backendFilter = event?.target?.value || "all"; }
   @action onStatusFilterChange(event) { this.statusFilter = event?.target?.value || "all"; }
+  @action onMediaTypeFilterChange(event) { this.mediaTypeFilter = event?.target?.value || "all"; }
   @action onHlsFilterChange(event) { this.hlsFilter = event?.target?.value || "all"; }
   @action onSortByChange(event) { this.sortBy = event?.target?.value || "created_at_desc"; }
   @action onLimitInput(event) {
@@ -528,6 +539,18 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @action onForceActionChange(event) { this.forceAction = !!event?.target?.checked; }
 
   @action
+  async resetFilters() {
+    this.searchQuery = "";
+    this.backendFilter = "all";
+    this.statusFilter = "all";
+    this.mediaTypeFilter = "all";
+    this.hlsFilter = "all";
+    this.limit = 50;
+    this.sortBy = "created_at_desc";
+    await this.search();
+  }
+
+  @action
   async search() {
     this.isSearching = true;
     this.searchError = "";
@@ -538,6 +561,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       if (q) params.set("q", q);
       if (this.backendFilter && this.backendFilter !== "all") params.set("backend", this.backendFilter);
       if (this.statusFilter && this.statusFilter !== "all") params.set("status", this.statusFilter);
+      if (this.mediaTypeFilter && this.mediaTypeFilter !== "all") params.set("media_type", this.mediaTypeFilter);
       if (this.hlsFilter && this.hlsFilter !== "all") params.set("has_hls", this.hlsFilter === "yes" ? "true" : "false");
       params.set("limit", String(this.limit || 50));
       const response = await fetch(`/admin/plugins/media-gallery/media-items/search.json?${params.toString()}`, {
@@ -553,6 +577,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       const json = await response.json();
       this.searchResults = Array.isArray(json?.items) ? json.items : [];
       this.searchInfo = `${this.searchResults.length} result(s).`;
+      const refreshedSelection = this.searchResults.find((row) => row.public_id === this.selectedPublicId);
+      if (refreshedSelection) {
+        this.selectedItem = refreshedSelection;
+      }
     } catch (e) {
       this.searchError = e?.message || String(e);
       this.searchResults = [];
@@ -562,15 +590,23 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
 
   @action
-  async selectItem(item) {
+  async selectItem(item, event) {
+    event?.preventDefault?.();
     const publicId = item?.public_id;
     if (!publicId) return;
+
+    const restoreScrollY = window.scrollY;
     this.selectedItem = item;
     this.selectedPublicId = publicId;
     this.selectedError = "";
+    this.selectedPlanError = "";
     this.lastActionMessage = "";
     this.actionError = "";
     await this.refreshSelected();
+    event?.currentTarget?.blur?.();
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: restoreScrollY, left: 0, behavior: "auto" });
+    });
   }
 
   @action
@@ -578,17 +614,23 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     if (!this.selectedPublicId) return;
     this.isLoadingSelection = true;
     this.selectedError = "";
+    this.selectedPlanError = "";
+    this.selectedPlan = null;
+
     try {
       const publicId = encodeURIComponent(this.selectedPublicId);
-      const [diagnostics, plan] = await Promise.all([
-        this._fetchJson(`/admin/plugins/media-gallery/media-items/${publicId}/diagnostics.json`),
-        this._fetchJson(`/admin/plugins/media-gallery/media-items/${publicId}/migration-plan.json`),
-      ]);
+      const diagnostics = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${publicId}/diagnostics.json`);
       this.selectedDiagnostics = diagnostics;
-      this.selectedPlan = plan;
+
       const refreshedSelection = this.searchResults.find((row) => row.public_id === this.selectedPublicId);
       if (refreshedSelection) {
         this.selectedItem = refreshedSelection;
+      }
+
+      try {
+        this.selectedPlan = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${publicId}/migration-plan.json`);
+      } catch (planError) {
+        this.selectedPlanError = planError?.message || String(planError);
       }
     } catch (e) {
       this.selectedError = e?.message || String(e);
