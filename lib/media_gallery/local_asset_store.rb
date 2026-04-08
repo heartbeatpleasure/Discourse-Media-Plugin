@@ -105,7 +105,6 @@ module ::MediaGallery
       entries = []
       Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).sort.each do |path|
         next if File.directory?(path)
-        next if File.basename(path).start_with?(".")
 
         entries << relative_key_for(path)
         break if limit.present? && limit.to_i > 0 && entries.length >= limit.to_i
@@ -138,7 +137,7 @@ module ::MediaGallery
 
     def purge_prefix!(prefix)
       dir = absolute_path_for(prefix)
-      existing_files = Dir.exist?(dir) ? Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).count { |p| File.file?(p) && !File.basename(p).start_with?(".") } : 0
+      existing_files = Dir.exist?(dir) ? Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).count { |p| File.file?(p) } : 0
       FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
       cleanup_empty_parents(File.dirname(dir)) if dir.present?
 
