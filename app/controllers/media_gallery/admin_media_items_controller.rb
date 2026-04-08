@@ -9,13 +9,14 @@ module ::MediaGallery
     # Returns a small list for quickly selecting a public_id in the admin UI.
     def search
       q = params[:q].to_s.strip
-      limit = 20
+      limit = params[:limit].to_i
+      limit = 20 if limit <= 0
+      limit = 100 if limit > 100
 
       scope = ::MediaGallery::MediaItem.includes(:user).order(created_at: :desc)
 
       if q.present?
         if q =~ /\A\d+\z/
-          # Numeric input: treat as media_item id.
           scope = scope.where(id: q.to_i)
         else
           like = "%#{q}%"
@@ -26,7 +27,23 @@ module ::MediaGallery
         end
       end
 
+      backend = params[:backend].to_s.strip
+      if %w[local s3].include?(backend)
+        scope = scope.where(managed_storage_backend: backend)
+      end
+
+      status = params[:status].to_s.strip
+      if status.present?
+        scope = scope.where(status: status)
+      end
+
+      has_hls_filter = params[:has_hls].to_s.strip
+
       items = scope.limit(limit).map do |item|
+        has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
+        next if has_hls_filter == "true" && !has_hls
+        next if has_hls_filter == "false" && has_hls
+
         {
           id: item.id,
           public_id: item.public_id,
@@ -35,8 +52,12 @@ module ::MediaGallery
           created_at: item.created_at,
           user_id: item.user_id,
           username: item.user&.username,
+          managed_storage_backend: item.managed_storage_backend,
+          managed_storage_profile: item.managed_storage_profile,
+          delivery_mode: item.delivery_mode,
+          has_hls: has_hls,
         }
-      end
+      end.compact
 
       render_json_dump(items: items)
     end

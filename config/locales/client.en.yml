@@ -120,6 +120,36 @@ en:
         description: "Admin tools for the Media Gallery plugin."
         open_settings: "Open settings"
 
+
+
+        migrations:
+          title: "Migration manager"
+          short_title: "Migrations"
+          description: "Search media, inspect source and target state, and run copy, switch, and cleanup actions without leaving the Media Gallery admin area."
+          active_storage: "Active storage"
+          target_storage: "Target storage"
+          refresh_health: "Refresh health"
+          run_probe: "Run probe"
+          find_media: "Find media"
+          search_label: "Search"
+          search_placeholder: "Search by public_id / title / id…"
+          backend_filter: "Backend"
+          status_filter: "Status"
+          hls_filter: "HLS"
+          limit_label: "Limit"
+          sort_label: "Sort"
+          search_button: "Search"
+          results: "Results"
+          select_button: "Use"
+          selected_item: "Selected item"
+          refresh_selected: "Refresh"
+          copy_button: "Copy to target"
+          switch_button: "Switch to target"
+          cleanup_button: "Cleanup source"
+          plan: "Migration plan"
+          diagnostics: "Diagnostics"
+          no_selection: "Select an item from the results table to inspect or migrate it."
+
         forensics_exports:
           title: "Forensics exports"
           short_title: "Forensics exports"
