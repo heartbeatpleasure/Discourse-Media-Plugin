@@ -156,10 +156,14 @@ module ::MediaGallery
     # POST /admin/plugins/media-gallery/media-items/bulk-migrate.json
     def bulk_migrate
       target_profile = params[:target_profile].to_s.presence || "target"
-      items = filtered_search_scope.limit(search_limit).to_a
+      items = bulk_migration_scope.to_a
       results = []
       queued = 0
       skipped = 0
+
+      if items.blank?
+        return render_json_error("no_media_items_selected", status: 422)
+      end
 
       items.each do |item|
         has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
@@ -186,7 +190,7 @@ module ::MediaGallery
       render_json_dump(
         ok: true,
         target_profile: target_profile,
-        requested_count: queued + skipped,
+        requested_count: items.length,
         queued_count: queued,
         skipped_count: skipped,
         items: results
@@ -231,6 +235,20 @@ module ::MediaGallery
         raise Discourse::NotFound if item.blank?
         item
       end
+    end
+
+    def bulk_migration_scope
+      public_ids = requested_bulk_public_ids
+      return filtered_search_scope.limit(search_limit) if public_ids.blank?
+
+      items_by_public_id = ::MediaGallery::MediaItem.where(public_id: public_ids).index_by(&:public_id)
+      public_ids.filter_map { |public_id| items_by_public_id[public_id] }
+    end
+
+    def requested_bulk_public_ids
+      values = params[:public_ids]
+      values = values.split(",") if values.is_a?(String)
+      Array(values).map(&:to_s).map(&:strip).reject(&:blank?).uniq.first(100)
     end
 
     def filtered_search_scope

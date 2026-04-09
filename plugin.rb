@@ -6,7 +6,7 @@
 # authors: Chris
 # url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin
 
-add_admin_route "admin.media_gallery.title", "mediaGallery"
+add_admin_route "admin.media_gallery.title", "media-gallery"
 
 enabled_site_setting :media_gallery_enabled
 
