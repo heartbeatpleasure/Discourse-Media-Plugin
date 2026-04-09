@@ -8,38 +8,15 @@ module ::MediaGallery
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
     # Returns a small list for quickly selecting a public_id in the admin UI.
     def search
-      page = search_page
-      per_page = search_per_page
-      scope = apply_search_sort(filtered_search_scope)
+      items = filtered_search_scope.limit(search_limit).map do |item|
+        has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
+        next if has_hls_filter == "true" && !has_hls
+        next if has_hls_filter == "false" && has_hls
 
-      if has_hls_filter.in?(["true", "false"])
-        matching_items = scope.to_a.select do |item|
-          has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
-          has_hls_filter == "true" ? has_hls : !has_hls
-        end
+        serialize_search_item(item, has_hls: has_hls)
+      end.compact
 
-        total_count = matching_items.length
-        window = matching_items.slice((page - 1) * per_page, per_page) || []
-        items = window.map do |item|
-          serialize_search_item(item, has_hls: ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash))
-        end
-      else
-        total_count = scope.count
-        window = scope.offset((page - 1) * per_page).limit(per_page)
-        items = window.map do |item|
-          serialize_search_item(item, has_hls: ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash))
-        end
-      end
-
-      render_json_dump(
-        items: items,
-        pagination: {
-          page: page,
-          per_page: per_page,
-          total_count: total_count,
-          has_more: (page * per_page) < total_count,
-        }
-      )
+      render_json_dump(items: items)
     end
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/diagnostics.json
@@ -58,6 +35,8 @@ module ::MediaGallery
         error_message: item.error_message,
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: item.managed_storage_profile,
+        managed_storage_profile_label: managed_storage_profile_label_for(item),
+        managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
         delivery_mode: item.delivery_mode,
         roles: diagnostics_roles(item),
         processing: processing_metadata(item),
@@ -201,8 +180,7 @@ module ::MediaGallery
             requested_by: current_user.username,
             force: boolean_param(:force),
             auto_switch: boolean_param(:auto_switch),
-            auto_cleanup: boolean_param(:auto_cleanup),
-            full_migration: boolean_param(:full_migration)
+            auto_cleanup: boolean_param(:auto_cleanup)
           )
           queued += 1
           results << { public_id: item.public_id, status: state["status"].to_s.presence || "queued" }
@@ -220,15 +198,6 @@ module ::MediaGallery
         skipped_count: skipped,
         items: results
       )
-    rescue => e
-      render_json_error(e.message, status: 422)
-    end
-
-    # POST /admin/plugins/media-gallery/media-items/:public_id/clear-history.json
-    def clear_history
-      item = load_item!
-      cleared = ::MediaGallery::MigrationRunHistory.clear_history!(item)
-      render_json_dump(ok: true, public_id: item.public_id, cleared: cleared)
     rescue => e
       render_json_error(e.message, status: 422)
     end
@@ -273,7 +242,7 @@ module ::MediaGallery
 
     def bulk_migration_scope
       public_ids = requested_bulk_public_ids
-      return apply_search_sort(filtered_search_scope).limit(search_per_page) if public_ids.blank?
+      return filtered_search_scope.limit(search_limit) if public_ids.blank?
 
       items_by_public_id = ::MediaGallery::MediaItem.where(public_id: public_ids).index_by(&:public_id)
       public_ids.filter_map { |public_id| items_by_public_id[public_id] }
@@ -313,34 +282,11 @@ module ::MediaGallery
       scope
     end
 
-    def search_page
-      page = params[:page].to_i
-      page = 1 if page <= 0
-      page
-    end
-
-    def search_per_page
-      per_page = params[:per_page].to_i
-      per_page = 20 if per_page <= 0
-      per_page = 100 if per_page > 100
-      per_page
-    end
-
-    def apply_search_sort(scope)
-      case params[:sort].to_s
-      when "created_at_asc"
-        scope.reorder(created_at: :asc)
-      when "title_asc"
-        scope.reorder(Arel.sql('LOWER(title) ASC NULLS LAST'), created_at: :desc)
-      when "title_desc"
-        scope.reorder(Arel.sql('LOWER(title) DESC NULLS LAST'), created_at: :desc)
-      when "backend_asc"
-        scope.reorder(Arel.sql('LOWER(managed_storage_backend) ASC NULLS LAST'), created_at: :desc)
-      when "backend_desc"
-        scope.reorder(Arel.sql('LOWER(managed_storage_backend) DESC NULLS LAST'), created_at: :desc)
-      else
-        scope.reorder(created_at: :desc)
-      end
+    def search_limit
+      limit = params[:limit].to_i
+      limit = 20 if limit <= 0
+      limit = 100 if limit > 100
+      limit
     end
 
     def has_hls_filter
@@ -366,9 +312,24 @@ module ::MediaGallery
         thumbnail_url: "/media/#{item.public_id}/thumbnail",
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: item.managed_storage_profile,
+        managed_storage_profile_label: managed_storage_profile_label_for(item),
+        managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
         delivery_mode: item.delivery_mode,
         has_hls: has_hls,
       }
+    end
+
+
+    def managed_storage_profile_key_for(item)
+      item.managed_storage_profile.to_s.presence || ::MediaGallery::StorageSettingsResolver.active_profile_key
+    end
+
+    def managed_storage_profile_label_for(item)
+      ::MediaGallery::StorageSettingsResolver.profile_label_for_key(managed_storage_profile_key_for(item))
+    end
+
+    def managed_storage_location_fingerprint_key_for(item)
+      ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(managed_storage_profile_key_for(item))
     end
 
     def processing_metadata(item)

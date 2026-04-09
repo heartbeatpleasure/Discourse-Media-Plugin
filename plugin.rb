@@ -96,6 +96,7 @@ after_initialize do
 
     # Admin-only helper to find media items by public_id/title/id.
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/storage/profiles" => "media_gallery/admin_storage#profiles", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/health" => "media_gallery/admin_storage#health", defaults: { format: :json }
     post "/admin/plugins/media-gallery/storage/probe" => "media_gallery/admin_storage#probe", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/diagnostics" => "media_gallery/admin_media_items#diagnostics", defaults: { format: :json }
@@ -106,7 +107,6 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/:public_id/verify-target" => "media_gallery/admin_media_items#verify_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/rollback-to-source" => "media_gallery/admin_media_items#rollback_to_source", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/finalize-migration" => "media_gallery/admin_media_items#finalize_migration", defaults: { format: :json }
-    post "/admin/plugins/media-gallery/media-items/:public_id/clear-history" => "media_gallery/admin_media_items#clear_history", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/bulk-migrate" => "media_gallery/admin_media_items#bulk_migrate", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
 

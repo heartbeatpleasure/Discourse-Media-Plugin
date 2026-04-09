@@ -8,8 +8,6 @@ module ::MediaGallery
   module StorageHealth
     module_function
 
-    PROFILES = %w[active target].freeze
-
     def health(profile: "active")
       profile = normalize_profile(profile)
       summary = ::MediaGallery::StorageSettingsResolver.profile_summary(profile)
@@ -20,7 +18,9 @@ module ::MediaGallery
         profile: profile,
         backend: summary[:backend],
         profile_key: summary[:profile_key],
+        label: summary[:label],
         config: summary[:config],
+        location_fingerprint_key: summary[:location_fingerprint_key],
         validation_errors: errors,
       }
 
@@ -56,7 +56,7 @@ module ::MediaGallery
       raise "store_not_buildable" if store.blank?
 
       backend = ::MediaGallery::StorageSettingsResolver.profile_backend(profile)
-      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key(profile)
+      profile_key = ::MediaGallery::StorageSettingsResolver.normalized_profile_key(profile)
       key = probe_key(profile_key)
       marker = "media-gallery-healthcheck:#{SecureRandom.hex(8)}"
       tmp_path = nil
@@ -137,8 +137,7 @@ module ::MediaGallery
     end
 
     def normalize_profile(profile)
-      value = profile.to_s.strip
-      PROFILES.include?(value) ? value : "active"
+      ::MediaGallery::StorageSettingsResolver.normalized_profile_key(profile) || (profile.to_s.strip == "target" ? ::MediaGallery::StorageSettingsResolver.target_profile_key : "active")
     end
 
     def probe_key(profile_key)

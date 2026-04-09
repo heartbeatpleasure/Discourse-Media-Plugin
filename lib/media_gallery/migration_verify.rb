@@ -18,10 +18,11 @@ module ::MediaGallery
       warnings = Array(plan[:warnings] || plan["warnings"]).map(&:to_s)
       missing = totals[:missing_on_target_count].to_i
       same_profile = source[:profile_key].present? && source[:profile_key].to_s == target[:profile_key].to_s
+      same_location = source[:location_fingerprint_key].present? && source[:location_fingerprint_key].to_s == target[:location_fingerprint_key].to_s
 
       status = if target[:backend].to_s.blank?
         "not_configured"
-      elsif same_profile
+      elsif same_profile || same_location
         "same_profile"
       elsif missing.zero?
         "verified"

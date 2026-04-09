@@ -50,6 +50,7 @@ module ::MediaGallery
       warnings << "target_profile_not_configured" if target[:backend].blank?
       warnings << "source_backend_upload_roles_present" if role_previews.any? { |r| r[:summary][:unsupported_upload_role] }
       warnings << "source_and_target_same_profile" if source[:profile_key].present? && source[:profile_key] == target[:profile_key]
+      warnings << "source_and_target_same_location" if source[:location_fingerprint_key].present? && source[:location_fingerprint_key] == target[:location_fingerprint_key]
       warnings.concat(role_previews.flat_map { |r| Array(r[:warnings]) })
       warnings.uniq!
 
@@ -79,14 +80,16 @@ module ::MediaGallery
         profile: profile_key.to_s.start_with?("target_") ? "target" : "active",
         backend: backend,
         profile_key: profile_key,
-        config: sanitized_config_for_profile_key(profile_key, backend)
+        label: ::MediaGallery::StorageSettingsResolver.profile_label_for_key(profile_key),
+        config: sanitized_config_for_profile_key(profile_key, backend),
+        location_fingerprint: ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(profile_key),
+        location_fingerprint_key: ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(profile_key)
       }
     end
     private_class_method :source_summary_for
 
     def target_summary_for(target_profile)
-      profile = target_profile.to_s == "active" ? "active" : "target"
-      ::MediaGallery::StorageSettingsResolver.profile_summary(profile).deep_symbolize_keys
+      ::MediaGallery::StorageSettingsResolver.profile_summary(target_profile).deep_symbolize_keys
     end
     private_class_method :target_summary_for
 
@@ -194,11 +197,7 @@ module ::MediaGallery
           ::MediaGallery::LocalAssetStore.new(root_path: ::MediaGallery::StorageSettingsResolver.local_asset_root_path)
         end
       when "s3"
-        if profile_key == "target_s3"
-          ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key("target_s3")
-        else
-          ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key("active_s3")
-        end
+        nil
       else
         nil
       end

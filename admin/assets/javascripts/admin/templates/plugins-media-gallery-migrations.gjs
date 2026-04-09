@@ -518,11 +518,23 @@ export default RouteTemplate(
             <span class={{@controller.targetStorageCard.badgeClass}}>{{@controller.targetStorageCard.badgeLabel}}</span>
           </div>
 
+
+
+          {{#if @controller.targetProfileOptions.length}}
+            <div class="mg-migrations__field" style="margin-bottom: 0.9rem;">
+              <label>Migration destination</label>
+              <select value={{@controller.selectedTargetProfileKey}} {{on "change" @controller.onTargetProfileChange}}>
+                {{#each @controller.targetProfileOptions as |profile|}}
+                  <option value={{profile.profile_key}}>{{profile.label}} · {{profile.backend}}</option>
+                {{/each}}
+              </select>
+            </div>
+          {{/if}}
           <div class="mg-migrations__actions" style="margin-bottom: 0.9rem;">
-            <button class="btn" type="button" {{on "click" (fn @controller.loadStorageHealth "target")}} disabled={{@controller.storageBusy}}>
+            <button class="btn" type="button" {{on "click" (fn @controller.loadStorageHealth @controller.selectedTargetProfileKey)}} disabled={{@controller.storageBusy}}>
               {{i18n "admin.media_gallery.migrations.refresh_health"}}
             </button>
-            <button class="btn" type="button" {{on "click" (fn @controller.runStorageProbe "target")}} disabled={{@controller.storageBusy}}>
+            <button class="btn" type="button" {{on "click" (fn @controller.runStorageProbe @controller.selectedTargetProfileKey)}} disabled={{@controller.storageBusy}}>
               {{i18n "admin.media_gallery.migrations.run_probe"}}
             </button>
           </div>
@@ -624,13 +636,8 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-migrations__field">
-            <label>Per page</label>
-            <select value={{@controller.perPage}} {{on "change" @controller.onPerPageChange}}>
-              <option value="10">10</option>
-              <option value="20">20</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-            </select>
+            <label>{{i18n "admin.media_gallery.migrations.limit_label"}}</label>
+            <input type="number" min="1" max="100" value={{@controller.limit}} {{on "input" @controller.onLimitInput}} />
           </div>
 
           <div class="mg-migrations__field">
@@ -647,19 +654,13 @@ export default RouteTemplate(
         </div>
 
         <div class="mg-migrations__filters-footer">
-          <span class="mg-migrations__muted">{{@controller.searchSummaryLabel}}</span>
+          <span class="mg-migrations__muted">{{@controller.searchInfo}}</span>
           <div class="mg-migrations__filters-actions">
             <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
               {{if @controller.isSearching "Searching…" (i18n "admin.media_gallery.migrations.search_button")}}
             </button>
             <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isSearching}}>
               Reset
-            </button>
-            <button class="btn" type="button" {{on "click" @controller.goToPreviousPage}} disabled={{@controller.previousPageDisabled}}>
-              Previous
-            </button>
-            <button class="btn" type="button" {{on "click" @controller.goToNextPage}} disabled={{@controller.nextPageDisabled}}>
-              Next
             </button>
           </div>
         </div>
@@ -676,7 +677,7 @@ export default RouteTemplate(
 
         <div class="mg-migrations__bulk-panel">
           <h3>Migrate multiple selected items</h3>
-          <p class="mg-migrations__muted">Choose whether to queue copy-only work or the full migration sequence for the items you explicitly selected below.</p>
+          <p class="mg-migrations__muted">This queues copy jobs for the items you explicitly selected below and sends them to {{@controller.selectedTargetProfileLabel}}.</p>
           <div class="mg-migrations__bulk-toolbar" style="margin-top: 0.85rem;">
             <div class="mg-migrations__muted">{{@controller.bulkSelectionCount}} item(s) selected</div>
             <div class="mg-migrations__filters-actions">
@@ -688,16 +689,13 @@ export default RouteTemplate(
               </button>
             </div>
           </div>
-          <div class="mg-migrations__toggle-row" style="margin-top: 0.9rem; margin-bottom: 0.9rem;">
-            <label><input type="checkbox" checked={{@controller.bulkFullMigration}} {{on "change" @controller.onBulkFullMigrationChange}} /> full migration after copy</label>
-          </div>
           <label class="mg-migrations__bulk-confirm">
             <input type="checkbox" checked={{@controller.bulkConfirm}} {{on "change" @controller.onBulkConfirmChange}} />
             I understand this queues migration work for all selected items.
           </label>
           <div class="mg-migrations__filters-actions" style="margin-top: 0.9rem;">
             <button class="btn btn-danger" type="button" {{on "click" @controller.bulkMigrate}} disabled={{@controller.bulkMigrateDisabled}}>
-              {{@controller.bulkPrimaryActionLabel}}
+              {{if @controller.isBulkMigrating "Queueing selected items…" "Queue migration for selected items"}}
             </button>
           </div>
         </div>
@@ -775,7 +773,7 @@ export default RouteTemplate(
               <div class="mg-migrations__panel-header" style="margin-bottom: 0.75rem;">
                 <div class="mg-migrations__panel-copy">
                   <h3>Actions</h3>
-                  <span class="mg-migrations__muted">Copy first, then verify and switch. Rollback is available after switch and before cleanup. The selected item refreshes automatically every 5 seconds while copy or cleanup is still running.</span>
+                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. Destination: {{@controller.selectedTargetProfileLabel}}. The selected item refreshes automatically every 5 seconds while copy or cleanup is still running.</span>
                 </div>
               </div>
 
@@ -798,11 +796,11 @@ export default RouteTemplate(
                 <button class="btn" type="button" {{on "click" @controller.switchToTarget}} disabled={{@controller.switchDisabled}}>
                   {{if @controller.isSwitching "Switching…" (i18n "admin.media_gallery.migrations.switch_button")}}
                 </button>
-                <button class="btn" type="button" {{on "click" @controller.rollbackToSource}} disabled={{@controller.rollbackDisabled}}>
-                  {{if @controller.isRollingBack "Rolling back…" "Rollback"}}
-                </button>
                 <button class="btn" type="button" {{on "click" @controller.cleanupSource}} disabled={{@controller.cleanupDisabled}}>
                   {{if @controller.isCleaning "Cleaning…" (i18n "admin.media_gallery.migrations.cleanup_button")}}
+                </button>
+                <button class="btn" type="button" {{on "click" @controller.rollbackToSource}} disabled={{@controller.rollbackDisabled}}>
+                  {{if @controller.isRollingBack "Rolling back…" "Rollback"}}
                 </button>
                 <button class="btn" type="button" {{on "click" @controller.finalizeMigration}} disabled={{@controller.finalizeDisabled}}>
                   {{if @controller.isFinalizing "Finalizing…" "Finalize"}}
@@ -823,7 +821,7 @@ export default RouteTemplate(
             <div class="mg-migrations__panel-header">
               <div class="mg-migrations__panel-copy">
                 <h3>Current state</h3>
-                <span class="mg-migrations__muted">Processing, copy, verify, switch, rollback, cleanup, and finalize are shown separately so you can see exactly where the item is in the migration flow.</span>
+                <span class="mg-migrations__muted">Processing, copy, switch, and cleanup are shown separately so you can see exactly where the item is in the migration flow.</span>
               </div>
             </div>
             <div class="mg-migrations__state-grid">
@@ -848,9 +846,6 @@ export default RouteTemplate(
                   <h3>Previous migration runs</h3>
                   <span class="mg-migrations__muted">After finalize, the completed run moves here so the current action state is clean for the next migration.</span>
                 </div>
-                <button class="btn" type="button" {{on "click" @controller.clearSelectedHistory}} disabled={{@controller.clearHistoryDisabled}}>
-                  Clear history
-                </button>
               </div>
               <div class="mg-migrations__state-grid">
                 {{#each @controller.selectedHistoryEntries as |entry|}}
@@ -910,7 +905,7 @@ export default RouteTemplate(
               <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
                 <div class="mg-migrations__panel-copy">
                   <h3>Migration summary</h3>
-                  <span class="mg-migrations__muted">Dry-run preview of the move from the current profile to the configured target profile.</span>
+                  <span class="mg-migrations__muted">Dry-run preview of the move from the current profile to the selected destination profile.</span>
                 </div>
               </div>
 

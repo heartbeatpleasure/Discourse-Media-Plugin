@@ -6,6 +6,8 @@ module ::MediaGallery
 
     BACKENDS = %w[local s3].freeze
     DELIVERY_MODES = %w[stream x_accel redirect].freeze
+    TARGET_PROFILE_KEYS = %w[target_local target_s3 target_s3_2 target_s3_3].freeze
+    PROFILE_KEYS = (%w[active_local active_s3] + TARGET_PROFILE_KEYS).freeze
 
     def managed_storage_enabled?
       backend = configured_backend
@@ -90,7 +92,14 @@ module ::MediaGallery
     end
 
     def target_profile_key
-      profile_key("target")
+      case target_backend
+      when "local"
+        "target_local"
+      when "s3"
+        "target_s3"
+      else
+        first_available_target_profile_key || "target_local"
+      end
     end
 
     def profile_key(profile)
@@ -98,16 +107,35 @@ module ::MediaGallery
       case [profile.to_s, backend]
       when ["active", "s3"] then "active_s3"
       when ["active", "local"] then "active_local"
-      when ["target", "s3"] then "target_s3"
+      when ["target", "s3"] then target_profile_key.to_s.start_with?("target_s3") ? target_profile_key : "target_s3"
       when ["target", "local"] then "target_local"
-      else nil
+      else
+        normalized_profile_key(profile)
       end
     end
 
+    def normalized_profile_key(profile)
+      value = profile.to_s.strip
+      return active_profile_key if value.blank? || value == "active"
+      return target_profile_key if value == "target"
+      return value if PROFILE_KEYS.include?(value)
+
+      nil
+    end
+
     def profile_backend(profile)
-      case profile.to_s
-      when "target" then target_backend
-      else active_backend
+      key = normalized_profile_key(profile)
+      backend_for_profile_key(key)
+    end
+
+    def backend_for_profile_key(profile_key)
+      case profile_key.to_s
+      when "active_local", "target_local"
+        "local"
+      when "active_s3", "target_s3", "target_s3_2", "target_s3_3"
+        "s3"
+      else
+        nil
       end
     end
 
@@ -123,56 +151,67 @@ module ::MediaGallery
     end
 
     def build_store_for_profile_key(profile_key)
-      case profile_key.to_s
-      when "active_local"
-        ::MediaGallery::LocalAssetStore.new(root_path: local_asset_root_path)
-      when "active_s3"
-        ::MediaGallery::S3AssetStore.new(s3_options)
-      when "target_local"
-        ::MediaGallery::LocalAssetStore.new(root_path: target_local_asset_root_path)
-      when "target_s3"
-        ::MediaGallery::S3AssetStore.new(target_s3_options)
+      key = normalized_profile_key(profile_key)
+      backend = backend_for_profile_key(key)
+      return nil if backend.blank?
+
+      case backend
+      when "local"
+        ::MediaGallery::LocalAssetStore.new(root_path: local_root_for_profile_key(key))
+      when "s3"
+        ::MediaGallery::S3AssetStore.new(s3_options_for_profile_key(key))
       else
         nil
       end
     end
 
     def profile_key_location_fingerprint(profile_key)
-      case profile_key.to_s
-      when "active_local"
-        { backend: "local", root_path: File.expand_path(local_asset_root_path.to_s) }
-      when "active_s3"
-        s3_location_fingerprint(s3_options)
-      when "target_local"
-        { backend: "local", root_path: File.expand_path(target_local_asset_root_path.to_s) }
-      when "target_s3"
-        s3_location_fingerprint(target_s3_options)
+      key = normalized_profile_key(profile_key)
+      case backend_for_profile_key(key)
+      when "local"
+        root_path = local_root_for_profile_key(key)
+        return nil if root_path.blank?
+
+        { backend: "local", root_path: File.expand_path(root_path.to_s) }
+      when "s3"
+        opts = s3_options_for_profile_key(key)
+        return nil if opts.blank?
+
+        s3_location_fingerprint(opts)
       else
         nil
       end
     end
 
+    def profile_location_fingerprint_key(profile_key)
+      value = profile_key_location_fingerprint(profile_key)
+      value.present? ? value.to_json : nil
+    end
+
     def sanitized_config_for_profile_key(profile_key)
-      case profile_key.to_s
-      when "active_local"
-        { local_asset_root_path: local_asset_root_path }
-      when "active_s3"
-        sanitized_s3_config_for_options(s3_options)
-      when "target_local"
-        { local_asset_root_path: target_local_asset_root_path }
-      when "target_s3"
-        sanitized_s3_config_for_options(target_s3_options)
+      key = normalized_profile_key(profile_key)
+      case backend_for_profile_key(key)
+      when "local"
+        { local_asset_root_path: local_root_for_profile_key(key) }
+      when "s3"
+        sanitized_s3_config_for_options(s3_options_for_profile_key(key))
       else
         {}
       end
     end
 
     def s3_options_for_profile_key(profile_key)
-      case profile_key.to_s
+      case normalized_profile_key(profile_key).to_s
+      when "active_s3"
+        s3_options
       when "target_s3"
         target_s3_options
+      when "target_s3_2"
+        target_s3_2_options
+      when "target_s3_3"
+        target_s3_3_options
       else
-        s3_options
+        {}
       end
     end
 
@@ -182,73 +221,26 @@ module ::MediaGallery
     end
 
     def build_store_for_profile(profile)
-      case profile.to_s
-      when "target"
-        backend = target_backend
-        case backend
-        when "local"
-          ::MediaGallery::LocalAssetStore.new(root_path: target_local_asset_root_path)
-        when "s3"
-          ::MediaGallery::S3AssetStore.new(target_s3_options)
-        else
-          nil
-        end
-      else
-        build_store(active_backend)
-      end
-    end
-
-    def s3_options
-      {
-        endpoint: site_setting_string(:media_gallery_s3_endpoint),
-        region: site_setting_string(:media_gallery_s3_region).presence || "auto",
-        bucket: site_setting_string(:media_gallery_s3_bucket),
-        prefix: normalize_prefix(site_setting_string(:media_gallery_s3_prefix)),
-        access_key_id: site_setting_string(:media_gallery_s3_access_key_id),
-        secret_access_key: site_setting_string(:media_gallery_s3_secret_access_key),
-        force_path_style: site_setting_bool(:media_gallery_s3_force_path_style, default: false),
-        presign_ttl_seconds: site_setting_int(:media_gallery_s3_presign_ttl_seconds, default: 300)
-      }
-    end
-
-    def target_local_asset_root_path
-      value = site_setting_string(:media_gallery_target_local_asset_root_path)
-      value.presence || local_asset_root_path
-    end
-
-    def target_s3_options
-      {
-        endpoint: site_setting_string(:media_gallery_target_s3_endpoint),
-        region: site_setting_string(:media_gallery_target_s3_region).presence || "auto",
-        bucket: site_setting_string(:media_gallery_target_s3_bucket),
-        prefix: normalize_prefix(site_setting_string(:media_gallery_target_s3_prefix)),
-        access_key_id: site_setting_string(:media_gallery_target_s3_access_key_id),
-        secret_access_key: site_setting_string(:media_gallery_target_s3_secret_access_key),
-        force_path_style: site_setting_bool(:media_gallery_target_s3_force_path_style, default: false),
-        presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_presign_ttl_seconds, default: 300)
-      }
-    end
-
-    def s3_ready?
-      s3_options_ready?(s3_options)
-    end
-
-    def target_s3_ready?
-      s3_options_ready?(target_s3_options)
+      build_store_for_profile_key(normalized_profile_key(profile))
     end
 
     def profile_summary(profile)
-      backend = profile_backend(profile)
+      key = normalized_profile_key(profile)
+      backend = backend_for_profile_key(key)
       {
-        profile: profile.to_s,
+        profile: profile.to_s.presence || "active",
         backend: backend,
-        profile_key: profile_key(profile),
-        config: sanitized_config_for(profile),
+        profile_key: key,
+        label: profile_label_for_key(key),
+        config: sanitized_config_for_profile_key(key),
+        location_fingerprint: profile_key_location_fingerprint(key),
+        location_fingerprint_key: profile_location_fingerprint_key(key),
       }
     end
 
     def validate_profile(profile)
-      backend = profile_backend(profile)
+      key = normalized_profile_key(profile)
+      backend = backend_for_profile_key(key)
       errors = []
 
       if backend.blank?
@@ -258,11 +250,10 @@ module ::MediaGallery
 
       case backend
       when "local"
-        root = profile.to_s == "target" ? target_local_asset_root_path : local_asset_root_path
+        root = local_root_for_profile_key(key)
         errors << "local_asset_root_path_missing" if root.blank?
       when "s3"
-        opts = profile.to_s == "target" ? target_s3_options : s3_options
-        errors.concat(validate_s3_options(opts))
+        errors.concat(validate_s3_options(s3_options_for_profile_key(key)))
       else
         errors << "unknown_asset_storage_backend"
       end
@@ -301,6 +292,41 @@ module ::MediaGallery
       true
     end
 
+    def available_target_profiles(exclude_profile_key: nil, exclude_location_fingerprint_key: nil)
+      TARGET_PROFILE_KEYS.filter_map do |profile_key|
+        next unless target_profile_visible?(profile_key)
+
+        summary = profile_summary(profile_key)
+        next if exclude_profile_key.present? && summary[:profile_key].to_s == exclude_profile_key.to_s
+        next if exclude_location_fingerprint_key.present? && summary[:location_fingerprint_key].to_s == exclude_location_fingerprint_key.to_s
+
+        summary
+      end
+    end
+
+    def target_profiles_summary
+      available_target_profiles
+    end
+
+    def profile_label_for_key(profile_key)
+      case normalized_profile_key(profile_key).to_s
+      when "active_local"
+        "Active local storage"
+      when "active_s3"
+        "Active S3 storage"
+      when "target_local"
+        site_setting_string(:media_gallery_target_local_profile_name).presence || "Local storage"
+      when "target_s3"
+        site_setting_string(:media_gallery_target_s3_profile_name).presence || "S3 profile 1"
+      when "target_s3_2"
+        site_setting_string(:media_gallery_target_s3_2_profile_name).presence || "S3 profile 2"
+      when "target_s3_3"
+        site_setting_string(:media_gallery_target_s3_3_profile_name).presence || "S3 profile 3"
+      else
+        profile_key.to_s
+      end
+    end
+
     def site_setting_string(name)
       return "" unless SiteSetting.respond_to?(name)
       SiteSetting.public_send(name).to_s.strip
@@ -322,13 +348,104 @@ module ::MediaGallery
       default
     end
 
-    def sanitized_config_for(profile)
-      case profile.to_s
-      when "target"
-        sanitized_config_for_profile_key(target_profile_key)
+    def active_local_profile_name
+      "Active local storage"
+    end
+    private_class_method :active_local_profile_name
+
+    def active_s3_profile_name
+      "Active S3 storage"
+    end
+    private_class_method :active_s3_profile_name
+
+    def first_available_target_profile_key
+      available_target_profiles.first&.dig(:profile_key)
+    end
+    private_class_method :first_available_target_profile_key
+
+    def target_profile_visible?(profile_key)
+      case normalized_profile_key(profile_key).to_s
+      when "target_local"
+        local_root_for_profile_key("target_local").present?
+      when "target_s3", "target_s3_2", "target_s3_3"
+        s3_options_ready?(s3_options_for_profile_key(profile_key))
       else
-        sanitized_config_for_profile_key(active_profile_key)
+        false
       end
+    end
+    private_class_method :target_profile_visible?
+
+    def local_root_for_profile_key(profile_key)
+      case normalized_profile_key(profile_key).to_s
+      when "target_local"
+        target_local_asset_root_path
+      else
+        local_asset_root_path
+      end
+    end
+    private_class_method :local_root_for_profile_key
+
+    def s3_options
+      {
+        endpoint: site_setting_string(:media_gallery_s3_endpoint),
+        region: site_setting_string(:media_gallery_s3_region).presence || "auto",
+        bucket: site_setting_string(:media_gallery_s3_bucket),
+        prefix: normalize_prefix(site_setting_string(:media_gallery_s3_prefix)),
+        access_key_id: site_setting_string(:media_gallery_s3_access_key_id),
+        secret_access_key: site_setting_string(:media_gallery_s3_secret_access_key),
+        force_path_style: site_setting_bool(:media_gallery_s3_force_path_style, default: false),
+        presign_ttl_seconds: site_setting_int(:media_gallery_s3_presign_ttl_seconds, default: 300)
+      }
+    end
+
+    def target_local_asset_root_path
+      value = site_setting_string(:media_gallery_target_local_asset_root_path)
+      value.presence || local_asset_root_path
+    end
+
+    def target_s3_options
+      {
+        endpoint: site_setting_string(:media_gallery_target_s3_endpoint),
+        region: site_setting_string(:media_gallery_target_s3_region).presence || "auto",
+        bucket: site_setting_string(:media_gallery_target_s3_bucket),
+        prefix: normalize_prefix(site_setting_string(:media_gallery_target_s3_prefix)),
+        access_key_id: site_setting_string(:media_gallery_target_s3_access_key_id),
+        secret_access_key: site_setting_string(:media_gallery_target_s3_secret_access_key),
+        force_path_style: site_setting_bool(:media_gallery_target_s3_force_path_style, default: false),
+        presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_presign_ttl_seconds, default: 300)
+      }
+    end
+
+    def target_s3_2_options
+      {
+        endpoint: site_setting_string(:media_gallery_target_s3_2_endpoint),
+        region: site_setting_string(:media_gallery_target_s3_2_region).presence || "auto",
+        bucket: site_setting_string(:media_gallery_target_s3_2_bucket),
+        prefix: normalize_prefix(site_setting_string(:media_gallery_target_s3_2_prefix)),
+        access_key_id: site_setting_string(:media_gallery_target_s3_2_access_key_id),
+        secret_access_key: site_setting_string(:media_gallery_target_s3_2_secret_access_key),
+        force_path_style: site_setting_bool(:media_gallery_target_s3_2_force_path_style, default: false),
+        presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_2_presign_ttl_seconds, default: 300)
+      }
+    end
+    private_class_method :target_s3_2_options
+
+    def target_s3_3_options
+      {
+        endpoint: site_setting_string(:media_gallery_target_s3_3_endpoint),
+        region: site_setting_string(:media_gallery_target_s3_3_region).presence || "auto",
+        bucket: site_setting_string(:media_gallery_target_s3_3_bucket),
+        prefix: normalize_prefix(site_setting_string(:media_gallery_target_s3_3_prefix)),
+        access_key_id: site_setting_string(:media_gallery_target_s3_3_access_key_id),
+        secret_access_key: site_setting_string(:media_gallery_target_s3_3_secret_access_key),
+        force_path_style: site_setting_bool(:media_gallery_target_s3_3_force_path_style, default: false),
+        presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_3_presign_ttl_seconds, default: 300)
+      }
+    end
+    private_class_method :target_s3_3_options
+
+    def sanitized_config_for(profile)
+      sanitized_config_for_profile_key(normalized_profile_key(profile))
     end
     private_class_method :sanitized_config_for
 

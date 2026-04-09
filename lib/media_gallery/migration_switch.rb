@@ -96,6 +96,7 @@ module ::MediaGallery
       source = (plan[:source] || plan["source"] || {}).deep_symbolize_keys
       raise "target_profile_not_configured" if target[:backend].to_s.blank?
       raise "source_and_target_same_profile" if source[:profile_key].present? && source[:profile_key] == target[:profile_key]
+      raise "source_and_target_same_location" if source[:location_fingerprint_key].present? && source[:location_fingerprint_key] == target[:location_fingerprint_key]
 
       warnings = Array(plan[:warnings] || plan["warnings"]).map(&:to_s)
       unsupported = warnings.find do |w|
