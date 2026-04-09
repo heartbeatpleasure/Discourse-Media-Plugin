@@ -13,6 +13,7 @@ module Jobs
       force = ActiveModel::Type::Boolean.new.cast(args[:force])
       auto_switch = ActiveModel::Type::Boolean.new.cast(args[:auto_switch])
       auto_cleanup = ActiveModel::Type::Boolean.new.cast(args[:auto_cleanup])
+      full_migration = ActiveModel::Type::Boolean.new.cast(args[:full_migration])
 
       mutex_key = "media_gallery_copy_item_#{item.id}"
       if defined?(::DistributedMutex)
@@ -24,7 +25,8 @@ module Jobs
             run_token: run_token,
             force: force,
             auto_switch: auto_switch,
-            auto_cleanup: auto_cleanup
+            auto_cleanup: auto_cleanup,
+            full_migration: full_migration
           )
         end
       else
@@ -34,7 +36,8 @@ module Jobs
           run_token: run_token,
           force: force,
           auto_switch: auto_switch,
-          auto_cleanup: auto_cleanup
+          auto_cleanup: auto_cleanup,
+          full_migration: full_migration
         )
       end
     rescue => e

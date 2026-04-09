@@ -106,6 +106,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/:public_id/verify-target" => "media_gallery/admin_media_items#verify_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/rollback-to-source" => "media_gallery/admin_media_items#rollback_to_source", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/finalize-migration" => "media_gallery/admin_media_items#finalize_migration", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/clear-history" => "media_gallery/admin_media_items#clear_history", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/bulk-migrate" => "media_gallery/admin_media_items#bulk_migrate", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
 

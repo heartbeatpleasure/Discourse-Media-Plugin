@@ -10,7 +10,7 @@ module ::MediaGallery
     CLEANUP_STATE_KEY = "migration_cleanup"
     CLEANUP_ROLE_NAMES = %w[main thumbnail hls].freeze
 
-    def enqueue_cleanup!(item, requested_by: nil, force: false)
+    def enqueue_cleanup!(item, requested_by: nil, force: false, auto_finalize: false)
       raise "media_item_required" if item.blank?
       raise "item_not_ready" unless item.ready?
 
@@ -27,14 +27,14 @@ module ::MediaGallery
       end
 
       token = SecureRandom.hex(10)
-      state = build_queued_state(item: item, switch_state: switch_state, requested_by: requested_by, force: force, run_token: token)
+      state = build_queued_state(item: item, switch_state: switch_state, requested_by: requested_by, force: force, run_token: token, auto_finalize: auto_finalize)
       save_cleanup_state!(item, state)
 
-      ::Jobs.enqueue(:media_gallery_cleanup_source_after_switch, media_item_id: item.id, run_token: token, force: force)
+      ::Jobs.enqueue(:media_gallery_cleanup_source_after_switch, media_item_id: item.id, run_token: token, force: force, auto_finalize: auto_finalize)
       state
     end
 
-    def perform_cleanup!(item, run_token: nil, force: false)
+    def perform_cleanup!(item, run_token: nil, force: false, auto_finalize: nil)
       raise "media_item_required" if item.blank?
       raise "item_not_ready" unless item.ready?
 
@@ -47,6 +47,7 @@ module ::MediaGallery
         raise "cleanup_already_in_progress"
       end
       return current_state if current_state["status"].to_s == "cleaned" && !force && cleanup_matches_current_switch
+      auto_finalize = current_state["auto_finalize"] if auto_finalize.nil?
 
       source_profile_key = switch_state["source_profile_key"].to_s
       target_profile_key = switch_state["target_profile_key"].presence || item.managed_storage_profile
@@ -77,7 +78,7 @@ module ::MediaGallery
       target_missing = verify_target_objects(target_store, target_objects)
       raise "cleanup_target_incomplete:#{target_missing}" if target_missing.positive?
 
-      state = build_cleaning_state(item: item, switch_state: switch_state, run_token: run_token.presence || current_state["run_token"], force: force, source_objects: source_objects)
+      state = build_cleaning_state(item: item, switch_state: switch_state, run_token: run_token.presence || current_state["run_token"], force: force, source_objects: source_objects, auto_finalize: auto_finalize)
       save_cleanup_state!(item, state)
 
       grouped = group_objects_for_cleanup(item, source_objects)
@@ -115,6 +116,11 @@ module ::MediaGallery
       state["role_results"] = role_results
       state["last_error"] = nil
       save_cleanup_state!(item, state)
+
+      if auto_finalize
+        ::MediaGallery::MigrationFinalize.finalize!(item.reload, requested_by: state["requested_by"], force: force)
+      end
+
       state
     rescue => e
       state = cleanup_state_for(item)
@@ -137,7 +143,7 @@ module ::MediaGallery
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
     end
 
-    def build_queued_state(item:, switch_state:, requested_by:, force:, run_token:)
+    def build_queued_state(item:, switch_state:, requested_by:, force:, run_token:, auto_finalize:)
       {
         "status" => "queued",
         "queued_at" => Time.now.utc.iso8601,
@@ -151,12 +157,13 @@ module ::MediaGallery
         "target_profile_key" => item.managed_storage_profile.to_s,
         "source_location_fingerprint" => switch_state["source_location_fingerprint"],
         "target_location_fingerprint" => switch_state["target_location_fingerprint"],
+        "auto_finalize" => !!auto_finalize,
         "last_error" => nil
       }
     end
     private_class_method :build_queued_state
 
-    def build_cleaning_state(item:, switch_state:, run_token:, force:, source_objects:)
+    def build_cleaning_state(item:, switch_state:, run_token:, force:, source_objects:, auto_finalize:)
       {
         "status" => "cleaning",
         "started_at" => Time.now.utc.iso8601,
@@ -169,6 +176,7 @@ module ::MediaGallery
         "target_profile_key" => item.managed_storage_profile.to_s,
         "source_location_fingerprint" => switch_state["source_location_fingerprint"],
         "target_location_fingerprint" => switch_state["target_location_fingerprint"],
+        "auto_finalize" => !!auto_finalize,
         "object_count" => source_objects.length,
         "last_error" => nil
       }

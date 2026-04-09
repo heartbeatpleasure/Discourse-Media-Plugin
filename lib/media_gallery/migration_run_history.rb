@@ -71,6 +71,15 @@ module ::MediaGallery
       true
     end
 
+    def clear_history!(item)
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      changed = meta.delete(HISTORY_KEY).present?
+      return false unless changed
+
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+      true
+    end
+
     def current_cycle_present?(item)
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
       current_cycle_from_meta(meta).present?
