@@ -2,6 +2,6 @@ export default {
   resource: "admin.adminPlugins",
   path: "/plugins",
   map() {
-    this.route("media-gallery", { path: "/media-gallery" });
+    this.route("mediaGallery", { path: "/media-gallery" });
   },
 };

@@ -18,7 +18,7 @@ module ::MediaGallery
       validate_plan_for_copy!(plan)
 
       state = copy_state_for(item)
-      if state["status"].to_s == "copying" && !force
+      if copy_state_blocks_new_run?(state, plan, force: force)
         raise "copy_already_in_progress"
       end
 
@@ -47,7 +47,7 @@ module ::MediaGallery
       validate_plan_for_copy!(plan)
 
       current_state = copy_state_for(item)
-      if current_state["status"].to_s == "copying" && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token && !force
+      if copy_state_blocks_new_run?(current_state, plan, force: force) && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token
         raise "copy_already_in_progress"
       end
       auto_switch = current_state["auto_switch"] if auto_switch.nil?
@@ -180,6 +180,39 @@ module ::MediaGallery
       true
     end
     private_class_method :validate_plan_for_copy!
+
+    def copy_state_blocks_new_run?(state, plan, force: false)
+      return false if force
+
+      current = state.is_a?(Hash) ? state.deep_dup : {}
+      status = current["status"].to_s
+      return false unless %w[queued copying].include?(status)
+
+      current_source_key = current["source_profile_key"].to_s
+      current_target_key = current["target_profile_key"].to_s
+      plan_source_key = plan.dig(:source, :profile_key).to_s.presence || plan.dig("source", "profile_key").to_s
+      plan_target_key = plan.dig(:target, :profile_key).to_s.presence || plan.dig("target", "profile_key").to_s
+
+      return false if current_source_key.present? && plan_source_key.present? && current_source_key != plan_source_key
+      return false if current_target_key.present? && plan_target_key.present? && current_target_key != plan_target_key
+
+      last_activity_at = parse_copy_time(current["updated_at"] || current["started_at"] || current["queued_at"])
+      return false if last_activity_at.present? && last_activity_at < 20.minutes.ago
+
+      true
+    end
+    private_class_method :copy_state_blocks_new_run?
+
+    def parse_copy_time(value)
+      return nil if value.blank?
+
+      Time.zone.parse(value.to_s)
+    rescue
+      Time.parse(value.to_s)
+    rescue
+      nil
+    end
+    private_class_method :parse_copy_time
 
     def build_queued_state(plan:, requested_by:, run_token:, force:, auto_switch:, auto_cleanup:)
       {

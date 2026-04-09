@@ -4,7 +4,7 @@ export default {
   resource: "admin.adminPlugins",
   path: "/plugins",
   map() {
-    this.route("media-gallery-migrations", {
+    this.route("mediaGalleryMigrations", {
       path: "/media-gallery-migrations",
     });
   },
