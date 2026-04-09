@@ -665,7 +665,7 @@ export default RouteTemplate(
 
         <div class="mg-migrations__bulk-panel">
           <h3>Migrate multiple selected items</h3>
-          <p class="mg-migrations__muted">This queues copy jobs for the items you selected below.</p>
+          <p class="mg-migrations__muted">This queues copy jobs for the items you explicitly selected below.</p>
           <div class="mg-migrations__bulk-toolbar" style="margin-top: 0.85rem;">
             <div class="mg-migrations__muted">{{@controller.bulkSelectionCount}} item(s) selected</div>
             <div class="mg-migrations__filters-actions">
@@ -761,7 +761,7 @@ export default RouteTemplate(
               <div class="mg-migrations__panel-header" style="margin-bottom: 0.75rem;">
                 <div class="mg-migrations__panel-copy">
                   <h3>Actions</h3>
-                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified.</span>
+                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. Finalize closes the completed migration cycle; it does not copy or move files.</span>
                 </div>
               </div>
 

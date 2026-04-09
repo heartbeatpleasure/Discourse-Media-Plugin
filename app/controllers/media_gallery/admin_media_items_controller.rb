@@ -48,14 +48,14 @@ module ::MediaGallery
         processing_stale_after_minutes: processing_stale_after_minutes,
       )
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/reset-processing.json
     def reset_processing
       item = load_item!
       unless item.queued_or_processing? || item.status == "failed"
-        return render_json_error("item_not_resettable", status: 422)
+        return render_friendly_error("item_not_resettable", status: 422)
       end
 
       processing = processing_metadata(item).deep_dup
@@ -78,7 +78,7 @@ module ::MediaGallery
       target_profile = params[:target_profile].to_s.presence || "target"
       render_json_dump(::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile))
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/verify-target.json
@@ -88,7 +88,7 @@ module ::MediaGallery
       result = ::MediaGallery::MigrationVerify.verify!(item, target_profile: target_profile, requested_by: current_user.username)
       render_json_dump(result)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/copy-to-target.json
@@ -106,7 +106,7 @@ module ::MediaGallery
 
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/switch-to-target.json
@@ -123,7 +123,7 @@ module ::MediaGallery
 
       render_json_dump(ok: true, public_id: item.public_id, migration_switch: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/cleanup-source.json
@@ -132,7 +132,7 @@ module ::MediaGallery
       state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: current_user.username, force: boolean_param(:force))
       render_json_dump(ok: true, public_id: item.public_id, migration_cleanup: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/rollback-to-source.json
@@ -141,7 +141,7 @@ module ::MediaGallery
       state = ::MediaGallery::MigrationRollback.rollback!(item, requested_by: current_user.username, force: boolean_param(:force))
       render_json_dump(ok: true, public_id: item.public_id, migration_rollback: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/finalize-migration.json
@@ -150,7 +150,7 @@ module ::MediaGallery
       state = ::MediaGallery::MigrationFinalize.finalize!(item, requested_by: current_user.username, force: boolean_param(:force))
       render_json_dump(ok: true, public_id: item.public_id, migration_finalize: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/bulk-migrate.json
@@ -162,7 +162,7 @@ module ::MediaGallery
       skipped = 0
 
       if items.blank?
-        return render_json_error("no_media_items_selected", status: 422)
+        return render_friendly_error("no_media_items_selected", status: 422)
       end
 
       items.each do |item|
@@ -183,7 +183,7 @@ module ::MediaGallery
           results << { public_id: item.public_id, status: state["status"].to_s.presence || "queued" }
         rescue => e
           skipped += 1
-          results << { public_id: item.public_id, status: "skipped", error: e.message }
+          results << { public_id: item.public_id, status: "skipped", error: friendly_error_message(e) }
         end
       end
 
@@ -196,7 +196,7 @@ module ::MediaGallery
         items: results
       )
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_friendly_error(e, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/retry-processing.json
@@ -205,7 +205,7 @@ module ::MediaGallery
       force = boolean_param(:force)
 
       unless item.status == "failed" || (force && item.queued_or_processing?)
-        return render_json_error("item_not_retryable", status: 422)
+        return render_friendly_error("item_not_retryable", status: 422)
       end
 
       meta = (item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {})
@@ -228,6 +228,63 @@ module ::MediaGallery
     end
 
     private
+
+    def render_friendly_error(error_or_message, status: 422)
+      render_json_error(friendly_error_message(error_or_message), status: status)
+    end
+
+    def friendly_error_message(error_or_message)
+      raw = if error_or_message.respond_to?(:message)
+        error_or_message.message
+      else
+        error_or_message.to_s
+      end
+
+      message = raw.to_s.sub(/\A[A-Z][A-Za-z0-9_:]+:\s+/, "")
+
+      mappings = {
+        "item_not_resettable" => "This item cannot be reset right now.",
+        "item_not_retryable" => "This item cannot be retried right now.",
+        "no_media_items_selected" => "Select at least one item before starting a bulk migration.",
+        "copy_already_in_progress" => "A copy job for this item is already in progress.",
+        "cleanup_already_in_progress" => "Cleanup is already in progress for this item.",
+        "rollback_source_already_cleaned" => "Rollback is no longer available because the previous source has already been cleaned.",
+        "source_and_target_same_profile" => "Source and target use the same profile. Change the target profile first.",
+        "target_not_fully_copied" => "Switch is blocked because the target is not fully copied yet.",
+        "target_profile_not_configured" => "The target profile is not configured.",
+        "migration_plan_missing" => "The migration plan could not be built for this item.",
+        "no_source_objects_available_for_migration" => "No source objects are available for this migration.",
+        "hls_role_has_no_objects_on_source" => "No HLS objects were found on the current source for this item.",
+      }
+      return mappings[message] if mappings.key?(message)
+
+      if (match = message.match(/\Acopy_verification_incomplete:(\d+)\z/i))
+        return "Copy finished, but #{match[1]} target object(s) are still missing."
+      end
+
+      if (match = message.match(/\Acleanup_target_incomplete:(\d+)\z/i))
+        return "Cleanup is blocked because #{match[1]} target object(s) are still missing."
+      end
+
+      if (match = message.match(/\Acleanup_remaining_source_objects:(\d+)\z/i))
+        return "Cleanup did not finish because #{match[1]} source object(s) are still present."
+      end
+
+      if (match = message.match(/\Asource_object_missing:(.+)\z/i))
+        return "A source object is missing: #{match[1]}"
+      end
+
+      if (match = message.match(/\Aunsupported_upload_role:(.+)\z/i))
+        role = match[1].to_s.tr("_-", " ").squeeze(" ").strip
+        return "The #{role} role still uses the legacy upload backend and cannot be switched automatically."
+      end
+
+      humanized = message.tr("_-", " ").squeeze(" ").strip
+      return humanized if humanized.blank?
+
+      humanized[0] = humanized[0].upcase
+      humanized
+    end
 
     def load_item!
       @current_item ||= begin

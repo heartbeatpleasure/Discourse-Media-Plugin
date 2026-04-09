@@ -36,59 +36,58 @@ function titleCase(value) {
   return text.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-const FRIENDLY_ERROR_MESSAGES = {
-  backend_not_configured: "The backend is not configured.",
-  copy_already_in_progress: "A copy job is already in progress for this item.",
-  item_not_ready: "This item is not ready for migration yet.",
-  item_not_resettable: "This item cannot be reset right now.",
-  item_not_retryable: "This item cannot be retried right now.",
-  media_item_required: "No media item was selected.",
-  migration_plan_missing: "Could not build a migration plan for this item.",
-  no_media_items_selected: "No media items were selected.",
-  rollback_not_available: "Rollback is not available for the current state.",
-  rollback_source_already_cleaned: "Rollback is not available because the source was already cleaned.",
-  rollback_source_backend_missing: "Rollback is not available because the source backend is missing.",
-  rollback_source_profile_missing: "Rollback is not available because the source profile is missing.",
-  rollback_source_store_missing: "Rollback is not available because the source storage is missing.",
-  source_and_target_same_profile: "Source and target use the same profile.",
-  source_store_missing: "The source storage is not available.",
-  target_profile_not_configured: "The target profile is not configured.",
-  target_store_missing: "The target storage is not available.",
-};
+function sentenceCase(value) {
+  const text = prettyLabel(value);
+  if (text === "—") {
+    return text;
+  }
 
-function prettyErrorMessage(value) {
-  let message = value == null ? "" : String(value).trim();
-  if (!message) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function humanizeMigrationError(value) {
+  const raw = value == null ? "" : String(value).trim();
+  if (!raw) {
     return "";
   }
 
-  message = message.replace(/^\s*[A-Z]\w*(?:::[A-Z]\w*)*:\s*/, "");
+  const withoutClassPrefix = raw.replace(/^[A-Z][A-Za-z0-9_:]+:\s*/, "");
+  const mappings = {
+    copy_already_in_progress: "A copy job for this item is already in progress.",
+    cleanup_already_in_progress: "Cleanup is already in progress for this item.",
+    rollback_source_already_cleaned: "Rollback is no longer available because the previous source has already been cleaned.",
+    source_and_target_same_profile: "Source and target use the same profile. Change the target profile first.",
+    target_not_fully_copied: "Switch is blocked because the target is not fully copied yet.",
+    target_profile_not_configured: "The target profile is not configured.",
+    migration_plan_missing: "The migration plan could not be built for this item.",
+    no_source_objects_available_for_migration: "No source objects are available for this migration.",
+    hls_role_has_no_objects_on_source: "No HLS objects were found on the current source for this item.",
+  };
 
-  if (FRIENDLY_ERROR_MESSAGES[message]) {
-    return FRIENDLY_ERROR_MESSAGES[message];
+  if (mappings[withoutClassPrefix]) {
+    return mappings[withoutClassPrefix];
   }
 
-  let match = message.match(/^copy_verification_incomplete:(\d+)$/);
-  if (match) {
-    const count = Number(match[1] || 0);
-    return `Copy verification is incomplete. ${count} object(s) are still missing on the target.`;
+  const detailPatterns = [
+    [/^copy_verification_incomplete:(\d+)$/i, (_, count) => `Copy finished, but ${count} target object(s) are still missing.`],
+    [/^cleanup_target_incomplete:(\d+)$/i, (_, count) => `Cleanup is blocked because ${count} target object(s) are still missing.`],
+    [/^cleanup_remaining_source_objects:(\d+)$/i, (_, count) => `Cleanup did not finish because ${count} source object(s) are still present.`],
+    [/^source_object_missing:(.+)$/i, (_, key) => `A source object is missing: ${key}`],
+    [/^unsupported_upload_role:(.+)$/i, (_, role) => `The ${prettyLabel(role)} role still uses the legacy upload backend and cannot be switched automatically.`],
+  ];
+
+  for (const [pattern, formatter] of detailPatterns) {
+    const match = withoutClassPrefix.match(pattern);
+    if (match) {
+      return formatter(...match);
+    }
   }
 
-  match = message.match(/^rollback_source_missing:(.+)$/);
-  if (match) {
-    return `Rollback is not available because source data is missing (${prettyLabel(match[1])}).`;
+  if (/^[a-z0-9_:-]+$/i.test(withoutClassPrefix)) {
+    return sentenceCase(withoutClassPrefix);
   }
 
-  match = message.match(/^source_object_missing:(.+)$/);
-  if (match) {
-    return `A source object is missing (${match[1]}).`;
-  }
-
-  if (/^[a-z0-9_:-]+$/i.test(message)) {
-    return titleCase(message.replace(/:/g, " - "));
-  }
-
-  return message;
+  return withoutClassPrefix;
 }
 
 function formatDateTime(value) {
@@ -142,6 +141,9 @@ function toneForStatus(status) {
     case "copied":
     case "switched":
     case "cleaned":
+    case "verified":
+    case "rolled_back":
+    case "finalized":
     case "ok":
     case "available":
       return "success";
@@ -149,6 +151,7 @@ function toneForStatus(status) {
     case "copying":
     case "processing":
     case "cleaning":
+    case "pending_cleanup":
       return "warning";
     case "missing":
     case "failed":
@@ -180,7 +183,7 @@ function buildStateCard({ title, status, detail, meta, error }) {
     badgeClass: badgeClassForStatus(status),
     detail: normalizeText(detail),
     meta: normalizeText(meta),
-    error: error ? truncate(prettyErrorMessage(error), 220) : "",
+    error: error ? truncate(humanizeMigrationError(error), 220) : "",
   };
 }
 
@@ -347,6 +350,18 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     return !!this.selectedPublicId;
   }
 
+  get selectedCleanupStatus() {
+    return (this.selectedDiagnostics?.migration_cleanup?.status || "").toString();
+  }
+
+  get selectedSwitchStatus() {
+    return (this.selectedDiagnostics?.migration_switch?.status || "").toString();
+  }
+
+  get selectedFinalizeStatus() {
+    return (this.selectedDiagnostics?.migration_finalize?.status || "").toString();
+  }
+
   get selectedSourceProfileKey() {
     return this.selectedDiagnostics?.managed_storage_profile || this.selectedItem?.managed_storage_profile || "";
   }
@@ -354,83 +369,52 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   get isSameSourceAndTargetProfile() {
     const sourceProfileKey = this.selectedSourceProfileKey;
     const targetProfileKey = this.targetHealth?.profile_key || "";
-    return !!(sourceProfileKey && targetProfileKey && sourceProfileKey === targetProfileKey);
-  }
-
-  get copyStatus() {
-    return (this.selectedDiagnostics?.migration_copy?.status || "").toString();
-  }
-
-  get copyStateMatchesSelection() {
-    const copyState = this.selectedDiagnostics?.migration_copy || {};
-    const sourceProfileKey = this.selectedSourceProfileKey;
-    const targetProfileKey = this.targetHealth?.profile_key || "";
-
-    if (!copyState.source_profile_key || !copyState.target_profile_key) {
-      return true;
-    }
-
-    return copyState.source_profile_key === sourceProfileKey && copyState.target_profile_key === targetProfileKey;
-  }
-
-  get cleanupStatus() {
-    return (this.selectedDiagnostics?.migration_cleanup?.status || "").toString();
-  }
-
-  get finalizeStatus() {
-    return (this.selectedDiagnostics?.migration_finalize?.status || "").toString();
+    return !!sourceProfileKey && !!targetProfileKey && sourceProfileKey === targetProfileKey;
   }
 
   get copyDisabled() {
-    if (!this.hasSelectedItem || this.isCopying || this.isSwitching || this.isCleaning) {
-      return true;
-    }
-
-    if (this.isSameSourceAndTargetProfile && !this.forceAction) {
-      return true;
-    }
-
-    return ["queued", "copying"].includes(this.copyStatus) && this.copyStateMatchesSelection && !this.forceAction;
+    return !this.hasSelectedItem || this.isCopying || this.isSwitching || this.isCleaning;
   }
 
   get switchDisabled() {
-    if (!this.hasSelectedItem || this.isSwitching || this.isCopying || this.isCleaning) {
-      return true;
-    }
-
-    return this.isSameSourceAndTargetProfile && !this.forceAction;
+    return !this.hasSelectedItem || this.isSwitching || this.isCopying || this.isCleaning || this.isSameSourceAndTargetProfile;
   }
 
   get cleanupDisabled() {
-    if (!this.hasSelectedItem || this.isCleaning || this.isCopying || this.isSwitching || this.isRollingBack || this.isFinalizing) {
-      return true;
-    }
-
-    return ["cleaned", "finalized"].includes(this.cleanupStatus) || this.finalizeStatus === "finalized";
+    return !this.hasSelectedItem ||
+      this.isCleaning ||
+      this.isCopying ||
+      this.isSwitching ||
+      this.isRollingBack ||
+      this.isFinalizing ||
+      this.selectedSwitchStatus !== "switched" ||
+      this.selectedCleanupStatus === "cleaned";
   }
 
   get verifyDisabled() {
-    if (!this.hasSelectedItem || this.isVerifying || this.isLoadingSelection || this.isRollingBack || this.isFinalizing) {
-      return true;
-    }
-
-    return this.isSameSourceAndTargetProfile && !this.forceAction;
+    return !this.hasSelectedItem || this.isVerifying || this.isLoadingSelection || this.isRollingBack || this.isFinalizing || this.isSameSourceAndTargetProfile;
   }
 
   get rollbackDisabled() {
-    if (!this.hasSelectedItem || this.isRollingBack || this.isCopying || this.isSwitching || this.isCleaning || this.isFinalizing) {
-      return true;
-    }
-
-    return this.cleanupStatus === "cleaned" || this.finalizeStatus === "finalized";
+    return !this.hasSelectedItem ||
+      this.isRollingBack ||
+      this.isCopying ||
+      this.isSwitching ||
+      this.isCleaning ||
+      this.isFinalizing ||
+      this.selectedSwitchStatus !== "switched" ||
+      this.selectedCleanupStatus === "cleaned" ||
+      this.selectedFinalizeStatus === "finalized";
   }
 
   get finalizeDisabled() {
-    if (!this.hasSelectedItem || this.isFinalizing || this.isRollingBack || this.isCopying || this.isSwitching) {
-      return true;
-    }
-
-    return this.finalizeStatus === "finalized";
+    return !this.hasSelectedItem ||
+      this.isFinalizing ||
+      this.isRollingBack ||
+      this.isCopying ||
+      this.isSwitching ||
+      this.selectedSwitchStatus !== "switched" ||
+      this.selectedFinalizeStatus === "finalized";
   }
 
   get bulkSelectionCount() {
@@ -469,14 +453,18 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     if (!this.hasSelectedItem || this.isLoadingSelection || this.isLoadingPlan) {
       return false;
     }
-    return !this.isSameSourceAndTargetProfile;
+    const sourceProfileKey = this.selectedSourceProfileKey;
+    const targetProfileKey = this.targetHealth?.profile_key;
+    return !(sourceProfileKey && targetProfileKey && sourceProfileKey === targetProfileKey);
   }
 
   get selectedPlanHint() {
     if (!this.hasSelectedItem) {
       return "Select an item to inspect its migration preview.";
     }
-    if (this.isSameSourceAndTargetProfile) {
+    const sourceProfileKey = this.selectedSourceProfileKey;
+    const targetProfileKey = this.targetHealth?.profile_key;
+    if (sourceProfileKey && targetProfileKey && sourceProfileKey === targetProfileKey) {
       return "Source and target use the same profile. Change the target profile to preview a migration.";
     }
     if (!this.selectedPlanLoaded) {
@@ -580,7 +568,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       buildStateCard({
         title: "Finalize",
         status: finalize.status || "idle",
-        detail: finalize.status === "pending_cleanup" ? "Cleanup queued before finalization" : "Finalize marks the migrated item as complete",
+        detail: finalize.status === "pending_cleanup" ? "Cleanup was queued before finalization" : "Finalize closes the completed migration cycle. It does not move files.",
         meta: finalize.finalized_at ? `Finalized ${formatDateTime(finalize.finalized_at)}` : (finalize.queued_at ? `Queued ${formatDateTime(finalize.queued_at)}` : "Not finalized"),
         error: finalize.last_error,
       }),
@@ -629,7 +617,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       missingCountLabel: String(missingCount),
       missingBadgeClass: badgeClassForStatus(missingCount === 0 ? "ok" : "warning"),
       switchReadinessLabel: missingCount === 0 ? "Ready to switch" : "Copy still missing target objects",
-      warnings: safeArray(plan.warnings).map((warning) => titleCase(warning)),
+      warnings: safeArray(plan.warnings).map((warning) => humanizeMigrationError(warning)),
     };
   }
 
@@ -646,7 +634,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         targetExistingLabel: String(summary.target_existing_count || 0),
         missingCountLabel: String(missingCount),
         missingBadgeClass: badgeClassForStatus(missingCount === 0 ? "ok" : "warning"),
-        warnings: safeArray(entry?.warnings).map((warning) => titleCase(warning)),
+        warnings: safeArray(entry?.warnings).map((warning) => humanizeMigrationError(warning)),
       };
     });
   }
@@ -720,20 +708,20 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     try {
       const json = await response.clone().json();
       if (Array.isArray(json?.errors) && json.errors.length) {
-        return prettyErrorMessage(json.errors.join(" "));
+        return humanizeMigrationError(json.errors.join(" "));
       }
-      if (json?.error) return prettyErrorMessage(json.error);
-      if (json?.message) return prettyErrorMessage(json.message);
+      if (json?.error) return humanizeMigrationError(json.error);
+      if (json?.message) return humanizeMigrationError(json.message);
     } catch {
       // ignore
     }
     try {
       const text = await response.text();
-      if (text) return prettyErrorMessage(truncate(text, 600));
+      if (text) return humanizeMigrationError(truncate(text, 600));
     } catch {
       // ignore
     }
-    return prettyErrorMessage(`HTTP ${response.status}`);
+    return humanizeMigrationError(`HTTP ${response.status}`);
   }
 
   async _fetchJson(url, options = {}) {
@@ -768,15 +756,12 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
 
   _normalizePlanError(errorMessage) {
-    const message = errorMessage == null ? "" : String(errorMessage);
+    const message = humanizeMigrationError(errorMessage);
     if (!message) return "";
-    if (message.includes("source_and_target_same_profile")) {
-      return "Source and target use the same profile. Change the target profile to preview a migration.";
-    }
     if (message.includes("Internal Server Error")) {
       return "Could not build a migration plan for this item right now.";
     }
-    return prettyErrorMessage(message);
+    return message;
   }
 
   @action onSearchInput(event) { this.searchQuery = event?.target?.value || ""; }
@@ -841,7 +826,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         this.selectedItem = refreshedSelection;
       }
     } catch (e) {
-      this.searchError = prettyErrorMessage(e?.message || String(e));
+      this.searchError = e?.message || String(e);
       this.searchResults = [];
     } finally {
       this.isSearching = false;
@@ -898,7 +883,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         await this.loadSelectedPlan();
       }
     } catch (e) {
-      this.selectedError = prettyErrorMessage(e?.message || String(e));
+      this.selectedError = e?.message || String(e);
     } finally {
       this.isLoadingSelection = false;
     }
@@ -949,7 +934,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       await this.refreshSelected();
       await this.search();
     } catch (e) {
-      this.actionError = prettyErrorMessage(e?.message || String(e));
+      this.actionError = e?.message || String(e);
     } finally {
       this.isCopying = false;
     }
@@ -970,7 +955,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         : "Verification completed. Check the state cards for details.";
       await this.refreshSelected();
     } catch (e) {
-      this.actionError = prettyErrorMessage(e?.message || String(e));
+      this.actionError = e?.message || String(e);
     } finally {
       this.isVerifying = false;
     }
@@ -996,7 +981,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       await this.refreshSelected();
       await this.search();
     } catch (e) {
-      this.actionError = prettyErrorMessage(e?.message || String(e));
+      this.actionError = e?.message || String(e);
     } finally {
       this.isSwitching = false;
     }
@@ -1019,7 +1004,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       await this.refreshSelected();
       await this.search();
     } catch (e) {
-      this.actionError = prettyErrorMessage(e?.message || String(e));
+      this.actionError = e?.message || String(e);
     } finally {
       this.isCleaning = false;
     }
@@ -1042,7 +1027,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       await this.refreshSelected();
       await this.search();
     } catch (e) {
-      this.actionError = prettyErrorMessage(e?.message || String(e));
+      this.actionError = e?.message || String(e);
     } finally {
       this.isRollingBack = false;
     }
@@ -1067,7 +1052,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       await this.refreshSelected();
       await this.search();
     } catch (e) {
-      this.actionError = prettyErrorMessage(e?.message || String(e));
+      this.actionError = e?.message || String(e);
     } finally {
       this.isFinalizing = false;
     }
@@ -1100,7 +1085,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         await this.refreshSelected();
       }
     } catch (e) {
-      this.bulkActionError = prettyErrorMessage(e?.message || String(e));
+      this.bulkActionError = e?.message || String(e);
     } finally {
       this.isBulkMigrating = false;
     }
@@ -1149,7 +1134,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       if (profile === "active") this.activeHealth = json;
       else this.targetHealth = json;
     } catch (e) {
-      this.storageError = prettyErrorMessage(e?.message || String(e));
+      this.storageError = e?.message || String(e);
     } finally {
       this.storageBusy = false;
     }
@@ -1168,7 +1153,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       if (profile === "active") this.activeProbe = json;
       else this.targetProbe = json;
     } catch (e) {
-      this.storageError = prettyErrorMessage(e?.message || String(e));
+      this.storageError = e?.message || String(e);
     } finally {
       this.storageBusy = false;
     }

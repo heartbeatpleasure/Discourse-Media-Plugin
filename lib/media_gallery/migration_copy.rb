@@ -18,7 +18,7 @@ module ::MediaGallery
       validate_plan_for_copy!(plan)
 
       state = copy_state_for(item)
-      if copy_state_blocks_new_run?(state, plan, force: force)
+      if copy_state_blocks_new_copy?(state, plan: plan) && !force
         raise "copy_already_in_progress"
       end
 
@@ -47,7 +47,7 @@ module ::MediaGallery
       validate_plan_for_copy!(plan)
 
       current_state = copy_state_for(item)
-      if copy_state_blocks_new_run?(current_state, plan, force: force) && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token
+      if copy_state_blocks_existing_run?(current_state, plan: plan, run_token: run_token) && !force
         raise "copy_already_in_progress"
       end
       auto_switch = current_state["auto_switch"] if auto_switch.nil?
@@ -181,38 +181,44 @@ module ::MediaGallery
     end
     private_class_method :validate_plan_for_copy!
 
-    def copy_state_blocks_new_run?(state, plan, force: false)
-      return false if force
 
-      current = state.is_a?(Hash) ? state.deep_dup : {}
-      status = current["status"].to_s
-      return false unless %w[queued copying].include?(status)
+    def copy_state_blocks_new_copy?(state, plan:)
+      return false unless state.is_a?(Hash)
+      return false unless state["status"].to_s == "copying"
+      return false if copy_state_stale?(state)
+      copy_state_matches_plan?(state, plan)
+    end
+    private_class_method :copy_state_blocks_new_copy?
 
-      current_source_key = current["source_profile_key"].to_s
-      current_target_key = current["target_profile_key"].to_s
-      plan_source_key = plan.dig(:source, :profile_key).to_s.presence || plan.dig("source", "profile_key").to_s
-      plan_target_key = plan.dig(:target, :profile_key).to_s.presence || plan.dig("target", "profile_key").to_s
-
-      return false if current_source_key.present? && plan_source_key.present? && current_source_key != plan_source_key
-      return false if current_target_key.present? && plan_target_key.present? && current_target_key != plan_target_key
-
-      last_activity_at = parse_copy_time(current["updated_at"] || current["started_at"] || current["queued_at"])
-      return false if last_activity_at.present? && last_activity_at < 20.minutes.ago
-
+    def copy_state_blocks_existing_run?(state, plan:, run_token:)
+      return false unless state.is_a?(Hash)
+      return false unless state["status"].to_s == "copying"
+      return false if copy_state_stale?(state)
+      return false unless copy_state_matches_plan?(state, plan)
+      return false if state["run_token"].present? && run_token.present? && state["run_token"] == run_token
       true
     end
-    private_class_method :copy_state_blocks_new_run?
+    private_class_method :copy_state_blocks_existing_run?
 
-    def parse_copy_time(value)
-      return nil if value.blank?
+    def copy_state_matches_plan?(state, plan)
+      return false unless state.is_a?(Hash) && plan.is_a?(Hash)
 
-      Time.zone.parse(value.to_s)
-    rescue
-      Time.parse(value.to_s)
-    rescue
-      nil
+      state_source = state["source_profile_key"].to_s
+      state_target = state["target_profile_key"].to_s
+      plan_source = (plan.dig(:source, :profile_key) || plan.dig("source", "profile_key")).to_s
+      plan_target = (plan.dig(:target, :profile_key) || plan.dig("target", "profile_key")).to_s
+
+      state_source.present? && state_target.present? && state_source == plan_source && state_target == plan_target
     end
-    private_class_method :parse_copy_time
+    private_class_method :copy_state_matches_plan?
+
+    def copy_state_stale?(state)
+      timestamp = [state["updated_at"], state["started_at"], state["queued_at"]].compact.map { |value| Time.iso8601(value) rescue nil }.compact.max
+      return false if timestamp.blank?
+
+      timestamp < 30.minutes.ago
+    end
+    private_class_method :copy_state_stale?
 
     def build_queued_state(plan:, requested_by:, run_token:, force:, auto_switch:, auto_cleanup:)
       {

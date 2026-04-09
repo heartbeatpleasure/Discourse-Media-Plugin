@@ -101,10 +101,12 @@ module ::MediaGallery
       unsupported = warnings.find do |w|
         w.include?("upload") ||
           w == "source_store_unavailable" ||
-          w == "target_store_missing" ||
-          w == "hls_role_has_no_objects_on_source"
+          w == "target_store_missing"
       end
       raise(unsupported) if unsupported.present?
+
+      object_count = (plan.dig(:totals, :object_count) || plan.dig("totals", "object_count") || 0).to_i
+      raise "no_source_objects_available_for_migration" if object_count <= 0
 
       missing = (plan.dig(:totals, :missing_on_target_count) || plan.dig("totals", "missing_on_target_count") || 0).to_i
       raise "target_not_fully_copied" if missing.positive?
