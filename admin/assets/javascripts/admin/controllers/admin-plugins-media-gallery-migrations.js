@@ -36,60 +36,6 @@ function titleCase(value) {
   return text.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function sentenceCase(value) {
-  const text = prettyLabel(value);
-  if (text === "—") {
-    return text;
-  }
-
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-function humanizeMigrationError(value) {
-  const raw = value == null ? "" : String(value).trim();
-  if (!raw) {
-    return "";
-  }
-
-  const withoutClassPrefix = raw.replace(/^[A-Z][A-Za-z0-9_:]+:\s*/, "");
-  const mappings = {
-    copy_already_in_progress: "A copy job for this item is already in progress.",
-    cleanup_already_in_progress: "Cleanup is already in progress for this item.",
-    rollback_source_already_cleaned: "Rollback is no longer available because the previous source has already been cleaned.",
-    source_and_target_same_profile: "Source and target use the same profile. Change the target profile first.",
-    target_not_fully_copied: "Switch is blocked because the target is not fully copied yet.",
-    target_profile_not_configured: "The target profile is not configured.",
-    migration_plan_missing: "The migration plan could not be built for this item.",
-    no_source_objects_available_for_migration: "No source objects are available for this migration.",
-    hls_role_has_no_objects_on_source: "No HLS objects were found on the current source for this item.",
-  };
-
-  if (mappings[withoutClassPrefix]) {
-    return mappings[withoutClassPrefix];
-  }
-
-  const detailPatterns = [
-    [/^copy_verification_incomplete:(\d+)$/i, (_, count) => `Copy finished, but ${count} target object(s) are still missing.`],
-    [/^cleanup_target_incomplete:(\d+)$/i, (_, count) => `Cleanup is blocked because ${count} target object(s) are still missing.`],
-    [/^cleanup_remaining_source_objects:(\d+)$/i, (_, count) => `Cleanup did not finish because ${count} source object(s) are still present.`],
-    [/^source_object_missing:(.+)$/i, (_, key) => `A source object is missing: ${key}`],
-    [/^unsupported_upload_role:(.+)$/i, (_, role) => `The ${prettyLabel(role)} role still uses the legacy upload backend and cannot be switched automatically.`],
-  ];
-
-  for (const [pattern, formatter] of detailPatterns) {
-    const match = withoutClassPrefix.match(pattern);
-    if (match) {
-      return formatter(...match);
-    }
-  }
-
-  if (/^[a-z0-9_:-]+$/i.test(withoutClassPrefix)) {
-    return sentenceCase(withoutClassPrefix);
-  }
-
-  return withoutClassPrefix;
-}
-
 function formatDateTime(value) {
   if (!value) {
     return "—";
@@ -141,9 +87,6 @@ function toneForStatus(status) {
     case "copied":
     case "switched":
     case "cleaned":
-    case "verified":
-    case "rolled_back":
-    case "finalized":
     case "ok":
     case "available":
       return "success";
@@ -151,7 +94,6 @@ function toneForStatus(status) {
     case "copying":
     case "processing":
     case "cleaning":
-    case "pending_cleanup":
       return "warning";
     case "missing":
     case "failed":
@@ -183,7 +125,7 @@ function buildStateCard({ title, status, detail, meta, error }) {
     badgeClass: badgeClassForStatus(status),
     detail: normalizeText(detail),
     meta: normalizeText(meta),
-    error: error ? truncate(humanizeMigrationError(error), 220) : "",
+    error: error ? truncate(error, 220) : "",
   };
 }
 
@@ -236,7 +178,12 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked storageError = "";
   @tracked storageBusy = false;
 
+  autoRefreshTimer = null;
+  autoRefreshIntervalMs = 5000;
+  autoRefreshSearchCounter = 0;
+
   resetState() {
+    this._stopAutoRefresh();
     this.searchQuery = "";
     this.backendFilter = "all";
     this.statusFilter = "all";
@@ -286,6 +233,12 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     await this.search();
     await this.loadStorageHealth("active");
     await this.loadStorageHealth("target");
+    this._syncAutoRefresh();
+  }
+
+  willDestroy() {
+    this._stopAutoRefresh();
+    super.willDestroy(...arguments);
   }
 
   get sortedResults() {
@@ -350,71 +303,33 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     return !!this.selectedPublicId;
   }
 
-  get selectedCleanupStatus() {
-    return (this.selectedDiagnostics?.migration_cleanup?.status || "").toString();
-  }
-
-  get selectedSwitchStatus() {
-    return (this.selectedDiagnostics?.migration_switch?.status || "").toString();
-  }
-
-  get selectedFinalizeStatus() {
-    return (this.selectedDiagnostics?.migration_finalize?.status || "").toString();
-  }
-
-  get selectedSourceProfileKey() {
-    return this.selectedDiagnostics?.managed_storage_profile || this.selectedItem?.managed_storage_profile || "";
-  }
-
-  get isSameSourceAndTargetProfile() {
-    const sourceProfileKey = this.selectedSourceProfileKey;
-    const targetProfileKey = this.targetHealth?.profile_key || "";
-    return !!sourceProfileKey && !!targetProfileKey && sourceProfileKey === targetProfileKey;
-  }
-
   get copyDisabled() {
     return !this.hasSelectedItem || this.isCopying || this.isSwitching || this.isCleaning;
   }
 
   get switchDisabled() {
-    return !this.hasSelectedItem || this.isSwitching || this.isCopying || this.isCleaning || this.isSameSourceAndTargetProfile;
+    return !this.hasSelectedItem || this.isSwitching || this.isCopying || this.isCleaning;
   }
 
   get cleanupDisabled() {
-    return !this.hasSelectedItem ||
-      this.isCleaning ||
-      this.isCopying ||
-      this.isSwitching ||
-      this.isRollingBack ||
-      this.isFinalizing ||
-      this.selectedSwitchStatus !== "switched" ||
-      this.selectedCleanupStatus === "cleaned";
+    const switchStatus = this.selectedDiagnostics?.migration_switch?.status || "";
+    return !this.hasSelectedItem || this.isCleaning || this.isCopying || this.isSwitching || this.isRollingBack || this.isFinalizing || switchStatus !== "switched";
   }
 
   get verifyDisabled() {
-    return !this.hasSelectedItem || this.isVerifying || this.isLoadingSelection || this.isRollingBack || this.isFinalizing || this.isSameSourceAndTargetProfile;
+    return !this.hasSelectedItem || this.isVerifying || this.isLoadingSelection || this.isRollingBack || this.isFinalizing;
   }
 
   get rollbackDisabled() {
-    return !this.hasSelectedItem ||
-      this.isRollingBack ||
-      this.isCopying ||
-      this.isSwitching ||
-      this.isCleaning ||
-      this.isFinalizing ||
-      this.selectedSwitchStatus !== "switched" ||
-      this.selectedCleanupStatus === "cleaned" ||
-      this.selectedFinalizeStatus === "finalized";
+    const switchStatus = this.selectedDiagnostics?.migration_switch?.status || "";
+    const cleanupStatus = this.selectedDiagnostics?.migration_cleanup?.status || "";
+    return !this.hasSelectedItem || this.isRollingBack || this.isCopying || this.isSwitching || this.isCleaning || this.isFinalizing || !["switched", "rolled_back"].includes(switchStatus) || cleanupStatus === "cleaned";
   }
 
   get finalizeDisabled() {
-    return !this.hasSelectedItem ||
-      this.isFinalizing ||
-      this.isRollingBack ||
-      this.isCopying ||
-      this.isSwitching ||
-      this.selectedSwitchStatus !== "switched" ||
-      this.selectedFinalizeStatus === "finalized";
+    const switchStatus = this.selectedDiagnostics?.migration_switch?.status || "";
+    const cleanupStatus = this.selectedDiagnostics?.migration_cleanup?.status || "";
+    return !this.hasSelectedItem || this.isFinalizing || this.isRollingBack || this.isCopying || this.isSwitching || !(switchStatus === "switched" || cleanupStatus === "cleaned");
   }
 
   get bulkSelectionCount() {
@@ -453,7 +368,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     if (!this.hasSelectedItem || this.isLoadingSelection || this.isLoadingPlan) {
       return false;
     }
-    const sourceProfileKey = this.selectedSourceProfileKey;
+    const sourceProfileKey = this.selectedDiagnostics?.managed_storage_profile || this.selectedItem?.managed_storage_profile;
     const targetProfileKey = this.targetHealth?.profile_key;
     return !(sourceProfileKey && targetProfileKey && sourceProfileKey === targetProfileKey);
   }
@@ -462,7 +377,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     if (!this.hasSelectedItem) {
       return "Select an item to inspect its migration preview.";
     }
-    const sourceProfileKey = this.selectedSourceProfileKey;
+    const sourceProfileKey = this.selectedDiagnostics?.managed_storage_profile || this.selectedItem?.managed_storage_profile;
     const targetProfileKey = this.targetHealth?.profile_key;
     if (sourceProfileKey && targetProfileKey && sourceProfileKey === targetProfileKey) {
       return "Source and target use the same profile. Change the target profile to preview a migration.";
@@ -533,15 +448,15 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       buildStateCard({
         title: "Copy",
         status: copy.status || "idle",
-        detail: copy.current_key ? `Current object: ${truncate(copy.current_key, 80)}` : `${copy.objects_copied || 0} copied • ${copy.objects_skipped || 0} skipped`,
-        meta: copy.progress_total ? `${copy.progress_index || 0} / ${copy.progress_total} objects` : `${copy.object_count || 0} objects`,
+        detail: copy.current_key ? `Current object: ${truncate(copy.current_key, 80)}` : ((copy.status || "idle") === "idle" ? "Copy not started" : `${copy.objects_copied || 0} copied • ${copy.objects_skipped || 0} skipped`),
+        meta: copy.progress_total ? `${copy.progress_index || 0} / ${copy.progress_total} objects` : ((copy.status || "idle") === "idle" ? "No copy queued" : `${copy.object_count || 0} objects`),
         error: copy.last_error,
       }),
       buildStateCard({
         title: "Verify",
         status: verify.status || "idle",
         detail: verify.target_profile_key ? `${normalizeText(verify.source_profile_key)} → ${normalizeText(verify.target_profile_key)}` : "Target verification not run yet",
-        meta: verify.missing_on_target_count === 0 ? "Target complete" : `${verify.missing_on_target_count || 0} objects still missing`,
+        meta: verify.target_profile_key ? (verify.missing_on_target_count === 0 ? "Target complete" : `${verify.missing_on_target_count || 0} objects still missing`) : "No verification recorded",
         error: verify.last_error,
       }),
       buildStateCard({
@@ -568,7 +483,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       buildStateCard({
         title: "Finalize",
         status: finalize.status || "idle",
-        detail: finalize.status === "pending_cleanup" ? "Cleanup was queued before finalization" : "Finalize closes the completed migration cycle. It does not move files.",
+        detail: finalize.status === "pending_cleanup" ? "Cleanup queued before finalization" : "Finalize marks the migrated item as complete",
         meta: finalize.finalized_at ? `Finalized ${formatDateTime(finalize.finalized_at)}` : (finalize.queued_at ? `Queued ${formatDateTime(finalize.queued_at)}` : "Not finalized"),
         error: finalize.last_error,
       }),
@@ -617,7 +532,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       missingCountLabel: String(missingCount),
       missingBadgeClass: badgeClassForStatus(missingCount === 0 ? "ok" : "warning"),
       switchReadinessLabel: missingCount === 0 ? "Ready to switch" : "Copy still missing target objects",
-      warnings: safeArray(plan.warnings).map((warning) => humanizeMigrationError(warning)),
+      warnings: safeArray(plan.warnings).map((warning) => titleCase(warning)),
     };
   }
 
@@ -634,9 +549,41 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         targetExistingLabel: String(summary.target_existing_count || 0),
         missingCountLabel: String(missingCount),
         missingBadgeClass: badgeClassForStatus(missingCount === 0 ? "ok" : "warning"),
-        warnings: safeArray(entry?.warnings).map((warning) => humanizeMigrationError(warning)),
+        warnings: safeArray(entry?.warnings).map((warning) => titleCase(warning)),
       };
     });
+  }
+
+  get selectedHistoryEntries() {
+    return safeArray(this.selectedDiagnostics?.migration_history).map((entry) => {
+      const copy = entry?.copy || {};
+      const verify = entry?.verify || {};
+      const switchState = entry?.switch || {};
+      const cleanup = entry?.cleanup || {};
+      const rollback = entry?.rollback || {};
+      const finalize = entry?.finalize || {};
+      const sourceProfile = entry?.source_profile_key || copy?.source_profile_key || switchState?.source_profile_key || rollback?.source_profile_key;
+      const targetProfile = entry?.target_profile_key || copy?.target_profile_key || switchState?.target_profile_key || finalize?.target_profile_key;
+      const finishedAt = finalize?.finalized_at || rollback?.rolled_back_at || cleanup?.cleaned_at || switchState?.switched_at || copy?.copied_at || entry?.archived_at;
+
+      return {
+        title: sourceProfile && targetProfile ? `${normalizeText(sourceProfile)} → ${normalizeText(targetProfile)}` : "Previous migration run",
+        meta: finishedAt ? `Completed ${formatDateTime(finishedAt)}` : `Archived ${formatDateTime(entry?.archived_at)}`,
+        reason: entry?.reason ? titleCase(entry.reason) : "",
+        badges: [
+          { label: `Copy ${titleCase(copy?.status || "idle")}`, className: badgeClassForStatus(copy?.status || "neutral") },
+          { label: `Verify ${titleCase(verify?.status || "idle")}`, className: badgeClassForStatus(verify?.status || "neutral") },
+          { label: `Switch ${titleCase(switchState?.status || "idle")}`, className: badgeClassForStatus(switchState?.status || "neutral") },
+          { label: `Cleanup ${titleCase(cleanup?.status || "idle")}`, className: badgeClassForStatus(cleanup?.status || "neutral") },
+          rollback?.status ? { label: `Rollback ${titleCase(rollback.status)}`, className: badgeClassForStatus(rollback.status) } : null,
+          finalize?.status ? { label: `Finalize ${titleCase(finalize.status)}`, className: badgeClassForStatus(finalize.status) } : null,
+        ].filter(Boolean),
+      };
+    });
+  }
+
+  get hasSelectedHistory() {
+    return this.selectedHistoryEntries.length > 0;
   }
 
   get rawPlanJson() {
@@ -661,6 +608,66 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       health: this.targetHealth,
       probe: this.targetProbe,
     });
+  }
+
+  _shouldAutoRefreshSelected() {
+    if (!this.selectedPublicId || this.isLoadingSelection || this.isSearching) {
+      return false;
+    }
+
+    const diagnostics = this.selectedDiagnostics || {};
+    const activeStatuses = [
+      diagnostics?.migration_copy?.status,
+      diagnostics?.migration_cleanup?.status,
+      diagnostics?.migration_finalize?.status,
+    ].filter(Boolean);
+
+    return activeStatuses.some((status) => ["queued", "copying", "cleaning", "pending_cleanup"].includes(String(status)));
+  }
+
+  _startAutoRefresh() {
+    if (this.autoRefreshTimer) {
+      return;
+    }
+
+    this.autoRefreshTimer = window.setInterval(() => {
+      this._pollSelected();
+    }, this.autoRefreshIntervalMs);
+  }
+
+  _stopAutoRefresh() {
+    if (this.autoRefreshTimer) {
+      window.clearInterval(this.autoRefreshTimer);
+      this.autoRefreshTimer = null;
+      this.autoRefreshSearchCounter = 0;
+    }
+  }
+
+  _syncAutoRefresh() {
+    if (this._shouldAutoRefreshSelected()) {
+      this._startAutoRefresh();
+    } else {
+      this._stopAutoRefresh();
+    }
+  }
+
+  async _pollSelected() {
+    if (
+      document?.visibilityState === "hidden" ||
+      !this.selectedPublicId ||
+      this.isLoadingSelection ||
+      this.isCopying ||
+      this.isSwitching ||
+      this.isCleaning ||
+      this.isVerifying ||
+      this.isRollingBack ||
+      this.isFinalizing
+    ) {
+      return;
+    }
+
+    await this.refreshSelected({ preserveMessages: true, includeSearchRefresh: this.autoRefreshSearchCounter >= 2 });
+    this.autoRefreshSearchCounter = (this.autoRefreshSearchCounter + 1) % 3;
   }
 
   _buildStorageCard({ title, health, probe }) {
@@ -708,20 +715,20 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     try {
       const json = await response.clone().json();
       if (Array.isArray(json?.errors) && json.errors.length) {
-        return humanizeMigrationError(json.errors.join(" "));
+        return json.errors.join(" ");
       }
-      if (json?.error) return humanizeMigrationError(json.error);
-      if (json?.message) return humanizeMigrationError(json.message);
+      if (json?.error) return String(json.error);
+      if (json?.message) return String(json.message);
     } catch {
       // ignore
     }
     try {
       const text = await response.text();
-      if (text) return humanizeMigrationError(truncate(text, 600));
+      if (text) return truncate(text, 600);
     } catch {
       // ignore
     }
-    return humanizeMigrationError(`HTTP ${response.status}`);
+    return `HTTP ${response.status}`;
   }
 
   async _fetchJson(url, options = {}) {
@@ -756,8 +763,11 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
 
   _normalizePlanError(errorMessage) {
-    const message = humanizeMigrationError(errorMessage);
+    const message = errorMessage == null ? "" : String(errorMessage);
     if (!message) return "";
+    if (message.includes("source_and_target_same_profile")) {
+      return "Source and target use the same profile. Change the target profile to preview a migration.";
+    }
     if (message.includes("Internal Server Error")) {
       return "Could not build a migration plan for this item right now.";
     }
@@ -830,6 +840,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.searchResults = [];
     } finally {
       this.isSearching = false;
+      this._syncAutoRefresh();
     }
   }
 
@@ -857,17 +868,27 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
 
   @action
-  async refreshSelected() {
+  async refreshSelected(options = {}) {
     if (!this.selectedPublicId) return;
+
+    const preserveMessages = !!options.preserveMessages;
+    const includeSearchRefresh = !!options.includeSearchRefresh;
+
     this.isLoadingSelection = true;
-    this.selectedError = "";
-    this.selectedPlanError = "";
+    if (!preserveMessages) {
+      this.selectedError = "";
+      this.selectedPlanError = "";
+    }
 
     try {
       const publicId = encodeURIComponent(this.selectedPublicId);
       const diagnostics = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${publicId}/diagnostics.json`);
       this.selectedDiagnostics = diagnostics;
       this.selectedVerification = diagnostics?.migration_verify || null;
+
+      if (includeSearchRefresh) {
+        await this.search();
+      }
 
       const refreshedSelection = this.searchResults.find((row) => row.public_id === this.selectedPublicId);
       if (refreshedSelection) {
@@ -886,6 +907,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.selectedError = e?.message || String(e);
     } finally {
       this.isLoadingSelection = false;
+      this._syncAutoRefresh();
     }
   }
 
@@ -930,9 +952,16 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
           auto_cleanup: this.autoCleanup,
         }),
       });
-      this.lastActionMessage = "Copy queued/completed.";
-      await this.refreshSelected();
-      await this.search();
+      await this.refreshSelected({ includeSearchRefresh: true });
+      const copyStatus = this.selectedDiagnostics?.migration_copy?.status;
+      const copyError = this.selectedDiagnostics?.migration_copy?.last_error;
+      if (copyStatus === "failed" && copyError) {
+        this.actionError = copyError;
+      } else if (copyStatus === "copied") {
+        this.lastActionMessage = "Copy completed.";
+      } else {
+        this.lastActionMessage = "Copy queued/completed.";
+      }
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -978,8 +1007,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         }),
       });
       this.lastActionMessage = "Switch completed.";
-      await this.refreshSelected();
-      await this.search();
+      await this.refreshSelected({ includeSearchRefresh: true });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1001,8 +1029,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         body: JSON.stringify({ force: this.forceAction }),
       });
       this.lastActionMessage = "Cleanup queued/completed.";
-      await this.refreshSelected();
-      await this.search();
+      await this.refreshSelected({ includeSearchRefresh: true });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1024,8 +1051,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         body: JSON.stringify({ force: this.forceAction }),
       });
       this.lastActionMessage = "Rollback completed.";
-      await this.refreshSelected();
-      await this.search();
+      await this.refreshSelected({ includeSearchRefresh: true });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1049,8 +1075,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.lastActionMessage = result?.migration_finalize?.status === "pending_cleanup"
         ? "Finalize queued cleanup first. Run finalize again after cleanup completes."
         : "Migration finalized.";
-      await this.refreshSelected();
-      await this.search();
+      await this.refreshSelected({ includeSearchRefresh: true });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {

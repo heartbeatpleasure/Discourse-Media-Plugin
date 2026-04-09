@@ -43,6 +43,11 @@ module ::MediaGallery
       end
       attrs[:migration_error] = nil if item.respond_to?(:migration_error)
       item.update_columns(attrs)
+      ::MediaGallery::MigrationRunHistory.archive_current_cycle!(
+        item,
+        archived_by: requested_by,
+        reason: "finalized"
+      )
       state
     rescue => e
       state = finalize_state_for(item)

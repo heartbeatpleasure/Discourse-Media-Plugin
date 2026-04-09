@@ -6,7 +6,7 @@
 # authors: Chris
 # url: https://github.com/heartbeatpleasure/Discourse-Media-Plugin
 
-add_admin_route "admin.media_gallery.title", "mediaGallery"
+add_admin_route "admin.media_gallery.title", "media-gallery"
 
 enabled_site_setting :media_gallery_enabled
 
@@ -19,6 +19,7 @@ after_initialize do
   require_relative "lib/media_gallery/storage_settings_resolver"
   require_relative "lib/media_gallery/storage_health"
   require_relative "lib/media_gallery/migration_preview"
+  require_relative "lib/media_gallery/migration_run_history"
   require_relative "lib/media_gallery/migration_copy"
   require_relative "lib/media_gallery/migration_switch"
   require_relative "lib/media_gallery/migration_cleanup"

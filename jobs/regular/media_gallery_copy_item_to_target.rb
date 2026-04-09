@@ -37,6 +37,9 @@ module Jobs
           auto_cleanup: auto_cleanup
         )
       end
+    rescue => e
+      Rails.logger.error("[media-gallery] copy job failed for item=#{item&.id || args[:media_item_id]}: #{e.class}: #{e.message}")
+      nil
     end
   end
 end

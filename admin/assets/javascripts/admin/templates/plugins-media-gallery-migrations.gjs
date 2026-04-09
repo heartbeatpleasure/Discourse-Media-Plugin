@@ -665,7 +665,7 @@ export default RouteTemplate(
 
         <div class="mg-migrations__bulk-panel">
           <h3>Migrate multiple selected items</h3>
-          <p class="mg-migrations__muted">This queues copy jobs for the items you explicitly selected below.</p>
+          <p class="mg-migrations__muted">This queues copy jobs for the items you explicitly selected below. It does not automatically use every search result.</p>
           <div class="mg-migrations__bulk-toolbar" style="margin-top: 0.85rem;">
             <div class="mg-migrations__muted">{{@controller.bulkSelectionCount}} item(s) selected</div>
             <div class="mg-migrations__filters-actions">
@@ -761,7 +761,7 @@ export default RouteTemplate(
               <div class="mg-migrations__panel-header" style="margin-bottom: 0.75rem;">
                 <div class="mg-migrations__panel-copy">
                   <h3>Actions</h3>
-                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. Finalize closes the completed migration cycle; it does not copy or move files.</span>
+                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. The selected item refreshes automatically every 5 seconds while copy or cleanup is still running.</span>
                 </div>
               </div>
 
@@ -827,6 +827,33 @@ export default RouteTemplate(
                 </div>
               {{/each}}
             </div>
+
+            {{#if @controller.hasSelectedHistory}}
+              <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
+                <div class="mg-migrations__panel-copy">
+                  <h3>Previous migration runs</h3>
+                  <span class="mg-migrations__muted">After finalize, the completed run moves here so the current action state is clean for the next migration.</span>
+                </div>
+              </div>
+              <div class="mg-migrations__state-grid">
+                {{#each @controller.selectedHistoryEntries as |entry|}}
+                  <div class="mg-migrations__state-card">
+                    <div class="mg-migrations__card-header">
+                      <span class="mg-migrations__state-title">{{entry.title}}</span>
+                      {{#if entry.reason}}
+                        <span class="mg-migrations__badge">{{entry.reason}}</span>
+                      {{/if}}
+                    </div>
+                    <div class="mg-migrations__state-detail">{{entry.meta}}</div>
+                    <div class="mg-migrations__warning-list" style="margin-top: 0.75rem;">
+                      {{#each entry.badges as |badge|}}
+                        <span class={{badge.className}}>{{badge.label}}</span>
+                      {{/each}}
+                    </div>
+                  </div>
+                {{/each}}
+              </div>
+            {{/if}}
 
             <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
               <div class="mg-migrations__panel-copy">

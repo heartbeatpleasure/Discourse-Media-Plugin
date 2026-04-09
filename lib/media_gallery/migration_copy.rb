@@ -18,8 +18,17 @@ module ::MediaGallery
       validate_plan_for_copy!(plan)
 
       state = copy_state_for(item)
-      if copy_state_blocks_new_copy?(state, plan: plan) && !force
-        raise "copy_already_in_progress"
+      if %w[queued copying].include?(state["status"].to_s) && same_copy_target?(state, plan) && !force
+        return state
+      end
+
+      if should_archive_current_cycle_before_new_copy?(item, state)
+        ::MediaGallery::MigrationRunHistory.archive_current_cycle!(
+          item,
+          archived_by: requested_by,
+          reason: "new_copy_started"
+        )
+        state = {}
       end
 
       token = SecureRandom.hex(10)
@@ -47,7 +56,7 @@ module ::MediaGallery
       validate_plan_for_copy!(plan)
 
       current_state = copy_state_for(item)
-      if copy_state_blocks_existing_run?(current_state, plan: plan, run_token: run_token) && !force
+      if current_state["status"].to_s == "copying" && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token && !force
         raise "copy_already_in_progress"
       end
       auto_switch = current_state["auto_switch"] if auto_switch.nil?
@@ -181,45 +190,6 @@ module ::MediaGallery
     end
     private_class_method :validate_plan_for_copy!
 
-
-    def copy_state_blocks_new_copy?(state, plan:)
-      return false unless state.is_a?(Hash)
-      return false unless state["status"].to_s == "copying"
-      return false if copy_state_stale?(state)
-      copy_state_matches_plan?(state, plan)
-    end
-    private_class_method :copy_state_blocks_new_copy?
-
-    def copy_state_blocks_existing_run?(state, plan:, run_token:)
-      return false unless state.is_a?(Hash)
-      return false unless state["status"].to_s == "copying"
-      return false if copy_state_stale?(state)
-      return false unless copy_state_matches_plan?(state, plan)
-      return false if state["run_token"].present? && run_token.present? && state["run_token"] == run_token
-      true
-    end
-    private_class_method :copy_state_blocks_existing_run?
-
-    def copy_state_matches_plan?(state, plan)
-      return false unless state.is_a?(Hash) && plan.is_a?(Hash)
-
-      state_source = state["source_profile_key"].to_s
-      state_target = state["target_profile_key"].to_s
-      plan_source = (plan.dig(:source, :profile_key) || plan.dig("source", "profile_key")).to_s
-      plan_target = (plan.dig(:target, :profile_key) || plan.dig("target", "profile_key")).to_s
-
-      state_source.present? && state_target.present? && state_source == plan_source && state_target == plan_target
-    end
-    private_class_method :copy_state_matches_plan?
-
-    def copy_state_stale?(state)
-      timestamp = [state["updated_at"], state["started_at"], state["queued_at"]].compact.map { |value| Time.iso8601(value) rescue nil }.compact.max
-      return false if timestamp.blank?
-
-      timestamp < 30.minutes.ago
-    end
-    private_class_method :copy_state_stale?
-
     def build_queued_state(plan:, requested_by:, run_token:, force:, auto_switch:, auto_cleanup:)
       {
         "status" => "queued",
@@ -260,6 +230,34 @@ module ::MediaGallery
       state
     end
     private_class_method :build_copying_state
+
+
+
+    def same_copy_target?(state, plan)
+      target_profile_key = state["target_profile_key"].to_s
+      source_profile_key = state["source_profile_key"].to_s
+      target_backend = state["target_backend"].to_s
+      source_backend = state["source_backend"].to_s
+
+      plan_target_profile_key = (plan.dig(:target, :profile_key) || plan.dig("target", "profile_key")).to_s
+      plan_source_profile_key = (plan.dig(:source, :profile_key) || plan.dig("source", "profile_key")).to_s
+      plan_target_backend = (plan.dig(:target, :backend) || plan.dig("target", "backend")).to_s
+      plan_source_backend = (plan.dig(:source, :backend) || plan.dig("source", "backend")).to_s
+
+      target_profile_key == plan_target_profile_key &&
+        source_profile_key == plan_source_profile_key &&
+        target_backend == plan_target_backend &&
+        source_backend == plan_source_backend
+    end
+    private_class_method :same_copy_target?
+
+    def should_archive_current_cycle_before_new_copy?(item, state)
+      return false unless ::MediaGallery::MigrationRunHistory.current_cycle_present?(item)
+      return false if %w[queued copying].include?(state["status"].to_s)
+
+      true
+    end
+    private_class_method :should_archive_current_cycle_before_new_copy?
 
     def update_progress!(item, state, copied:, skipped:, failed:, bytes_copied:, current_key:, index:, total:)
       latest = copy_state_for(item)
