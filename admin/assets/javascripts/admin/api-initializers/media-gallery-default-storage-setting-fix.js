@@ -11,6 +11,53 @@ const LABELS = {
 const SETTINGS_PATH = "/admin/site_settings";
 const FILTER_TOKEN = "filter=media_gallery";
 
+const HUMANIZED_LABEL_REPLACEMENTS = {
+  "Media gallery S3 profile name": "Media gallery S3 profile 1 name",
+  "Media gallery S3 endpoint": "Media gallery S3 profile 1 endpoint",
+  "Media gallery S3 region": "Media gallery S3 profile 1 region",
+  "Media gallery S3 bucket": "Media gallery S3 profile 1 bucket",
+  "Media gallery S3 prefix": "Media gallery S3 profile 1 prefix",
+  "Media gallery S3 access key ID": "Media gallery S3 profile 1 access key ID",
+  "Media gallery S3 secret access key": "Media gallery S3 profile 1 secret access key",
+  "Media gallery S3 force path style": "Media gallery S3 profile 1 force path style",
+  "Media gallery S3 presign ttl seconds": "Media gallery S3 profile 1 presign ttl seconds",
+
+  "Media gallery target S3 profile name": "Media gallery S3 profile 2 name",
+  "Media gallery target S3 endpoint": "Media gallery S3 profile 2 endpoint",
+  "Media gallery target S3 region": "Media gallery S3 profile 2 region",
+  "Media gallery target S3 bucket": "Media gallery S3 profile 2 bucket",
+  "Media gallery target S3 prefix": "Media gallery S3 profile 2 prefix",
+  "Media gallery target S3 access key ID": "Media gallery S3 profile 2 access key ID",
+  "Media gallery target S3 secret access key": "Media gallery S3 profile 2 secret access key",
+  "Media gallery target S3 force path style": "Media gallery S3 profile 2 force path style",
+  "Media gallery target S3 presign ttl seconds": "Media gallery S3 profile 2 presign ttl seconds",
+
+  "Media gallery target S3 2 profile name": "Media gallery S3 profile 3 name",
+  "Media gallery target S3 2 endpoint": "Media gallery S3 profile 3 endpoint",
+  "Media gallery target S3 2 region": "Media gallery S3 profile 3 region",
+  "Media gallery target S3 2 bucket": "Media gallery S3 profile 3 bucket",
+  "Media gallery target S3 2 prefix": "Media gallery S3 profile 3 prefix",
+  "Media gallery target S3 2 access key ID": "Media gallery S3 profile 3 access key ID",
+  "Media gallery target S3 2 secret access key": "Media gallery S3 profile 3 secret access key",
+  "Media gallery target S3 2 force path style": "Media gallery S3 profile 3 force path style",
+  "Media gallery target S3 2 presign ttl seconds": "Media gallery S3 profile 3 presign ttl seconds",
+
+  "Media gallery target S3 3 profile name": "Media gallery legacy S3 fallback profile name",
+  "Media gallery target S3 3 endpoint": "Media gallery legacy S3 fallback endpoint",
+  "Media gallery target S3 3 region": "Media gallery legacy S3 fallback region",
+  "Media gallery target S3 3 bucket": "Media gallery legacy S3 fallback bucket",
+  "Media gallery target S3 3 prefix": "Media gallery legacy S3 fallback prefix",
+  "Media gallery target S3 3 access key ID": "Media gallery legacy S3 fallback access key ID",
+  "Media gallery target S3 3 secret access key": "Media gallery legacy S3 fallback secret access key",
+  "Media gallery target S3 3 force path style": "Media gallery legacy S3 fallback force path style",
+  "Media gallery target S3 3 presign ttl seconds": "Media gallery legacy S3 fallback presign ttl seconds",
+
+  "Media gallery target local profile name": "Media gallery legacy local profile name",
+  "Media gallery target local asset root path": "Media gallery local storage override root path (legacy)",
+  "Media gallery target asset storage backend": "Media gallery legacy destination backend",
+  "Media gallery asset storage backend": "Media gallery legacy managed storage backend",
+};
+
 function inMediaGallerySettings() {
   return (
     window.location.pathname.startsWith(SETTINGS_PATH) &&
@@ -38,7 +85,7 @@ function setTextIfNeeded(node, text) {
 
 function rowLooksRelevant(row) {
   const text = (row?.textContent || "").toLowerCase();
-  return text.includes("default storage profile");
+  return text.includes("media gallery") || text.includes("default storage profile");
 }
 
 function patchNativeSelect(row) {
@@ -70,7 +117,6 @@ function patchSelectKit(row) {
     const value = item.getAttribute("data-value");
     const label = desiredLabel(value);
 
-    // Only touch the visible text holder, not the whole element tree.
     const labelNode =
       item.querySelector(".name, .select-kit-row-label, .text, .desc") || item;
 
@@ -78,9 +124,15 @@ function patchSelectKit(row) {
   });
 
   const selectedValue =
-    row.querySelector(".select-kit .is-selected[data-value], .select-kit-collection .is-selected[data-value]")?.getAttribute("data-value") ||
+    row
+      .querySelector(
+        ".select-kit .is-selected[data-value], .select-kit-collection .is-selected[data-value]"
+      )
+      ?.getAttribute("data-value") ||
     row.querySelector("input[type='hidden']")?.value ||
-    row.querySelector(".select-kit-header [data-value]")?.getAttribute("data-value");
+    row
+      .querySelector(".select-kit-header [data-value]")
+      ?.getAttribute("data-value");
 
   const header = row.querySelector(
     ".select-kit-header .selected-name, .select-kit-header-wrapper .selected-name"
@@ -93,12 +145,33 @@ function patchSelectKit(row) {
   return changed;
 }
 
-function patchDefaultStorageSetting() {
+function patchHumanizedSettingLabels() {
   if (!inMediaGallerySettings()) {
     return false;
   }
 
-  let touched = false;
+  let changed = false;
+
+  document
+    .querySelectorAll("label, .setting-label, .setting-name, .name")
+    .forEach((node) => {
+      const current = (node.textContent || "").trim();
+      const replacement = HUMANIZED_LABEL_REPLACEMENTS[current];
+
+      if (replacement) {
+        changed = setTextIfNeeded(node, replacement) || changed;
+      }
+    });
+
+  return changed;
+}
+
+function patchSettingsPage() {
+  if (!inMediaGallerySettings()) {
+    return false;
+  }
+
+  let touched = patchHumanizedSettingLabels();
 
   document
     .querySelectorAll(".setting, .control-group, .site-setting")
@@ -115,7 +188,7 @@ function patchDefaultStorageSetting() {
 }
 
 function schedulePatch() {
-  schedule("afterRender", () => patchDefaultStorageSetting());
+  schedule("afterRender", () => patchSettingsPage());
 }
 
 export default apiInitializer("0.11.1", (api) => {
@@ -141,9 +214,6 @@ export default apiInitializer("0.11.1", (api) => {
     stop();
     schedulePatch();
 
-    // Observe only for a short time while the settings page renders. The previous
-    // permanent body observer could keep retriggering itself and stall the rest of
-    // the settings list.
     observer = new MutationObserver(() => {
       attempts += 1;
       schedulePatch();
@@ -158,7 +228,10 @@ export default apiInitializer("0.11.1", (api) => {
   };
 
   api.onPageChange((url) => {
-    if (url?.startsWith(SETTINGS_PATH) && window.location.search.includes(FILTER_TOKEN)) {
+    if (
+      url?.startsWith(SETTINGS_PATH) &&
+      window.location.search.includes(FILTER_TOKEN)
+    ) {
       start();
     } else {
       stop();
