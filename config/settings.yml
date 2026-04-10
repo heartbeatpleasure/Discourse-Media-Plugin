@@ -205,10 +205,6 @@ plugins:
     default: "/shared/media_gallery/private"
     client: false
 
-  media_gallery_target_local_asset_root_path:
-    default: ""
-    client: false
-
   # S3 profile 1.
   media_gallery_s3_profile_name:
     default: "S3 profile 1"
@@ -338,49 +334,6 @@ plugins:
 
   media_gallery_target_asset_storage_backend:
     default: ""
-    client: false
-
-  media_gallery_target_local_profile_name:
-    default: "Local storage"
-    client: false
-
-  media_gallery_target_s3_3_profile_name:
-    default: ""
-    client: false
-
-  media_gallery_target_s3_3_endpoint:
-    default: ""
-    client: false
-
-  media_gallery_target_s3_3_region:
-    default: "auto"
-    client: false
-
-  media_gallery_target_s3_3_bucket:
-    default: ""
-    client: false
-
-  media_gallery_target_s3_3_prefix:
-    default: ""
-    client: false
-
-  media_gallery_target_s3_3_access_key_id:
-    default: ""
-    client: false
-
-  media_gallery_target_s3_3_secret_access_key:
-    default: ""
-    client: false
-
-  media_gallery_target_s3_3_force_path_style:
-    default: false
-    client: false
-
-  media_gallery_target_s3_3_presign_ttl_seconds:
-    default: 300
-    type: integer
-    min: 30
-    max: 3600
     client: false
 
   # Processing hardening. Leave disabled to avoid Sidekiq retry-loops that can

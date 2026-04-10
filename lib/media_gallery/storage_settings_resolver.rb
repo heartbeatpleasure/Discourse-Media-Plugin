@@ -7,13 +7,17 @@ module ::MediaGallery
     BACKENDS = %w[local s3].freeze
     DELIVERY_MODES = %w[stream x_accel redirect].freeze
     CANONICAL_PROFILE_KEYS = %w[local s3_1 s3_2 s3_3].freeze
-    LEGACY_PROFILE_KEYS = %w[active_local active_s3 target_local target_s3 target_s3_2 target_s3_3].freeze
+    LEGACY_PROFILE_ALIASES = {
+      "active_local" => "local",
+      "target_local" => "local",
+      "active_s3" => "s3_1",
+      "target_s3" => "s3_1",
+      "target_s3_2" => "s3_2",
+      "target_s3_3" => "s3_3",
+    }.freeze
 
     def managed_storage_enabled?
-      return true if default_profile_key.present?
-
-      backend = legacy_configured_backend
-      return true if backend.present?
+      return true if configured_profile_keys.any?
 
       SiteSetting.respond_to?(:media_gallery_private_storage_enabled) &&
         SiteSetting.media_gallery_private_storage_enabled
@@ -26,9 +30,6 @@ module ::MediaGallery
 
       backend = backend_for_profile_key(active_profile_key)
       return backend if BACKENDS.include?(backend)
-
-      legacy_backend = legacy_configured_backend
-      return legacy_backend if BACKENDS.include?(legacy_backend)
 
       "local"
     end
@@ -69,8 +70,7 @@ module ::MediaGallery
     end
 
     def local_profile_root_path
-      value = site_setting_string(:media_gallery_target_local_asset_root_path)
-      value.presence || local_asset_root_path
+      local_asset_root_path
     end
 
     def default_delivery_mode
@@ -95,9 +95,6 @@ module ::MediaGallery
     def default_profile_key
       explicit = normalize_canonical_profile_key(site_setting_string(:media_gallery_default_storage_profile_key))
       return explicit if explicit.present? && profile_visible?(explicit)
-
-      legacy = legacy_default_profile_key
-      return legacy if legacy.present? && profile_visible?(legacy)
 
       first_configured_profile_key || "local"
     end
@@ -129,17 +126,8 @@ module ::MediaGallery
       canonical = normalize_canonical_profile_key(value)
       return canonical if canonical.present?
 
-      return nil unless LEGACY_PROFILE_KEYS.include?(value)
-
-      fingerprint = legacy_profile_key_location_fingerprint(value)
-      if fingerprint.present?
-        configured_profile_keys.each do |candidate|
-          return candidate if profile_key_location_fingerprint(candidate) == fingerprint
-        end
-      end
-
-      fallback = legacy_profile_alias(value)
-      fallback.present? ? normalize_canonical_profile_key(fallback) : nil
+      alias_value = LEGACY_PROFILE_ALIASES[value]
+      alias_value.present? ? normalize_canonical_profile_key(alias_value) : nil
     end
 
     def profile_backend(profile)
@@ -279,13 +267,13 @@ module ::MediaGallery
     def profile_label_for_key(profile_key)
       case normalize_canonical_profile_key(profile_key).to_s
       when "local"
-        site_setting_string(:media_gallery_local_profile_name).presence || site_setting_string(:media_gallery_target_local_profile_name).presence || "Local storage"
+        site_setting_string(:media_gallery_local_profile_name).presence || "Local storage"
       when "s3_1"
         site_setting_string(:media_gallery_s3_profile_name).presence || "S3 profile 1"
       when "s3_2"
         site_setting_string(:media_gallery_target_s3_profile_name).presence || "S3 profile 2"
       when "s3_3"
-        site_setting_string(:media_gallery_target_s3_2_profile_name).presence || site_setting_string(:media_gallery_target_s3_3_profile_name).presence || "S3 profile 3"
+        site_setting_string(:media_gallery_target_s3_2_profile_name).presence || "S3 profile 3"
       else
         profile_key.to_s
       end
@@ -414,52 +402,6 @@ module ::MediaGallery
     end
     private_class_method :choose_profile_key_for_backend
 
-    def legacy_default_profile_key
-      case legacy_configured_backend
-      when "local"
-        "local"
-      when "s3"
-        "s3_1"
-      else
-        nil
-      end
-    end
-    private_class_method :legacy_default_profile_key
-
-    def legacy_profile_alias(profile_key)
-      {
-        "active_local" => "local",
-        "target_local" => "local",
-        "active_s3" => "s3_1",
-        "target_s3" => "s3_2",
-        "target_s3_2" => "s3_3",
-        "target_s3_3" => "s3_3",
-      }[profile_key.to_s]
-    end
-    private_class_method :legacy_profile_alias
-
-    def legacy_profile_key_location_fingerprint(profile_key)
-      case profile_key.to_s
-      when "active_local"
-        { backend: "local", root_path: File.expand_path(local_asset_root_path.to_s) }
-      when "target_local"
-        { backend: "local", root_path: File.expand_path(local_profile_root_path.to_s) }
-      when "active_s3"
-        s3_location_fingerprint(s3_options)
-      when "target_s3"
-        s3_location_fingerprint(s3_profile_2_options)
-      when "target_s3_2"
-        s3_location_fingerprint(primary_s3_profile_3_options)
-      when "target_s3_3"
-        s3_location_fingerprint(legacy_s3_profile_3_options)
-      else
-        nil
-      end
-    rescue
-      nil
-    end
-    private_class_method :legacy_profile_key_location_fingerprint
-
     def profile_visible?(profile_key)
       case normalize_canonical_profile_key(profile_key).to_s
       when "local"
@@ -476,16 +418,6 @@ module ::MediaGallery
       local_profile_root_path
     end
     private_class_method :local_root_for_profile_key
-
-    def legacy_configured_backend
-      return nil unless SiteSetting.respond_to?(:media_gallery_asset_storage_backend)
-
-      value = SiteSetting.media_gallery_asset_storage_backend.to_s.strip
-      BACKENDS.include?(value) ? value : nil
-    rescue
-      nil
-    end
-    private_class_method :legacy_configured_backend
 
     def s3_options
       {
@@ -514,7 +446,7 @@ module ::MediaGallery
     end
     private_class_method :s3_profile_2_options
 
-    def primary_s3_profile_3_options
+    def s3_profile_3_options
       {
         endpoint: site_setting_string(:media_gallery_target_s3_2_endpoint),
         region: site_setting_string(:media_gallery_target_s3_2_region).presence || "auto",
@@ -525,31 +457,6 @@ module ::MediaGallery
         force_path_style: site_setting_bool(:media_gallery_target_s3_2_force_path_style, default: false),
         presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_2_presign_ttl_seconds, default: 300)
       }
-    end
-    private_class_method :primary_s3_profile_3_options
-
-    def legacy_s3_profile_3_options
-      {
-        endpoint: site_setting_string(:media_gallery_target_s3_3_endpoint),
-        region: site_setting_string(:media_gallery_target_s3_3_region).presence || "auto",
-        bucket: site_setting_string(:media_gallery_target_s3_3_bucket),
-        prefix: normalize_prefix(site_setting_string(:media_gallery_target_s3_3_prefix)),
-        access_key_id: site_setting_string(:media_gallery_target_s3_3_access_key_id),
-        secret_access_key: site_setting_string(:media_gallery_target_s3_3_secret_access_key),
-        force_path_style: site_setting_bool(:media_gallery_target_s3_3_force_path_style, default: false),
-        presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_3_presign_ttl_seconds, default: 300)
-      }
-    end
-    private_class_method :legacy_s3_profile_3_options
-
-    def s3_profile_3_options
-      primary = primary_s3_profile_3_options
-      return primary if s3_options_ready?(primary)
-
-      legacy = legacy_s3_profile_3_options
-      return legacy if s3_options_ready?(legacy)
-
-      primary
     end
     private_class_method :s3_profile_3_options
 
