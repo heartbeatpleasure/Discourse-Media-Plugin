@@ -83,7 +83,7 @@ module ::MediaGallery
     end
 
     def active_profile_key
-      profile_key("active")
+      active_profile_key_from_backend
     end
 
     def target_backend
@@ -103,20 +103,17 @@ module ::MediaGallery
     end
 
     def profile_key(profile)
-      backend = profile_backend(profile)
-      case [profile.to_s, backend]
-      when ["active", "s3"] then "active_s3"
-      when ["active", "local"] then "active_local"
-      when ["target", "s3"] then target_profile_key.to_s.start_with?("target_s3") ? target_profile_key : "target_s3"
-      when ["target", "local"] then "target_local"
-      else
-        normalized_profile_key(profile)
-      end
+      value = profile.to_s.strip
+      return active_profile_key_from_backend if value.blank? || value == "active"
+      return target_profile_key if value == "target"
+      return value if PROFILE_KEYS.include?(value)
+
+      nil
     end
 
     def normalized_profile_key(profile)
       value = profile.to_s.strip
-      return active_profile_key if value.blank? || value == "active"
+      return active_profile_key_from_backend if value.blank? || value == "active"
       return target_profile_key if value == "target"
       return value if PROFILE_KEYS.include?(value)
 
@@ -138,6 +135,19 @@ module ::MediaGallery
         nil
       end
     end
+
+
+    def active_profile_key_from_backend
+      case active_backend
+      when "s3"
+        "active_s3"
+      when "local"
+        "active_local"
+      else
+        nil
+      end
+    end
+    private_class_method :active_profile_key_from_backend
 
     def build_store(backend = active_backend)
       case backend.to_s
