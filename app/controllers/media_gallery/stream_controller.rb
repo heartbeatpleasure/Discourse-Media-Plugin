@@ -34,6 +34,10 @@ module ::MediaGallery
       raise Discourse::NotFound unless item.ready?
 
       kind = payload["kind"].to_s
+      unless MediaGallery::Token.asset_binding_valid?(media_item: item, kind: kind, payload: payload)
+        raise Discourse::NotFound
+      end
+
       kind = "main" if kind.blank?
 
       delivery = resolve_file(item, payload, kind)

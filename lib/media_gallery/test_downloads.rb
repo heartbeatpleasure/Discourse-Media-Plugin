@@ -4,6 +4,7 @@ require "fileutils"
 require "json"
 require "securerandom"
 require "time"
+require "tmpdir"
 
 module ::MediaGallery
   module TestDownloads
@@ -32,13 +33,8 @@ module ::MediaGallery
       DEFAULT_RETENTION_HOURS
     end
 
-
     def packaged_codebook_scheme_for(item)
-      root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-      meta_path = File.join(root, "fingerprint_meta.json")
-      return nil unless File.exist?(meta_path)
-
-      meta = JSON.parse(File.read(meta_path)) rescue nil
+      meta = fingerprint_meta_for(item)
       return nil unless meta.is_a?(Hash)
 
       meta["codebook_scheme"].to_s.presence ||
@@ -68,8 +64,6 @@ module ::MediaGallery
         end
       end
     end
-
-
 
     TASK_NAMESPACE = "media_gallery_test_downloads"
 
@@ -144,15 +138,18 @@ module ::MediaGallery
     end
 
     def template_playlist_path(item, variant: DEFAULT_VARIANT)
+      access = managed_hls_access_for(item)
+      return ::MediaGallery::Hls.variant_playlist_key_for(item, variant, role: access[:role]) if access.present?
+
       ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
     end
 
     def parse_template_segments(item, variant: DEFAULT_VARIANT)
-      path = template_playlist_path(item, variant: variant)
-      raise Discourse::NotFound if path.blank? || !File.exist?(path)
+      raw = template_playlist_raw(item, variant: variant)
+      raise Discourse::NotFound if raw.blank?
 
       names = []
-      File.read(path).each_line do |line|
+      raw.to_s.each_line do |line|
         l = line.to_s.strip
         next if l.blank? || l.start_with?("#")
         names << File.basename(l)
@@ -217,7 +214,7 @@ module ::MediaGallery
       selection.merge(chosen_segment_names: chosen)
     end
 
-    def selected_segment_paths(item:, user_id:, mode:, start_segment: 0, segment_count: nil, variant: DEFAULT_VARIANT)
+    def select_segments(item:, user_id:, mode:, start_segment: 0, segment_count: nil, variant: DEFAULT_VARIANT)
       seg_names = parse_template_segments(item, variant: variant)
       selection = resolve_segment_selection(
         seg_names: seg_names,
@@ -229,7 +226,7 @@ module ::MediaGallery
       fingerprint_id = ::MediaGallery::Fingerprinting.fingerprint_id_for(user_id: user_id.to_i, media_item_id: item.id)
       codebook_scheme = packaged_codebook_scheme_for(item)
 
-      paths = selection[:chosen_segment_names].map do |filename|
+      segment_entries = selection[:chosen_segment_names].map do |filename|
         seg_idx = ::MediaGallery::Fingerprinting.segment_index_from_filename(filename)
         raise "invalid_segment_filename: #{filename}" if seg_idx.nil?
 
@@ -240,17 +237,14 @@ module ::MediaGallery
           codebook: codebook_scheme,
         )
 
-        base = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-        path = File.join(base, ab, variant.to_s, filename)
-        raise "missing_segment_file: #{path}" unless File.exist?(path)
-        path
+        { filename: filename, ab: ab.to_s, segment_index: seg_idx }
       end
 
       {
-        segment_paths: paths,
+        segment_entries: segment_entries,
         fingerprint_id: fingerprint_id,
         start_segment: selection[:start_segment],
-        segment_count: paths.length,
+        segment_count: segment_entries.length,
         total_segments: selection[:total_segments],
         random_clip_region: selection[:random_clip_region],
         clip_percent_of_video: selection[:clip_percent_of_video],
@@ -264,7 +258,7 @@ module ::MediaGallery
       ensure_root!
       cleanup!
 
-      selected = selected_segment_paths(
+      selected = select_segments(
         item: item,
         user_id: user_id,
         mode: mode,
@@ -278,12 +272,16 @@ module ::MediaGallery
 
       output_path = artifact_file_path(item.public_id, artifact_id, "mp4")
       concat_list = File.join(dir, "concat.txt")
-      File.write(concat_list, selected[:segment_paths].map { |p| "file '#{p.gsub("'", %q('\\''))}'" }.join("\n") + "\n")
 
-      ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
-        concat_file_path: concat_list,
-        output_path: output_path,
-      )
+      Dir.mktmpdir("media_gallery_test_download") do |stage_dir|
+        staged_paths = stage_selected_segments!(item: item, selection: selected, stage_dir: stage_dir)
+        File.write(concat_list, staged_paths.map { |p| "file '#{p.gsub("'", %q('\\''))}'" }.join("\n") + "\n")
+
+        ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
+          concat_file_path: concat_list,
+          output_path: output_path,
+        )
+      end
 
       user = ::User.find_by(id: user_id.to_i)
 
@@ -324,5 +322,86 @@ module ::MediaGallery
       raise Discourse::NotFound unless File.exist?(path)
       JSON.parse(File.read(path))
     end
+
+    def template_playlist_raw(item, variant: DEFAULT_VARIANT)
+      access = managed_hls_access_for(item)
+      if access.present?
+        key = ::MediaGallery::Hls.variant_playlist_key_for(item, variant, role: access[:role])
+        return access[:store].read(key)
+      end
+
+      path = ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
+      raise Discourse::NotFound if path.blank? || !File.exist?(path)
+      File.read(path)
+    end
+    private_class_method :template_playlist_raw
+
+    def fingerprint_meta_for(item)
+      access = managed_hls_access_for(item)
+      if access.present?
+        key = ::MediaGallery::Hls.fingerprint_meta_key_for(item, role: access[:role])
+        begin
+          raw = access[:store].read(key)
+          meta = JSON.parse(raw) rescue nil
+          return meta if meta.is_a?(Hash)
+        rescue
+          nil
+        end
+      end
+
+      root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+      meta_path = File.join(root, "fingerprint_meta.json")
+      return nil unless File.exist?(meta_path)
+
+      meta = JSON.parse(File.read(meta_path)) rescue nil
+      meta.is_a?(Hash) ? meta : nil
+    rescue
+      nil
+    end
+    private_class_method :fingerprint_meta_for
+
+    def managed_hls_access_for(item)
+      role = ::MediaGallery::Hls.managed_role_for(item)
+      return nil unless role.present?
+      return nil unless ::MediaGallery::Hls.managed_role_ready?(item, role)
+
+      store = ::MediaGallery::Hls.store_for_managed_role(item, role)
+      return nil if store.blank?
+
+      { role: role.deep_stringify_keys, store: store }
+    rescue
+      nil
+    end
+    private_class_method :managed_hls_access_for
+
+    def stage_selected_segments!(item:, selection:, stage_dir:)
+      access = managed_hls_access_for(item)
+
+      Array(selection[:segment_entries]).map.with_index do |entry, idx|
+        filename = entry[:filename].to_s
+        ab = entry[:ab].to_s
+        dest = File.join(stage_dir, format("%05d_%s", idx, filename))
+
+        if access.present?
+          key = ::MediaGallery::Hls.segment_key_for(
+            item,
+            selection[:variant],
+            filename,
+            ab: ab,
+            role: access[:role]
+          )
+          access[:store].download_to_file!(key, dest)
+        else
+          base = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+          source = File.join(base, ab, selection[:variant].to_s, filename)
+          raise "missing_segment_file: #{source}" unless File.exist?(source)
+          FileUtils.cp(source, dest)
+        end
+
+        raise "staged_segment_missing: #{dest}" unless File.exist?(dest)
+        dest
+      end
+    end
+    private_class_method :stage_selected_segments!
   end
 end

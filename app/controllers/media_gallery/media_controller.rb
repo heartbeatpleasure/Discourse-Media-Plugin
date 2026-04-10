@@ -569,6 +569,7 @@ module ::MediaGallery
       item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
       raise Discourse::NotFound if item.blank?
       raise Discourse::NotFound unless item.ready?
+      raise Discourse::NotFound unless MediaGallery::Token.asset_binding_valid?(media_item: item, kind: payload["kind"], payload: payload)
 
       streaming_session = item.media_type.to_s == "video" || item.media_type.to_s == "audio"
 

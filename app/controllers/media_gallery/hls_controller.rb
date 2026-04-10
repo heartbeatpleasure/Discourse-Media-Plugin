@@ -23,6 +23,7 @@ module ::MediaGallery
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
       deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
+      enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
 
       role = hls_role_for(item)
@@ -41,6 +42,7 @@ module ::MediaGallery
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
       deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
+      enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
 
       variant = params[:variant].to_s
@@ -62,6 +64,7 @@ module ::MediaGallery
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
       deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
+      enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
 
       variant = params[:variant].to_s
@@ -134,6 +137,12 @@ module ::MediaGallery
 
     def ensure_hls_enabled
       raise Discourse::NotFound unless SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled
+    end
+
+    def enforce_asset_binding!(item, payload:, kind:, token:)
+      return if ::MediaGallery::Token.asset_binding_valid?(media_item: item, kind: kind, payload: payload)
+
+      deny!(:asset_binding_mismatch, token: token)
     end
 
     def verify_hls_token!(token)
