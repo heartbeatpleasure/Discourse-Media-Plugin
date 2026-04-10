@@ -123,6 +123,8 @@ function buildSummaryRow(label, value) {
   };
 }
 
+const TARGET_PROFILE_STORAGE_KEY = "media-gallery:selected-target-profile";
+
 function buildStateCard({ title, status, detail, meta, error }) {
   const statusLabel = titleCase(status || "unknown");
 
@@ -830,6 +832,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
 
     this.selectedTargetProfile = nextProfile;
+    this._persistSelectedTargetProfile(nextProfile);
     if (this.targetHealth?.profile_key !== nextProfile) {
       await this.loadStorageHealth(nextProfile);
     }
@@ -956,6 +959,44 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     if (this.hlsFilter && this.hlsFilter !== "all") params.set("has_hls", this.hlsFilter === "yes" ? "true" : "false");
     params.set("limit", String(this.limit || 50));
     return params;
+  }
+
+  _storageAvailable() {
+    return typeof window !== "undefined" && !!window.localStorage;
+  }
+
+  _storedTargetProfile() {
+    if (!this._storageAvailable()) {
+      return "";
+    }
+
+    try {
+      return window.localStorage.getItem(TARGET_PROFILE_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  _persistSelectedTargetProfile(profileKey) {
+    if (!this._storageAvailable()) {
+      return;
+    }
+
+    try {
+      if (profileKey) {
+        window.localStorage.setItem(TARGET_PROFILE_STORAGE_KEY, profileKey);
+      } else {
+        window.localStorage.removeItem(TARGET_PROFILE_STORAGE_KEY);
+      }
+    } catch {}
+  }
+
+  _resolveStorageProfileRequest(profile) {
+    if (profile === "target") {
+      return this.selectedTargetProfileKey || this.selectedTargetProfile || profile;
+    }
+
+    return profile;
   }
 
   _actionHeaders() {
@@ -1408,13 +1449,15 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   async loadStorageHealth(profile) {
     this.storageBusy = true;
     this.storageError = "";
+    const resolvedProfile = this._resolveStorageProfileRequest(profile);
     try {
-      const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/health.json?profile=${encodeURIComponent(profile)}`);
-      if (profile === "active") {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/health.json?profile=${encodeURIComponent(resolvedProfile)}`);
+      if (resolvedProfile === "active") {
         this.activeHealth = json;
       } else {
         this.targetHealth = json;
-        this.selectedTargetProfile = json?.profile_key || profile;
+        this.selectedTargetProfile = json?.profile_key || resolvedProfile;
+        this._persistSelectedTargetProfile(this.selectedTargetProfile);
       }
     } catch (e) {
       this.storageError = e?.message || String(e);
@@ -1427,13 +1470,14 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   async runStorageProbe(profile) {
     this.storageBusy = true;
     this.storageError = "";
+    const resolvedProfile = this._resolveStorageProfileRequest(profile);
     try {
       const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/probe.json`, {
         method: "POST",
         headers: this._actionHeaders(),
-        body: JSON.stringify({ profile }),
+        body: JSON.stringify({ profile: resolvedProfile }),
       });
-      if (profile === "active") this.activeProbe = json;
+      if (resolvedProfile === "active") this.activeProbe = json;
       else this.targetProbe = json;
     } catch (e) {
       this.storageError = e?.message || String(e);
@@ -1451,9 +1495,12 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.activeProfileSummary = json?.default_profile || json?.active_profile || null;
       this.availableTargetProfiles = Array.isArray(json?.profiles) ? json.profiles : (Array.isArray(json?.target_profiles) ? json.target_profiles : []);
       const preferred = json?.default_target_profile_key;
+      const stored = this._storedTargetProfile();
       const options = this.targetProfileOptions;
+      const storedOption = options.find((entry) => entry.profile_key === stored);
       const preferredOption = options.find((entry) => entry.profile_key === preferred && !this._isSameAsSourceProfile(entry.profile_key));
-      this.selectedTargetProfile = preferredOption?.profile_key || this._preferredTargetProfileFromOptions(options) || this.availableTargetProfiles[0]?.profile_key || "";
+      this.selectedTargetProfile = storedOption?.profile_key || preferredOption?.profile_key || this._preferredTargetProfileFromOptions(options) || this.availableTargetProfiles[0]?.profile_key || "";
+      this._persistSelectedTargetProfile(this.selectedTargetProfile);
     } catch (e) {
       this.storageError = e?.message || String(e);
     } finally {
@@ -1464,6 +1511,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @action
   async onTargetProfileChange(event) {
     this.selectedTargetProfile = event?.target?.value || "";
+    this._persistSelectedTargetProfile(this.selectedTargetProfile);
     this.targetProbe = null;
     if (this.selectedTargetProfile) {
       await this.loadStorageHealth(this.selectedTargetProfile);

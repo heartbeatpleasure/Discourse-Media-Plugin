@@ -239,10 +239,6 @@ en:
     media_gallery_target_s3_2_presign_ttl_seconds_title: "Media gallery S3 profile 3 presign TTL seconds"
     media_gallery_target_s3_2_presign_ttl_seconds: "Presigned URL TTL for S3 profile 3."
 
-    media_gallery_asset_storage_backend_title: "Media gallery legacy managed storage backend"
-    media_gallery_asset_storage_backend: "Legacy compatibility setting for the previous managed storage backend."
-    media_gallery_target_asset_storage_backend_title: "Media gallery legacy destination backend"
-    media_gallery_target_asset_storage_backend: "Legacy compatibility setting for the previous destination backend."
     media_gallery_target_local_profile_name_title: "Media gallery legacy local profile name"
     media_gallery_target_local_profile_name: "Legacy fallback display name for local storage."
     media_gallery_target_s3_3_profile_name_title: "Media gallery legacy S3 fallback profile name"

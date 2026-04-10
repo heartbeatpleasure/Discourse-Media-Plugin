@@ -327,15 +327,6 @@ plugins:
     max: 3600
     client: false
 
-  # Legacy compatibility settings kept only for transition / fallback.
-  media_gallery_asset_storage_backend:
-    default: ""
-    client: false
-
-  media_gallery_target_asset_storage_backend:
-    default: ""
-    client: false
-
   # Processing hardening. Leave disabled to avoid Sidekiq retry-loops that can
   # repeatedly upload the same processed assets when a late-stage step fails.
   media_gallery_processing_raise_to_sidekiq_retry:
