@@ -109,19 +109,13 @@ export default RouteTemplate(
           background: var(--primary-very-low);
           box-sizing: border-box;
           width: 100%;
-          padding: 0 0.85rem;
-          line-height: 1.2;
         }
 
         .mg-migrations__storage-selection-value {
           display: flex;
           align-items: center;
+          padding: 0 0.85rem;
           font-weight: 600;
-        }
-
-        .mg-migrations__storage-actions {
-          margin: 0 0 0.9rem;
-          align-items: flex-start;
         }
 
         .mg-migrations__badge {
@@ -511,7 +505,7 @@ export default RouteTemplate(
             <div class="mg-migrations__storage-selection-value">{{@controller.activeStorageCard.selectionValue}}</div>
           </div>
 
-          <div class="mg-migrations__actions mg-migrations__storage-actions">
+          <div class="mg-migrations__actions" style="margin-bottom: 0.9rem;">
             <button class="btn" type="button" {{on "click" (fn @controller.loadStorageHealth "active")}} disabled={{@controller.storageBusy}}>
               {{i18n "admin.media_gallery.migrations.refresh_health"}}
             </button>
@@ -575,7 +569,7 @@ export default RouteTemplate(
             </select>
           </div>
 
-          <div class="mg-migrations__actions mg-migrations__storage-actions">
+          <div class="mg-migrations__actions" style="margin-bottom: 0.9rem;">
             <button class="btn" type="button" {{on "click" (fn @controller.loadStorageHealth "target")}} disabled={{@controller.storageBusy}}>
               {{i18n "admin.media_gallery.migrations.refresh_health"}}
             </button>
@@ -642,12 +636,11 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-migrations__field">
-            <label>Storage profile</label>
-            <select value={{@controller.storageProfileFilter}} {{on "change" @controller.onStorageProfileFilterChange}}>
-              <option value="all">all profiles</option>
-              {{#each @controller.searchProfileOptions as |profile|}}
-                <option value={{profile.profile_key}}>{{profile.label}} · {{profile.backend}}</option>
-              {{/each}}
+            <label>{{i18n "admin.media_gallery.migrations.backend_filter"}}</label>
+            <select value={{@controller.backendFilter}} {{on "change" @controller.onBackendFilterChange}}>
+              <option value="all">all</option>
+              <option value="local">local</option>
+              <option value="s3">s3</option>
             </select>
           </div>
 
@@ -723,7 +716,7 @@ export default RouteTemplate(
 
         <div class="mg-migrations__bulk-panel">
           <h3>Migrate multiple selected items</h3>
-          <p class="mg-migrations__muted">Queue migration work for the items you explicitly selected below.</p>
+          <p class="mg-migrations__muted">This queues copy jobs for the items you explicitly selected below. It does not automatically use every search result.</p>
           <div class="mg-migrations__bulk-toolbar" style="margin-top: 0.85rem;">
             <div class="mg-migrations__muted">{{@controller.bulkSelectionCount}} item(s) selected</div>
             <div class="mg-migrations__filters-actions">
@@ -736,16 +729,12 @@ export default RouteTemplate(
             </div>
           </div>
           <label class="mg-migrations__bulk-confirm">
-            <input type="checkbox" checked={{@controller.bulkFullMigration}} {{on "change" @controller.onBulkFullMigrationChange}} />
-            Run the full migration sequence automatically after copy.
-          </label>
-          <label class="mg-migrations__bulk-confirm">
             <input type="checkbox" checked={{@controller.bulkConfirm}} {{on "change" @controller.onBulkConfirmChange}} />
-            I understand this queues {{@controller.bulkModeLabel}} work for all selected items.
+            I understand this queues migration work for all selected items.
           </label>
           <div class="mg-migrations__filters-actions" style="margin-top: 0.9rem;">
             <button class="btn btn-danger" type="button" {{on "click" @controller.bulkMigrate}} disabled={{@controller.bulkMigrateDisabled}}>
-              {{if @controller.isBulkMigrating "Queueing selected items…" (if @controller.bulkFullMigration "Queue full migration for selected items" "Queue copy for selected items")}}
+              {{if @controller.isBulkMigrating "Queueing selected items…" "Queue migration for selected items"}}
             </button>
           </div>
         </div>
@@ -823,7 +812,7 @@ export default RouteTemplate(
               <div class="mg-migrations__panel-header" style="margin-bottom: 0.75rem;">
                 <div class="mg-migrations__panel-copy">
                   <h3>Actions</h3>
-                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. The selected item refreshes automatically every 5 seconds while copy or cleanup is still running.</span>
+                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. Current state refreshes automatically every 5 seconds while copy or cleanup is still running.</span>
                 </div>
               </div>
 
@@ -854,6 +843,9 @@ export default RouteTemplate(
                 </button>
                 <button class="btn" type="button" {{on "click" @controller.finalizeMigration}} disabled={{@controller.finalizeDisabled}}>
                   {{if @controller.isFinalizing "Finalizing…" "Finalize"}}
+                </button>
+                <button class="btn" type="button" {{on "click" @controller.clearQueuedState}} disabled={{@controller.clearQueuedStateDisabled}}>
+                  Clear queued state
                 </button>
               </div>
             </div>
@@ -930,7 +922,7 @@ export default RouteTemplate(
                     <span class="mg-migrations__role-title">{{role.name}}</span>
                     <span class={{role.badgeClass}}>{{role.existsLabel}}</span>
                   </div>
-                  <div>{{role.backendLabel}} · {{role.legacyLabel}}</div>
+                  <div>{{role.summaryLabel}}</div>
                   <span class="mg-migrations__muted">{{role.contentType}}</span>
                   <span class="mg-migrations__muted mg-migrations__role-locator">{{role.locator}}</span>
                 </div>

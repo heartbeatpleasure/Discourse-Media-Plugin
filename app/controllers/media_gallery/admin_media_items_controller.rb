@@ -8,14 +8,13 @@ module ::MediaGallery
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
     # Returns a small list for quickly selecting a public_id in the admin UI.
     def search
-      items = filtered_search_scope.to_a.filter_map do |item|
+      items = filtered_search_scope.limit(search_limit).map do |item|
         has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
         next if has_hls_filter == "true" && !has_hls
         next if has_hls_filter == "false" && has_hls
-        next unless profile_filter_matches?(item)
 
         serialize_search_item(item, has_hls: has_hls)
-      end.first(search_limit)
+      end.compact
 
       render_json_dump(items: items)
     end
@@ -105,8 +104,7 @@ module ::MediaGallery
         requested_by: current_user.username,
         force: boolean_param(:force),
         auto_switch: boolean_param(:auto_switch),
-        auto_cleanup: boolean_param(:auto_cleanup),
-        full_migration: boolean_param(:full_migration)
+        auto_cleanup: boolean_param(:auto_cleanup)
       )
 
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
@@ -158,6 +156,38 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
+    # POST /admin/plugins/media-gallery/media-items/:public_id/clear-queued-state.json
+    def clear_queued_state
+      item = load_item!
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      changed = []
+
+      {
+        "migration_copy" => %w[queued copying],
+        "migration_cleanup" => %w[queued cleaning],
+        "migration_finalize" => %w[queued pending_cleanup],
+      }.each do |key, statuses|
+        state = meta[key]
+        next unless state.is_a?(Hash)
+        next unless statuses.include?(state["status"].to_s)
+
+        state = state.deep_dup
+        state["status"] = "cleared"
+        state["cleared_at"] = Time.now.utc.iso8601
+        state["cleared_by"] = current_user.username
+        state["last_error"] = nil
+        meta[key] = state
+        changed << key
+      end
+
+      return render_json_error("no_queued_state_to_clear", status: 422) if changed.empty?
+
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+      render_json_dump(ok: true, public_id: item.public_id, cleared: changed, message: "Queued state cleared.")
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
     # POST /admin/plugins/media-gallery/media-items/bulk-migrate.json
     def bulk_migrate
       target_profile = params[:target_profile].to_s.presence || "target"
@@ -182,8 +212,7 @@ module ::MediaGallery
             requested_by: current_user.username,
             force: boolean_param(:force),
             auto_switch: boolean_param(:auto_switch),
-            auto_cleanup: boolean_param(:auto_cleanup),
-            full_migration: boolean_param(:full_migration)
+            auto_cleanup: boolean_param(:auto_cleanup)
           )
           queued += 1
           results << { public_id: item.public_id, status: state["status"].to_s.presence || "queued" }
@@ -283,20 +312,6 @@ module ::MediaGallery
       scope = scope.where(media_type: media_type) if %w[audio image video].include?(media_type)
 
       scope
-    end
-
-    def requested_profile_filter_key
-      value = params[:profile_key].to_s.strip
-      return nil if value.blank? || value == "all"
-
-      ::MediaGallery::StorageSettingsResolver.normalized_profile_key(value)
-    end
-
-    def profile_filter_matches?(item)
-      key = requested_profile_filter_key
-      return true if key.blank?
-
-      managed_storage_profile_key_for(item).to_s == key.to_s
     end
 
     def search_limit
