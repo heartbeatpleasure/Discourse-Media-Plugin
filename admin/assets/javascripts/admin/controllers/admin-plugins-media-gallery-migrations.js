@@ -85,8 +85,11 @@ function toneForStatus(status) {
   switch ((status || "").toString()) {
     case "ready":
     case "copied":
+    case "verified":
     case "switched":
     case "cleaned":
+    case "rolled_back":
+    case "finalized":
     case "ok":
     case "available":
       return "success";
@@ -94,7 +97,11 @@ function toneForStatus(status) {
     case "copying":
     case "processing":
     case "cleaning":
+    case "pending_cleanup":
+    case "incomplete":
       return "warning";
+    case "same_profile":
+    case "not_configured":
     case "missing":
     case "failed":
     case "error":
@@ -144,6 +151,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked searchResults = [];
   @tracked selectedBulkPublicIds = [];
   @tracked bulkConfirm = false;
+  @tracked bulkFullMigration = true;
 
   @tracked selectedItem = null;
   @tracked selectedPublicId = "";
@@ -200,6 +208,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.searchResults = [];
     this.selectedBulkPublicIds = [];
     this.bulkConfirm = false;
+    this.bulkFullMigration = true;
     this.selectedItem = null;
     this.selectedPublicId = "";
     this.selectedPlan = null;
@@ -375,6 +384,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     return this.isBulkMigrating || this.isSearching || !this.hasBulkSelection || !this.bulkConfirm || !this.selectedTargetProfileKey;
   }
 
+  get bulkModeLabel() {
+    return this.bulkFullMigration ? "full migration" : "copy only";
+  }
+
   get selectedTargetProfileKey() {
     return this.selectedTargetProfile || this.targetHealth?.profile_key || this.availableTargetProfiles[0]?.profile_key || "target";
   }
@@ -389,7 +402,6 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
 
   get targetProfileOptions() {
-    const excludedFingerprint = this.selectedSourceLocationFingerprintKey;
     const seen = new Set();
 
     return (this.availableTargetProfiles || []).filter((entry) => {
@@ -397,11 +409,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         return false;
       }
 
-      if (excludedFingerprint && entry?.location_fingerprint_key === excludedFingerprint) {
-        return false;
-      }
-
-      const dedupeKey = entry?.location_fingerprint_key || entry.profile_key;
+      const dedupeKey = entry.profile_key;
       if (seen.has(dedupeKey)) {
         return false;
       }
@@ -774,6 +782,36 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
 
 
+  _isSameAsSourceProfile(profileKey) {
+    if (!profileKey) {
+      return false;
+    }
+
+    const sourceProfileKey = this.selectedDiagnostics?.managed_storage_profile || this.selectedItem?.managed_storage_profile;
+    const sourceFingerprint = this.selectedSourceLocationFingerprintKey;
+    const option = this.targetProfileOptions.find((entry) => entry.profile_key === profileKey);
+    const targetFingerprint = option?.location_fingerprint_key;
+
+    return !!(
+      (sourceProfileKey && profileKey && sourceProfileKey === profileKey) ||
+      (sourceFingerprint && targetFingerprint && sourceFingerprint === targetFingerprint)
+    );
+  }
+
+  _preferredTargetProfileFromOptions(options = this.targetProfileOptions) {
+    if (!options.length) {
+      return "";
+    }
+
+    const current = this.selectedTargetProfileKey;
+    if (current && options.some((entry) => entry.profile_key === current) && !this._isSameAsSourceProfile(current)) {
+      return current;
+    }
+
+    const alternate = options.find((entry) => !this._isSameAsSourceProfile(entry.profile_key));
+    return alternate?.profile_key || options[0]?.profile_key || "";
+  }
+
   async _ensureValidSelectedTargetProfile() {
     const options = this.targetProfileOptions;
     if (!options.length) {
@@ -781,11 +819,12 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
 
     const current = this.selectedTargetProfileKey;
-    if (options.some((entry) => entry.profile_key === current)) {
+    const currentIsValid = options.some((entry) => entry.profile_key === current);
+    if (currentIsValid && !this._isSameAsSourceProfile(current)) {
       return;
     }
 
-    const nextProfile = options[0]?.profile_key;
+    const nextProfile = this._preferredTargetProfileFromOptions(options);
     if (!nextProfile) {
       return;
     }
@@ -956,6 +995,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
   @action onAutoSwitchChange(event) { this.autoSwitch = !!event?.target?.checked; }
   @action onAutoCleanupChange(event) { this.autoCleanup = !!event?.target?.checked; }
+  @action onBulkFullMigrationChange(event) { this.bulkFullMigration = !!event?.target?.checked; }
   @action onForceActionChange(event) { this.forceAction = !!event?.target?.checked; }
 
   @action
@@ -967,6 +1007,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.hlsFilter = "all";
     this.limit = 50;
     this.sortBy = "created_at_desc";
+    this.bulkConfirm = false;
+    this.bulkFullMigration = true;
     await this.search();
   }
 
@@ -1304,8 +1346,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         public_ids: [...this.selectedBulkPublicIds],
         target_profile: this.selectedTargetProfileKey,
         force: this.forceAction,
-        auto_switch: this.autoSwitch,
-        auto_cleanup: this.autoCleanup,
+        auto_switch: this.bulkFullMigration ? false : this.autoSwitch,
+        auto_cleanup: this.bulkFullMigration ? false : this.autoCleanup,
+        full_migration: this.bulkFullMigration,
       };
 
       const result = await this._fetchJson(`/admin/plugins/media-gallery/media-items/bulk-migrate.json`, {
@@ -1314,7 +1357,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         body: JSON.stringify(payload),
       });
 
-      this.bulkActionMessage = `${result?.queued_count || 0} selected item(s) queued, ${result?.skipped_count || 0} skipped.`;
+      this.bulkActionMessage = `${result?.queued_count || 0} selected item(s) queued for ${this.bulkModeLabel}, ${result?.skipped_count || 0} skipped.`;
       this.bulkConfirm = false;
       await this.search();
       if (this.hasSelectedItem) {
@@ -1409,8 +1452,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.availableTargetProfiles = Array.isArray(json?.profiles) ? json.profiles : (Array.isArray(json?.target_profiles) ? json.target_profiles : []);
       const preferred = json?.default_target_profile_key;
       const options = this.targetProfileOptions;
-      const preferredOption = options.find((entry) => entry.profile_key === preferred);
-      this.selectedTargetProfile = preferredOption?.profile_key || options[0]?.profile_key || this.availableTargetProfiles[0]?.profile_key || "";
+      const preferredOption = options.find((entry) => entry.profile_key === preferred && !this._isSameAsSourceProfile(entry.profile_key));
+      this.selectedTargetProfile = preferredOption?.profile_key || this._preferredTargetProfileFromOptions(options) || this.availableTargetProfiles[0]?.profile_key || "";
     } catch (e) {
       this.storageError = e?.message || String(e);
     } finally {

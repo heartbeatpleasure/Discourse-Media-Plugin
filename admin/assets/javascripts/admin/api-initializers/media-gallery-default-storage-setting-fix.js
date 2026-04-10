@@ -1,7 +1,7 @@
 import { apiInitializer } from "discourse/lib/api";
 import { schedule } from "@ember/runloop";
 
-const LABELS = {
+const FALLBACK_LABELS = {
   local: "Local storage",
   s3_1: "S3 profile 1",
   s3_2: "S3 profile 2",
@@ -65,8 +65,35 @@ function inMediaGallerySettings() {
   );
 }
 
+function currentProfileLabels() {
+  const labels = { ...FALLBACK_LABELS };
+
+  document
+    .querySelectorAll(".setting, .control-group, .site-setting")
+    .forEach((row) => {
+      const text = (row?.textContent || "").toLowerCase();
+      const value = row.querySelector("input[type='text'], input:not([type]), textarea")?.value?.trim();
+      if (!value) {
+        return;
+      }
+
+      if (text.includes("local profile name") && !text.includes("legacy")) {
+        labels.local = value;
+      } else if (text.includes("s3 profile 1 name")) {
+        labels.s3_1 = value;
+      } else if (text.includes("s3 profile 2 name")) {
+        labels.s3_2 = value;
+      } else if (text.includes("s3 profile 3 name") && !text.includes("legacy")) {
+        labels.s3_3 = value;
+      }
+    });
+
+  return labels;
+}
+
 function desiredLabel(value) {
-  return LABELS[value] || value;
+  const labels = currentProfileLabels();
+  return labels[value] || FALLBACK_LABELS[value] || value;
 }
 
 function setTextIfNeeded(node, text) {
@@ -195,6 +222,9 @@ export default apiInitializer("0.11.1", (api) => {
   let observer = null;
   let attempts = 0;
   let stopTimer = null;
+  let changeHandler = null;
+  let clickHandler = null;
+  let inputHandler = null;
 
   const stop = () => {
     if (observer) {
@@ -205,6 +235,21 @@ export default apiInitializer("0.11.1", (api) => {
     if (stopTimer) {
       clearTimeout(stopTimer);
       stopTimer = null;
+    }
+
+    if (changeHandler) {
+      document.removeEventListener("change", changeHandler, true);
+      changeHandler = null;
+    }
+
+    if (clickHandler) {
+      document.removeEventListener("click", clickHandler, true);
+      clickHandler = null;
+    }
+
+    if (inputHandler) {
+      document.removeEventListener("input", inputHandler, true);
+      inputHandler = null;
     }
 
     attempts = 0;
@@ -218,13 +263,32 @@ export default apiInitializer("0.11.1", (api) => {
       attempts += 1;
       schedulePatch();
 
-      if (attempts >= 25) {
-        stop();
+      if (attempts >= 25 && observer) {
+        observer.disconnect();
+        observer = null;
       }
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    stopTimer = setTimeout(stop, 4000);
+
+    changeHandler = () => schedulePatch();
+    clickHandler = () => schedulePatch();
+    inputHandler = () => schedulePatch();
+    document.addEventListener("change", changeHandler, true);
+    document.addEventListener("click", clickHandler, true);
+    document.addEventListener("input", inputHandler, true);
+
+    stopTimer = setTimeout(() => {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+      if (stopTimer) {
+        clearTimeout(stopTimer);
+        stopTimer = null;
+      }
+      attempts = 0;
+    }, 4000);
   };
 
   api.onPageChange((url) => {

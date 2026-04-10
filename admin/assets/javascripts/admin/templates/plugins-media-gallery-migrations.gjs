@@ -716,7 +716,7 @@ export default RouteTemplate(
 
         <div class="mg-migrations__bulk-panel">
           <h3>Migrate multiple selected items</h3>
-          <p class="mg-migrations__muted">This queues copy jobs for the items you explicitly selected below. It does not automatically use every search result.</p>
+          <p class="mg-migrations__muted">Queue migration work for the items you explicitly selected below.</p>
           <div class="mg-migrations__bulk-toolbar" style="margin-top: 0.85rem;">
             <div class="mg-migrations__muted">{{@controller.bulkSelectionCount}} item(s) selected</div>
             <div class="mg-migrations__filters-actions">
@@ -729,12 +729,16 @@ export default RouteTemplate(
             </div>
           </div>
           <label class="mg-migrations__bulk-confirm">
+            <input type="checkbox" checked={{@controller.bulkFullMigration}} {{on "change" @controller.onBulkFullMigrationChange}} />
+            Run the full migration sequence automatically after copy.
+          </label>
+          <label class="mg-migrations__bulk-confirm">
             <input type="checkbox" checked={{@controller.bulkConfirm}} {{on "change" @controller.onBulkConfirmChange}} />
-            I understand this queues migration work for all selected items.
+            I understand this queues {{@controller.bulkModeLabel}} work for all selected items.
           </label>
           <div class="mg-migrations__filters-actions" style="margin-top: 0.9rem;">
             <button class="btn btn-danger" type="button" {{on "click" @controller.bulkMigrate}} disabled={{@controller.bulkMigrateDisabled}}>
-              {{if @controller.isBulkMigrating "Queueing selected items…" "Queue migration for selected items"}}
+              {{if @controller.isBulkMigrating "Queueing selected items…" (if @controller.bulkFullMigration "Queue full migration for selected items" "Queue copy for selected items")}}
             </button>
           </div>
         </div>

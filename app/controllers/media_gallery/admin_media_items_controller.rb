@@ -212,7 +212,8 @@ module ::MediaGallery
             requested_by: current_user.username,
             force: boolean_param(:force),
             auto_switch: boolean_param(:auto_switch),
-            auto_cleanup: boolean_param(:auto_cleanup)
+            auto_cleanup: boolean_param(:auto_cleanup),
+            full_migration: boolean_param(:full_migration)
           )
           queued += 1
           results << { public_id: item.public_id, status: state["status"].to_s.presence || "queued" }
