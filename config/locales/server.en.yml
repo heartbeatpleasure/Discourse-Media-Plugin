@@ -164,10 +164,23 @@ en:
 
   site_settings:
     media_gallery_default_storage_profile_key: "Media gallery default storage profile"
+    media_gallery_processing_root_path: "Media gallery processing root path"
+    media_gallery_delivery_mode_default: "Media gallery delivery mode default"
+
     media_gallery_local_profile_name: "Media gallery local storage name"
+    media_gallery_local_asset_root_path: "Media gallery default local storage root path"
+    media_gallery_target_local_asset_root_path: "Media gallery destination local storage root path"
+
     media_gallery_s3_profile_name: "Media gallery S3 profile 1 name"
-    media_gallery_target_local_profile_name: "Media gallery local storage name (legacy)"
-    media_gallery_target_local_asset_root_path: "Media gallery local storage root path"
+    media_gallery_s3_endpoint: "Media gallery S3 profile 1 endpoint"
+    media_gallery_s3_region: "Media gallery S3 profile 1 region"
+    media_gallery_s3_bucket: "Media gallery S3 profile 1 bucket"
+    media_gallery_s3_prefix: "Media gallery S3 profile 1 prefix"
+    media_gallery_s3_access_key_id: "Media gallery S3 profile 1 access key ID"
+    media_gallery_s3_secret_access_key: "Media gallery S3 profile 1 secret access key"
+    media_gallery_s3_force_path_style: "Media gallery S3 profile 1 force path style"
+    media_gallery_s3_presign_ttl_seconds: "Media gallery S3 profile 1 presign ttl seconds"
+
     media_gallery_target_s3_profile_name: "Media gallery S3 profile 2 name"
     media_gallery_target_s3_endpoint: "Media gallery S3 profile 2 endpoint"
     media_gallery_target_s3_region: "Media gallery S3 profile 2 region"
@@ -177,6 +190,7 @@ en:
     media_gallery_target_s3_secret_access_key: "Media gallery S3 profile 2 secret access key"
     media_gallery_target_s3_force_path_style: "Media gallery S3 profile 2 force path style"
     media_gallery_target_s3_presign_ttl_seconds: "Media gallery S3 profile 2 presign ttl seconds"
+
     media_gallery_target_s3_2_profile_name: "Media gallery S3 profile 3 name"
     media_gallery_target_s3_2_endpoint: "Media gallery S3 profile 3 endpoint"
     media_gallery_target_s3_2_region: "Media gallery S3 profile 3 region"
@@ -186,3 +200,16 @@ en:
     media_gallery_target_s3_2_secret_access_key: "Media gallery S3 profile 3 secret access key"
     media_gallery_target_s3_2_force_path_style: "Media gallery S3 profile 3 force path style"
     media_gallery_target_s3_2_presign_ttl_seconds: "Media gallery S3 profile 3 presign ttl seconds"
+
+    media_gallery_asset_storage_backend: "Media gallery legacy managed storage backend"
+    media_gallery_target_asset_storage_backend: "Media gallery legacy destination backend"
+    media_gallery_target_local_profile_name: "Media gallery legacy local destination name"
+    media_gallery_target_s3_3_profile_name: "Media gallery legacy extra S3 profile name"
+    media_gallery_target_s3_3_endpoint: "Media gallery legacy extra S3 profile endpoint"
+    media_gallery_target_s3_3_region: "Media gallery legacy extra S3 profile region"
+    media_gallery_target_s3_3_bucket: "Media gallery legacy extra S3 profile bucket"
+    media_gallery_target_s3_3_prefix: "Media gallery legacy extra S3 profile prefix"
+    media_gallery_target_s3_3_access_key_id: "Media gallery legacy extra S3 profile access key ID"
+    media_gallery_target_s3_3_secret_access_key: "Media gallery legacy extra S3 profile secret access key"
+    media_gallery_target_s3_3_force_path_style: "Media gallery legacy extra S3 profile force path style"
+    media_gallery_target_s3_3_presign_ttl_seconds: "Media gallery legacy extra S3 profile presign ttl seconds"

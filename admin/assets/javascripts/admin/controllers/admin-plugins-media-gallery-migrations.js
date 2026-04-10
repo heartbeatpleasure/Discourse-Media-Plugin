@@ -376,11 +376,23 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   get targetProfileOptions() {
     const excludedFingerprint = this.selectedSourceLocationFingerprintKey;
+    const seen = new Set();
+
     return (this.availableTargetProfiles || []).filter((entry) => {
-      if (!excludedFingerprint) {
-        return true;
+      if (!entry?.profile_key) {
+        return false;
       }
-      return entry?.location_fingerprint_key !== excludedFingerprint;
+
+      if (excludedFingerprint && entry?.location_fingerprint_key === excludedFingerprint) {
+        return false;
+      }
+
+      const dedupeKey = entry?.location_fingerprint_key || entry.profile_key;
+      if (seen.has(dedupeKey)) {
+        return false;
+      }
+      seen.add(dedupeKey);
+      return true;
     });
   }
 
@@ -634,17 +646,24 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
 
   get activeStorageCard() {
+    const profileName = this.activeHealth?.label || this.activeProfileSummary?.label || "Not configured";
     return this._buildStorageCard({
       title: "Default storage",
+      profileName,
+      selectionLabel: "Current profile",
+      selectionValue: profileName,
       health: this.activeHealth,
       probe: this.activeProbe,
     });
   }
 
   get targetStorageCard() {
-    const targetLabel = this.targetHealth?.label || this.selectedTargetProfileLabel;
+    const targetLabel = this.targetHealth?.label || this.selectedTargetProfileLabel || "Choose a destination";
     return this._buildStorageCard({
-      title: targetLabel ? `Destination storage · ${targetLabel}` : "Destination storage",
+      title: "Destination storage",
+      profileName: targetLabel,
+      selectionLabel: "Migration destination",
+      selectionValue: targetLabel,
       health: this.targetHealth,
       probe: this.targetProbe,
     });
@@ -769,7 +788,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
   }
 
-  _buildStorageCard({ title, health, probe }) {
+  _buildStorageCard({ title, profileName, selectionLabel, selectionValue, health, probe }) {
     const config = health?.config || {};
     const backend = health?.backend || "unknown";
     const location =
@@ -796,6 +815,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
     return {
       title,
+      profileName: normalizeText(profileName || health?.label || "Not configured"),
+      selectionLabel: normalizeText(selectionLabel || "Profile"),
+      selectionValue: normalizeText(selectionValue || profileName || health?.label || "—"),
       badgeClass: badgeClassForStatus(health?.available ? "available" : "unavailable"),
       badgeLabel: health?.available ? "Healthy" : "Needs attention",
       rows,

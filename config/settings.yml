@@ -172,36 +172,7 @@ plugins:
     default: true
     client: false
 
-  # Managed storage backend for plugin-owned processed assets.
-  # Blank/legacy installs still fall back to local managed storage when private storage is enabled.
-  # Leave empty to keep the legacy/private-storage behaviour controlled by
-  # media_gallery_private_storage_enabled. Set to local or s3 to opt into
-  # the explicit managed-storage backend.
-  media_gallery_asset_storage_backend:
-    default: ""
-    client: false
-
-  # Scratch workspace used while transcoding / packaging. Leave empty to use the OS temp dir.
-  media_gallery_processing_root_path:
-    default: "/shared/media_gallery/tmp"
-    client: false
-
-  # Managed local asset root. Defaults to media_gallery_private_root_path when left blank.
-  media_gallery_local_asset_root_path:
-    default: "/shared/media_gallery/private"
-    client: false
-
-  # Default delivery behaviour for managed assets.
-  # local: stream/x_accel, s3: redirect. For thumbnails we still proxy via Rails.
-  media_gallery_delivery_mode_default:
-    default: "stream"
-    type: enum
-    choices:
-      - stream
-      - x_accel
-      - redirect
-    client: false
-
+  # Storage profile selection and shared processing settings.
   media_gallery_default_storage_profile_key:
     default: ""
     type: enum
@@ -213,10 +184,33 @@ plugins:
       - s3_3
     client: false
 
+  media_gallery_processing_root_path:
+    default: "/shared/media_gallery/tmp"
+    client: false
+
+  media_gallery_delivery_mode_default:
+    default: "stream"
+    type: enum
+    choices:
+      - stream
+      - x_accel
+      - redirect
+    client: false
+
+  # Local storage profile.
   media_gallery_local_profile_name:
     default: "Local storage"
     client: false
 
+  media_gallery_local_asset_root_path:
+    default: "/shared/media_gallery/private"
+    client: false
+
+  media_gallery_target_local_asset_root_path:
+    default: ""
+    client: false
+
+  # S3 profile 1.
   media_gallery_s3_profile_name:
     default: "S3 profile 1"
     client: false
@@ -256,15 +250,9 @@ plugins:
     max: 3600
     client: false
 
-  # Optional target profile for future migrations and storage health probes.
-  # These settings do not affect current uploads or playback unless code
-  # explicitly asks for the target profile.
-  media_gallery_target_asset_storage_backend:
-    default: ""
-    client: false
-
-  media_gallery_target_local_asset_root_path:
-    default: ""
+  # S3 profile 2.
+  media_gallery_target_s3_profile_name:
+    default: "S3 profile 2"
     client: false
 
   media_gallery_target_s3_endpoint:
@@ -302,16 +290,9 @@ plugins:
     max: 3600
     client: false
 
-  media_gallery_target_local_profile_name:
-    default: "Local storage"
-    client: false
-
-  media_gallery_target_s3_profile_name:
-    default: "S3 profile 1"
-    client: false
-
+  # S3 profile 3.
   media_gallery_target_s3_2_profile_name:
-    default: ""
+    default: "S3 profile 3"
     client: false
 
   media_gallery_target_s3_2_endpoint:
@@ -347,6 +328,19 @@ plugins:
     type: integer
     min: 30
     max: 3600
+    client: false
+
+  # Legacy compatibility settings kept for older migrations and fallbacks.
+  media_gallery_asset_storage_backend:
+    default: ""
+    client: false
+
+  media_gallery_target_asset_storage_backend:
+    default: ""
+    client: false
+
+  media_gallery_target_local_profile_name:
+    default: "Local storage"
     client: false
 
   media_gallery_target_s3_3_profile_name:

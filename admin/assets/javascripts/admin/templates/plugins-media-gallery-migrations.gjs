@@ -83,6 +83,41 @@ export default RouteTemplate(
           font-size: var(--font-down-1);
         }
 
+        .mg-migrations__panel-profile {
+          color: var(--primary-high);
+          font-size: var(--font-down-1);
+          font-weight: 600;
+        }
+
+        .mg-migrations__storage-selection {
+          display: grid;
+          gap: 0.35rem;
+          margin-bottom: 0.9rem;
+        }
+
+        .mg-migrations__storage-selection-label {
+          color: var(--mg-muted);
+          font-size: var(--font-down-1);
+          font-weight: 600;
+        }
+
+        .mg-migrations__storage-selection-value,
+        .mg-migrations__storage-selection select {
+          min-height: 42px;
+          border: 1px solid var(--mg-border);
+          border-radius: 12px;
+          background: var(--primary-very-low);
+          box-sizing: border-box;
+          width: 100%;
+        }
+
+        .mg-migrations__storage-selection-value {
+          display: flex;
+          align-items: center;
+          padding: 0 0.85rem;
+          font-weight: 600;
+        }
+
         .mg-migrations__badge {
           display: inline-flex;
           align-items: center;
@@ -459,9 +494,15 @@ export default RouteTemplate(
           <div class="mg-migrations__panel-header">
             <div class="mg-migrations__panel-copy">
               <h2>{{@controller.activeStorageCard.title}}</h2>
+              <span class="mg-migrations__panel-profile">{{@controller.activeStorageCard.profileName}}</span>
               <span class="mg-migrations__muted">Quick health check and probe for this storage profile.</span>
             </div>
             <span class={{@controller.activeStorageCard.badgeClass}}>{{@controller.activeStorageCard.badgeLabel}}</span>
+          </div>
+
+          <div class="mg-migrations__storage-selection">
+            <span class="mg-migrations__storage-selection-label">{{@controller.activeStorageCard.selectionLabel}}</span>
+            <div class="mg-migrations__storage-selection-value">{{@controller.activeStorageCard.selectionValue}}</div>
           </div>
 
           <div class="mg-migrations__actions" style="margin-bottom: 0.9rem;">
@@ -513,28 +554,26 @@ export default RouteTemplate(
           <div class="mg-migrations__panel-header">
             <div class="mg-migrations__panel-copy">
               <h2>{{@controller.targetStorageCard.title}}</h2>
+              <span class="mg-migrations__panel-profile">{{@controller.targetStorageCard.profileName}}</span>
               <span class="mg-migrations__muted">Quick health check and probe for this storage profile.</span>
             </div>
             <span class={{@controller.targetStorageCard.badgeClass}}>{{@controller.targetStorageCard.badgeLabel}}</span>
           </div>
 
+          <div class="mg-migrations__storage-selection">
+            <span class="mg-migrations__storage-selection-label">{{@controller.targetStorageCard.selectionLabel}}</span>
+            <select value={{@controller.selectedTargetProfileKey}} {{on "change" @controller.onTargetProfileChange}}>
+              {{#each @controller.targetProfileOptions as |profile|}}
+                <option value={{profile.profile_key}}>{{profile.label}} · {{profile.backend}}</option>
+              {{/each}}
+            </select>
+          </div>
 
-
-          {{#if @controller.targetProfileOptions.length}}
-            <div class="mg-migrations__field" style="margin-bottom: 0.9rem;">
-              <label>Migration destination</label>
-              <select value={{@controller.selectedTargetProfileKey}} {{on "change" @controller.onTargetProfileChange}}>
-                {{#each @controller.targetProfileOptions as |profile|}}
-                  <option value={{profile.profile_key}}>{{profile.label}} · {{profile.backend}}</option>
-                {{/each}}
-              </select>
-            </div>
-          {{/if}}
           <div class="mg-migrations__actions" style="margin-bottom: 0.9rem;">
-            <button class="btn" type="button" {{on "click" (fn @controller.loadStorageHealth @controller.selectedTargetProfileKey)}} disabled={{@controller.storageBusy}}>
+            <button class="btn" type="button" {{on "click" (fn @controller.loadStorageHealth "target")}} disabled={{@controller.storageBusy}}>
               {{i18n "admin.media_gallery.migrations.refresh_health"}}
             </button>
-            <button class="btn" type="button" {{on "click" (fn @controller.runStorageProbe @controller.selectedTargetProfileKey)}} disabled={{@controller.storageBusy}}>
+            <button class="btn" type="button" {{on "click" (fn @controller.runStorageProbe "target")}} disabled={{@controller.storageBusy}}>
               {{i18n "admin.media_gallery.migrations.run_probe"}}
             </button>
           </div>
@@ -677,7 +716,7 @@ export default RouteTemplate(
 
         <div class="mg-migrations__bulk-panel">
           <h3>Migrate multiple selected items</h3>
-          <p class="mg-migrations__muted">This queues copy jobs for the items you explicitly selected below and sends them to {{@controller.selectedTargetProfileLabel}}.</p>
+          <p class="mg-migrations__muted">This queues copy jobs for the items you explicitly selected below. It does not automatically use every search result.</p>
           <div class="mg-migrations__bulk-toolbar" style="margin-top: 0.85rem;">
             <div class="mg-migrations__muted">{{@controller.bulkSelectionCount}} item(s) selected</div>
             <div class="mg-migrations__filters-actions">
@@ -773,7 +812,7 @@ export default RouteTemplate(
               <div class="mg-migrations__panel-header" style="margin-bottom: 0.75rem;">
                 <div class="mg-migrations__panel-copy">
                   <h3>Actions</h3>
-                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. Destination: {{@controller.selectedTargetProfileLabel}}. The selected item refreshes automatically every 5 seconds while copy or cleanup is still running.</span>
+                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. The selected item refreshes automatically every 5 seconds while copy or cleanup is still running.</span>
                 </div>
               </div>
 
@@ -905,7 +944,7 @@ export default RouteTemplate(
               <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
                 <div class="mg-migrations__panel-copy">
                   <h3>Migration summary</h3>
-                  <span class="mg-migrations__muted">Dry-run preview of the move from the current profile to the selected destination profile.</span>
+                  <span class="mg-migrations__muted">Dry-run preview of the move from the current profile to the configured target profile.</span>
                 </div>
               </div>
 
