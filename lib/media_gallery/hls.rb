@@ -5,17 +5,20 @@ require "securerandom"
 require "time"
 require "json"
 require "digest"
+require "tmpdir"
 
 require_relative "fingerprint_watermark"
 
 module ::MediaGallery
   # HLS packaging + readiness + managed-store publishing.
   #
-  # Safe rollout strategy for this iteration:
-  # - packaging still happens locally into the plugin-managed private root
-  # - local HLS remains available for backwards compatibility / admin tools
-  # - when the active managed backend is S3, the finalized HLS package is also
-  #   uploaded to S3 and playback resolves from the manifest/backend
+  # Current rollout strategy:
+  # - packaging happens inside a processing workspace / scratch directory
+  # - the finalized package is published from scratch into the active managed
+  #   store only after validation succeeds
+  # - for non-local backends we keep a best-effort local mirror for backwards
+  #   compatibility with older admin / tooling flows while managed storage stays
+  #   the canonical source of truth
   module Hls
     module_function
 
@@ -122,31 +125,24 @@ module ::MediaGallery
       legacy_local_ready?(item)
     end
 
-    def package_video!(item, input_path:)
+    def package_video!(item, input_path:, workspace: nil)
       return nil unless enabled?
-      return nil unless MediaGallery::PrivateStorage.enabled?
       return nil unless item&.media_type.to_s == "video"
       return nil if input_path.blank? || !File.exist?(input_path)
 
-      public_id = item.public_id.to_s
       variant = DEFAULT_VARIANT
-
-      final_root = MediaGallery::PrivateStorage.hls_root_abs_dir(public_id)
-      item_root = MediaGallery::PrivateStorage.item_private_dir(public_id)
-
-      MediaGallery::PrivateStorage.ensure_dir!(item_root)
-      tmp_root = File.join(item_root, "hls__tmp_#{SecureRandom.hex(8)}")
-
-      FileUtils.rm_rf(tmp_root) if Dir.exist?(tmp_root)
+      build_root, cleanup_after_publish = build_root_for_package(workspace: workspace)
+      FileUtils.rm_rf(build_root) if build_root.present? && Dir.exist?(build_root)
+      FileUtils.mkdir_p(build_root)
 
       if fingerprinting_enabled?
-        tmp_variant_dir = File.join(tmp_root, variant)
-        MediaGallery::PrivateStorage.ensure_dir!(tmp_variant_dir)
+        tmp_variant_dir = File.join(build_root, variant)
+        FileUtils.mkdir_p(tmp_variant_dir)
 
-        tmp_a_dir = File.join(tmp_root, "a", variant)
-        tmp_b_dir = File.join(tmp_root, "b", variant)
-        MediaGallery::PrivateStorage.ensure_dir!(tmp_a_dir)
-        MediaGallery::PrivateStorage.ensure_dir!(tmp_b_dir)
+        tmp_a_dir = File.join(build_root, "a", variant)
+        tmp_b_dir = File.join(build_root, "b", variant)
+        FileUtils.mkdir_p(tmp_a_dir)
+        FileUtils.mkdir_p(tmp_b_dir)
 
         v_kbps = estimate_video_bitrate_kbps(item)
 
@@ -169,8 +165,8 @@ module ::MediaGallery
         raise "hls_ab_playlist_missing" unless File.exist?(a_pl)
         FileUtils.cp(a_pl, tmp_variant_pl)
       else
-        tmp_variant_dir = File.join(tmp_root, variant)
-        MediaGallery::PrivateStorage.ensure_dir!(tmp_variant_dir)
+        tmp_variant_dir = File.join(build_root, variant)
+        FileUtils.mkdir_p(tmp_variant_dir)
 
         MediaGallery::Ffmpeg.package_hls_single_variant(
           input_path: input_path,
@@ -179,24 +175,16 @@ module ::MediaGallery
         )
       end
 
-      tmp_master = File.join(tmp_root, "master.m3u8")
-      File.write(tmp_master, master_playlist_content(item: item, variant: variant))
-
-      tmp_complete = File.join(tmp_root, ".complete")
-      File.write(tmp_complete, Time.now.utc.iso8601)
-
-      tmp_variant_pl = File.join(tmp_root, variant, "index.m3u8")
-      unless File.exist?(tmp_master) && File.exist?(tmp_variant_pl) && File.exist?(tmp_complete)
-        raise "hls_outputs_incomplete"
-      end
-
-      swap_in_packaged_hls!(final_root: final_root, tmp_root: tmp_root, item_root: item_root)
+      File.write(File.join(build_root, "master.m3u8"), master_playlist_content(item: item, variant: variant))
+      File.write(File.join(build_root, ".complete"), Time.now.utc.iso8601)
 
       meta = {
         "ready" => true,
         "variant" => variant,
         "segment_duration_seconds" => segment_duration_seconds,
-        "generated_at" => Time.now.utc.iso8601
+        "generated_at" => Time.now.utc.iso8601,
+        "build_root" => build_root,
+        "cleanup_build_root_after_publish" => cleanup_after_publish
       }
 
       if fingerprinting_enabled?
@@ -218,7 +206,7 @@ module ::MediaGallery
 
         begin
           File.write(
-            File.join(final_root, "fingerprint_meta.json"),
+            File.join(build_root, "fingerprint_meta.json"),
             JSON.pretty_generate({
               "layout" => wm_layout,
               "codebook_scheme" => codebook_scheme,
@@ -242,44 +230,35 @@ module ::MediaGallery
               "public_id" => item.public_id
             })
           )
+          meta["fingerprint_meta_present"] = true
         rescue => e
           Rails.logger.warn("[media_gallery] failed to write fingerprint_meta.json public_id=#{item.public_id} error=#{e.class}: #{e.message}")
         end
       end
 
+      validate_packaged_video!(build_root: build_root, variant: variant, ab_fingerprint: meta["ab_fingerprint"])
       meta
     rescue => e
       Rails.logger.warn("[media_gallery] HLS packaging failed public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
-
       begin
-        if item&.public_id.present?
-          item_root = MediaGallery::PrivateStorage.item_private_dir(item.public_id)
-          Dir.glob(File.join(item_root.to_s, "hls__tmp_*")) do |p|
-            FileUtils.rm_rf(p) if p.to_s.include?("hls__tmp_")
-          end
-        end
+        FileUtils.rm_rf(build_root) if build_root.present? && Dir.exist?(build_root)
       rescue
       end
-
       nil
     end
 
-    # Publish the finalized local HLS package into the target managed store and
+    # Publish the finalized scratch HLS package into the target managed store and
     # return the manifest role that playback should use.
     def publish_packaged_video!(item, store:, hls_meta:)
       raise "managed_store_unavailable" if store.blank?
       raise "hls_meta_missing" unless hls_meta.is_a?(Hash)
 
-      final_root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-      raise "hls_final_root_missing" unless final_root.present? && Dir.exist?(final_root)
-
-      if store.backend.to_s == "local"
-        return build_role_for_store(item, backend: "local", hls_meta: hls_meta)
-      end
+      packaged_root = packaged_root_for(item, hls_meta)
+      raise "hls_packaged_root_missing" unless packaged_root.present? && Dir.exist?(packaged_root)
 
       store.ensure_available!
 
-      each_packaged_file(final_root) do |abs_path, rel_path|
+      each_packaged_file(packaged_root) do |abs_path, rel_path|
         key = File.join(item.public_id.to_s, "hls", rel_path)
         store.put_file!(
           abs_path,
@@ -293,7 +272,10 @@ module ::MediaGallery
         )
       end
 
-      build_role_for_store(item, backend: store.backend, hls_meta: hls_meta)
+      mirror_packaged_video_to_legacy_root!(item, packaged_root: packaged_root) if store.backend.to_s != "local"
+      build_role_for_store(item, backend: store.backend, hls_meta: hls_meta, packaged_root: packaged_root)
+    ensure
+      cleanup_packaged_root!(hls_meta)
     end
 
     def master_key_for(item, role: nil)
@@ -494,7 +476,7 @@ module ::MediaGallery
     end
     private_class_method :each_packaged_file
 
-    def build_role_for_store(item, backend:, hls_meta:)
+    def build_role_for_store(item, backend:, hls_meta:, packaged_root: nil)
       key_prefix = File.join(item.public_id.to_s, "hls")
       role = {
         backend: backend.to_s,
@@ -509,7 +491,8 @@ module ::MediaGallery
         generated_at: hls_meta["generated_at"]
       }
 
-      if File.exist?(File.join(MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id), "fingerprint_meta.json"))
+      packaged_root ||= packaged_root_for(item, hls_meta)
+      if packaged_root.present? && File.exist?(File.join(packaged_root, "fingerprint_meta.json"))
         role[:fingerprint_meta_key] = File.join(key_prefix, "fingerprint_meta.json")
       end
 
@@ -522,6 +505,102 @@ module ::MediaGallery
       role.deep_stringify_keys
     end
     private_class_method :build_role_for_store
+
+    def build_root_for_package(workspace: nil)
+      if workspace.present?
+        root =
+          if workspace.respond_to?(:ensure_dir!)
+            workspace.ensure_dir!("hls_build_#{SecureRandom.hex(6)}")
+          elsif workspace.respond_to?(:root)
+            File.join(workspace.root.to_s, "hls_build_#{SecureRandom.hex(6)}")
+          end
+
+        if root.present?
+          FileUtils.mkdir_p(root)
+          return [root, false]
+        end
+      end
+
+      configured_root = ::MediaGallery::StorageSettingsResolver.processing_root_path
+      if configured_root.present?
+        FileUtils.mkdir_p(configured_root)
+        return [Dir.mktmpdir("media-gallery-hls", configured_root), true]
+      end
+
+      [Dir.mktmpdir("media-gallery-hls"), true]
+    end
+    private_class_method :build_root_for_package
+
+    def validate_packaged_video!(build_root:, variant:, ab_fingerprint: false)
+      master_path = File.join(build_root, "master.m3u8")
+      complete_path = File.join(build_root, ".complete")
+      variant_playlist = File.join(build_root, variant.to_s, "index.m3u8")
+      raise "hls_outputs_incomplete" unless File.exist?(master_path) && File.exist?(complete_path) && File.exist?(variant_playlist)
+
+      if ab_fingerprint
+        a_dir = File.join(build_root, "a", variant.to_s)
+        b_dir = File.join(build_root, "b", variant.to_s)
+        raise "hls_ab_segments_missing" unless hls_segments_present?(a_dir) && hls_segments_present?(b_dir)
+      else
+        variant_dir = File.join(build_root, variant.to_s)
+        raise "hls_segments_missing" unless hls_segments_present?(variant_dir)
+      end
+
+      true
+    end
+    private_class_method :validate_packaged_video!
+
+    def hls_segments_present?(dir)
+      return false unless dir.present? && Dir.exist?(dir)
+      Dir.glob(File.join(dir, "*.ts")).any? || Dir.glob(File.join(dir, "*.m4s")).any?
+    end
+    private_class_method :hls_segments_present?
+
+    def packaged_root_for(item, hls_meta)
+      root = hls_meta["build_root"].to_s.presence
+      return root if root.present? && Dir.exist?(root)
+      MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+    end
+    private_class_method :packaged_root_for
+
+    def mirror_packaged_video_to_legacy_root!(item, packaged_root:)
+      return false if packaged_root.blank? || !Dir.exist?(packaged_root)
+      return false unless MediaGallery::PrivateStorage.enabled?
+
+      item_root = MediaGallery::PrivateStorage.item_private_dir(item.public_id)
+      final_root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
+      MediaGallery::PrivateStorage.ensure_dir!(item_root)
+
+      tmp_root = File.join(item_root, "hls__tmp_#{SecureRandom.hex(8)}")
+      FileUtils.rm_rf(tmp_root) if Dir.exist?(tmp_root)
+      FileUtils.mkdir_p(tmp_root)
+
+      each_packaged_file(packaged_root) do |abs_path, rel_path|
+        dest = File.join(tmp_root, rel_path)
+        FileUtils.mkdir_p(File.dirname(dest))
+        FileUtils.cp(abs_path, dest)
+      end
+
+      swap_in_packaged_hls!(final_root: final_root, tmp_root: tmp_root, item_root: item_root)
+      true
+    rescue => e
+      Rails.logger.warn("[media_gallery] failed to mirror packaged HLS to legacy root public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
+      false
+    end
+    private_class_method :mirror_packaged_video_to_legacy_root!
+
+    def cleanup_packaged_root!(hls_meta)
+      return unless hls_meta.is_a?(Hash)
+      return unless ActiveModel::Type::Boolean.new.cast(hls_meta["cleanup_build_root_after_publish"])
+
+      root = hls_meta["build_root"].to_s
+      return if root.blank? || !Dir.exist?(root)
+
+      FileUtils.rm_rf(root)
+    rescue => e
+      Rails.logger.warn("[media_gallery] failed to cleanup packaged HLS build root=#{root} error=#{e.class}: #{e.message}")
+    end
+    private_class_method :cleanup_packaged_root!
 
     def swap_in_packaged_hls!(final_root:, tmp_root:, item_root:)
       return if final_root.blank? || tmp_root.blank? || item_root.blank?

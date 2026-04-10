@@ -281,7 +281,7 @@ module Jobs
           begin
             @current_processing_stage = "package_hls"
             input_for_hls = processed_tmp
-            hls_meta = MediaGallery::Hls.package_video!(item, input_path: input_for_hls)
+            hls_meta = MediaGallery::Hls.package_video!(item, input_path: input_for_hls, workspace: workspace)
             if hls_meta.present?
               hls_role = MediaGallery::Hls.publish_packaged_video!(
                 item,

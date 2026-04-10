@@ -12,12 +12,12 @@ module ::MediaGallery
 
     VERIFY_STATE_KEY = "migration_verify"
     DIGEST_DETAIL_LIMIT = 20
+    HLS_DETAIL_LIMIT = 10
 
     def verify!(item, target_profile: "target", requested_by: nil)
       raise "media_item_required" if item.blank?
 
       plan = ::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile)
-      totals = (plan[:totals] || plan["totals"] || {}).deep_symbolize_keys
       source = (plan[:source] || plan["source"] || {}).deep_symbolize_keys
       target = (plan[:target] || plan["target"] || {}).deep_symbolize_keys
       warnings = Array(plan[:warnings] || plan["warnings"]).map(&:to_s)
@@ -25,29 +25,32 @@ module ::MediaGallery
       same_location = source[:location_fingerprint_key].present? && source[:location_fingerprint_key].to_s == target[:location_fingerprint_key].to_s
 
       verification = {
-        object_count: totals[:object_count].to_i,
-        missing_on_target_count: totals[:missing_on_target_count].to_i,
+        object_count: 0,
+        missing_on_target_count: 0,
         compared_object_count: 0,
         bytes_matched_count: 0,
         digest_verified_count: 0,
+        hls_manifest_checked_count: 0,
+        hls_manifest_verified_count: 0,
         mismatched_count: 0,
         mismatches: []
       }
 
-      status = if target[:backend].to_s.blank?
-        "not_configured"
-      elsif same_profile || same_location
-        "same_profile"
-      else
-        verification = verify_plan_objects(plan)
-        if verification[:object_count].to_i <= 0
-          "incomplete"
-        elsif verification[:missing_on_target_count].to_i.zero? && verification[:mismatched_count].to_i.zero?
-          "verified"
+      status =
+        if target[:backend].to_s.blank?
+          "not_configured"
+        elsif same_profile || same_location
+          "same_profile"
         else
-          "mismatch"
+          verification = verify_plan_objects(plan)
+          if verification[:object_count].to_i <= 0
+            "incomplete"
+          elsif verification[:missing_on_target_count].to_i.zero? && verification[:mismatched_count].to_i.zero?
+            "verified"
+          else
+            "mismatch"
+          end
         end
-      end
 
       warnings.concat(Array(verification[:warnings]).map(&:to_s))
       warnings.uniq!
@@ -67,6 +70,8 @@ module ::MediaGallery
         "compared_object_count" => verification[:compared_object_count].to_i,
         "bytes_matched_count" => verification[:bytes_matched_count].to_i,
         "digest_verified_count" => verification[:digest_verified_count].to_i,
+        "hls_manifest_checked_count" => verification[:hls_manifest_checked_count].to_i,
+        "hls_manifest_verified_count" => verification[:hls_manifest_verified_count].to_i,
         "mismatched_count" => verification[:mismatched_count].to_i,
         "mismatches" => Array(verification[:mismatches]).first(DIGEST_DETAIL_LIMIT),
         "warnings" => warnings,
@@ -110,6 +115,8 @@ module ::MediaGallery
         compared_object_count: 0,
         bytes_matched_count: 0,
         digest_verified_count: 0,
+        hls_manifest_checked_count: 0,
+        hls_manifest_verified_count: 0,
         mismatched_count: 0,
         mismatches: [],
         warnings: []
@@ -117,7 +124,8 @@ module ::MediaGallery
 
       if source_store.blank? || target_store.blank?
         result[:warnings] << "verify_store_missing"
-        return result.merge(object_count: (plan.dig(:totals, :object_count) || plan.dig("totals", "object_count") || 0).to_i)
+        result[:object_count] = (plan.dig(:totals, :object_count) || plan.dig("totals", "object_count") || 0).to_i
+        return result
       end
 
       source_store.ensure_available!
@@ -176,6 +184,7 @@ module ::MediaGallery
         end
       end
 
+      verify_hls_manifest_consistency!(result, plan: plan, target_store: target_store)
       result[:warnings].uniq!
       result
     end
@@ -207,7 +216,7 @@ module ::MediaGallery
       case backend
       when "local"
         root_path = summary.dig(:config, :local_asset_root_path).to_s.presence || ::MediaGallery::StorageSettingsResolver.local_asset_root_path
-        return ::MediaGallery::LocalAssetStore.new(root_path: root_path)
+        ::MediaGallery::LocalAssetStore.new(root_path: root_path)
       when "s3"
         nil
       else
@@ -240,6 +249,138 @@ module ::MediaGallery
       nil
     end
     private_class_method :digest_for_object
+
+    def verify_hls_manifest_consistency!(result, plan:, target_store:)
+      roles = Array(plan[:roles] || plan["roles"])
+      roles.each do |role_row|
+        next unless (role_row[:name] || role_row["name"]).to_s == "hls"
+
+        result[:hls_manifest_checked_count] += 1
+        role = (role_row[:role] || role_row["role"] || {}).deep_stringify_keys
+        objects = Array(role_row[:objects] || role_row["objects"]).map { |obj| (obj.is_a?(Hash) ? obj.deep_stringify_keys : {}) }
+        consistency = verify_single_hls_role(target_store: target_store, role: role, objects: objects)
+
+        if consistency[:ok]
+          result[:hls_manifest_verified_count] += 1
+        else
+          result[:mismatched_count] += 1
+          append_mismatch!(
+            result,
+            key: role["master_key"].to_s.presence || role["key_prefix"].to_s,
+            reason: "hls_manifest_inconsistent",
+            errors: Array(consistency[:errors]).first(HLS_DETAIL_LIMIT)
+          )
+        end
+
+        result[:warnings].concat(Array(consistency[:warnings]))
+      end
+    end
+    private_class_method :verify_hls_manifest_consistency!
+
+    def verify_single_hls_role(target_store:, role:, objects:)
+      return { ok: false, errors: ["target_store_missing"], warnings: [] } if target_store.blank?
+
+      prefix = role["key_prefix"].to_s
+      master_key = role["master_key"].to_s.presence || File.join(prefix, "master.m3u8")
+      complete_key = role["complete_key"].to_s.presence || File.join(prefix, ".complete")
+      errors = []
+      warnings = []
+      object_keys = objects.map { |obj| obj["key"].to_s }.reject(&:blank?).uniq
+
+      errors << "missing_complete_marker: #{complete_key}" unless target_store.exists?(complete_key)
+      errors << "missing_master_playlist: #{master_key}" unless target_store.exists?(master_key)
+      return { ok: false, errors: errors, warnings: warnings } if errors.present?
+
+      master_refs = playlist_refs(read_text(target_store, master_key))
+      variant_keys = master_refs.select { |ref| ref.downcase.end_with?(".m3u8") }.map { |ref| normalize_playlist_reference(master_key, ref) }.uniq
+      errors << "master_has_no_variant_playlists" if variant_keys.empty?
+
+      uses_ab = ActiveModel::Type::Boolean.new.cast(role["ab_fingerprint"]) || role["ab_segment_key_template"].to_s.present?
+      fingerprint_meta_key = role["fingerprint_meta_key"].to_s.presence
+      if uses_ab && fingerprint_meta_key.present? && !target_store.exists?(fingerprint_meta_key)
+        errors << "missing_fingerprint_meta: #{fingerprint_meta_key}"
+      end
+
+      variant_keys.each do |variant_key|
+        unless target_store.exists?(variant_key)
+          errors << "missing_variant_playlist: #{variant_key}"
+          next
+        end
+
+        refs = playlist_refs(read_text(target_store, variant_key))
+        segment_refs = refs.select { |ref| segment_like_reference?(ref) }
+        errors << "variant_has_no_segments: #{variant_key}" if segment_refs.empty?
+
+        variant_name = variant_name_from_playlist_key(prefix, variant_key)
+        segment_refs.each do |segment_ref|
+          file_name = File.basename(segment_ref.to_s)
+          if uses_ab
+            %w[a b].each do |ab|
+              key = File.join(prefix, ab, variant_name, file_name)
+              errors << "missing_ab_segment: #{key}" unless target_store.exists?(key) || object_keys.include?(key)
+            end
+          else
+            key = normalize_playlist_reference(variant_key, segment_ref)
+            errors << "missing_segment: #{key}" unless target_store.exists?(key) || object_keys.include?(key)
+          end
+        end
+      end
+
+      { ok: errors.empty?, errors: errors.uniq, warnings: warnings.uniq }
+    rescue => e
+      { ok: false, errors: ["hls_manifest_check_failed: #{e.class}: #{e.message}"], warnings: warnings }
+    end
+    private_class_method :verify_single_hls_role
+
+    def read_text(store, key)
+      value = store.read(key)
+      value.respond_to?(:force_encoding) ? value.force_encoding("UTF-8") : value.to_s
+    end
+    private_class_method :read_text
+
+    def playlist_refs(raw)
+      refs = []
+      raw.to_s.each_line do |line|
+        stripped = line.to_s.strip
+        next if stripped.blank?
+
+        if stripped.start_with?("#")
+          stripped.scan(/URI="([^"]+)"/) { |match| refs << sanitize_playlist_ref(match.first) }
+          next
+        end
+
+        refs << sanitize_playlist_ref(stripped)
+      end
+      refs.reject(&:blank?)
+    end
+    private_class_method :playlist_refs
+
+    def sanitize_playlist_ref(ref)
+      value = ref.to_s.strip
+      value = value.sub(/[?#].*\z/, "")
+      value.sub(%r{\A\./}, "")
+    end
+    private_class_method :sanitize_playlist_ref
+
+    def normalize_playlist_reference(base_key, ref)
+      clean = sanitize_playlist_ref(ref)
+      return clean if clean.start_with?("/")
+      File.join(File.dirname(base_key.to_s), clean)
+    end
+    private_class_method :normalize_playlist_reference
+
+    def segment_like_reference?(ref)
+      ext = File.extname(ref.to_s).downcase
+      %w[.ts .m4s .mp4].include?(ext)
+    end
+    private_class_method :segment_like_reference?
+
+    def variant_name_from_playlist_key(prefix, playlist_key)
+      relative = playlist_key.to_s.sub(%r{\A#{Regexp.escape(prefix.to_s)}/?}, "")
+      value = relative.split("/").first.to_s
+      value.present? ? value : ::MediaGallery::Hls::DEFAULT_VARIANT
+    end
+    private_class_method :variant_name_from_playlist_key
 
     def append_mismatch!(result, attrs)
       result[:mismatches] << attrs.stringify_keys
