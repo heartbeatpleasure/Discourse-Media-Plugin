@@ -755,7 +755,7 @@ export default RouteTemplate(
 
           {{#if @controller.hasSearchResults}}
             <div class="mg-migrations__results-list">
-              {{#each @controller.resultCards as |item|}}
+              {{#each @controller.resultCards key="public_id" as |item|}}
                 <article class={{item.cardClass}}>
                   <div class="mg-migrations__result-select">
                     <input type="checkbox" checked={{item.isBulkSelected}} {{on "change" (fn @controller.toggleBulkSelection item)}} />
