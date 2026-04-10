@@ -131,26 +131,37 @@ module ::MediaGallery
       save_copy_state!(item, state)
 
       if full_migration
-        ::MediaGallery::MigrationVerify.save_verify_state!(item, {
-          "status" => "verified",
-          "verified_at" => Time.now.utc.iso8601,
-          "requested_by" => state["requested_by"],
-          "target_profile" => target_profile.to_s,
-          "source_profile_key" => state["source_profile_key"].to_s,
-          "target_profile_key" => state["target_profile_key"].to_s,
-          "source_backend" => state["source_backend"].to_s,
-          "target_backend" => state["target_backend"].to_s,
-          "object_count" => objects.length,
-          "target_existing_count" => objects.length,
-          "missing_on_target_count" => 0,
-          "warnings" => Array(verification[:warnings] || verification["warnings"]),
-          "last_error" => nil,
-        })
-        auto_switch = true
-        auto_cleanup = true
-      end
+        item.reload
+        verification = ::MediaGallery::MigrationVerify.verify!(item, target_profile: target_profile, requested_by: state["requested_by"])
+        verify_state = verification[:verification] || verification["verification"] || ::MediaGallery::MigrationVerify.verify_state_for(item)
+        raise "verification_incomplete" unless verify_state.is_a?(Hash) && verify_state["status"].to_s == "verified"
 
-      if auto_switch
+        item.reload
+        switch_state = ::MediaGallery::MigrationSwitch.switch!(
+          item,
+          target_profile: target_profile,
+          requested_by: state["requested_by"],
+          mode: "auto_full_migration"
+        )
+
+        item.reload
+        cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(
+          item,
+          requested_by: state["requested_by"],
+          force: false,
+          auto_finalize: true
+        )
+
+        state = copy_state_for(item)
+        state["status"] = "switched"
+        state["switched_at"] = switch_state["switched_at"]
+        state["switched_backend"] = switch_state["target_backend"]
+        state["switched_profile_key"] = switch_state["target_profile_key"]
+        state["verification_status"] = verify_state["status"]
+        state["cleanup_enqueued_at"] = cleanup_state["queued_at"] if cleanup_state.is_a?(Hash)
+        state["last_error"] = nil
+        save_copy_state!(item, state)
+      elsif auto_switch
         item.reload
         switch_state = ::MediaGallery::MigrationSwitch.switch!(
           item,
@@ -161,7 +172,7 @@ module ::MediaGallery
 
         if auto_cleanup
           item.reload
-          cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: state["requested_by"], force: false, auto_finalize: !!full_migration)
+          cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: state["requested_by"], force: false)
         end
         state = copy_state_for(item)
         state["status"] = "switched"
@@ -170,7 +181,6 @@ module ::MediaGallery
         state["switched_profile_key"] = switch_state["target_profile_key"]
         state["last_error"] = nil
         state["auto_cleanup"] = !!auto_cleanup
-        state["full_migration"] = !!full_migration
         state["cleanup_enqueued_at"] = cleanup_state["queued_at"] if defined?(cleanup_state) && cleanup_state.is_a?(Hash)
         save_copy_state!(item, state)
       end
@@ -255,7 +265,6 @@ module ::MediaGallery
       state["objects_failed"] = 0
       state["bytes_copied"] = 0
       state["last_error"] = nil
-      state["full_migration"] = !!state["full_migration"]
       state
     end
     private_class_method :build_copying_state

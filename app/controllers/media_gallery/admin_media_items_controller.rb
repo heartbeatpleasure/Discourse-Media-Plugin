@@ -8,13 +8,14 @@ module ::MediaGallery
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
     # Returns a small list for quickly selecting a public_id in the admin UI.
     def search
-      items = filtered_search_scope.limit(search_limit).map do |item|
+      items = filtered_search_scope.to_a.filter_map do |item|
         has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
         next if has_hls_filter == "true" && !has_hls
         next if has_hls_filter == "false" && has_hls
+        next unless profile_filter_matches?(item)
 
         serialize_search_item(item, has_hls: has_hls)
-      end.compact
+      end.first(search_limit)
 
       render_json_dump(items: items)
     end
@@ -109,41 +110,6 @@ module ::MediaGallery
       )
 
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
-    rescue => e
-      render_json_error(e.message, status: 422)
-    end
-
-    # POST /admin/plugins/media-gallery/media-items/:public_id/clear-queued-state.json
-    def clear_queued_state
-      item = load_item!
-      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
-      changed = false
-      cleared = []
-      now = Time.now.utc.iso8601
-
-      {
-        "migration_copy" => %w[queued failed],
-        "migration_cleanup" => %w[queued failed],
-        "migration_finalize" => %w[pending_cleanup failed]
-      }.each do |key, clearable_statuses|
-        state = meta[key]
-        next unless state.is_a?(Hash)
-        next unless clearable_statuses.include?(state["status"].to_s)
-
-        state = state.deep_dup
-        state["status"] = "cancelled"
-        state["cancelled_at"] = now
-        state["cancelled_by"] = current_user.username
-        state["last_error"] = "Cleared by admin"
-        meta[key] = state
-        cleared << key
-        changed = true
-      end
-
-      raise "no_queued_state_to_clear" unless changed
-
-      item.update_columns(extra_metadata: meta, updated_at: Time.now)
-      render_json_dump(ok: true, public_id: item.public_id, cleared: cleared, message: "Queued state cleared.")
     rescue => e
       render_json_error(e.message, status: 422)
     end
@@ -317,6 +283,20 @@ module ::MediaGallery
       scope = scope.where(media_type: media_type) if %w[audio image video].include?(media_type)
 
       scope
+    end
+
+    def requested_profile_filter_key
+      value = params[:profile_key].to_s.strip
+      return nil if value.blank? || value == "all"
+
+      ::MediaGallery::StorageSettingsResolver.normalized_profile_key(value)
+    end
+
+    def profile_filter_matches?(item)
+      key = requested_profile_filter_key
+      return true if key.blank?
+
+      managed_storage_profile_key_for(item).to_s == key.to_s
     end
 
     def search_limit
