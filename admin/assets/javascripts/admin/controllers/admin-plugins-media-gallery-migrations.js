@@ -144,6 +144,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked searchResults = [];
   @tracked selectedBulkPublicIds = [];
   @tracked bulkConfirm = false;
+  @tracked bulkFullMigration = false;
 
   @tracked selectedItem = null;
   @tracked selectedPublicId = "";
@@ -167,6 +168,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked isRollingBack = false;
   @tracked isFinalizing = false;
   @tracked isBulkMigrating = false;
+  @tracked isClearingQueuedState = false;
   @tracked autoSwitch = false;
   @tracked autoCleanup = false;
   @tracked forceAction = false;
@@ -200,6 +202,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.searchResults = [];
     this.selectedBulkPublicIds = [];
     this.bulkConfirm = false;
+    this.bulkFullMigration = false;
     this.selectedItem = null;
     this.selectedPublicId = "";
     this.selectedPlan = null;
@@ -221,6 +224,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.isRollingBack = false;
     this.isFinalizing = false;
     this.isBulkMigrating = false;
+    this.isClearingQueuedState = false;
     this.autoSwitch = false;
     this.autoCleanup = false;
     this.forceAction = false;
@@ -370,20 +374,48 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     return option?.label || this.targetHealth?.label || this.selectedTargetProfileKey;
   }
 
+  get bulkPrimaryActionLabel() {
+    if (this.isBulkMigrating) {
+      return this.bulkFullMigration ? "Queueing full migration…" : "Queueing selected items…";
+    }
+
+    return this.bulkFullMigration ? "Queue full migration for selected items" : "Queue copy for selected items";
+  }
+
+  get clearQueuedStateDisabled() {
+    if (!this.hasSelectedItem || this.isClearingQueuedState) {
+      return true;
+    }
+
+    const statuses = [
+      this.selectedDiagnostics?.migration_copy?.status,
+      this.selectedDiagnostics?.migration_cleanup?.status,
+      this.selectedDiagnostics?.migration_finalize?.status,
+    ].map((value) => String(value || ""));
+
+    return !statuses.some((status) => ["queued", "failed", "pending_cleanup"].includes(status));
+  }
+
   get selectedSourceLocationFingerprintKey() {
     return this.selectedDiagnostics?.managed_storage_location_fingerprint_key || this.selectedItem?.managed_storage_location_fingerprint_key || "";
   }
 
+  get isSameTargetAsSource() {
+    const sourceProfileKey = this.selectedDiagnostics?.managed_storage_profile || this.selectedItem?.managed_storage_profile;
+    const targetProfileKey = this.selectedTargetProfileKey;
+    const sourceFingerprint = this.selectedSourceLocationFingerprintKey;
+    const targetFingerprint = this.targetHealth?.location_fingerprint_key || this.targetProfileOptions.find((entry) => entry.profile_key === targetProfileKey)?.location_fingerprint_key;
+    return !!(
+      (sourceProfileKey && targetProfileKey && sourceProfileKey === targetProfileKey) ||
+      (sourceFingerprint && targetFingerprint && sourceFingerprint === targetFingerprint)
+    );
+  }
+
   get targetProfileOptions() {
-    const excludedFingerprint = this.selectedSourceLocationFingerprintKey;
     const seen = new Set();
 
     return (this.availableTargetProfiles || []).filter((entry) => {
       if (!entry?.profile_key) {
-        return false;
-      }
-
-      if (excludedFingerprint && entry?.location_fingerprint_key === excludedFingerprint) {
         return false;
       }
 
@@ -1076,9 +1108,20 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
   }
 
+  _ensureDifferentTargetForAction() {
+    if (!this.isSameTargetAsSource) {
+      return true;
+    }
+
+    this.actionError = "This item already uses the selected destination. Choose a different profile to copy, verify, or switch.";
+    this.lastActionMessage = "";
+    return false;
+  }
+
   @action
   async copyToTarget() {
     if (!this.selectedPublicId) return;
+    if (!this._ensureDifferentTargetForAction()) return;
     this.isCopying = true;
     this.actionError = "";
     this.lastActionMessage = "";
@@ -1114,6 +1157,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @action
   async verifyTarget() {
     if (!this.selectedPublicId) return;
+    if (!this._ensureDifferentTargetForAction()) return;
     this.isVerifying = true;
     this.actionError = "";
     this.lastActionMessage = "";
@@ -1136,6 +1180,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @action
   async switchToTarget() {
     if (!this.selectedPublicId) return;
+    if (!this._ensureDifferentTargetForAction()) return;
     this.isSwitching = true;
     this.actionError = "";
     this.lastActionMessage = "";
@@ -1246,7 +1291,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         body: JSON.stringify(payload),
       });
 
-      this.bulkActionMessage = `${result?.queued_count || 0} selected item(s) queued, ${result?.skipped_count || 0} skipped.`;
+      this.bulkActionMessage = this.bulkFullMigration
+        ? `${result?.queued_count || 0} selected item(s) queued for full migration, ${result?.skipped_count || 0} skipped.`
+        : `${result?.queued_count || 0} selected item(s) queued for copy, ${result?.skipped_count || 0} skipped.`;
       this.bulkConfirm = false;
       await this.search();
       if (this.hasSelectedItem) {
@@ -1294,6 +1341,11 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
 
   @action
+  onBulkFullMigrationChange(event) {
+    this.bulkFullMigration = !!event?.target?.checked;
+  }
+
+  @action
   async loadStorageHealth(profile) {
     this.storageBusy = true;
     this.storageError = "";
@@ -1328,6 +1380,30 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.storageError = e?.message || String(e);
     } finally {
       this.storageBusy = false;
+    }
+  }
+
+  @action
+  async clearQueuedState() {
+    if (!this.selectedPublicId || this.clearQueuedStateDisabled) {
+      return;
+    }
+
+    this.isClearingQueuedState = true;
+    this.actionError = "";
+    this.lastActionMessage = "";
+    try {
+      const publicId = encodeURIComponent(this.selectedPublicId);
+      const result = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${publicId}/clear-queued-state.json`, {
+        method: "POST",
+        headers: this._actionHeaders(),
+      });
+      await this.refreshSelected({ includeSearchRefresh: true });
+      this.lastActionMessage = result?.message || "Queued state cleared.";
+    } catch (e) {
+      this.actionError = e?.message || String(e);
+    } finally {
+      this.isClearingQueuedState = false;
     }
   }
 

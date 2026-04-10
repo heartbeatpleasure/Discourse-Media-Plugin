@@ -104,10 +104,46 @@ module ::MediaGallery
         requested_by: current_user.username,
         force: boolean_param(:force),
         auto_switch: boolean_param(:auto_switch),
-        auto_cleanup: boolean_param(:auto_cleanup)
+        auto_cleanup: boolean_param(:auto_cleanup),
+        full_migration: boolean_param(:full_migration)
       )
 
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
+    # POST /admin/plugins/media-gallery/media-items/:public_id/clear-queued-state.json
+    def clear_queued_state
+      item = load_item!
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      changed = false
+      cleared = []
+      now = Time.now.utc.iso8601
+
+      {
+        "migration_copy" => %w[queued failed],
+        "migration_cleanup" => %w[queued failed],
+        "migration_finalize" => %w[pending_cleanup failed]
+      }.each do |key, clearable_statuses|
+        state = meta[key]
+        next unless state.is_a?(Hash)
+        next unless clearable_statuses.include?(state["status"].to_s)
+
+        state = state.deep_dup
+        state["status"] = "cancelled"
+        state["cancelled_at"] = now
+        state["cancelled_by"] = current_user.username
+        state["last_error"] = "Cleared by admin"
+        meta[key] = state
+        cleared << key
+        changed = true
+      end
+
+      raise "no_queued_state_to_clear" unless changed
+
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+      render_json_dump(ok: true, public_id: item.public_id, cleared: cleared, message: "Queued state cleared.")
     rescue => e
       render_json_error(e.message, status: 422)
     end
@@ -180,7 +216,8 @@ module ::MediaGallery
             requested_by: current_user.username,
             force: boolean_param(:force),
             auto_switch: boolean_param(:auto_switch),
-            auto_cleanup: boolean_param(:auto_cleanup)
+            auto_cleanup: boolean_param(:auto_cleanup),
+            full_migration: boolean_param(:full_migration)
           )
           queued += 1
           results << { public_id: item.public_id, status: state["status"].to_s.presence || "queued" }

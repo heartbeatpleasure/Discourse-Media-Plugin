@@ -102,6 +102,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/:public_id/diagnostics" => "media_gallery/admin_media_items#diagnostics", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/migration-plan" => "media_gallery/admin_media_items#migration_plan", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/copy-to-target" => "media_gallery/admin_media_items#copy_to_target", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/clear-queued-state" => "media_gallery/admin_media_items#clear_queued_state", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/switch-to-target" => "media_gallery/admin_media_items#switch_to_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/cleanup-source" => "media_gallery/admin_media_items#cleanup_source", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/verify-target" => "media_gallery/admin_media_items#verify_target", defaults: { format: :json }
