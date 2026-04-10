@@ -202,6 +202,25 @@ plugins:
       - redirect
     client: false
 
+  media_gallery_default_storage_profile_key:
+    default: ""
+    type: enum
+    choices:
+      - ""
+      - local
+      - s3_1
+      - s3_2
+      - s3_3
+    client: false
+
+  media_gallery_local_profile_name:
+    default: "Local storage"
+    client: false
+
+  media_gallery_s3_profile_name:
+    default: "S3 profile 1"
+    client: false
+
   media_gallery_s3_endpoint:
     default: ""
     client: false

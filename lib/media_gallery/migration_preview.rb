@@ -74,10 +74,10 @@ module ::MediaGallery
     end
 
     def source_summary_for(item)
-      backend = item.managed_storage_backend.presence || ::MediaGallery::StorageSettingsResolver.active_backend
-      profile_key = item.managed_storage_profile.presence || ::MediaGallery::StorageSettingsResolver.active_profile_key
+      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
+      backend = item.managed_storage_backend.presence || ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(profile_key) || ::MediaGallery::StorageSettingsResolver.active_backend
       {
-        profile: profile_key.to_s.start_with?("target_") ? "target" : "active",
+        profile: profile_key,
         backend: backend,
         profile_key: profile_key,
         label: ::MediaGallery::StorageSettingsResolver.profile_label_for_key(profile_key),

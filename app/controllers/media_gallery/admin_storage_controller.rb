@@ -6,10 +6,15 @@ module ::MediaGallery
 
     # GET /admin/plugins/media-gallery/storage/profiles.json
     def profiles
+      default_profile = ::MediaGallery::StorageSettingsResolver.profile_summary("active")
+      profiles = ::MediaGallery::StorageSettingsResolver.configured_profiles_summary
+
       render_json_dump(
-        active_profile: ::MediaGallery::StorageSettingsResolver.profile_summary("active"),
+        active_profile: default_profile,
+        default_profile: default_profile,
         default_target_profile_key: ::MediaGallery::StorageSettingsResolver.target_profile_key,
-        target_profiles: ::MediaGallery::StorageSettingsResolver.target_profiles_summary
+        target_profiles: profiles,
+        profiles: profiles
       )
     end
 

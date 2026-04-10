@@ -635,7 +635,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   get activeStorageCard() {
     return this._buildStorageCard({
-      title: "Active storage",
+      title: "Default storage",
       health: this.activeHealth,
       probe: this.activeProbe,
     });
@@ -644,7 +644,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   get targetStorageCard() {
     const targetLabel = this.targetHealth?.label || this.selectedTargetProfileLabel;
     return this._buildStorageCard({
-      title: targetLabel ? `Target storage · ${targetLabel}` : "Target storage",
+      title: targetLabel ? `Destination storage · ${targetLabel}` : "Destination storage",
       health: this.targetHealth,
       probe: this.targetProbe,
     });
@@ -744,22 +744,24 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       return active?.label || profileKey;
     }
 
-    const target = (this.availableTargetProfiles || []).find((entry) => entry.profile_key === profileKey);
-    if (target?.label) {
-      return target.label;
+    const configured = (this.availableTargetProfiles || []).find((entry) => entry.profile_key === profileKey);
+    if (configured?.label) {
+      return configured.label;
     }
 
     switch (profileKey) {
+      case "local":
       case "active_local":
-        return "Active local storage";
-      case "active_s3":
-        return "Active S3 storage";
       case "target_local":
         return "Local storage";
-      case "target_s3":
+      case "s3_1":
+      case "active_s3":
         return "S3 profile 1";
-      case "target_s3_2":
+      case "s3_2":
+      case "target_s3":
         return "S3 profile 2";
+      case "s3_3":
+      case "target_s3_2":
       case "target_s3_3":
         return "S3 profile 3";
       default:
@@ -1313,8 +1315,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.storageError = "";
     try {
       const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/profiles.json`);
-      this.activeProfileSummary = json?.active_profile || null;
-      this.availableTargetProfiles = Array.isArray(json?.target_profiles) ? json.target_profiles : [];
+      this.activeProfileSummary = json?.default_profile || json?.active_profile || null;
+      this.availableTargetProfiles = Array.isArray(json?.profiles) ? json.profiles : (Array.isArray(json?.target_profiles) ? json.target_profiles : []);
       const preferred = json?.default_target_profile_key;
       const options = this.targetProfileOptions;
       const preferredOption = options.find((entry) => entry.profile_key === preferred);

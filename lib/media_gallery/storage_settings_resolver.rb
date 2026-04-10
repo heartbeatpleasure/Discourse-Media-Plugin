@@ -6,11 +6,13 @@ module ::MediaGallery
 
     BACKENDS = %w[local s3].freeze
     DELIVERY_MODES = %w[stream x_accel redirect].freeze
-    TARGET_PROFILE_KEYS = %w[target_local target_s3 target_s3_2 target_s3_3].freeze
-    PROFILE_KEYS = (%w[active_local active_s3] + TARGET_PROFILE_KEYS).freeze
+    CANONICAL_PROFILE_KEYS = %w[local s3_1 s3_2 s3_3].freeze
+    LEGACY_PROFILE_KEYS = %w[active_local active_s3 target_local target_s3 target_s3_2 target_s3_3].freeze
 
     def managed_storage_enabled?
-      backend = configured_backend
+      return true if default_profile_key.present?
+
+      backend = legacy_configured_backend
       return true if backend.present?
 
       SiteSetting.respond_to?(:media_gallery_private_storage_enabled) &&
@@ -22,8 +24,11 @@ module ::MediaGallery
     def active_backend
       return nil unless managed_storage_enabled?
 
-      backend = configured_backend
+      backend = backend_for_profile_key(active_profile_key)
       return backend if BACKENDS.include?(backend)
+
+      legacy_backend = legacy_configured_backend
+      return legacy_backend if BACKENDS.include?(legacy_backend)
 
       "local"
     end
@@ -36,13 +41,9 @@ module ::MediaGallery
       active_backend == "s3"
     end
 
+    # Legacy helper kept for backwards compatibility with older callers.
     def configured_backend
-      return nil unless SiteSetting.respond_to?(:media_gallery_asset_storage_backend)
-
-      value = SiteSetting.media_gallery_asset_storage_backend.to_s.strip
-      BACKENDS.include?(value) ? value : nil
-    rescue
-      nil
+      active_backend
     end
 
     def processing_root_path
@@ -67,6 +68,11 @@ module ::MediaGallery
       value.presence || legacy_private_root_path || "/shared/media_gallery/private"
     end
 
+    def local_profile_root_path
+      value = site_setting_string(:media_gallery_target_local_asset_root_path)
+      value.presence || local_asset_root_path
+    end
+
     def default_delivery_mode
       value =
         if SiteSetting.respond_to?(:media_gallery_delivery_mode_default)
@@ -83,81 +89,82 @@ module ::MediaGallery
     end
 
     def active_profile_key
-      active_profile_key_from_backend
+      default_profile_key
+    end
+
+    def default_profile_key
+      explicit = normalize_canonical_profile_key(site_setting_string(:media_gallery_default_storage_profile_key))
+      return explicit if explicit.present? && profile_visible?(explicit)
+
+      legacy = legacy_default_profile_key
+      return legacy if legacy.present? && profile_visible?(legacy)
+
+      first_configured_profile_key || "local"
     end
 
     def target_backend
-      value = site_setting_string(:media_gallery_target_asset_storage_backend)
-      BACKENDS.include?(value) ? value : nil
+      backend_for_profile_key(target_profile_key)
     end
 
     def target_profile_key
-      case target_backend
-      when "local"
-        "target_local"
-      when "s3"
-        "target_s3"
-      else
-        first_available_target_profile_key || "target_local"
-      end
+      first_available_target_profile_key || active_profile_key
     end
 
     def profile_key(profile)
-      value = profile.to_s.strip
-      return active_profile_key_from_backend if value.blank? || value == "active"
-      return target_profile_key if value == "target"
-      return value if PROFILE_KEYS.include?(value)
-
-      nil
+      normalized_profile_key(profile)
     end
 
     def normalized_profile_key(profile)
       value = profile.to_s.strip
-      return active_profile_key_from_backend if value.blank? || value == "active"
+      return active_profile_key if value.blank? || value == "active" || value == "default"
       return target_profile_key if value == "target"
-      return value if PROFILE_KEYS.include?(value)
 
-      nil
+      canonicalize_profile_key(value)
+    end
+
+    def canonicalize_profile_key(profile_key)
+      value = profile_key.to_s.strip
+      return nil if value.blank?
+
+      canonical = normalize_canonical_profile_key(value)
+      return canonical if canonical.present?
+
+      return nil unless LEGACY_PROFILE_KEYS.include?(value)
+
+      fingerprint = legacy_profile_key_location_fingerprint(value)
+      if fingerprint.present?
+        configured_profile_keys.each do |candidate|
+          return candidate if profile_key_location_fingerprint(candidate) == fingerprint
+        end
+      end
+
+      fallback = legacy_profile_alias(value)
+      fallback.present? ? normalize_canonical_profile_key(fallback) : nil
     end
 
     def profile_backend(profile)
-      key = normalized_profile_key(profile)
-      backend_for_profile_key(key)
+      backend_for_profile_key(normalized_profile_key(profile))
     end
 
     def backend_for_profile_key(profile_key)
-      case profile_key.to_s
-      when "active_local", "target_local"
+      case normalize_canonical_profile_key(profile_key).to_s
+      when "local"
         "local"
-      when "active_s3", "target_s3", "target_s3_2", "target_s3_3"
+      when "s3_1", "s3_2", "s3_3"
         "s3"
       else
         nil
       end
     end
 
-
-    def active_profile_key_from_backend
-      case active_backend
-      when "s3"
-        "active_s3"
-      when "local"
-        "active_local"
+    def build_store(backend = nil)
+      key = if backend.present?
+        choose_profile_key_for_backend(backend)
       else
-        nil
+        active_profile_key
       end
-    end
-    private_class_method :active_profile_key_from_backend
 
-    def build_store(backend = active_backend)
-      case backend.to_s
-      when "local"
-        ::MediaGallery::LocalAssetStore.new(root_path: local_asset_root_path)
-      when "s3"
-        ::MediaGallery::S3AssetStore.new(s3_options)
-      else
-        nil
-      end
+      build_store_for_profile_key(key)
     end
 
     def build_store_for_profile_key(profile_key)
@@ -167,9 +174,15 @@ module ::MediaGallery
 
       case backend
       when "local"
-        ::MediaGallery::LocalAssetStore.new(root_path: local_root_for_profile_key(key))
+        root_path = local_root_for_profile_key(key)
+        return nil if root_path.blank?
+
+        ::MediaGallery::LocalAssetStore.new(root_path: root_path)
       when "s3"
-        ::MediaGallery::S3AssetStore.new(s3_options_for_profile_key(key))
+        opts = s3_options_for_profile_key(key)
+        return nil if opts.blank?
+
+        ::MediaGallery::S3AssetStore.new(opts)
       else
         nil
       end
@@ -211,15 +224,13 @@ module ::MediaGallery
     end
 
     def s3_options_for_profile_key(profile_key)
-      case normalized_profile_key(profile_key).to_s
-      when "active_s3"
+      case normalize_canonical_profile_key(profile_key).to_s
+      when "s3_1"
         s3_options
-      when "target_s3"
-        target_s3_options
-      when "target_s3_2"
-        target_s3_2_options
-      when "target_s3_3"
-        target_s3_3_options
+      when "s3_2"
+        s3_profile_2_options
+      when "s3_3"
+        s3_profile_3_options
       else
         {}
       end
@@ -234,11 +245,28 @@ module ::MediaGallery
       build_store_for_profile_key(normalized_profile_key(profile))
     end
 
+    def configured_profiles_summary
+      configured_profile_keys.map { |key| profile_summary(key) }
+    end
+
+    def available_target_profiles(exclude_profile_key: nil, exclude_location_fingerprint_key: nil)
+      configured_profiles_summary.filter do |summary|
+        next false if exclude_profile_key.present? && summary[:profile_key].to_s == normalized_profile_key(exclude_profile_key).to_s
+        next false if exclude_location_fingerprint_key.present? && summary[:location_fingerprint_key].to_s == exclude_location_fingerprint_key.to_s
+
+        true
+      end
+    end
+
+    def target_profiles_summary
+      available_target_profiles
+    end
+
     def profile_summary(profile)
       key = normalized_profile_key(profile)
       backend = backend_for_profile_key(key)
       {
-        profile: profile.to_s.presence || "active",
+        profile: summary_profile_name_for(profile, key),
         backend: backend,
         profile_key: key,
         label: profile_label_for_key(key),
@@ -246,6 +274,21 @@ module ::MediaGallery
         location_fingerprint: profile_key_location_fingerprint(key),
         location_fingerprint_key: profile_location_fingerprint_key(key),
       }
+    end
+
+    def profile_label_for_key(profile_key)
+      case normalize_canonical_profile_key(profile_key).to_s
+      when "local"
+        site_setting_string(:media_gallery_local_profile_name).presence || site_setting_string(:media_gallery_target_local_profile_name).presence || "Local storage"
+      when "s3_1"
+        site_setting_string(:media_gallery_s3_profile_name).presence || "S3 profile 1"
+      when "s3_2"
+        site_setting_string(:media_gallery_target_s3_profile_name).presence || "S3 profile 2"
+      when "s3_3"
+        site_setting_string(:media_gallery_target_s3_2_profile_name).presence || site_setting_string(:media_gallery_target_s3_3_profile_name).presence || "S3 profile 3"
+      else
+        profile_key.to_s
+      end
     end
 
     def validate_profile(profile)
@@ -282,7 +325,7 @@ module ::MediaGallery
 
     def normalize_key(relative_key)
       rel = relative_key.to_s.sub(%r{\A/+}, "")
-      pref = s3_options[:prefix].to_s
+      pref = s3_options_for_profile_key(active_profile_key)[:prefix].to_s
       return rel if pref.blank?
       return pref if rel.blank?
 
@@ -291,7 +334,7 @@ module ::MediaGallery
 
     def strip_prefix(key)
       raw = key.to_s.sub(%r{\A/+}, "")
-      pref = s3_options[:prefix].to_s
+      pref = s3_options_for_profile_key(active_profile_key)[:prefix].to_s
       return raw if pref.blank?
       return raw unless raw.start_with?("#{pref}/")
 
@@ -302,39 +345,15 @@ module ::MediaGallery
       true
     end
 
-    def available_target_profiles(exclude_profile_key: nil, exclude_location_fingerprint_key: nil)
-      TARGET_PROFILE_KEYS.filter_map do |profile_key|
-        next unless target_profile_visible?(profile_key)
+    def profile_key_for_item(item)
+      return active_profile_key if item.blank?
 
-        summary = profile_summary(profile_key)
-        next if exclude_profile_key.present? && summary[:profile_key].to_s == exclude_profile_key.to_s
-        next if exclude_location_fingerprint_key.present? && summary[:location_fingerprint_key].to_s == exclude_location_fingerprint_key.to_s
+      stored = item.respond_to?(:managed_storage_profile) ? item.managed_storage_profile.to_s.presence : nil
+      resolved = canonicalize_profile_key(stored)
+      return resolved if resolved.present?
 
-        summary
-      end
-    end
-
-    def target_profiles_summary
-      available_target_profiles
-    end
-
-    def profile_label_for_key(profile_key)
-      case normalized_profile_key(profile_key).to_s
-      when "active_local"
-        "Active local storage"
-      when "active_s3"
-        "Active S3 storage"
-      when "target_local"
-        site_setting_string(:media_gallery_target_local_profile_name).presence || "Local storage"
-      when "target_s3"
-        site_setting_string(:media_gallery_target_s3_profile_name).presence || "S3 profile 1"
-      when "target_s3_2"
-        site_setting_string(:media_gallery_target_s3_2_profile_name).presence || "S3 profile 2"
-      when "target_s3_3"
-        site_setting_string(:media_gallery_target_s3_3_profile_name).presence || "S3 profile 3"
-      else
-        profile_key.to_s
-      end
+      backend = item.respond_to?(:managed_storage_backend) ? item.managed_storage_backend.to_s.presence : nil
+      choose_profile_key_for_backend(backend) || active_profile_key
     end
 
     def site_setting_string(name)
@@ -358,42 +377,115 @@ module ::MediaGallery
       default
     end
 
-    def active_local_profile_name
-      "Active local storage"
+    def normalize_canonical_profile_key(value)
+      key = value.to_s.strip
+      CANONICAL_PROFILE_KEYS.include?(key) ? key : nil
     end
-    private_class_method :active_local_profile_name
+    private_class_method :normalize_canonical_profile_key
 
-    def active_s3_profile_name
-      "Active S3 storage"
+    def summary_profile_name_for(profile, key)
+      raw = profile.to_s.strip
+      return "default" if raw.blank? || raw == "active" || raw == "default"
+      return "target" if raw == "target"
+
+      key
     end
-    private_class_method :active_s3_profile_name
+    private_class_method :summary_profile_name_for
+
+    def configured_profile_keys
+      CANONICAL_PROFILE_KEYS.select { |key| profile_visible?(key) }
+    end
+
+    def first_configured_profile_key
+      configured_profile_keys.first
+    end
+    private_class_method :first_configured_profile_key
 
     def first_available_target_profile_key
-      available_target_profiles.first&.dig(:profile_key)
+      configured_profile_keys.find { |key| key != active_profile_key }
     end
     private_class_method :first_available_target_profile_key
 
-    def target_profile_visible?(profile_key)
-      case normalized_profile_key(profile_key).to_s
+    def choose_profile_key_for_backend(backend)
+      backend_name = backend.to_s
+      return active_profile_key if backend_name.present? && active_profile_key.present? && backend_for_profile_key(active_profile_key) == backend_name
+
+      configured_profile_keys.find { |key| backend_for_profile_key(key) == backend_name }
+    end
+    private_class_method :choose_profile_key_for_backend
+
+    def legacy_default_profile_key
+      case legacy_configured_backend
+      when "local"
+        "local"
+      when "s3"
+        "s3_1"
+      else
+        nil
+      end
+    end
+    private_class_method :legacy_default_profile_key
+
+    def legacy_profile_alias(profile_key)
+      {
+        "active_local" => "local",
+        "target_local" => "local",
+        "active_s3" => "s3_1",
+        "target_s3" => "s3_2",
+        "target_s3_2" => "s3_3",
+        "target_s3_3" => "s3_3",
+      }[profile_key.to_s]
+    end
+    private_class_method :legacy_profile_alias
+
+    def legacy_profile_key_location_fingerprint(profile_key)
+      case profile_key.to_s
+      when "active_local"
+        { backend: "local", root_path: File.expand_path(local_asset_root_path.to_s) }
       when "target_local"
-        local_root_for_profile_key("target_local").present?
-      when "target_s3", "target_s3_2", "target_s3_3"
+        { backend: "local", root_path: File.expand_path(local_profile_root_path.to_s) }
+      when "active_s3"
+        s3_location_fingerprint(s3_options)
+      when "target_s3"
+        s3_location_fingerprint(s3_profile_2_options)
+      when "target_s3_2"
+        s3_location_fingerprint(primary_s3_profile_3_options)
+      when "target_s3_3"
+        s3_location_fingerprint(legacy_s3_profile_3_options)
+      else
+        nil
+      end
+    rescue
+      nil
+    end
+    private_class_method :legacy_profile_key_location_fingerprint
+
+    def profile_visible?(profile_key)
+      case normalize_canonical_profile_key(profile_key).to_s
+      when "local"
+        local_root_for_profile_key("local").present?
+      when "s3_1", "s3_2", "s3_3"
         s3_options_ready?(s3_options_for_profile_key(profile_key))
       else
         false
       end
     end
-    private_class_method :target_profile_visible?
+    private_class_method :profile_visible?
 
-    def local_root_for_profile_key(profile_key)
-      case normalized_profile_key(profile_key).to_s
-      when "target_local"
-        target_local_asset_root_path
-      else
-        local_asset_root_path
-      end
+    def local_root_for_profile_key(_profile_key)
+      local_profile_root_path
     end
     private_class_method :local_root_for_profile_key
+
+    def legacy_configured_backend
+      return nil unless SiteSetting.respond_to?(:media_gallery_asset_storage_backend)
+
+      value = SiteSetting.media_gallery_asset_storage_backend.to_s.strip
+      BACKENDS.include?(value) ? value : nil
+    rescue
+      nil
+    end
+    private_class_method :legacy_configured_backend
 
     def s3_options
       {
@@ -408,12 +500,7 @@ module ::MediaGallery
       }
     end
 
-    def target_local_asset_root_path
-      value = site_setting_string(:media_gallery_target_local_asset_root_path)
-      value.presence || local_asset_root_path
-    end
-
-    def target_s3_options
+    def s3_profile_2_options
       {
         endpoint: site_setting_string(:media_gallery_target_s3_endpoint),
         region: site_setting_string(:media_gallery_target_s3_region).presence || "auto",
@@ -425,8 +512,9 @@ module ::MediaGallery
         presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_presign_ttl_seconds, default: 300)
       }
     end
+    private_class_method :s3_profile_2_options
 
-    def target_s3_2_options
+    def primary_s3_profile_3_options
       {
         endpoint: site_setting_string(:media_gallery_target_s3_2_endpoint),
         region: site_setting_string(:media_gallery_target_s3_2_region).presence || "auto",
@@ -438,9 +526,9 @@ module ::MediaGallery
         presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_2_presign_ttl_seconds, default: 300)
       }
     end
-    private_class_method :target_s3_2_options
+    private_class_method :primary_s3_profile_3_options
 
-    def target_s3_3_options
+    def legacy_s3_profile_3_options
       {
         endpoint: site_setting_string(:media_gallery_target_s3_3_endpoint),
         region: site_setting_string(:media_gallery_target_s3_3_region).presence || "auto",
@@ -452,12 +540,18 @@ module ::MediaGallery
         presign_ttl_seconds: site_setting_int(:media_gallery_target_s3_3_presign_ttl_seconds, default: 300)
       }
     end
-    private_class_method :target_s3_3_options
+    private_class_method :legacy_s3_profile_3_options
 
-    def sanitized_config_for(profile)
-      sanitized_config_for_profile_key(normalized_profile_key(profile))
+    def s3_profile_3_options
+      primary = primary_s3_profile_3_options
+      return primary if s3_options_ready?(primary)
+
+      legacy = legacy_s3_profile_3_options
+      return legacy if s3_options_ready?(legacy)
+
+      primary
     end
-    private_class_method :sanitized_config_for
+    private_class_method :s3_profile_3_options
 
     def sanitized_s3_config_for_options(opts)
       {
@@ -474,6 +568,8 @@ module ::MediaGallery
     private_class_method :sanitized_s3_config_for_options
 
     def s3_location_fingerprint(opts)
+      return nil if opts.blank?
+
       {
         backend: "s3",
         endpoint: opts[:endpoint].to_s.sub(%r{/+\z}, ""),

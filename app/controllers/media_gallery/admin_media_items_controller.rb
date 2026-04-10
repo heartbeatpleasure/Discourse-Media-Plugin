@@ -34,7 +34,7 @@ module ::MediaGallery
         thumbnail_url: "/media/#{item.public_id}/thumbnail",
         error_message: item.error_message,
         managed_storage_backend: item.managed_storage_backend,
-        managed_storage_profile: item.managed_storage_profile,
+        managed_storage_profile: managed_storage_profile_key_for(item),
         managed_storage_profile_label: managed_storage_profile_label_for(item),
         managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
         delivery_mode: item.delivery_mode,
@@ -311,7 +311,7 @@ module ::MediaGallery
         error_message: item.error_message,
         thumbnail_url: "/media/#{item.public_id}/thumbnail",
         managed_storage_backend: item.managed_storage_backend,
-        managed_storage_profile: item.managed_storage_profile,
+        managed_storage_profile: managed_storage_profile_key_for(item),
         managed_storage_profile_label: managed_storage_profile_label_for(item),
         managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
         delivery_mode: item.delivery_mode,
@@ -321,7 +321,7 @@ module ::MediaGallery
 
 
     def managed_storage_profile_key_for(item)
-      item.managed_storage_profile.to_s.presence || ::MediaGallery::StorageSettingsResolver.active_profile_key
+      ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
     end
 
     def managed_storage_profile_label_for(item)
@@ -400,7 +400,7 @@ module ::MediaGallery
     end
 
     def managed_store_for_role(role)
-      profile_key = @current_item&.managed_storage_profile.to_s.presence
+      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(@current_item)
       store = profile_key.present? ? ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key) : nil
       store ||= ::MediaGallery::StorageSettingsResolver.build_store(role["backend"].to_s)
       return nil if store.blank?
