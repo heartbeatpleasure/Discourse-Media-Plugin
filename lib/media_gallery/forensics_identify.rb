@@ -3,6 +3,8 @@
 require "open3"
 require "json"
 require "digest"
+require "fileutils"
+require "tmpdir"
 
 module ::MediaGallery
   # Admin-only helper to identify which fingerprint/user likely leaked a video.
@@ -128,8 +130,9 @@ module ::MediaGallery
       raise ArgumentError, "missing media_item" if media_item.blank?
       raise ArgumentError, "missing file" if file_path.blank? || !File.exist?(file_path)
 
-      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      filemode_budget_seconds = normalize_filemode_time_budget_seconds(time_budget_seconds)
+      with_packaged_hls_context(media_item: media_item) do
+        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        filemode_budget_seconds = normalize_filemode_time_budget_seconds(time_budget_seconds)
 
       seg = SiteSetting.media_gallery_hls_segment_duration_seconds.to_i
       seg = 6 if seg <= 0
@@ -313,15 +316,142 @@ module ::MediaGallery
         Thread.current[:media_gallery_fingerprint_codebook_scheme] = previous_codebook_scheme
       end
     end
+    end
+
+    def with_packaged_hls_context(media_item:)
+      context = build_packaged_hls_context(media_item: media_item)
+      previous = Thread.current[:media_gallery_forensics_identify_packaged_hls_context]
+      Thread.current[:media_gallery_forensics_identify_packaged_hls_context] = context if context.present?
+
+      yield
+    ensure
+      Thread.current[:media_gallery_forensics_identify_packaged_hls_context] = previous
+      cleanup_packaged_hls_context!(context) if context.present? && context != previous
+    end
+    private_class_method :with_packaged_hls_context
+
+    def build_packaged_hls_context(media_item:)
+      access = managed_hls_access_for(media_item)
+      return nil unless access.present?
+
+      prefix = access.dig(:role, "key_prefix").to_s.presence
+      return nil if prefix.blank?
+
+      keys = Array(access[:store].list_prefix(prefix)).compact.map(&:to_s).uniq.sort
+      return nil if keys.blank?
+
+      root = build_packaged_hls_workspace_root
+      keys.each do |key|
+        next if key.blank?
+
+        rel = key.sub(%r{\A#{Regexp.escape(prefix)}/?}, "")
+        next if rel.blank?
+
+        destination = File.join(root, rel)
+        access[:store].download_to_file!(key, destination)
+      end
+
+      {
+        public_id: media_item.public_id.to_s,
+        root: root,
+        source: "managed",
+        backend: access[:store].backend.to_s,
+        profile_key: media_item.try(:managed_storage_profile).to_s.presence,
+      }
+    rescue => e
+      begin
+        Rails.logger.warn(
+          "[media_gallery] forensics identify staged HLS context failed public_id=#{media_item&.public_id} "           "error=#{e.class}: #{e.message}"
+        )
+      rescue
+        nil
+      end
+      cleanup_packaged_hls_context!({ root: root }) if root.present?
+      nil
+    end
+    private_class_method :build_packaged_hls_context
+
+    def build_packaged_hls_workspace_root
+      configured_root = ::MediaGallery::StorageSettingsResolver.processing_root_path
+      if configured_root.present?
+        FileUtils.mkdir_p(configured_root)
+        Dir.mktmpdir("media-gallery-forensics-hls", configured_root)
+      else
+        Dir.mktmpdir("media-gallery-forensics-hls")
+      end
+    end
+    private_class_method :build_packaged_hls_workspace_root
+
+    def cleanup_packaged_hls_context!(context)
+      root = context.is_a?(Hash) ? context[:root].to_s : nil
+      return if root.blank? || !Dir.exist?(root)
+
+      FileUtils.rm_rf(root)
+    rescue
+      nil
+    end
+    private_class_method :cleanup_packaged_hls_context!
+
+    def managed_hls_access_for(media_item)
+      return nil if media_item.blank?
+
+      role = ::MediaGallery::Hls.managed_role_for(media_item)
+      return nil unless role.present?
+      return nil unless ::MediaGallery::Hls.managed_role_ready?(media_item, role)
+
+      store = ::MediaGallery::Hls.store_for_managed_role(media_item, role)
+      return nil if store.blank?
+
+      { role: role.deep_stringify_keys, store: store }
+    rescue => e
+      begin
+        Rails.logger.warn(
+          "[media_gallery] forensics identify managed HLS access failed public_id=#{media_item&.public_id} "           "error=#{e.class}: #{e.message}"
+        )
+      rescue
+        nil
+      end
+      nil
+    end
+    private_class_method :managed_hls_access_for
+
+    def packaged_hls_root_for(media_item:)
+      context = Thread.current[:media_gallery_forensics_identify_packaged_hls_context]
+      if context.is_a?(Hash) && context[:public_id].to_s == media_item.public_id.to_s
+        root = context[:root].to_s
+        return root if root.present? && Dir.exist?(root)
+      end
+
+      return nil unless defined?(::MediaGallery::PrivateStorage)
+
+      root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
+      return root if root.present? && Dir.exist?(root)
+
+      nil
+    rescue
+      nil
+    end
+    private_class_method :packaged_hls_root_for
+
+    def packaged_variant_playlist_path_for(media_item:, variant:)
+      root = packaged_hls_root_for(media_item: media_item)
+      return nil if root.blank?
+
+      path = File.join(root, variant.to_s, "index.m3u8")
+      File.exist?(path) ? path : nil
+    rescue
+      nil
+    end
+    private_class_method :packaged_variant_playlist_path_for
 
     # ----------------------------------------------------------------------
 
     def detect_layout_for(media_item:)
       # Prefer the metadata file written during packaging.
       begin
-        root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
-        meta_path = File.join(root, "fingerprint_meta.json")
-        if File.exist?(meta_path)
+        root = packaged_hls_root_for(media_item: media_item)
+        meta_path = File.join(root, "fingerprint_meta.json") if root.present?
+        if meta_path.present? && File.exist?(meta_path)
           j = JSON.parse(File.read(meta_path))
           v = j["layout"].to_s
           return v if v.present?
@@ -334,7 +464,9 @@ module ::MediaGallery
     end
 
     def packaged_fingerprint_spec_for(media_item:)
-      root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
+      root = packaged_hls_root_for(media_item: media_item)
+      return nil if root.blank?
+
       meta_path = File.join(root, "fingerprint_meta.json")
       return nil unless File.exist?(meta_path)
 
@@ -2161,16 +2293,12 @@ end
     # This avoids assuming fixed `segment_seconds` and reduces drift-related sampling errors.
     def packaged_segment_midpoints_for(media_item:)
       return nil if media_item.blank?
-      return nil unless defined?(::MediaGallery::PrivateStorage) && ::MediaGallery::PrivateStorage.enabled?
       return nil unless defined?(::MediaGallery::Hls) && ::MediaGallery::Hls.respond_to?(:variants)
-
-      public_id = media_item.public_id.to_s
-      return nil if public_id.blank?
 
       variant = ::MediaGallery::Hls.variants.first.to_s
       variant = "v0" if variant.blank?
 
-      pl = ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(public_id, variant)
+      pl = packaged_variant_playlist_path_for(media_item: media_item, variant: variant)
       return nil if pl.blank? || !File.exist?(pl)
 
       midpoints = []
@@ -2207,16 +2335,12 @@ end
     # { uri: "seg_00000.ts", duration: 3.012 } in segment order.
     def packaged_segments_for(media_item:)
       return nil if media_item.blank?
-      return nil unless defined?(::MediaGallery::PrivateStorage) && ::MediaGallery::PrivateStorage.enabled?
       return nil unless defined?(::MediaGallery::Hls) && ::MediaGallery::Hls.respond_to?(:variants)
-
-      public_id = media_item.public_id.to_s
-      return nil if public_id.blank?
 
       variant = ::MediaGallery::Hls.variants.first.to_s
       variant = "v0" if variant.blank?
 
-      pl = ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(public_id, variant)
+      pl = packaged_variant_playlist_path_for(media_item: media_item, variant: variant)
       return nil if pl.blank? || !File.exist?(pl)
 
       out = []
@@ -2251,10 +2375,9 @@ end
     # compare the leak score against the content-matched A and B scores for the *same* segment.
     def reference_tables_for(media_item:, spec:, needed_count:)
   return nil if media_item.blank? || spec.blank?
-  return nil unless defined?(::MediaGallery::PrivateStorage) && ::MediaGallery::PrivateStorage.enabled?
   return nil unless defined?(::MediaGallery::Hls) && ::MediaGallery::Hls.respond_to?(:variants)
 
-  root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
+  root = packaged_hls_root_for(media_item: media_item)
   return nil if root.blank? || !Dir.exist?(root)
 
   segs = packaged_segments_for(media_item: media_item)
