@@ -174,10 +174,9 @@ plugins:
 
   # Storage profile selection and shared processing settings.
   media_gallery_default_storage_profile_key:
-    default: ""
+    default: "local"
     type: enum
     choices:
-      - ""
       - local
       - s3_1
       - s3_2
@@ -249,6 +248,8 @@ plugins:
     min: 30
     max: 3600
     client: false
+
+  ## Additional destination profiles
 
   # S3 profile 2.
   media_gallery_target_s3_profile_name:
@@ -330,7 +331,7 @@ plugins:
     max: 3600
     client: false
 
-  # Legacy compatibility settings kept for older migrations and fallbacks.
+  # Legacy compatibility settings kept only for transition / fallback.
   media_gallery_asset_storage_backend:
     default: ""
     client: false
