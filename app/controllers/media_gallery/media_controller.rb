@@ -655,7 +655,11 @@ module ::MediaGallery
 
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])
-      raise Discourse::NotFound unless item.ready?
+      unless item.ready?
+        return render_default_thumbnail(item) if item.queued_or_processing? || item.status.to_s == "failed"
+
+        raise Discourse::NotFound
+      end
 
       # Thumbnails are served via a stable URL so browsers can cache them efficiently.
       # Streaming URLs remain tokenized (short TTL) for the main media bytes.
@@ -952,17 +956,33 @@ module ::MediaGallery
     end
 
     def default_thumbnail_svg(item)
-      title = item.title.to_s
-      title = title[0, 60]
+      title = item.title.to_s[0, 60]
       safe_title = ERB::Util.html_escape(title)
+
+      processing = item.extra_metadata.is_a?(Hash) ? item.extra_metadata["processing"] : nil
+      processing = processing.is_a?(Hash) ? processing : {}
+      stage = processing["current_stage"].presence || processing["last_stage"].presence || processing["last_failed_stage"].presence
+      stage_label = ERB::Util.html_escape(stage.to_s.tr("_-", " ").squeeze(" ").strip).presence
+
+      headline, subtitle =
+        case item.status.to_s
+        when "queued"
+          ["Queued", stage_label || safe_title]
+        when "processing"
+          ["Processing…", stage_label || safe_title]
+        when "failed"
+          ["Thumbnail unavailable", stage_label || safe_title]
+        else
+          ["No thumbnail", safe_title]
+        end
 
       <<~SVG
         <svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180" role="img" aria-label="Thumbnail">
           <rect width="320" height="180" fill="#f2f2f2"/>
           <rect x="8" y="8" width="304" height="164" fill="#ffffff" stroke="#d9d9d9"/>
           <g fill="#666666" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
-            <text x="160" y="86" font-size="16" text-anchor="middle">No thumbnail</text>
-            <text x="160" y="112" font-size="12" text-anchor="middle">#{safe_title}</text>
+            <text x="160" y="86" font-size="16" text-anchor="middle">#{headline}</text>
+            <text x="160" y="112" font-size="12" text-anchor="middle">#{subtitle}</text>
           </g>
         </svg>
       SVG

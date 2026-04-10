@@ -123,8 +123,6 @@ function buildSummaryRow(label, value) {
   };
 }
 
-const TARGET_PROFILE_STORAGE_KEY = "media-gallery:selected-target-profile";
-
 function buildStateCard({ title, status, detail, meta, error }) {
   const statusLabel = titleCase(status || "unknown");
 
@@ -136,6 +134,36 @@ function buildStateCard({ title, status, detail, meta, error }) {
     meta: normalizeText(meta),
     error: error ? truncate(error, 220) : "",
   };
+}
+
+function thumbnailStateKey(item, diagnostics) {
+  const itemData = item && typeof item === "object" ? item : {};
+  const diagnosticsData = diagnostics && typeof diagnostics === "object" ? diagnostics : {};
+  const processing = diagnosticsData.processing || itemData.processing || {};
+  const status = diagnosticsData.status || itemData.status || "unknown";
+  const stage = processing.current_stage || processing.last_stage || processing.last_failed_stage || "";
+  const updatedAt = diagnosticsData.updated_at || itemData.updated_at || "";
+
+  return [status, stage, updatedAt].filter(Boolean).join(":");
+}
+
+function buildThumbnailUrl(publicId, { item = null, diagnostics = null } = {}) {
+  if (!publicId) {
+    return "";
+  }
+
+  const base =
+    diagnostics?.thumbnail_url ||
+    item?.thumbnail_url ||
+    `/media/${encodeURIComponent(publicId)}/thumbnail`;
+  const stateKey = thumbnailStateKey(item, diagnostics);
+
+  if (!stateKey) {
+    return base;
+  }
+
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}v=${encodeURIComponent(stateKey)}`;
 }
 
 export default class AdminPluginsMediaGalleryMigrationsController extends Controller {
@@ -309,7 +337,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         hasHlsLabel: item.has_hls ? "HLS" : "No HLS",
         hlsClass: badgeClassForStatus(item.has_hls ? "ok" : "neutral"),
         metaLabel: metaParts.join(" • "),
-        thumbnailUrl: item.thumbnail_url || `/media/${encodeURIComponent(item.public_id)}/thumbnail`,
+        thumbnailUrl: buildThumbnailUrl(item.public_id, { item }),
         sizeLabel: formatBytes(item.filesize_processed_bytes),
       };
     });
@@ -468,11 +496,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   }
 
   get selectedThumbnailUrl() {
-    if (!this.selectedPublicId) {
-      return "";
-    }
-
-    return this.selectedItem?.thumbnail_url || `/media/${encodeURIComponent(this.selectedPublicId)}/thumbnail`;
+    return buildThumbnailUrl(this.selectedPublicId, {
+      item: this.selectedItem,
+      diagnostics: this.selectedDiagnostics,
+    });
   }
 
   get selectedSummaryRows() {
@@ -496,15 +523,34 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
 
     const diagnostics = this.selectedDiagnostics || {};
+    const selectedItem = this.selectedItem || {};
     const processing = diagnostics.processing || {};
     const stage = processing.current_stage || processing.last_stage || processing.last_failed_stage || "—";
+    const status = diagnostics.status || selectedItem.status;
     const stale = diagnostics.processing_stale ? `Stale after ${diagnostics.processing_stale_after_minutes} min` : "Live state";
+
+    const backend = diagnostics.managed_storage_backend || selectedItem.managed_storage_backend || this.activeHealth?.backend || this.activeProfileSummary?.backend;
+    const profileLabel =
+      diagnostics.managed_storage_profile_label ||
+      selectedItem.managed_storage_profile_label ||
+      diagnostics.managed_storage_profile ||
+      selectedItem.managed_storage_profile ||
+      this.activeHealth?.label ||
+      this.activeProfileSummary?.label;
+
+    const metaParts = [stale];
+    if (["queued", "processing"].includes(String(status || "")) && (backend || profileLabel)) {
+      const destinationLabel = [backend ? titleCase(backend) : "", normalizeText(profileLabel)].filter((value) => value && value !== "—").join(" / ");
+      if (destinationLabel) {
+        metaParts.push(`Destination: ${destinationLabel}`);
+      }
+    }
 
     return buildStateCard({
       title: "Processing",
-      status: diagnostics.status || this.selectedItem?.status,
+      status,
       detail: `Stage: ${prettyLabel(stage)}`,
-      meta: stale,
+      meta: metaParts.join(" • "),
       error: diagnostics.error_message,
     });
   }
@@ -729,6 +775,11 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
 
     const diagnostics = this.selectedDiagnostics || {};
+    const mediaStatus = String(diagnostics?.status || this.selectedItem?.status || "");
+    if (["queued", "processing"].includes(mediaStatus)) {
+      return true;
+    }
+
     const activeStatuses = [
       diagnostics?.migration_copy?.status,
       diagnostics?.migration_cleanup?.status,
@@ -832,7 +883,6 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
 
     this.selectedTargetProfile = nextProfile;
-    this._persistSelectedTargetProfile(nextProfile);
     if (this.targetHealth?.profile_key !== nextProfile) {
       await this.loadStorageHealth(nextProfile);
     }
@@ -961,44 +1011,6 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     return params;
   }
 
-  _storageAvailable() {
-    return typeof window !== "undefined" && !!window.localStorage;
-  }
-
-  _storedTargetProfile() {
-    if (!this._storageAvailable()) {
-      return "";
-    }
-
-    try {
-      return window.localStorage.getItem(TARGET_PROFILE_STORAGE_KEY) || "";
-    } catch {
-      return "";
-    }
-  }
-
-  _persistSelectedTargetProfile(profileKey) {
-    if (!this._storageAvailable()) {
-      return;
-    }
-
-    try {
-      if (profileKey) {
-        window.localStorage.setItem(TARGET_PROFILE_STORAGE_KEY, profileKey);
-      } else {
-        window.localStorage.removeItem(TARGET_PROFILE_STORAGE_KEY);
-      }
-    } catch {}
-  }
-
-  _resolveStorageProfileRequest(profile) {
-    if (profile === "target") {
-      return this.selectedTargetProfileKey || this.selectedTargetProfile || profile;
-    }
-
-    return profile;
-  }
-
   _actionHeaders() {
     return {
       "Content-Type": "application/json",
@@ -1114,7 +1126,53 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     });
   }
 
-  @action
+  _mergeDiagnosticsIntoSelectedResults(diagnostics) {
+    if (!this.selectedPublicId) {
+      return;
+    }
+
+    const updatedResults = (this.searchResults || []).map((row) => {
+      if (row.public_id !== this.selectedPublicId) {
+        return row;
+      }
+
+      return {
+        ...row,
+        thumbnail_url: diagnostics?.thumbnail_url || row.thumbnail_url,
+        managed_storage_backend: diagnostics?.managed_storage_backend || row.managed_storage_backend,
+        managed_storage_profile: diagnostics?.managed_storage_profile || row.managed_storage_profile,
+        managed_storage_profile_label: diagnostics?.managed_storage_profile_label || row.managed_storage_profile_label,
+        managed_storage_location_fingerprint_key: diagnostics?.managed_storage_location_fingerprint_key || row.managed_storage_location_fingerprint_key,
+        delivery_mode: diagnostics?.delivery_mode || row.delivery_mode,
+        error_message: diagnostics?.error_message || row.error_message,
+        status: diagnostics?.status || row.status,
+      };
+    });
+
+    this.searchResults = updatedResults;
+
+    const updatedSelection = updatedResults.find((row) => row.public_id === this.selectedPublicId);
+    if (updatedSelection) {
+      this.selectedItem = updatedSelection;
+      return;
+    }
+
+    if (this.selectedItem?.public_id === this.selectedPublicId) {
+      this.selectedItem = {
+        ...this.selectedItem,
+        thumbnail_url: diagnostics?.thumbnail_url || this.selectedItem.thumbnail_url,
+        managed_storage_backend: diagnostics?.managed_storage_backend || this.selectedItem.managed_storage_backend,
+        managed_storage_profile: diagnostics?.managed_storage_profile || this.selectedItem.managed_storage_profile,
+        managed_storage_profile_label: diagnostics?.managed_storage_profile_label || this.selectedItem.managed_storage_profile_label,
+        managed_storage_location_fingerprint_key:
+          diagnostics?.managed_storage_location_fingerprint_key || this.selectedItem.managed_storage_location_fingerprint_key,
+        delivery_mode: diagnostics?.delivery_mode || this.selectedItem.delivery_mode,
+        error_message: diagnostics?.error_message || this.selectedItem.error_message,
+        status: diagnostics?.status || this.selectedItem.status,
+      };
+    }
+  }
+
   async refreshSelected(options = {}) {
     if (!this.selectedPublicId) return;
 
@@ -1138,31 +1196,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         await this.search();
       }
 
-      if (updateResults) {
-        const refreshedSelection = this.searchResults.find((row) => row.public_id === this.selectedPublicId);
-        if (refreshedSelection) {
-          this.selectedItem = refreshedSelection;
-        }
-
-        const updatedResults = (this.searchResults || []).map((row) => {
-          if (row.public_id !== this.selectedPublicId) {
-            return row;
-          }
-          return {
-            ...row,
-            managed_storage_backend: diagnostics?.managed_storage_backend || row.managed_storage_backend,
-            managed_storage_profile: diagnostics?.managed_storage_profile || row.managed_storage_profile,
-            managed_storage_profile_label: diagnostics?.managed_storage_profile_label || row.managed_storage_profile_label,
-            managed_storage_location_fingerprint_key: diagnostics?.managed_storage_location_fingerprint_key || row.managed_storage_location_fingerprint_key,
-            delivery_mode: diagnostics?.delivery_mode || row.delivery_mode,
-            status: diagnostics?.status || row.status,
-          };
-        });
-        this.searchResults = updatedResults;
-        const updatedSelection = updatedResults.find((row) => row.public_id === this.selectedPublicId);
-        if (updatedSelection) {
-          this.selectedItem = updatedSelection;
-        }
+      if (updateResults || !includeSearchRefresh) {
+        this._mergeDiagnosticsIntoSelectedResults(diagnostics);
       }
 
       await this._ensureValidSelectedTargetProfile();
@@ -1449,15 +1484,13 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   async loadStorageHealth(profile) {
     this.storageBusy = true;
     this.storageError = "";
-    const resolvedProfile = this._resolveStorageProfileRequest(profile);
     try {
-      const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/health.json?profile=${encodeURIComponent(resolvedProfile)}`);
-      if (resolvedProfile === "active") {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/health.json?profile=${encodeURIComponent(profile)}`);
+      if (profile === "active") {
         this.activeHealth = json;
       } else {
         this.targetHealth = json;
-        this.selectedTargetProfile = json?.profile_key || resolvedProfile;
-        this._persistSelectedTargetProfile(this.selectedTargetProfile);
+        this.selectedTargetProfile = json?.profile_key || profile;
       }
     } catch (e) {
       this.storageError = e?.message || String(e);
@@ -1470,14 +1503,13 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   async runStorageProbe(profile) {
     this.storageBusy = true;
     this.storageError = "";
-    const resolvedProfile = this._resolveStorageProfileRequest(profile);
     try {
       const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/probe.json`, {
         method: "POST",
         headers: this._actionHeaders(),
-        body: JSON.stringify({ profile: resolvedProfile }),
+        body: JSON.stringify({ profile }),
       });
-      if (resolvedProfile === "active") this.activeProbe = json;
+      if (profile === "active") this.activeProbe = json;
       else this.targetProbe = json;
     } catch (e) {
       this.storageError = e?.message || String(e);
@@ -1495,12 +1527,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.activeProfileSummary = json?.default_profile || json?.active_profile || null;
       this.availableTargetProfiles = Array.isArray(json?.profiles) ? json.profiles : (Array.isArray(json?.target_profiles) ? json.target_profiles : []);
       const preferred = json?.default_target_profile_key;
-      const stored = this._storedTargetProfile();
       const options = this.targetProfileOptions;
-      const storedOption = options.find((entry) => entry.profile_key === stored);
       const preferredOption = options.find((entry) => entry.profile_key === preferred && !this._isSameAsSourceProfile(entry.profile_key));
-      this.selectedTargetProfile = storedOption?.profile_key || preferredOption?.profile_key || this._preferredTargetProfileFromOptions(options) || this.availableTargetProfiles[0]?.profile_key || "";
-      this._persistSelectedTargetProfile(this.selectedTargetProfile);
+      this.selectedTargetProfile = preferredOption?.profile_key || this._preferredTargetProfileFromOptions(options) || this.availableTargetProfiles[0]?.profile_key || "";
     } catch (e) {
       this.storageError = e?.message || String(e);
     } finally {
@@ -1511,7 +1540,6 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @action
   async onTargetProfileChange(event) {
     this.selectedTargetProfile = event?.target?.value || "";
-    this._persistSelectedTargetProfile(this.selectedTargetProfile);
     this.targetProbe = null;
     if (this.selectedTargetProfile) {
       await this.loadStorageHealth(this.selectedTargetProfile);
