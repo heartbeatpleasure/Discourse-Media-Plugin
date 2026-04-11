@@ -13,11 +13,12 @@ module ::MediaGallery
     VERIFY_STATE_KEY = "migration_verify"
     DIGEST_DETAIL_LIMIT = 20
     HLS_DETAIL_LIMIT = 10
+    SUPPORTED_ROLE_NAMES = %w[main thumbnail hls].freeze
 
     def verify!(item, target_profile: "target", requested_by: nil)
       raise "media_item_required" if item.blank?
 
-      plan = ::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile)
+      plan = build_verification_plan(item, target_profile: target_profile)
       source = (plan[:source] || plan["source"] || {}).deep_symbolize_keys
       target = (plan[:target] || plan["target"] || {}).deep_symbolize_keys
       warnings = Array(plan[:warnings] || plan["warnings"]).map(&:to_s)
@@ -103,6 +104,69 @@ module ::MediaGallery
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
     end
 
+    def build_verification_plan(item, target_profile:)
+      source = source_summary_for(item)
+      target = target_summary_for(target_profile)
+      source_store = store_for_summary(source)
+      flat_objects = ::MediaGallery::MigrationPreview.objects_for_item(item, store: source_store)
+      grouped_objects = flat_objects.group_by { |object| object[:role_name].to_s }
+
+      roles = SUPPORTED_ROLE_NAMES.filter_map do |role_name|
+        role = ::MediaGallery::AssetManifest.role_for(item, role_name)
+        next if role.blank?
+
+        {
+          name: role_name,
+          role: role,
+          objects: Array(grouped_objects[role_name]).map do |object|
+            {
+              key: object[:key].to_s,
+              content_type: object[:content_type].to_s.presence,
+            }
+          end,
+        }
+      end
+
+      warnings = []
+      warnings << "target_profile_not_configured" if target[:backend].to_s.blank?
+      warnings << "source_and_target_same_profile" if source[:profile_key].present? && source[:profile_key].to_s == target[:profile_key].to_s
+      warnings << "source_and_target_same_location" if source[:location_fingerprint_key].present? && source[:location_fingerprint_key].to_s == target[:location_fingerprint_key].to_s
+      warnings << "source_backend_upload_roles_present" if roles.any? { |role_row| role_row.dig(:role, "backend").to_s == "upload" }
+      warnings << "verify_store_missing" if source_store.blank? || store_for_summary(target).blank?
+      warnings.uniq!
+
+      {
+        source: source,
+        target: target,
+        roles: roles,
+        warnings: warnings,
+        totals: {
+          object_count: roles.sum { |role_row| Array(role_row[:objects]).length }
+        }
+      }
+    end
+    private_class_method :build_verification_plan
+
+    def source_summary_for(item)
+      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
+      backend = item.managed_storage_backend.presence || ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(profile_key) || ::MediaGallery::StorageSettingsResolver.active_backend
+      {
+        profile: profile_key,
+        backend: backend,
+        profile_key: profile_key,
+        label: ::MediaGallery::StorageSettingsResolver.profile_label_for_key(profile_key),
+        config: ::MediaGallery::StorageSettingsResolver.sanitized_config_for_profile_key(profile_key),
+        location_fingerprint: ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(profile_key),
+        location_fingerprint_key: ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(profile_key),
+      }
+    end
+    private_class_method :source_summary_for
+
+    def target_summary_for(target_profile)
+      ::MediaGallery::StorageSettingsResolver.profile_summary(target_profile).deep_symbolize_keys
+    end
+    private_class_method :target_summary_for
+
     def verify_plan_objects(plan)
       source_summary = (plan[:source] || plan["source"] || {}).deep_symbolize_keys
       target_summary = (plan[:target] || plan["target"] || {}).deep_symbolize_keys
@@ -165,6 +229,10 @@ module ::MediaGallery
           end
 
           result[:bytes_matched_count] += 1
+
+          if skip_expensive_digest_for_object?(object)
+            next
+          end
 
           source_digest = digest_for_object(store: source_store, key: key, info: source_info, tmpdir: tmpdir, label: "src", index: index)
           target_digest = digest_for_object(store: target_store, key: key, info: target_info, tmpdir: tmpdir, label: "dst", index: index)
@@ -233,6 +301,14 @@ module ::MediaGallery
       value
     end
     private_class_method :normalize_info
+
+    def skip_expensive_digest_for_object?(object)
+      return false unless object.is_a?(Hash)
+      return false unless object[:role_name].to_s == "hls"
+
+      segment_like_reference?(object[:key])
+    end
+    private_class_method :skip_expensive_digest_for_object?
 
     def digest_for_object(store:, key:, info:, tmpdir:, label:, index:)
       checksum = info[:checksum_sha256].to_s.presence

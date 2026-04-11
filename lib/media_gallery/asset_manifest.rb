@@ -142,7 +142,7 @@ module ::MediaGallery
             "content_type" => "image/jpeg",
             "legacy" => true
           }
-        elsif item.public_id.present?
+        elsif implicit_legacy_thumbnail_available?(item)
           {
             "backend" => "local",
             "key" => ::MediaGallery::PrivateStorage.thumbnail_rel_path(item),
@@ -154,6 +154,17 @@ module ::MediaGallery
         nil
       end
     end
+
+    def implicit_legacy_thumbnail_available?(item)
+      return false if item.blank? || item.public_id.blank?
+      return false if item.media_type.to_s == "audio"
+
+      thumbnail_path = ::MediaGallery::PrivateStorage.thumbnail_abs_path(item)
+      File.exist?(thumbnail_path)
+    rescue
+      false
+    end
+    private_class_method :implicit_legacy_thumbnail_available?
 
     def inferred_main_content_type(item)
       case item.media_type.to_s

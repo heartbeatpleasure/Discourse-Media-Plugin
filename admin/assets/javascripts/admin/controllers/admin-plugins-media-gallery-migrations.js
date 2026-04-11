@@ -147,6 +147,8 @@ function thumbnailStateKey(item, diagnostics) {
   return [status, stage, updatedAt].filter(Boolean).join(":");
 }
 
+const TARGET_PROFILE_STORAGE_KEY = "media-gallery:migrations:selected-target-profile";
+
 function buildThumbnailUrl(publicId, { item = null, diagnostics = null } = {}) {
   if (!publicId) {
     return "";
@@ -222,6 +224,27 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   autoRefreshTimer = null;
   autoRefreshIntervalMs = 5000;
   autoRefreshSearchCounter = 0;
+
+  _readStoredTargetProfile() {
+    try {
+      return window?.localStorage?.getItem(TARGET_PROFILE_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  _persistTargetProfile(profileKey) {
+    const value = profileKey == null ? "" : String(profileKey);
+    try {
+      if (!value) {
+        window?.localStorage?.removeItem(TARGET_PROFILE_STORAGE_KEY);
+      } else {
+        window?.localStorage?.setItem(TARGET_PROFILE_STORAGE_KEY, value);
+      }
+    } catch {
+      // ignore storage failures
+    }
+  }
 
   resetState() {
     this._stopAutoRefresh();
@@ -883,6 +906,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
 
     this.selectedTargetProfile = nextProfile;
+    this._persistTargetProfile(nextProfile);
     if (this.targetHealth?.profile_key !== nextProfile) {
       await this.loadStorageHealth(nextProfile);
     }
@@ -1484,13 +1508,15 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   async loadStorageHealth(profile) {
     this.storageBusy = true;
     this.storageError = "";
+    const requestedProfile = profile === "target" ? this.selectedTargetProfileKey : profile;
     try {
-      const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/health.json?profile=${encodeURIComponent(profile)}`);
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/health.json?profile=${encodeURIComponent(requestedProfile)}`);
       if (profile === "active") {
         this.activeHealth = json;
       } else {
         this.targetHealth = json;
-        this.selectedTargetProfile = json?.profile_key || profile;
+        this.selectedTargetProfile = json?.profile_key || requestedProfile;
+        this._persistTargetProfile(this.selectedTargetProfile);
       }
     } catch (e) {
       this.storageError = e?.message || String(e);
@@ -1503,11 +1529,12 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   async runStorageProbe(profile) {
     this.storageBusy = true;
     this.storageError = "";
+    const requestedProfile = profile === "target" ? this.selectedTargetProfileKey : profile;
     try {
       const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/probe.json`, {
         method: "POST",
         headers: this._actionHeaders(),
-        body: JSON.stringify({ profile }),
+        body: JSON.stringify({ profile: requestedProfile }),
       });
       if (profile === "active") this.activeProbe = json;
       else this.targetProbe = json;
@@ -1528,8 +1555,11 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.availableTargetProfiles = Array.isArray(json?.profiles) ? json.profiles : (Array.isArray(json?.target_profiles) ? json.target_profiles : []);
       const preferred = json?.default_target_profile_key;
       const options = this.targetProfileOptions;
+      const stored = this._readStoredTargetProfile();
+      const storedOption = options.find((entry) => entry.profile_key === stored && !this._isSameAsSourceProfile(entry.profile_key));
       const preferredOption = options.find((entry) => entry.profile_key === preferred && !this._isSameAsSourceProfile(entry.profile_key));
-      this.selectedTargetProfile = preferredOption?.profile_key || this._preferredTargetProfileFromOptions(options) || this.availableTargetProfiles[0]?.profile_key || "";
+      this.selectedTargetProfile = storedOption?.profile_key || preferredOption?.profile_key || this._preferredTargetProfileFromOptions(options) || this.availableTargetProfiles[0]?.profile_key || "";
+      this._persistTargetProfile(this.selectedTargetProfile);
     } catch (e) {
       this.storageError = e?.message || String(e);
     } finally {
@@ -1540,6 +1570,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @action
   async onTargetProfileChange(event) {
     this.selectedTargetProfile = event?.target?.value || "";
+    this._persistTargetProfile(this.selectedTargetProfile);
     this.targetProbe = null;
     if (this.selectedTargetProfile) {
       await this.loadStorageHealth(this.selectedTargetProfile);
