@@ -464,9 +464,10 @@ export default RouteTemplate(
                       <div class="mg-management__result-subtitle">{{item.public_id}}</div>
                       <div class="mg-management__muted">by {{item.username}}</div>
                       <div class="mg-management__badge-row">
-                        <span class="mg-management__badge {{item.statusBadgeClass}}">{{item.status}}</span>
-                        <span class="mg-management__badge">{{item.media_type}}</span>
-                        <span class="mg-management__badge {{item.visibilityBadgeClass}}">{{if item.hidden "Hidden" "Visible"}}</span>
+                        <span class="mg-management__badge {{item.statusBadgeClass}}">{{item.displayStatus}}</span>
+                        <span class="mg-management__badge">{{item.displayMediaType}}</span>
+                        <span class="mg-management__badge">{{item.displayStorage}}</span>
+                        <span class="mg-management__badge {{item.visibilityBadgeClass}}">{{item.displayVisibility}}</span>
                       </div>
                     </div>
 
@@ -511,9 +512,11 @@ export default RouteTemplate(
               <div class="mg-management__selected-header-copy">
                 <div class="mg-management__selected-title">{{@controller.selectedItem.title}}</div>
                 <div class="mg-management__selected-subtitle">{{@controller.selectedItem.public_id}}</div>
+                <div class="mg-management__muted">by {{@controller.selectedItem.username}}</div>
                 <div class="mg-management__badge-row">
-                  <span class="mg-management__badge {{@controller.selectedStatusBadgeClass}}">{{@controller.selectedItem.status}}</span>
-                  <span class="mg-management__badge">{{@controller.selectedItem.media_type}}</span>
+                  <span class="mg-management__badge {{@controller.selectedStatusBadgeClass}}">{{@controller.selectedDisplayStatus}}</span>
+                  <span class="mg-management__badge">{{@controller.selectedDisplayMediaType}}</span>
+                  <span class="mg-management__badge">{{@controller.selectedDisplayStorage}}</span>
                   <span class="mg-management__badge {{@controller.selectedVisibilityBadgeClass}}">{{if @controller.selectedItem.hidden "Hidden" "Visible"}}</span>
                 </div>
               </div>
@@ -542,20 +545,35 @@ export default RouteTemplate(
 
                 <div class="mg-management__edit-grid" style="margin-top: 1rem;">
                   <div class="mg-management__field">
-                    <label>Gender</label>
+                    <label>{{i18n "media_gallery.gender_label"}}</label>
                     <select value={{@controller.editGender}} {{on "change" @controller.onEditGender}}>
-                      <option value="male">Male</option>
-                      <option value="female">Female</option>
-                      <option value="both">Both</option>
-                      <option value="non_binary">Non-binary</option>
-                      <option value="objects">Objects</option>
-                      <option value="other">Other</option>
+                      <option value="">{{i18n "media_gallery.genders.select_placeholder"}}</option>
+                      <option value="male">{{i18n "media_gallery.genders.male"}}</option>
+                      <option value="female">{{i18n "media_gallery.genders.female"}}</option>
+                      <option value="both">{{i18n "media_gallery.genders.both"}}</option>
+                      <option value="non_binary">{{i18n "media_gallery.genders.non_binary"}}</option>
+                      <option value="objects">{{i18n "media_gallery.genders.objects"}}</option>
+                      <option value="other">{{i18n "media_gallery.genders.other"}}</option>
                     </select>
                   </div>
 
                   <div class="mg-management__field">
                     <label>Tags</label>
-                    <input type="text" value={{@controller.editTags}} placeholder="comma,separated,tags" {{on "input" @controller.onEditTags}} />
+                    {{#if @controller.usingAllowedTags}}
+                      <div class="mg-management__tag-picker">
+                        {{#each @controller.decoratedAllowedTagOptions as |tag|}}
+                          <button
+                            type="button"
+                            class="mg-management__tag-chip {{if tag.isSelected "is-selected"}}"
+                            {{on "click" (fn @controller.toggleTag tag.value)}}
+                          >
+                            {{tag.label}}
+                          </button>
+                        {{/each}}
+                      </div>
+                    {{else}}
+                      <input type="text" value={{@controller.editTagsText}} placeholder="comma,separated,tags" {{on "input" @controller.onEditTagsText}} />
+                    {{/if}}
                   </div>
                 </div>
 
@@ -596,15 +614,26 @@ export default RouteTemplate(
                     {{#each @controller.historyEntries as |entry|}}
                       <article class="mg-management__history-card">
                         <div class="mg-management__history-meta">
-                          <span>{{entry.at}}</span>
+                          <span>{{entry.prettyAt}}</span>
                           <span>{{entry.admin_username}}</span>
-                          <strong>{{entry.action}}</strong>
+                          <strong>{{entry.actionLabel}}</strong>
                         </div>
                         {{#if entry.note}}
                           <div>{{entry.note}}</div>
                         {{/if}}
-                        {{#if entry.changes}}
-                          <code class="mg-management__changes">{{entry.changesSummary}}</code>
+                        {{#if entry.changeRows.length}}
+                          <div class="mg-management__history-list">
+                            {{#each entry.changeRows as |row|}}
+                              <div class="mg-management__history-row">
+                                <div class="mg-management__history-row-label">{{row.label}}</div>
+                                <div class="mg-management__history-row-values">
+                                  <span>{{row.from}}</span>
+                                  <span class="mg-management__history-arrow">→</span>
+                                  <span>{{row.to}}</span>
+                                </div>
+                              </div>
+                            {{/each}}
+                          </div>
                         {{/if}}
                       </article>
                     {{/each}}

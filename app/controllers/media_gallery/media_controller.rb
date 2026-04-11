@@ -770,14 +770,11 @@ module ::MediaGallery
     def ensure_item_visible_to_current_user!(item)
       return if item.blank?
       return if !item.respond_to?(:admin_hidden?) || !item.admin_hidden?
-      return if current_user&.staff? || current_user&.admin?
 
       raise Discourse::NotFound
     end
 
     def apply_admin_visibility_filter(scope)
-      return scope if current_user&.staff? || current_user&.admin?
-
       scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = false")
     end
 

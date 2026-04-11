@@ -50,6 +50,10 @@ module ::MediaGallery
       changes["gender"] = [item.gender.to_s, subject] if item.gender.to_s != subject
       changes["tags"] = [Array(item.tags).map(&:to_s), tags] if Array(item.tags).map(&:to_s) != tags
 
+      if changes.blank?
+        return render_json_dump(ok: true, item: management_item_payload(item), message: "No changes to save.")
+      end
+
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
       append_management_log!(meta, action: "update_metadata", item: item, note: note, changes: changes)
 
@@ -94,13 +98,19 @@ module ::MediaGallery
         visibility["unhidden_by"] = current_user.username
       end
 
+      visibility_changes = { "hidden" => [item.admin_hidden?, hidden] }
+      previous_reason = item.admin_visibility_state["reason"].to_s.presence
+      if previous_reason != reason
+        visibility_changes["reason"] = [previous_reason, reason]
+      end
+
       meta[VISIBILITY_KEY] = visibility
       append_management_log!(
         meta,
         action: hidden ? "hide" : "unhide",
         item: item,
         note: note,
-        changes: { "hidden" => [item.admin_hidden?, hidden], "reason" => [item.admin_visibility_state["reason"], reason] }
+        changes: visibility_changes
       )
 
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
@@ -493,6 +503,7 @@ module ::MediaGallery
         hidden: item.admin_hidden?,
         visibility: visibility,
         processing: processing_metadata(item),
+        allowed_tags: ::MediaGallery::Permissions.allowed_tags,
         management_log: item.admin_management_log,
       }
     end

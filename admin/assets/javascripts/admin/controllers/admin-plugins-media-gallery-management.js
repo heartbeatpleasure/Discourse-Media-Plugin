@@ -2,6 +2,15 @@ import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
 
+const GENDER_OPTIONS = [
+  { value: "male", label: "Male hearts" },
+  { value: "female", label: "Female hearts" },
+  { value: "both", label: "Both male and female hearts" },
+  { value: "non_binary", label: "Non-binary hearts" },
+  { value: "objects", label: "Heart-related objects" },
+  { value: "other", label: "Other" },
+];
+
 function formatDateTime(value) {
   if (!value) {
     return "—";
@@ -18,6 +27,12 @@ function formatDateTime(value) {
   }).format(date);
 }
 
+function titleize(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function normalizeTags(tags) {
   return Array.isArray(tags)
     ? tags.map((tag) => String(tag || "").trim().toLowerCase()).filter(Boolean)
@@ -25,6 +40,86 @@ function normalizeTags(tags) {
         .split(",")
         .map((tag) => String(tag || "").trim().toLowerCase())
         .filter(Boolean);
+}
+
+function arrayEqual(left, right) {
+  const a = Array.isArray(left) ? left : [];
+  const b = Array.isArray(right) ? right : [];
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  return a.every((value, index) => String(value) === String(b[index]));
+}
+
+function stringifyValue(value, key = "") {
+  if (key === "gender") {
+    return genderLabel(value);
+  }
+
+  if (key === "hidden") {
+    return value ? "Hidden" : "Visible";
+  }
+
+  if (Array.isArray(value)) {
+    return value.length ? value.map((entry) => String(entry || "").trim()).filter(Boolean).join(", ") : "—";
+  }
+
+  const normalized = String(value ?? "");
+  return normalized.trim() ? normalized : "—";
+}
+
+function formatHistoryAction(action) {
+  switch (String(action || "")) {
+    case "update_metadata":
+      return "Updated metadata";
+    case "hide":
+      return "Hidden item";
+    case "unhide":
+      return "Made item visible";
+    default:
+      return titleize(action || "change");
+  }
+}
+
+function formatHistoryChanges(entry) {
+  const changes = entry?.changes;
+  if (!changes || typeof changes !== "object") {
+    return [];
+  }
+
+  return Object.entries(changes)
+    .map(([key, pair]) => {
+      const fromValue = Array.isArray(pair) ? pair[0] : undefined;
+      const toValue = Array.isArray(pair) ? pair[1] : undefined;
+      if (
+        JSON.stringify(fromValue ?? null) === JSON.stringify(toValue ?? null)
+      ) {
+        return null;
+      }
+
+      let label = titleize(key);
+      if (key === "gender") {
+        label = "The file contains";
+      } else if (key === "hidden") {
+        label = "Visibility";
+      }
+
+      return {
+        key,
+        label,
+        from: stringifyValue(fromValue, key),
+        to: stringifyValue(toValue, key),
+      };
+    })
+    .filter(Boolean);
+}
+
+function genderLabel(value) {
+  return (
+    GENDER_OPTIONS.find((option) => option.value === value)?.label ||
+    stringifyValue(value)
+  );
 }
 
 export default class AdminPluginsMediaGalleryManagementController extends Controller {
@@ -48,7 +143,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked editTitle = "";
   @tracked editDescription = "";
   @tracked editGender = "";
-  @tracked editTags = "";
+  @tracked editTags = [];
+  @tracked editTagsText = "";
   @tracked adminNote = "";
 
   @tracked isSaving = false;
@@ -77,7 +173,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.editTitle = "";
     this.editDescription = "";
     this.editGender = "";
-    this.editTags = "";
+    this.editTags = [];
+    this.editTagsText = "";
     this.adminNote = "";
 
     this.isSaving = false;
@@ -94,8 +191,53 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return !!this.selectedItem;
   }
 
+  get allowedTagOptions() {
+    return Array.isArray(this.selectedItem?.allowed_tags)
+      ? this.selectedItem.allowed_tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+      : [];
+  }
+
+  get usingAllowedTags() {
+    return this.allowedTagOptions.length > 0;
+  }
+
+  get decoratedAllowedTagOptions() {
+    return this.allowedTagOptions.map((tag) => ({
+      value: String(tag || "").trim().toLowerCase(),
+      label: String(tag || "").trim(),
+      isSelected: this.editTags.includes(String(tag || "").trim().toLowerCase()),
+    }));
+  }
+
+  get currentTagValues() {
+    return this.usingAllowedTags ? this.editTags : normalizeTags(this.editTagsText);
+  }
+
+  get metadataDirty() {
+    if (!this.selectedItem) {
+      return false;
+    }
+
+    const originalTags = Array.isArray(this.selectedItem.tags)
+      ? this.selectedItem.tags.map((tag) => String(tag || "").trim().toLowerCase())
+      : [];
+
+    return (
+      String(this.selectedItem.title || "") !== String(this.editTitle || "").trim() ||
+      String(this.selectedItem.description || "") !== String(this.editDescription || "").trim() ||
+      String(this.selectedItem.gender || "") !== String(this.editGender || "") ||
+      !arrayEqual(originalTags, this.currentTagValues)
+    );
+  }
+
   get saveDisabled() {
-    return !this.hasSelectedItem || this.isSaving || !this.editTitle?.trim() || !this.editGender;
+    return (
+      !this.hasSelectedItem ||
+      this.isSaving ||
+      !this.editTitle?.trim() ||
+      !this.editGender ||
+      !this.metadataDirty
+    );
   }
 
   get toggleHiddenDisabled() {
@@ -118,6 +260,13 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return (Array.isArray(this.searchResults) ? this.searchResults : []).map((item) => ({
       ...item,
       isSelected: item?.public_id === this.selectedPublicId,
+      displayStatus: titleize(item?.status),
+      displayMediaType: titleize(item?.media_type),
+      displayVisibility: item?.hidden ? "Hidden" : "Visible",
+      displayStorage:
+        item?.managed_storage_profile_label ||
+        item?.managed_storage_profile ||
+        titleize(item?.managed_storage_backend),
       statusBadgeClass:
         item?.status === "ready"
           ? "is-success"
@@ -144,12 +293,29 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return this.selectedItem?.hidden ? "is-warning" : "";
   }
 
+  get selectedDisplayStatus() {
+    return titleize(this.selectedItem?.status);
+  }
+
+  get selectedDisplayMediaType() {
+    return titleize(this.selectedItem?.media_type);
+  }
+
+  get selectedDisplayStorage() {
+    return (
+      this.selectedItem?.managed_storage_profile_label ||
+      this.selectedItem?.managed_storage_profile ||
+      titleize(this.selectedItem?.managed_storage_backend)
+    );
+  }
+
+
   get selectedMetaRows() {
     const item = this.selectedItem || {};
     return [
-      { label: "public_id", value: item.public_id || "—" },
-      { label: "Status", value: item.status || "—" },
-      { label: "Media type", value: item.media_type || "—" },
+      { label: "Status", value: titleize(item.status) || "—" },
+      { label: "Media type", value: titleize(item.media_type) || "—" },
+      { label: "The file contains", value: genderLabel(item.gender) },
       { label: "Owner", value: item.username ? `${item.username} (#${item.user_id})` : String(item.user_id || "—") },
       { label: "Created", value: formatDateTime(item.created_at) },
       { label: "Updated", value: formatDateTime(item.updated_at) },
@@ -162,7 +328,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   get historyEntries() {
     return (Array.isArray(this.selectedItem?.management_log) ? this.selectedItem.management_log : []).map((entry) => ({
       ...entry,
-      changesSummary: entry?.changes ? JSON.stringify(entry.changes) : "",
+      actionLabel: formatHistoryAction(entry?.action),
+      prettyAt: formatDateTime(entry?.at),
+      changeRows: formatHistoryChanges(entry),
     }));
   }
 
@@ -220,8 +388,91 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.editTitle = item?.title || "";
     this.editDescription = item?.description || "";
     this.editGender = item?.gender || "";
-    this.editTags = Array.isArray(item?.tags) ? item.tags.join(", ") : "";
+    this.editTags = Array.isArray(item?.tags)
+      ? item.tags.map((tag) => String(tag || "").trim().toLowerCase()).filter(Boolean)
+      : [];
+    this.editTagsText = this.editTags.join(", ");
     this.adminNote = "";
+  }
+
+  _updateSearchInfo() {
+    this.searchInfo = `${this.searchResults.length} item(s) found.`;
+  }
+
+  _matchesActiveFilters(item) {
+    const query = String(this.searchQuery || "").trim().toLowerCase();
+    if (query) {
+      const haystack = [item?.public_id, item?.title, item?.id, item?.username]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      if (!haystack.includes(query)) {
+        return false;
+      }
+    }
+
+    if (this.statusFilter !== "all" && item?.status !== this.statusFilter) {
+      return false;
+    }
+
+    if (this.mediaTypeFilter !== "all" && item?.media_type !== this.mediaTypeFilter) {
+      return false;
+    }
+
+    if (this.hiddenFilter === "hidden" && !item?.hidden) {
+      return false;
+    }
+
+    if (this.hiddenFilter === "visible" && item?.hidden) {
+      return false;
+    }
+
+    return true;
+  }
+
+  _syncSearchResult(item) {
+    if (!item?.public_id) {
+      return;
+    }
+
+    const next = {
+      id: item.id,
+      public_id: item.public_id,
+      title: item.title,
+      status: item.status,
+      created_at: item.created_at,
+      user_id: item.user_id,
+      username: item.username,
+      media_type: item.media_type,
+      error_message: item.error_message,
+      thumbnail_url: item.thumbnail_url,
+      managed_storage_backend: item.managed_storage_backend,
+      managed_storage_profile: item.managed_storage_profile,
+      managed_storage_profile_label: item.managed_storage_profile_label,
+      managed_storage_location_fingerprint_key: item.managed_storage_location_fingerprint_key,
+      delivery_mode: item.delivery_mode,
+      has_hls: item.has_hls,
+      hidden: item.hidden,
+      hidden_reason: item.visibility?.reason || item.hidden_reason,
+    };
+
+    const existing = Array.isArray(this.searchResults) ? [...this.searchResults] : [];
+    const index = existing.findIndex((entry) => entry?.public_id === item.public_id);
+    if (!this._matchesActiveFilters(next)) {
+      if (index >= 0) {
+        existing.splice(index, 1);
+        this.searchResults = existing;
+        this._updateSearchInfo();
+      }
+      return;
+    }
+
+    if (index >= 0) {
+      existing.splice(index, 1, { ...existing[index], ...next });
+    } else {
+      existing.unshift(next);
+    }
+    this.searchResults = existing;
+    this._updateSearchInfo();
   }
 
   @action onSearchInput(event) {
@@ -252,8 +503,24 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.editGender = event?.target?.value || "";
   }
 
-  @action onEditTags(event) {
-    this.editTags = event?.target?.value || "";
+  @action onEditTagsText(event) {
+    this.editTagsText = event?.target?.value || "";
+  }
+
+  @action toggleTag(tag) {
+    const normalized = String(tag || "").trim().toLowerCase();
+    if (!normalized) {
+      return;
+    }
+
+    const current = Array.isArray(this.editTags) ? [...this.editTags] : [];
+    const index = current.indexOf(normalized);
+    if (index >= 0) {
+      current.splice(index, 1);
+    } else {
+      current.push(normalized);
+    }
+    this.editTags = current;
   }
 
   @action onAdminNote(event) {
@@ -287,7 +554,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         method: "GET",
       });
       this.searchResults = Array.isArray(json?.items) ? json.items : [];
-      this.searchInfo = `${this.searchResults.length} item(s) found.`;
+      this._updateSearchInfo();
     } catch (e) {
       this.searchResults = [];
       this.searchError = e?.message || String(e);
@@ -304,6 +571,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     }
 
     this.selectedPublicId = publicId;
+    this.selectedItem = { ...(this.selectedItem?.public_id === publicId ? this.selectedItem : {}), ...item };
     await this.refreshSelected();
   }
 
@@ -323,6 +591,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       });
       this.selectedItem = json;
       this._syncEditForm(json);
+      this._syncSearchResult(json);
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
@@ -345,16 +614,16 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         method: "PUT",
         body: JSON.stringify({
           title: this.editTitle.trim(),
-          description: this.editDescription,
+          description: String(this.editDescription || "").trim(),
           gender: this.editGender,
-          tags: normalizeTags(this.editTags),
+          tags: this.currentTagValues,
           admin_note: this.adminNote,
         }),
       });
       this.selectedItem = json?.item || this.selectedItem;
       this._syncEditForm(this.selectedItem);
       this.noticeMessage = json?.message || "Item updated.";
-      await this.search();
+      this._syncSearchResult(this.selectedItem);
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
@@ -384,7 +653,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       this.selectedItem = json?.item || this.selectedItem;
       this._syncEditForm(this.selectedItem);
       this.noticeMessage = json?.message || "Visibility updated.";
-      await this.search();
+      this._syncSearchResult(this.selectedItem);
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
@@ -412,9 +681,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         body: JSON.stringify({ admin_note: this.adminNote }),
       });
       this.noticeMessage = json?.message || "Item deleted.";
+      this.searchResults = this.searchResults.filter((entry) => entry?.public_id !== this.selectedPublicId);
+      this._updateSearchInfo();
       this.selectedItem = null;
       this.selectedPublicId = "";
-      await this.search();
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
@@ -439,7 +709,6 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       });
       this.noticeMessage = "Processing retry queued.";
       await this.refreshSelected();
-      await this.search();
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
