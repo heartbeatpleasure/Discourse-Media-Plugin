@@ -5,208 +5,623 @@ import { i18n } from "discourse-i18n";
 
 export default RouteTemplate(
   <template>
+    <style>
+      .media-gallery-admin-management {
+        --mg-surface: var(--secondary);
+        --mg-surface-alt: var(--primary-very-low);
+        --mg-border: var(--primary-low);
+        --mg-muted: var(--primary-medium);
+        --mg-radius: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .media-gallery-admin-management p,
+      .media-gallery-admin-management h1,
+      .media-gallery-admin-management h2,
+      .media-gallery-admin-management h3 {
+        margin: 0;
+      }
+
+      .mg-management__grid,
+      .mg-management__filters,
+      .mg-management__summary-grid,
+      .mg-management__edit-grid,
+      .mg-management__history-list,
+      .mg-management__results-list {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .mg-management__grid {
+        grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.95fr);
+        align-items: start;
+      }
+
+      .mg-management__panel {
+        background: var(--mg-surface);
+        border: 1px solid var(--mg-border);
+        border-radius: var(--mg-radius);
+        padding: 1rem 1.125rem;
+        min-width: 0;
+        overflow: hidden;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
+      .mg-management__panel-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.9rem;
+      }
+
+      .mg-management__panel-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+
+      .mg-management__muted {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-management__filters {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        align-items: end;
+      }
+
+      .mg-management__field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 0;
+      }
+
+      .mg-management__field.is-search {
+        grid-column: span 2;
+      }
+
+      .mg-management__field label {
+        font-weight: 600;
+        font-size: var(--font-down-1);
+      }
+
+      .mg-management__field input,
+      .mg-management__field select,
+      .mg-management__field textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--mg-border);
+        border-radius: 12px;
+        background: var(--primary-very-low);
+        min-height: 42px;
+      }
+
+      .mg-management__field textarea {
+        min-height: 118px;
+        resize: vertical;
+        padding-top: 0.75rem;
+      }
+
+      .mg-management__filters-footer,
+      .mg-management__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+      }
+
+      .mg-management__filters-footer {
+        justify-content: space-between;
+        margin-top: 1rem;
+      }
+
+      .mg-management__results-wrap {
+        margin-top: 1rem;
+      }
+
+      .mg-management__results-list {
+        max-height: 72vh;
+        overflow: auto;
+        padding-right: 0.1rem;
+      }
+
+      .mg-management__result-card {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr) auto;
+        gap: 0.9rem;
+        align-items: center;
+        padding: 0.9rem;
+        border: 1px solid var(--mg-border);
+        border-radius: 16px;
+        background: var(--mg-surface-alt);
+      }
+
+      .mg-management__result-card.is-selected {
+        border-color: var(--tertiary);
+        box-shadow: inset 0 0 0 1px var(--tertiary);
+        background: var(--secondary);
+      }
+
+      .mg-management__thumb,
+      .mg-management__thumb-placeholder {
+        width: 88px;
+        height: 88px;
+        border-radius: 14px;
+        border: 1px solid var(--mg-border);
+        background: var(--secondary);
+      }
+
+      .mg-management__thumb {
+        object-fit: cover;
+      }
+
+      .mg-management__thumb-placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        padding: 0.5rem;
+        box-sizing: border-box;
+      }
+
+      .mg-management__result-copy,
+      .mg-management__selected-header-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 0;
+      }
+
+      .mg-management__result-title,
+      .mg-management__selected-title {
+        font-size: 1.35rem;
+        font-weight: 700;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-management__result-title {
+        font-size: 1.1rem;
+      }
+
+      .mg-management__result-subtitle,
+      .mg-management__selected-subtitle {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        overflow-wrap: anywhere;
+      }
+
+      .mg-management__badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .mg-management__badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: 0.25rem 0.65rem;
+        font-size: var(--font-down-1);
+        line-height: 1.2;
+        white-space: nowrap;
+        background: var(--primary-very-low);
+        color: var(--primary-high);
+        border: 1px solid var(--primary-low);
+      }
+
+      .mg-management__badge.is-success {
+        background: var(--success-low);
+        color: var(--success);
+        border-color: var(--success-low-mid);
+      }
+
+      .mg-management__badge.is-warning {
+        background: var(--tertiary-very-low);
+        color: var(--tertiary);
+        border-color: var(--tertiary-low);
+      }
+
+      .mg-management__badge.is-danger {
+        background: var(--danger-low);
+        color: var(--danger);
+        border-color: var(--danger-low-mid);
+      }
+
+      .mg-management__summary-grid {
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      }
+
+      .mg-management__summary-card,
+      .mg-management__editor-section,
+      .mg-management__history-card {
+        border: 1px solid var(--mg-border);
+        border-radius: 16px;
+        background: var(--mg-surface-alt);
+        padding: 0.9rem;
+      }
+
+      .mg-management__summary-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+      }
+
+      .mg-management__summary-label {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-management__summary-value {
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-management__selected-header {
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        gap: 1rem;
+        align-items: start;
+      }
+
+      .mg-management__selected-thumb,
+      .mg-management__selected-thumb-placeholder {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border-radius: 16px;
+        border: 1px solid var(--mg-border);
+        background: var(--secondary);
+      }
+
+      .mg-management__selected-thumb {
+        object-fit: cover;
+      }
+
+      .mg-management__selected-thumb-placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        padding: 0.75rem;
+        box-sizing: border-box;
+      }
+
+      .mg-management__editor {
+        display: grid;
+        gap: 1rem;
+        margin-top: 1rem;
+      }
+
+      .mg-management__edit-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      .mg-management__history-list {
+        gap: 0.75rem;
+      }
+
+      .mg-management__history-card {
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .mg-management__history-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 0.85rem;
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-management__changes {
+        display: block;
+        padding: 0.55rem 0.65rem;
+        border-radius: 10px;
+        background: var(--secondary);
+        border: 1px solid var(--mg-border);
+        font-size: var(--font-down-1);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-management__empty-state {
+        display: grid;
+        gap: 0.35rem;
+        padding: 1.1rem;
+        border: 1px dashed var(--mg-border);
+        border-radius: 16px;
+        background: var(--mg-surface-alt);
+      }
+
+      @media (max-width: 1100px) {
+        .mg-management__grid {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-management__results-list {
+          max-height: none;
+        }
+      }
+
+      @media (max-width: 800px) {
+        .mg-management__selected-header {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-management__filters {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-management__field.is-search {
+          grid-column: auto;
+        }
+
+        .mg-management__result-card {
+          grid-template-columns: 72px minmax(0, 1fr);
+        }
+
+        .mg-management__result-card > :last-child {
+          grid-column: 1 / -1;
+          justify-self: start;
+        }
+
+        .mg-management__thumb,
+        .mg-management__thumb-placeholder {
+          width: 72px;
+          height: 72px;
+        }
+      }
+    </style>
+
     <div class="media-gallery-admin-management">
       <h1>{{i18n "admin.media_gallery.management.title"}}</h1>
       <p>{{i18n "admin.media_gallery.management.description"}}</p>
 
-      <div class="mg-management__layout" style="display:grid; grid-template-columns: minmax(360px, 520px) minmax(420px, 1fr); gap: 1rem; align-items:start;">
-        <section class="mg-management__panel" style="border:1px solid var(--primary-low); border-radius:1rem; padding:1rem; background: var(--secondary);">
-          <div style="display:grid; gap:0.75rem;">
-            <div>
-              <label class="control-label">Search</label>
-              <input class="admin-input" type="text" value={{@controller.searchQuery}} placeholder="Search by public_id, title or id" {{on "input" @controller.onSearchInput}} />
+      <div class="mg-management__grid">
+        <section class="mg-management__panel">
+          <div class="mg-management__panel-header">
+            <div class="mg-management__panel-copy">
+              <h2>Find media</h2>
+              <p class="mg-management__muted">Search by title, public ID, or type, then open an item to manage it.</p>
             </div>
-            <div style="display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:0.75rem;">
-              <div>
-                <label class="control-label">Status</label>
-                <select class="combobox" value={{@controller.statusFilter}} {{on "change" @controller.onStatusFilterChange}}>
-                  <option value="all">All</option>
-                  <option value="ready">Ready</option>
-                  <option value="queued">Queued</option>
-                  <option value="processing">Processing</option>
-                  <option value="failed">Failed</option>
-                </select>
-              </div>
-              <div>
-                <label class="control-label">Type</label>
-                <select class="combobox" value={{@controller.mediaTypeFilter}} {{on "change" @controller.onMediaTypeFilterChange}}>
-                  <option value="all">All</option>
-                  <option value="image">Image</option>
-                  <option value="audio">Audio</option>
-                  <option value="video">Video</option>
-                </select>
-              </div>
-              <div>
-                <label class="control-label">Visibility</label>
-                <select class="combobox" value={{@controller.hiddenFilter}} {{on "change" @controller.onHiddenFilterChange}}>
-                  <option value="all">All</option>
-                  <option value="visible">Visible</option>
-                  <option value="hidden">Hidden</option>
-                </select>
-              </div>
+          </div>
+
+          <div class="mg-management__filters">
+            <div class="mg-management__field is-search">
+              <label>Search</label>
+              <input type="text" value={{@controller.searchQuery}} placeholder="Search by public_id / title / id..." {{on "input" @controller.onSearchInput}} />
             </div>
-            <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+
+            <div class="mg-management__field">
+              <label>Status</label>
+              <select value={{@controller.statusFilter}} {{on "change" @controller.onStatusFilterChange}}>
+                <option value="all">All</option>
+                <option value="ready">Ready</option>
+                <option value="queued">Queued</option>
+                <option value="processing">Processing</option>
+                <option value="failed">Failed</option>
+              </select>
+            </div>
+
+            <div class="mg-management__field">
+              <label>Type</label>
+              <select value={{@controller.mediaTypeFilter}} {{on "change" @controller.onMediaTypeFilterChange}}>
+                <option value="all">All</option>
+                <option value="image">Image</option>
+                <option value="audio">Audio</option>
+                <option value="video">Video</option>
+              </select>
+            </div>
+
+            <div class="mg-management__field">
+              <label>Visibility</label>
+              <select value={{@controller.hiddenFilter}} {{on "change" @controller.onHiddenFilterChange}}>
+                <option value="all">All</option>
+                <option value="visible">Visible</option>
+                <option value="hidden">Hidden</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="mg-management__filters-footer">
+            <div class="mg-management__actions">
               <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
                 {{if @controller.isSearching "Searching…" "Search"}}
               </button>
               <button class="btn" type="button" {{on "click" @controller.loadInitial}} disabled={{@controller.isSearching}}>Reset</button>
             </div>
+            {{#if @controller.searchInfo}}
+              <span class="mg-management__muted">{{@controller.searchInfo}}</span>
+            {{/if}}
           </div>
 
-          {{#if @controller.searchInfo}}
-            <div class="alert alert-info" style="margin-top:1rem;">{{@controller.searchInfo}}</div>
-          {{/if}}
           {{#if @controller.searchError}}
-            <div class="alert alert-error" style="margin-top:1rem;">{{@controller.searchError}}</div>
+            <div class="alert alert-error" style="margin-top: 1rem;">{{@controller.searchError}}</div>
           {{/if}}
 
-          <div style="margin-top:1rem; max-height:70vh; overflow:auto;">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Title</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Visibility</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {{#each @controller.searchResults as |item|}}
-                  <tr>
-                    <td>
-                      <div><strong>{{item.title}}</strong></div>
-                      <div><code>{{item.public_id}}</code></div>
-                      <div class="mg-management__muted">{{item.username}}</div>
-                    </td>
-                    <td>{{item.media_type}}</td>
-                    <td>{{item.status}}</td>
-                    <td>{{if item.hidden "Hidden" "Visible"}}</td>
-                    <td>
-                      <button class="btn btn-small" type="button" {{on "click" (fn @controller.selectItem item)}}>Open</button>
-                    </td>
-                  </tr>
+          <div class="mg-management__results-wrap">
+            {{#if @controller.searchResults.length}}
+              <div class="mg-management__results-list">
+                {{#each @controller.decoratedSearchResults as |item|}}
+                  <article class="mg-management__result-card {{if item.isSelected "is-selected"}}">
+                    {{#if item.thumbnail_url}}
+                      <img class="mg-management__thumb" src={{item.thumbnail_url}} alt="thumbnail" />
+                    {{else}}
+                      <div class="mg-management__thumb-placeholder">No thumbnail</div>
+                    {{/if}}
+
+                    <div class="mg-management__result-copy">
+                      <div class="mg-management__result-title">{{item.title}}</div>
+                      <div class="mg-management__result-subtitle">{{item.public_id}}</div>
+                      <div class="mg-management__muted">by {{item.username}}</div>
+                      <div class="mg-management__badge-row">
+                        <span class="mg-management__badge {{item.statusBadgeClass}}">{{item.status}}</span>
+                        <span class="mg-management__badge">{{item.media_type}}</span>
+                        <span class="mg-management__badge {{item.visibilityBadgeClass}}">{{if item.hidden "Hidden" "Visible"}}</span>
+                      </div>
+                    </div>
+
+                    <button class="btn" type="button" {{on "click" (fn @controller.selectItem item)}}>
+                      {{if item.isSelected "Selected" "Open"}}
+                    </button>
+                  </article>
                 {{/each}}
-              </tbody>
-            </table>
+              </div>
+            {{else if @controller.hasSearched}}
+              <div class="mg-management__empty-state">
+                <strong>No items found</strong>
+                <span class="mg-management__muted">Try a broader search or reset the filters.</span>
+              </div>
+            {{/if}}
           </div>
         </section>
 
-        <section class="mg-management__panel" style="border:1px solid var(--primary-low); border-radius:1rem; padding:1rem; background: var(--secondary);">
+        <section class="mg-management__panel">
+          <div class="mg-management__panel-header">
+            <div class="mg-management__panel-copy">
+              <h2>Selected item</h2>
+              <p class="mg-management__muted">Inspect the item, update metadata, or change visibility from one place.</p>
+            </div>
+          </div>
+
           {{#if @controller.noticeMessage}}
-            <div class="alert alert-info">{{@controller.noticeMessage}}</div>
+            <div class="alert alert-info" style="margin-bottom: 1rem;">{{@controller.noticeMessage}}</div>
           {{/if}}
           {{#if @controller.selectionError}}
-            <div class="alert alert-error">{{@controller.selectionError}}</div>
+            <div class="alert alert-error" style="margin-bottom: 1rem;">{{@controller.selectionError}}</div>
           {{/if}}
 
           {{#if @controller.hasSelectedItem}}
-            <div style="display:flex; gap:1rem; align-items:flex-start; flex-wrap:wrap;">
-              <img src={{@controller.selectedItem.thumbnail_url}} alt="thumbnail" style="width: 180px; max-width:100%; border-radius:0.75rem; border:1px solid var(--primary-low);" />
-              <div style="flex:1; min-width:260px;">
-                <h2 style="margin-top:0;">{{@controller.selectedItem.title}}</h2>
-                <div class="mg-management__muted"><code>{{@controller.selectedItem.public_id}}</code></div>
-                <table class="table">
-                  <tbody>
-                    {{#each @controller.selectedMetaRows as |row|}}
-                      <tr>
-                        <th>{{row.label}}</th>
-                        <td>{{row.value}}</td>
-                      </tr>
-                    {{/each}}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div style="margin-top:1rem; display:grid; gap:0.75rem;">
-              <div>
-                <label class="control-label">Title</label>
-                <input class="admin-input" type="text" value={{@controller.editTitle}} {{on "input" @controller.onEditTitle}} />
-              </div>
-              <div>
-                <label class="control-label">Description</label>
-                <textarea class="admin-input" rows="5" value={{@controller.editDescription}} {{on "input" @controller.onEditDescription}}></textarea>
-              </div>
-              <div style="display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:0.75rem;">
-                <div>
-                  <label class="control-label">Gender</label>
-                  <select class="combobox" value={{@controller.editGender}} {{on "change" @controller.onEditGender}}>
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                    <option value="both">Both</option>
-                    <option value="non_binary">Non-binary</option>
-                    <option value="objects">Objects</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="control-label">Tags</label>
-                  <input class="admin-input" type="text" value={{@controller.editTags}} placeholder="comma,separated,tags" {{on "input" @controller.onEditTags}} />
-                </div>
-              </div>
-              <div>
-                <label class="control-label">Admin note / reason</label>
-                <textarea class="admin-input" rows="3" value={{@controller.adminNote}} placeholder="Optional note for hide/unhide/edit/delete" {{on "input" @controller.onAdminNote}}></textarea>
-              </div>
-            </div>
-
-            <div style="margin-top:1rem; display:flex; gap:0.75rem; flex-wrap:wrap;">
-              <button class="btn btn-primary" type="button" {{on "click" @controller.saveChanges}} disabled={{@controller.saveDisabled}}>
-                {{if @controller.isSaving "Saving…" "Save changes"}}
-              </button>
-              <button class="btn" type="button" {{on "click" @controller.toggleHidden}} disabled={{@controller.toggleHiddenDisabled}}>
-                {{if @controller.isTogglingHidden "Updating…" @controller.hiddenButtonLabel}}
-              </button>
-              <button class="btn" type="button" {{on "click" @controller.retryProcessing}} disabled={{@controller.retryDisabled}}>
-                {{if @controller.isRetrying "Queuing…" "Retry processing"}}
-              </button>
-              <button class="btn btn-danger" type="button" {{on "click" @controller.deleteItem}} disabled={{@controller.deleteDisabled}}>
-                {{if @controller.isDeleting "Deleting…" "Delete item"}}
-              </button>
-              <button class="btn" type="button" {{on "click" @controller.refreshSelected}} disabled={{@controller.isLoadingSelection}}>
-                {{if @controller.isLoadingSelection "Refreshing…" "Refresh"}}
-              </button>
-            </div>
-
-            <div style="margin-top:1.5rem;">
-              <h3>Admin history</h3>
-              {{#if @controller.historyEntries.length}}
-                <table class="table">
-                  <thead>
-                    <tr>
-                      <th>When</th>
-                      <th>Admin</th>
-                      <th>Action</th>
-                      <th>Note</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {{#each @controller.historyEntries as |entry|}}
-                      <tr>
-                        <td>{{entry.at}}</td>
-                        <td>{{entry.admin_username}}</td>
-                        <td>{{entry.action}}</td>
-                        <td>
-                          {{#if entry.note}}
-                            {{entry.note}}
-                          {{else}}
-                            —
-                          {{/if}}
-                          {{#if entry.changes}}
-                            <div class="mg-management__muted"><code>{{entry.changesSummary}}</code></div>
-                          {{/if}}
-                        </td>
-                      </tr>
-                    {{/each}}
-                  </tbody>
-                </table>
+            <div class="mg-management__selected-header">
+              {{#if @controller.selectedItem.thumbnail_url}}
+                <img class="mg-management__selected-thumb" src={{@controller.selectedItem.thumbnail_url}} alt="thumbnail" />
               {{else}}
-                <p>No admin changes recorded yet for this item.</p>
+                <div class="mg-management__selected-thumb-placeholder">No thumbnail available</div>
               {{/if}}
+
+              <div class="mg-management__selected-header-copy">
+                <div class="mg-management__selected-title">{{@controller.selectedItem.title}}</div>
+                <div class="mg-management__selected-subtitle">{{@controller.selectedItem.public_id}}</div>
+                <div class="mg-management__badge-row">
+                  <span class="mg-management__badge {{@controller.selectedStatusBadgeClass}}">{{@controller.selectedItem.status}}</span>
+                  <span class="mg-management__badge">{{@controller.selectedItem.media_type}}</span>
+                  <span class="mg-management__badge {{@controller.selectedVisibilityBadgeClass}}">{{if @controller.selectedItem.hidden "Hidden" "Visible"}}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="mg-management__summary-grid" style="margin-top: 1rem;">
+              {{#each @controller.selectedMetaRows as |row|}}
+                <div class="mg-management__summary-card">
+                  <div class="mg-management__summary-label">{{row.label}}</div>
+                  <div class="mg-management__summary-value">{{row.value}}</div>
+                </div>
+              {{/each}}
+            </div>
+
+            <div class="mg-management__editor">
+              <section class="mg-management__editor-section">
+                <div class="mg-management__field">
+                  <label>Title</label>
+                  <input type="text" value={{@controller.editTitle}} {{on "input" @controller.onEditTitle}} />
+                </div>
+
+                <div class="mg-management__field" style="margin-top: 1rem;">
+                  <label>Description</label>
+                  <textarea rows="5" value={{@controller.editDescription}} {{on "input" @controller.onEditDescription}}></textarea>
+                </div>
+
+                <div class="mg-management__edit-grid" style="margin-top: 1rem;">
+                  <div class="mg-management__field">
+                    <label>Gender</label>
+                    <select value={{@controller.editGender}} {{on "change" @controller.onEditGender}}>
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                      <option value="both">Both</option>
+                      <option value="non_binary">Non-binary</option>
+                      <option value="objects">Objects</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+
+                  <div class="mg-management__field">
+                    <label>Tags</label>
+                    <input type="text" value={{@controller.editTags}} placeholder="comma,separated,tags" {{on "input" @controller.onEditTags}} />
+                  </div>
+                </div>
+
+                <div class="mg-management__field" style="margin-top: 1rem;">
+                  <label>Admin note / reason</label>
+                  <textarea rows="3" value={{@controller.adminNote}} placeholder="Optional note for hide, unhide, edit, or delete" {{on "input" @controller.onAdminNote}}></textarea>
+                </div>
+              </section>
+
+              <section class="mg-management__editor-section">
+                <h3>Actions</h3>
+                <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, toggle visibility, queue a retry for failed items, or remove the item.</p>
+                <div class="mg-management__actions" style="margin-top: 1rem;">
+                  <button class="btn btn-primary" type="button" {{on "click" @controller.saveChanges}} disabled={{@controller.saveDisabled}}>
+                    {{if @controller.isSaving "Saving…" "Save changes"}}
+                  </button>
+                  <button class="btn" type="button" {{on "click" @controller.toggleHidden}} disabled={{@controller.toggleHiddenDisabled}}>
+                    {{if @controller.isTogglingHidden "Updating…" @controller.hiddenButtonLabel}}
+                  </button>
+                  <button class="btn" type="button" {{on "click" @controller.retryProcessing}} disabled={{@controller.retryDisabled}}>
+                    {{if @controller.isRetrying "Queuing…" "Retry processing"}}
+                  </button>
+                  <button class="btn btn-danger" type="button" {{on "click" @controller.deleteItem}} disabled={{@controller.deleteDisabled}}>
+                    {{if @controller.isDeleting "Deleting…" "Delete item"}}
+                  </button>
+                  <button class="btn" type="button" {{on "click" @controller.refreshSelected}} disabled={{@controller.isLoadingSelection}}>
+                    {{if @controller.isLoadingSelection "Refreshing…" "Refresh"}}
+                  </button>
+                </div>
+              </section>
+
+              <section class="mg-management__editor-section">
+                <h3>Admin history</h3>
+                <p class="mg-management__muted" style="margin-top: 0.3rem;">Track changes made by admins, including optional notes.</p>
+
+                {{#if @controller.historyEntries.length}}
+                  <div class="mg-management__history-list" style="margin-top: 1rem;">
+                    {{#each @controller.historyEntries as |entry|}}
+                      <article class="mg-management__history-card">
+                        <div class="mg-management__history-meta">
+                          <span>{{entry.at}}</span>
+                          <span>{{entry.admin_username}}</span>
+                          <strong>{{entry.action}}</strong>
+                        </div>
+                        {{#if entry.note}}
+                          <div>{{entry.note}}</div>
+                        {{/if}}
+                        {{#if entry.changes}}
+                          <code class="mg-management__changes">{{entry.changesSummary}}</code>
+                        {{/if}}
+                      </article>
+                    {{/each}}
+                  </div>
+                {{else}}
+                  <div class="mg-management__empty-state" style="margin-top: 1rem;">
+                    <strong>No admin changes recorded yet</strong>
+                    <span class="mg-management__muted">History entries will appear here after edits or visibility changes.</span>
+                  </div>
+                {{/if}}
+              </section>
             </div>
           {{else}}
-            <p>Select an item from the search results to manage it.</p>
+            <div class="mg-management__empty-state">
+              <strong>No item selected</strong>
+              <span class="mg-management__muted">Choose an item from the results list to inspect and manage it here.</span>
+            </div>
           {{/if}}
         </section>
       </div>

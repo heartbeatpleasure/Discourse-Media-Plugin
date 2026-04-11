@@ -114,6 +114,36 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return this.selectedItem?.hidden ? "Unhide item" : "Hide item";
   }
 
+  get decoratedSearchResults() {
+    return (Array.isArray(this.searchResults) ? this.searchResults : []).map((item) => ({
+      ...item,
+      isSelected: item?.public_id === this.selectedPublicId,
+      statusBadgeClass:
+        item?.status === "ready"
+          ? "is-success"
+          : item?.status === "failed"
+            ? "is-danger"
+            : item?.status === "processing" || item?.status === "queued"
+              ? "is-warning"
+              : "",
+      visibilityBadgeClass: item?.hidden ? "is-warning" : "",
+    }));
+  }
+
+  get selectedStatusBadgeClass() {
+    return this.selectedItem?.status === "ready"
+      ? "is-success"
+      : this.selectedItem?.status === "failed"
+        ? "is-danger"
+        : this.selectedItem?.status === "processing" || this.selectedItem?.status === "queued"
+          ? "is-warning"
+          : "";
+  }
+
+  get selectedVisibilityBadgeClass() {
+    return this.selectedItem?.hidden ? "is-warning" : "";
+  }
+
   get selectedMetaRows() {
     const item = this.selectedItem || {};
     return [
