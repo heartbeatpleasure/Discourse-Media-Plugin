@@ -456,6 +456,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   get targetProfileOptions() {
     const seen = new Set();
+    const selectedProfileKey = this.selectedTargetProfile || this.targetHealth?.profile_key || this.availableTargetProfiles[0]?.profile_key || "target";
 
     return (this.availableTargetProfiles || []).filter((entry) => {
       if (!entry?.profile_key) {
@@ -468,7 +469,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       }
       seen.add(dedupeKey);
       return true;
-    });
+    }).map((entry) => ({
+      ...entry,
+      selected: entry.profile_key === selectedProfileKey,
+    }));
   }
 
   get selectAllVisibleDisabled() {

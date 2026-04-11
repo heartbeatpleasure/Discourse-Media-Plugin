@@ -5,6 +5,7 @@ require "fileutils"
 require "securerandom"
 require "time"
 require "tmpdir"
+require "set"
 
 module ::MediaGallery
   module MigrationVerify
@@ -195,60 +196,34 @@ module ::MediaGallery
       source_store.ensure_available!
       target_store.ensure_available!
 
-      objects = flatten_objects(plan)
-      result[:object_count] = objects.length
+      roles = Array(plan[:roles] || plan["roles"])
+      result[:object_count] = roles.sum { |role_row| Array(role_row[:objects] || role_row["objects"]).length }
 
       Dir.mktmpdir("media_gallery_verify") do |tmpdir|
-        objects.each_with_index do |object, index|
-          key = object[:key].to_s
-          next if key.blank?
+        roles.each do |role_row|
+          role_name = (role_row[:name] || role_row["name"]).to_s
+          role = (role_row[:role] || role_row["role"] || {}).deep_stringify_keys
+          objects = Array(role_row[:objects] || role_row["objects"]).map { |obj| obj.is_a?(Hash) ? obj.deep_symbolize_keys : {} }
 
-          source_info = normalize_info(source_store.object_info(key))
-          target_info = normalize_info(target_store.object_info(key))
-
-          if !source_info[:exists]
-            result[:mismatched_count] += 1
-            append_mismatch!(result, key: key, reason: "source_missing")
+          if role_name == "hls"
+            verify_hls_role_objects!(
+              result,
+              role: role,
+              objects: objects,
+              source_store: source_store,
+              target_store: target_store,
+              tmpdir: tmpdir,
+            )
             next
           end
 
-          unless target_info[:exists]
-            result[:missing_on_target_count] += 1
-            append_mismatch!(result, key: key, reason: "target_missing")
-            next
-          end
-
-          result[:compared_object_count] += 1
-
-          source_bytes = source_info[:bytes].to_i
-          target_bytes = target_info[:bytes].to_i
-          if source_bytes != target_bytes
-            result[:mismatched_count] += 1
-            append_mismatch!(result, key: key, reason: "byte_size_mismatch", source_bytes: source_bytes, target_bytes: target_bytes)
-            next
-          end
-
-          result[:bytes_matched_count] += 1
-
-          if skip_expensive_digest_for_object?(object)
-            next
-          end
-
-          source_digest = digest_for_object(store: source_store, key: key, info: source_info, tmpdir: tmpdir, label: "src", index: index)
-          target_digest = digest_for_object(store: target_store, key: key, info: target_info, tmpdir: tmpdir, label: "dst", index: index)
-
-          if source_digest.blank? || target_digest.blank?
-            result[:warnings] << "digest_unavailable"
-            next
-          end
-
-          if source_digest != target_digest
-            result[:mismatched_count] += 1
-            append_mismatch!(result, key: key, reason: "checksum_mismatch", source_checksum_sha256: source_digest, target_checksum_sha256: target_digest)
-            next
-          end
-
-          result[:digest_verified_count] += 1
+          verify_standard_role_objects!(
+            result,
+            objects: objects.map { |obj| obj.merge(role_name: role_name) },
+            source_store: source_store,
+            target_store: target_store,
+            tmpdir: tmpdir,
+          )
         end
       end
 
@@ -257,6 +232,98 @@ module ::MediaGallery
       result
     end
     private_class_method :verify_plan_objects
+
+    def verify_standard_role_objects!(result, objects:, source_store:, target_store:, tmpdir:)
+      Array(objects).each_with_index do |object, index|
+        key = object[:key].to_s
+        next if key.blank?
+
+        source_info = normalize_info(source_store.object_info(key))
+        target_info = normalize_info(target_store.object_info(key))
+
+        if !source_info[:exists]
+          result[:mismatched_count] += 1
+          append_mismatch!(result, key: key, reason: "source_missing")
+          next
+        end
+
+        unless target_info[:exists]
+          result[:missing_on_target_count] += 1
+          append_mismatch!(result, key: key, reason: "target_missing")
+          next
+        end
+
+        result[:compared_object_count] += 1
+
+        source_bytes = source_info[:bytes].to_i
+        target_bytes = target_info[:bytes].to_i
+        if source_bytes != target_bytes
+          result[:mismatched_count] += 1
+          append_mismatch!(result, key: key, reason: "byte_size_mismatch", source_bytes: source_bytes, target_bytes: target_bytes)
+          next
+        end
+
+        result[:bytes_matched_count] += 1
+
+        if skip_expensive_digest_for_object?(object)
+          next
+        end
+
+        source_digest = digest_for_object(store: source_store, key: key, info: source_info, tmpdir: tmpdir, label: "src", index: index)
+        target_digest = digest_for_object(store: target_store, key: key, info: target_info, tmpdir: tmpdir, label: "dst", index: index)
+
+        if source_digest.blank? || target_digest.blank?
+          result[:warnings] << "digest_unavailable"
+          next
+        end
+
+        if source_digest != target_digest
+          result[:mismatched_count] += 1
+          append_mismatch!(result, key: key, reason: "checksum_mismatch", source_checksum_sha256: source_digest, target_checksum_sha256: target_digest)
+          next
+        end
+
+        result[:digest_verified_count] += 1
+      end
+    end
+    private_class_method :verify_standard_role_objects!
+
+    def verify_hls_role_objects!(result, role:, objects:, source_store:, target_store:, tmpdir:)
+      object_rows = Array(objects).map { |obj| obj.is_a?(Hash) ? obj.deep_symbolize_keys : {} }
+      prefix = role["key_prefix"].to_s.presence || derive_hls_prefix_from_objects(object_rows)
+      source_key_set = build_key_set_for_prefix(source_store, prefix, fallback_objects: object_rows)
+      target_key_set = build_key_set_for_prefix(target_store, prefix, fallback_objects: object_rows)
+
+      object_rows.each_with_index do |object, index|
+        key = object[:key].to_s
+        next if key.blank?
+
+        if segment_like_reference?(key)
+          unless source_key_set.include?(key)
+            result[:mismatched_count] += 1
+            append_mismatch!(result, key: key, reason: "source_missing")
+            next
+          end
+
+          unless target_key_set.include?(key)
+            result[:missing_on_target_count] += 1
+            append_mismatch!(result, key: key, reason: "target_missing")
+            next
+          end
+
+          next
+        end
+
+        verify_standard_role_objects!(
+          result,
+          objects: [object.merge(role_name: "hls")],
+          source_store: source_store,
+          target_store: target_store,
+          tmpdir: tmpdir,
+        )
+      end
+    end
+    private_class_method :verify_hls_role_objects!
 
     def flatten_objects(plan)
       roles = Array(plan[:roles] || plan["roles"])
@@ -334,7 +401,9 @@ module ::MediaGallery
         result[:hls_manifest_checked_count] += 1
         role = (role_row[:role] || role_row["role"] || {}).deep_stringify_keys
         objects = Array(role_row[:objects] || role_row["objects"]).map { |obj| (obj.is_a?(Hash) ? obj.deep_stringify_keys : {}) }
-        consistency = verify_single_hls_role(target_store: target_store, role: role, objects: objects)
+        prefix = role["key_prefix"].to_s.presence || derive_hls_prefix_from_objects(objects)
+        target_keys = build_key_set_for_prefix(target_store, prefix, fallback_objects: objects).to_a
+        consistency = verify_single_hls_role(target_store: target_store, role: role, objects: objects, target_keys: target_keys)
 
         if consistency[:ok]
           result[:hls_manifest_verified_count] += 1
@@ -353,7 +422,7 @@ module ::MediaGallery
     end
     private_class_method :verify_hls_manifest_consistency!
 
-    def verify_single_hls_role(target_store:, role:, objects:)
+    def verify_single_hls_role(target_store:, role:, objects:, target_keys: nil)
       return { ok: false, errors: ["target_store_missing"], warnings: [] } if target_store.blank?
 
       prefix = role["key_prefix"].to_s
@@ -362,9 +431,20 @@ module ::MediaGallery
       errors = []
       warnings = []
       object_keys = objects.map { |obj| obj["key"].to_s }.reject(&:blank?).uniq
+      target_key_set = Set.new(Array(target_keys).map(&:to_s).reject(&:blank?))
+      target_has_key = lambda do |key|
+        normalized = key.to_s
+        if normalized.blank?
+          false
+        elsif target_key_set.any?
+          target_key_set.include?(normalized)
+        else
+          target_store.exists?(normalized)
+        end
+      end
 
-      errors << "missing_complete_marker: #{complete_key}" unless target_store.exists?(complete_key)
-      errors << "missing_master_playlist: #{master_key}" unless target_store.exists?(master_key)
+      errors << "missing_complete_marker: #{complete_key}" unless target_has_key.call(complete_key)
+      errors << "missing_master_playlist: #{master_key}" unless target_has_key.call(master_key)
       return { ok: false, errors: errors, warnings: warnings } if errors.present?
 
       master_refs = playlist_refs(read_text(target_store, master_key))
@@ -373,12 +453,12 @@ module ::MediaGallery
 
       uses_ab = ActiveModel::Type::Boolean.new.cast(role["ab_fingerprint"]) || role["ab_segment_key_template"].to_s.present?
       fingerprint_meta_key = role["fingerprint_meta_key"].to_s.presence
-      if uses_ab && fingerprint_meta_key.present? && !target_store.exists?(fingerprint_meta_key)
+      if uses_ab && fingerprint_meta_key.present? && !target_has_key.call(fingerprint_meta_key)
         errors << "missing_fingerprint_meta: #{fingerprint_meta_key}"
       end
 
       variant_keys.each do |variant_key|
-        unless target_store.exists?(variant_key)
+        unless target_has_key.call(variant_key)
           errors << "missing_variant_playlist: #{variant_key}"
           next
         end
@@ -393,11 +473,11 @@ module ::MediaGallery
           if uses_ab
             %w[a b].each do |ab|
               key = File.join(prefix, ab, variant_name, file_name)
-              errors << "missing_ab_segment: #{key}" unless target_store.exists?(key) || object_keys.include?(key)
+              errors << "missing_ab_segment: #{key}" unless target_has_key.call(key) || object_keys.include?(key)
             end
           else
             key = normalize_playlist_reference(variant_key, segment_ref)
-            errors << "missing_segment: #{key}" unless target_store.exists?(key) || object_keys.include?(key)
+            errors << "missing_segment: #{key}" unless target_has_key.call(key) || object_keys.include?(key)
           end
         end
       end
@@ -407,6 +487,30 @@ module ::MediaGallery
       { ok: false, errors: ["hls_manifest_check_failed: #{e.class}: #{e.message}"], warnings: warnings }
     end
     private_class_method :verify_single_hls_role
+
+    def build_key_set_for_prefix(store, prefix, fallback_objects: [])
+      keys = []
+      keys = Array(store&.list_prefix(prefix)).map(&:to_s) if store.present? && prefix.present?
+      keys = Array(fallback_objects).map { |obj| obj.is_a?(Hash) ? (obj[:key] || obj["key"]).to_s : obj.to_s } if keys.blank?
+      Set.new(keys.reject(&:blank?))
+    rescue => e
+      Set.new(Array(fallback_objects).map { |obj| obj.is_a?(Hash) ? (obj[:key] || obj["key"]).to_s : obj.to_s }.reject(&:blank?)).tap do
+        # keep verify moving even if prefix listing fails on a provider
+      end
+    end
+    private_class_method :build_key_set_for_prefix
+
+    def derive_hls_prefix_from_objects(objects)
+      keys = Array(objects).map { |obj| obj.is_a?(Hash) ? (obj[:key] || obj["key"]).to_s : obj.to_s }.reject(&:blank?).sort
+      return "" if keys.blank?
+
+      if (master = keys.find { |key| File.basename(key) == "master.m3u8" })
+        return File.dirname(master)
+      end
+
+      File.dirname(keys.first)
+    end
+    private_class_method :derive_hls_prefix_from_objects
 
     def read_text(store, key)
       value = store.read(key)

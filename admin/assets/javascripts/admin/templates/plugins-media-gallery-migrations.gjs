@@ -564,7 +564,7 @@ export default RouteTemplate(
             <span class="mg-migrations__storage-selection-label">{{@controller.targetStorageCard.selectionLabel}}</span>
             <select value={{@controller.selectedTargetProfileKey}} {{on "change" @controller.onTargetProfileChange}}>
               {{#each @controller.targetProfileOptions as |profile|}}
-                <option value={{profile.profile_key}}>{{profile.label}} · {{profile.backend}}</option>
+                <option value={{profile.profile_key}} selected={{profile.selected}}>{{profile.label}} · {{profile.backend}}</option>
               {{/each}}
             </select>
           </div>
