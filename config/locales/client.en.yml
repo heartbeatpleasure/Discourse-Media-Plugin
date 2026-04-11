@@ -122,6 +122,11 @@ en:
 
 
 
+        management:
+          title: "Media management"
+          short_title: "Management"
+          description: "Search, edit, hide, retry, or delete media items from one admin page."
+
         migrations:
           title: "Migration manager"
           short_title: "Migrations"

@@ -31,6 +31,7 @@ module ::MediaGallery
 
       item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
       raise Discourse::NotFound if item.blank?
+      ensure_item_visible_to_current_user!(item)
       raise Discourse::NotFound unless item.ready?
 
       kind = payload["kind"].to_s
@@ -155,6 +156,14 @@ module ::MediaGallery
 
     def ensure_plugin_enabled
       raise Discourse::NotFound unless SiteSetting.media_gallery_enabled
+    end
+
+    def ensure_item_visible_to_current_user!(item)
+      return if item.blank?
+      return if !item.respond_to?(:admin_hidden?) || !item.admin_hidden?
+      return if current_user&.staff? || current_user&.admin?
+
+      raise Discourse::NotFound
     end
 
     def ensure_can_view

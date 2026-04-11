@@ -15,10 +15,10 @@ module ::MediaGallery
       raise "item_not_ready" unless item.ready?
 
       switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item)
-      validate_switch_for_cleanup!(item, switch_state)
+      context = cleanup_context_for(item, switch_state)
 
       state = cleanup_state_for(item)
-      cleanup_matches_current_switch = cleanup_state_matches_current_switch?(state, item, switch_state)
+      cleanup_matches_current_switch = cleanup_state_matches_current_context?(state, context)
       if state["status"].to_s == "cleaning" && !force && cleanup_matches_current_switch
         raise "cleanup_already_in_progress"
       end
@@ -27,7 +27,7 @@ module ::MediaGallery
       end
 
       token = SecureRandom.hex(10)
-      state = build_queued_state(item: item, switch_state: switch_state, requested_by: requested_by, force: force, run_token: token, auto_finalize: auto_finalize)
+      state = build_queued_state(context: context, requested_by: requested_by, force: force, run_token: token, auto_finalize: auto_finalize)
       save_cleanup_state!(item, state)
 
       ::Jobs.enqueue(:media_gallery_cleanup_source_after_switch, media_item_id: item.id, run_token: token, force: force, auto_finalize: auto_finalize)
@@ -39,56 +39,54 @@ module ::MediaGallery
       raise "item_not_ready" unless item.ready?
 
       switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item)
-      validate_switch_for_cleanup!(item, switch_state)
+      context = cleanup_context_for(item, switch_state)
 
       current_state = cleanup_state_for(item)
-      cleanup_matches_current_switch = cleanup_state_matches_current_switch?(current_state, item, switch_state)
+      cleanup_matches_current_switch = cleanup_state_matches_current_context?(current_state, context)
       if current_state["status"].to_s == "cleaning" && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token && !force && cleanup_matches_current_switch
         raise "cleanup_already_in_progress"
       end
       return current_state if current_state["status"].to_s == "cleaned" && !force && cleanup_matches_current_switch
       auto_finalize = current_state["auto_finalize"] if auto_finalize.nil?
 
-      source_profile_key = switch_state["source_profile_key"].to_s
-      target_profile_key = switch_state["target_profile_key"].presence || item.managed_storage_profile
-      source_store = store_for_switch_summary(profile_key: source_profile_key, backend: switch_state["source_backend"])
-      target_store = store_for_switch_summary(profile_key: target_profile_key, backend: switch_state["target_backend"].presence || item.managed_storage_backend)
-      raise "cleanup_source_store_missing" if source_store.blank?
-      raise "cleanup_target_store_missing" if target_store.blank?
+      inactive_store = store_for_switch_summary(profile_key: context[:inactive_profile_key], backend: context[:inactive_backend])
+      active_store = store_for_switch_summary(profile_key: context[:active_profile_key], backend: context[:active_backend])
+      raise "cleanup_source_store_missing" if inactive_store.blank?
+      raise "cleanup_target_store_missing" if active_store.blank?
 
-      source_store.ensure_available!
-      target_store.ensure_available!
+      inactive_store.ensure_available!
+      active_store.ensure_available!
 
-      expected_source_fingerprint = switch_state["source_location_fingerprint"]
-      current_source_fingerprint = ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(source_profile_key)
-      if fingerprints_differ?(expected_source_fingerprint, current_source_fingerprint)
+      expected_inactive_fingerprint = context[:inactive_location_fingerprint]
+      current_inactive_fingerprint = ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(context[:inactive_profile_key])
+      if fingerprints_differ?(expected_inactive_fingerprint, current_inactive_fingerprint)
         raise "cleanup_source_profile_changed_since_switch"
       end
 
-      expected_target_fingerprint = switch_state["target_location_fingerprint"]
-      current_target_fingerprint = ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(target_profile_key.to_s)
-      if fingerprints_differ?(expected_target_fingerprint, current_target_fingerprint)
+      expected_active_fingerprint = context[:active_location_fingerprint]
+      current_active_fingerprint = ::MediaGallery::StorageSettingsResolver.profile_key_location_fingerprint(context[:active_profile_key].to_s)
+      if fingerprints_differ?(expected_active_fingerprint, current_active_fingerprint)
         raise "cleanup_target_profile_changed_since_switch"
       end
 
-      raise "cleanup_same_store_protected" if source_store.same_location?(target_store)
+      raise "cleanup_same_store_protected" if inactive_store.same_location?(active_store)
 
-      source_objects = ::MediaGallery::MigrationPreview.objects_for_item(item, store: source_store)
-      target_objects = ::MediaGallery::MigrationPreview.objects_for_item(item, store: target_store)
-      target_missing = verify_target_objects(target_store, target_objects)
-      raise "cleanup_target_incomplete:#{target_missing}" if target_missing.positive?
+      inactive_objects = ::MediaGallery::MigrationPreview.objects_for_item(item, store: inactive_store)
+      active_objects = ::MediaGallery::MigrationPreview.objects_for_item(item, store: active_store)
+      active_missing = verify_target_objects(active_store, active_objects)
+      raise "cleanup_target_incomplete:#{active_missing}" if active_missing.positive?
 
-      state = build_cleaning_state(item: item, switch_state: switch_state, run_token: run_token.presence || current_state["run_token"], force: force, source_objects: source_objects, auto_finalize: auto_finalize)
+      state = build_cleaning_state(context: context, run_token: run_token.presence || current_state["run_token"], force: force, inactive_objects: inactive_objects, auto_finalize: auto_finalize)
       save_cleanup_state!(item, state)
 
-      grouped = group_objects_for_cleanup(item, source_objects)
+      grouped = group_objects_for_cleanup(item, inactive_objects)
       role_results = []
       deleted_current = 0
       deleted_versions = 0
       deleted_delete_markers = 0
 
       grouped.each_with_index do |entry, index|
-        result = purge_group(source_store, entry)
+        result = purge_group(inactive_store, entry)
         role_results << entry.merge(result: result)
         raise(result[:error].presence || "cleanup_purge_failed") unless result[:ok]
 
@@ -143,41 +141,43 @@ module ::MediaGallery
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
     end
 
-    def build_queued_state(item:, switch_state:, requested_by:, force:, run_token:, auto_finalize:)
+    def build_queued_state(context:, requested_by:, force:, run_token:, auto_finalize:)
       {
         "status" => "queued",
         "queued_at" => Time.now.utc.iso8601,
         "requested_by" => requested_by.to_s.presence,
         "force" => !!force,
         "run_token" => run_token,
-        "source_backend" => switch_state["source_backend"].to_s,
-        "source_profile" => switch_state["source_profile"].to_s,
-        "source_profile_key" => switch_state["source_profile_key"].to_s,
-        "target_backend" => item.managed_storage_backend.to_s,
-        "target_profile_key" => item.managed_storage_profile.to_s,
-        "source_location_fingerprint" => switch_state["source_location_fingerprint"],
-        "target_location_fingerprint" => switch_state["target_location_fingerprint"],
+        "cleanup_mode" => context[:mode],
+        "source_backend" => context[:inactive_backend].to_s,
+        "source_profile" => context[:inactive_profile].to_s,
+        "source_profile_key" => context[:inactive_profile_key].to_s,
+        "target_backend" => context[:active_backend].to_s,
+        "target_profile_key" => context[:active_profile_key].to_s,
+        "source_location_fingerprint" => context[:inactive_location_fingerprint],
+        "target_location_fingerprint" => context[:active_location_fingerprint],
         "auto_finalize" => !!auto_finalize,
         "last_error" => nil
       }
     end
     private_class_method :build_queued_state
 
-    def build_cleaning_state(item:, switch_state:, run_token:, force:, source_objects:, auto_finalize:)
+    def build_cleaning_state(context:, run_token:, force:, inactive_objects:, auto_finalize:)
       {
         "status" => "cleaning",
         "started_at" => Time.now.utc.iso8601,
         "run_token" => run_token,
         "force" => !!force,
-        "source_backend" => switch_state["source_backend"].to_s,
-        "source_profile" => switch_state["source_profile"].to_s,
-        "source_profile_key" => switch_state["source_profile_key"].to_s,
-        "target_backend" => item.managed_storage_backend.to_s,
-        "target_profile_key" => item.managed_storage_profile.to_s,
-        "source_location_fingerprint" => switch_state["source_location_fingerprint"],
-        "target_location_fingerprint" => switch_state["target_location_fingerprint"],
+        "cleanup_mode" => context[:mode],
+        "source_backend" => context[:inactive_backend].to_s,
+        "source_profile" => context[:inactive_profile].to_s,
+        "source_profile_key" => context[:inactive_profile_key].to_s,
+        "target_backend" => context[:active_backend].to_s,
+        "target_profile_key" => context[:active_profile_key].to_s,
+        "source_location_fingerprint" => context[:inactive_location_fingerprint],
+        "target_location_fingerprint" => context[:active_location_fingerprint],
         "auto_finalize" => !!auto_finalize,
-        "object_count" => source_objects.length,
+        "object_count" => inactive_objects.length,
         "last_error" => nil
       }
     end
@@ -198,8 +198,6 @@ module ::MediaGallery
       save_cleanup_state!(item, latest)
     end
     private_class_method :update_progress!
-
-
 
     def fingerprints_differ?(left, right)
       return false if left.blank? || right.blank?
@@ -224,42 +222,66 @@ module ::MediaGallery
     end
     private_class_method :normalize_fingerprint
 
-    def cleanup_state_matches_current_switch?(state, item, switch_state)
+    def cleanup_state_matches_current_context?(state, context)
       return false unless state.is_a?(Hash)
 
-      same_source = state["source_backend"].to_s == switch_state["source_backend"].to_s &&
-        state["source_profile_key"].to_s == switch_state["source_profile_key"].to_s
+      same_inactive = state["source_backend"].to_s == context[:inactive_backend].to_s &&
+        state["source_profile_key"].to_s == context[:inactive_profile_key].to_s
 
-      same_target = state["target_backend"].to_s == item.managed_storage_backend.to_s &&
-        state["target_profile_key"].to_s == item.managed_storage_profile.to_s
+      same_active = state["target_backend"].to_s == context[:active_backend].to_s &&
+        state["target_profile_key"].to_s == context[:active_profile_key].to_s
 
-      return false unless same_source && same_target
-
-      state_source_fp = state["source_location_fingerprint"]
-      state_target_fp = state["target_location_fingerprint"]
-      switch_source_fp = switch_state["source_location_fingerprint"]
-      switch_target_fp = switch_state["target_location_fingerprint"]
-
-      if fingerprints_differ?(state_source_fp, switch_source_fp)
-        return false
-      end
-
-      if fingerprints_differ?(state_target_fp, switch_target_fp)
-        return false
-      end
+      return false unless same_inactive && same_active
+      return false if fingerprints_differ?(state["source_location_fingerprint"], context[:inactive_location_fingerprint])
+      return false if fingerprints_differ?(state["target_location_fingerprint"], context[:active_location_fingerprint])
 
       true
     end
-    private_class_method :cleanup_state_matches_current_switch?
+    private_class_method :cleanup_state_matches_current_context?
 
-    def validate_switch_for_cleanup!(item, switch_state)
-      raise "switch_state_missing" unless switch_state.is_a?(Hash) && switch_state["status"].to_s == "switched"
-      raise "switch_source_profile_missing" if switch_state["source_profile_key"].to_s.blank?
-      raise "switch_target_profile_missing" if item.managed_storage_profile.to_s.blank?
-      raise "cleanup_source_equals_target_profile" if switch_state["source_profile_key"].to_s == item.managed_storage_profile.to_s
-      true
+    def cleanup_context_for(item, switch_state)
+      raise "switch_state_missing" unless switch_state.is_a?(Hash)
+
+      case switch_state["status"].to_s
+      when "switched"
+        inactive_profile_key = switch_state["source_profile_key"].to_s
+        active_profile_key = item.managed_storage_profile.to_s
+        raise "switch_source_profile_missing" if inactive_profile_key.blank?
+        raise "switch_target_profile_missing" if active_profile_key.blank?
+        raise "cleanup_source_equals_target_profile" if inactive_profile_key == active_profile_key
+
+        {
+          mode: "source_after_switch",
+          inactive_backend: switch_state["source_backend"].to_s,
+          inactive_profile: switch_state["source_profile"].to_s,
+          inactive_profile_key: inactive_profile_key,
+          inactive_location_fingerprint: switch_state["source_location_fingerprint"],
+          active_backend: item.managed_storage_backend.to_s,
+          active_profile_key: active_profile_key,
+          active_location_fingerprint: switch_state["target_location_fingerprint"],
+        }
+      when "rolled_back"
+        inactive_profile_key = switch_state["target_profile_key"].to_s
+        active_profile_key = item.managed_storage_profile.to_s
+        raise "rollback_target_profile_missing" if inactive_profile_key.blank?
+        raise "rollback_source_profile_missing" if active_profile_key.blank?
+        raise "cleanup_source_equals_target_profile" if inactive_profile_key == active_profile_key
+
+        {
+          mode: "inactive_target_after_rollback",
+          inactive_backend: switch_state["target_backend"].to_s,
+          inactive_profile: switch_state["target_profile"].to_s,
+          inactive_profile_key: inactive_profile_key,
+          inactive_location_fingerprint: switch_state["target_location_fingerprint"],
+          active_backend: item.managed_storage_backend.to_s,
+          active_profile_key: active_profile_key,
+          active_location_fingerprint: switch_state["source_location_fingerprint"],
+        }
+      else
+        raise "switch_state_missing"
+      end
     end
-    private_class_method :validate_switch_for_cleanup!
+    private_class_method :cleanup_context_for
 
     def store_for_switch_summary(profile_key:, backend:)
       profile_key = profile_key.to_s
@@ -286,20 +308,31 @@ module ::MediaGallery
     end
     private_class_method :verify_target_objects
 
-    def group_objects_for_cleanup(item, source_objects)
-      CLEANUP_ROLE_NAMES.filter_map do |role_name|
-        role = ::MediaGallery::AssetManifest.role_for(item, role_name)
-        next if role.blank?
+    def group_objects_for_cleanup(item, inactive_objects)
+      grouped = []
+      seen = {}
+
+      inactive_objects.each do |object|
+        role_name = object[:role_name].to_s
+        next unless CLEANUP_ROLE_NAMES.include?(role_name)
 
         if role_name == "hls"
-          prefix = role["key_prefix"].to_s.presence || File.join(item.public_id.to_s, "hls")
-          { role_name: role_name, type: "prefix", key: prefix }
+          prefix = File.join(item.public_id.to_s, "hls")
+          key = "prefix:#{prefix}"
+          next if seen[key]
+          seen[key] = true
+          grouped << { role_name: role_name, type: "prefix", key: prefix }
         else
-          key = role["key"].to_s
-          next if key.blank?
-          { role_name: role_name, type: "object", key: key }
+          object_key = object[:key].to_s
+          next if object_key.blank?
+          key = "object:#{object_key}"
+          next if seen[key]
+          seen[key] = true
+          grouped << { role_name: role_name, type: "object", key: object_key }
         end
       end
+
+      grouped
     end
     private_class_method :group_objects_for_cleanup
 
@@ -311,6 +344,5 @@ module ::MediaGallery
       end
     end
     private_class_method :purge_group
-
   end
 end

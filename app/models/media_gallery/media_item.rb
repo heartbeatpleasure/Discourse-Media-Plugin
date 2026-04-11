@@ -79,5 +79,24 @@ module ::MediaGallery
       value = storage_manifest
       value.is_a?(Hash) ? value : {}
     end
+
+    def extra_metadata_hash
+      value = extra_metadata
+      value.is_a?(Hash) ? value : {}
+    end
+
+    def admin_visibility_state
+      value = extra_metadata_hash["admin_visibility"]
+      value.is_a?(Hash) ? value.deep_dup : {}
+    end
+
+    def admin_hidden?
+      ActiveModel::Type::Boolean.new.cast(admin_visibility_state["hidden"])
+    end
+
+    def admin_management_log
+      value = extra_metadata_hash["admin_management_log"]
+      value.is_a?(Array) ? value.deep_dup : []
+    end
   end
 end

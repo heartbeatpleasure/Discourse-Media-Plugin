@@ -5,8 +5,11 @@ module ::MediaGallery
   class AdminMediaItemsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
+    MANAGEMENT_LOG_KEY = "admin_management_log"
+    VISIBILITY_KEY = "admin_visibility"
+    MAX_MANAGEMENT_LOG_ENTRIES = 50
+
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
-    # Returns a small list for quickly selecting a public_id in the admin UI.
     def search
       items = filtered_search_scope.limit(search_limit).map do |item|
         has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
@@ -17,6 +20,115 @@ module ::MediaGallery
       end.compact
 
       render_json_dump(items: items)
+    end
+
+    # GET /admin/plugins/media-gallery/media-items/:public_id/management.json
+    def management
+      item = load_item!
+      render_json_dump(management_item_payload(item))
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
+    # PUT /admin/plugins/media-gallery/media-items/:public_id/admin-update.json
+    def admin_update
+      item = load_item!
+      title = params[:title].to_s.strip
+      return render_json_error("title_required", status: 422) if title.blank?
+
+      subject = params[:gender].to_s.strip
+      return render_json_error("gender_required", status: 422) if subject.blank?
+      return render_json_error("invalid_gender", status: 422) unless ::MediaGallery::MediaItem::GENDERS.include?(subject)
+
+      description = params[:description].to_s.strip
+      tags = normalize_tags_param(params[:tags])
+      note = params[:admin_note].to_s.strip.presence
+
+      changes = {}
+      changes["title"] = [item.title, title] if item.title.to_s != title
+      changes["description"] = [item.description.to_s, description] if item.description.to_s != description
+      changes["gender"] = [item.gender.to_s, subject] if item.gender.to_s != subject
+      changes["tags"] = [Array(item.tags).map(&:to_s), tags] if Array(item.tags).map(&:to_s) != tags
+
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      append_management_log!(meta, action: "update_metadata", item: item, note: note, changes: changes)
+
+      item.update!(
+        title: title,
+        description: description.presence,
+        gender: subject,
+        tags: tags,
+        extra_metadata: meta,
+      )
+
+      item.reload
+      render_json_dump(ok: true, item: management_item_payload(item), message: "Item updated.")
+    rescue ActiveRecord::RecordInvalid => e
+      render_json_error("validation_error", status: 422, extra: { details: e.record.errors.full_messages })
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
+    # POST /admin/plugins/media-gallery/media-items/:public_id/visibility.json
+    def visibility
+      item = load_item!
+      hidden = boolean_param(:hidden)
+      note = params[:admin_note].to_s.strip.presence
+      reason = params[:reason].to_s.strip.presence || note
+      now = Time.now.utc.iso8601
+
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      visibility = admin_visibility_hash_from_meta(meta)
+
+      visibility["hidden"] = hidden
+      visibility["updated_at"] = now
+      visibility["updated_by"] = current_user.username
+      visibility["reason"] = reason
+
+      if hidden
+        visibility["hidden_at"] = now
+        visibility["hidden_by"] = current_user.username
+      else
+        visibility["hidden"] = false
+        visibility["unhidden_at"] = now
+        visibility["unhidden_by"] = current_user.username
+      end
+
+      meta[VISIBILITY_KEY] = visibility
+      append_management_log!(
+        meta,
+        action: hidden ? "hide" : "unhide",
+        item: item,
+        note: note,
+        changes: { "hidden" => [item.admin_hidden?, hidden], "reason" => [item.admin_visibility_state["reason"], reason] }
+      )
+
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+      item.reload
+      render_json_dump(ok: true, item: management_item_payload(item), message: hidden ? "Item hidden." : "Item visible again.")
+    rescue => e
+      render_json_error(e.message, status: 422)
+    end
+
+    # DELETE /admin/plugins/media-gallery/media-items/:public_id/admin-destroy.json
+    def admin_destroy
+      item = load_item!
+      note = params[:admin_note].to_s.strip.presence
+      public_id = item.public_id.to_s
+
+      item.with_lock do
+        upload_ids = [item.original_upload_id, item.processed_upload_id, item.thumbnail_upload_id].compact.uniq
+        uploads = upload_ids.present? ? ::Upload.where(id: upload_ids).to_a : []
+
+        delete_managed_assets_safely!(item)
+        uploads.each { |upload| destroy_upload_safely!(upload) }
+        log_admin_delete!(item, note: note)
+        item.destroy!
+      end
+
+      render_json_dump(ok: true, public_id: public_id, deleted: true, message: "Item deleted.")
+    rescue => e
+      render_json_error(e.message, status: 422)
     end
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/diagnostics.json
@@ -54,7 +166,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/:public_id/reset-processing.json
     def reset_processing
       item = load_item!
       unless item.queued_or_processing? || item.status == "failed"
@@ -75,7 +186,6 @@ module ::MediaGallery
       render_json_dump(ok: true, public_id: item.public_id, status: item.status, processing: processing)
     end
 
-    # GET /admin/plugins/media-gallery/media-items/:public_id/migration-plan.json
     def migration_plan
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
@@ -84,7 +194,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # GET /admin/plugins/media-gallery/media-items/:public_id/verify-target.json
     def verify_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
@@ -94,7 +203,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/:public_id/copy-to-target.json
     def copy_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
@@ -112,7 +220,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/:public_id/switch-to-target.json
     def switch_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
@@ -129,7 +236,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/:public_id/cleanup-source.json
     def cleanup_source
       item = load_item!
       state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: current_user.username, force: boolean_param(:force))
@@ -138,7 +244,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/:public_id/rollback-to-source.json
     def rollback_to_source
       item = load_item!
       state = ::MediaGallery::MigrationRollback.rollback!(item, requested_by: current_user.username, force: boolean_param(:force))
@@ -147,7 +252,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/:public_id/finalize-migration.json
     def finalize_migration
       item = load_item!
       state = ::MediaGallery::MigrationFinalize.finalize!(item, requested_by: current_user.username, force: boolean_param(:force))
@@ -156,7 +260,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/:public_id/clear-queued-state.json
     def clear_queued_state
       item = load_item!
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
@@ -188,7 +291,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/bulk-migrate.json
     def bulk_migrate
       target_profile = params[:target_profile].to_s.presence || "target"
       items = bulk_migration_scope.to_a
@@ -196,9 +298,7 @@ module ::MediaGallery
       queued = 0
       skipped = 0
 
-      if items.blank?
-        return render_json_error("no_media_items_selected", status: 422)
-      end
+      return render_json_error("no_media_items_selected", status: 422) if items.blank?
 
       items.each do |item|
         has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
@@ -235,7 +335,6 @@ module ::MediaGallery
       render_json_error(e.message, status: 422)
     end
 
-    # POST /admin/plugins/media-gallery/media-items/:public_id/retry-processing.json
     def retry_processing
       item = load_item!
       force = boolean_param(:force)
@@ -267,7 +366,7 @@ module ::MediaGallery
 
     def load_item!
       @current_item ||= begin
-        item = ::MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
+        item = ::MediaGallery::MediaItem.includes(:user).find_by(public_id: params[:public_id].to_s)
         raise Discourse::NotFound if item.blank?
         item
       end
@@ -312,6 +411,14 @@ module ::MediaGallery
       media_type = params[:media_type].to_s.strip
       scope = scope.where(media_type: media_type) if %w[audio image video].include?(media_type)
 
+      hidden_filter = params[:hidden].to_s.strip
+      case hidden_filter
+      when "hidden"
+        scope = scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = true")
+      when "visible"
+        scope = scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = false")
+      end
+
       scope
     end
 
@@ -330,7 +437,14 @@ module ::MediaGallery
       ActiveModel::Type::Boolean.new.cast(params[name])
     end
 
+    def normalize_tags_param(value)
+      raw = value
+      raw = raw.split(",") if raw.is_a?(String)
+      Array(raw).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
+    end
+
     def serialize_search_item(item, has_hls:)
+      visibility = item.admin_visibility_state
       {
         id: item.id,
         public_id: item.public_id,
@@ -349,9 +463,69 @@ module ::MediaGallery
         managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
         delivery_mode: item.delivery_mode,
         has_hls: has_hls,
+        hidden: item.admin_hidden?,
+        hidden_reason: visibility["reason"],
       }
     end
 
+    def management_item_payload(item)
+      visibility = item.admin_visibility_state
+      {
+        id: item.id,
+        public_id: item.public_id,
+        title: item.title,
+        description: item.description,
+        gender: item.gender,
+        tags: item.tags,
+        status: item.status,
+        media_type: item.media_type,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+        user_id: item.user_id,
+        username: item.user&.username,
+        thumbnail_url: "/media/#{item.public_id}/thumbnail",
+        error_message: item.error_message,
+        managed_storage_backend: item.managed_storage_backend,
+        managed_storage_profile: managed_storage_profile_key_for(item),
+        managed_storage_profile_label: managed_storage_profile_label_for(item),
+        delivery_mode: item.delivery_mode,
+        has_hls: ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash),
+        hidden: item.admin_hidden?,
+        visibility: visibility,
+        processing: processing_metadata(item),
+        management_log: item.admin_management_log,
+      }
+    end
+
+    def append_management_log!(meta, action:, item:, note:, changes: nil)
+      log = meta[MANAGEMENT_LOG_KEY]
+      log = [] unless log.is_a?(Array)
+      entry = {
+        "action" => action.to_s,
+        "at" => Time.now.utc.iso8601,
+        "admin_username" => current_user.username,
+        "admin_user_id" => current_user.id,
+        "public_id" => item.public_id.to_s,
+      }
+      entry["note"] = note if note.present?
+      entry["changes"] = stringify_changes(changes) if changes.present?
+      log.unshift(entry)
+      meta[MANAGEMENT_LOG_KEY] = log.first(MAX_MANAGEMENT_LOG_ENTRIES)
+      meta
+    end
+
+    def stringify_changes(changes)
+      return {} unless changes.is_a?(Hash)
+
+      changes.each_with_object({}) do |(key, value), acc|
+        acc[key.to_s] = value
+      end
+    end
+
+    def admin_visibility_hash_from_meta(meta)
+      value = meta[VISIBILITY_KEY]
+      value.is_a?(Hash) ? value.deep_dup : {}
+    end
 
     def managed_storage_profile_key_for(item)
       ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
@@ -440,6 +614,62 @@ module ::MediaGallery
       return nil if role["backend"].to_s.present? && store.backend.to_s != role["backend"].to_s
 
       store
+    end
+
+    def delete_managed_assets_safely!(item)
+      public_id = item.public_id.to_s
+
+      begin
+        ["main", "thumbnail"].each do |role_name|
+          role = ::MediaGallery::AssetManifest.role_for(item, role_name)
+          next if role.blank?
+          next unless %w[local s3].include?(role["backend"].to_s)
+
+          store = ::MediaGallery::StorageSettingsResolver.build_store(role["backend"])
+          store&.delete(role["key"].to_s)
+        end
+
+        hls_role = ::MediaGallery::AssetManifest.role_for(item, "hls")
+        if hls_role.present? && %w[local s3].include?(hls_role["backend"].to_s)
+          store = ::MediaGallery::StorageSettingsResolver.build_store(hls_role["backend"])
+          prefix = hls_role["key_prefix"].presence || hls_role["key"].presence || ::MediaGallery::PrivateStorage.hls_root_rel_dir(public_id)
+          store&.delete_prefix(prefix.to_s) if prefix.present?
+        end
+      rescue => e
+        Rails.logger.warn("[media_gallery] failed to delete managed assets public_id=#{public_id}: #{e.class}: #{e.message}")
+      end
+
+      begin
+        dir = ::MediaGallery::PrivateStorage.item_private_dir(public_id)
+        FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+      rescue => e
+        Rails.logger.warn("[media_gallery] failed to delete private dir public_id=#{public_id}: #{e.class}: #{e.message}")
+      end
+
+      begin
+        odir = ::MediaGallery::PrivateStorage.item_original_dir(public_id)
+        FileUtils.rm_rf(odir) if odir.present? && Dir.exist?(odir)
+      rescue => e
+        Rails.logger.warn("[media_gallery] failed to delete original export dir public_id=#{public_id}: #{e.class}: #{e.message}")
+      end
+    end
+
+    def destroy_upload_safely!(upload)
+      return if upload.blank?
+
+      if defined?(::UploadDestroyer)
+        ::UploadDestroyer.new(Discourse.system_user, upload).destroy
+      else
+        upload.destroy!
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] failed to destroy upload id=#{upload&.id}: #{e.class}: #{e.message}")
+    end
+
+    def log_admin_delete!(item, note: nil)
+      Rails.logger.info(
+        "[media_gallery] admin_delete public_id=#{item.public_id} admin=#{current_user.username} note=#{note.to_s.inspect} title=#{item.title.to_s.inspect}"
+      )
     end
   end
 end

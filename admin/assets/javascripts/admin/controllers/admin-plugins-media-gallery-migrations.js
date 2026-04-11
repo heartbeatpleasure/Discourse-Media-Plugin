@@ -388,7 +388,16 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   get cleanupDisabled() {
     const switchStatus = this.selectedDiagnostics?.migration_switch?.status || "";
-    return !this.hasSelectedItem || this.isCleaning || this.isCopying || this.isSwitching || this.isRollingBack || this.isFinalizing || switchStatus !== "switched";
+    return !this.hasSelectedItem || this.isCleaning || this.isCopying || this.isSwitching || this.isRollingBack || this.isFinalizing || !["switched", "rolled_back"].includes(switchStatus);
+  }
+
+  get cleanupActionLabel() {
+    const cleanupMode = this.selectedDiagnostics?.migration_cleanup?.cleanup_mode || "";
+    const switchStatus = this.selectedDiagnostics?.migration_switch?.status || "";
+    if (cleanupMode === "inactive_target_after_rollback" || switchStatus === "rolled_back") {
+      return "Cleanup inactive target";
+    }
+    return "Cleanup source";
   }
 
   get verifyDisabled() {
@@ -617,8 +626,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       buildStateCard({
         title: "Cleanup",
         status: cleanup.status || "idle",
-        detail: cleanup.current_role ? `Role: ${prettyLabel(cleanup.current_role)}` : "Source cleanup not started",
-        meta: cleanup.progress_total ? `${cleanup.progress_index || 0} / ${cleanup.progress_total} role groups` : `${cleanup.object_count || 0} source objects`,
+        detail: cleanup.current_role ? `Role: ${prettyLabel(cleanup.current_role)}` : ((cleanup.cleanup_mode === "inactive_target_after_rollback" || switchState.status === "rolled_back") ? "Inactive target cleanup not started" : "Source cleanup not started"),
+        meta: cleanup.progress_total ? `${cleanup.progress_index || 0} / ${cleanup.progress_total} role groups` : `${cleanup.object_count || 0} objects to purge`,
         error: cleanup.last_error,
       }),
       buildStateCard({
@@ -1408,8 +1417,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         body: JSON.stringify({ force: this.forceAction }),
       });
       this.lastActionMessage = result?.migration_finalize?.status === "pending_cleanup"
-        ? "Finalize queued cleanup first. Run finalize again after cleanup completes."
-        : "Migration finalized.";
+        ? "Finalize is waiting for cleanup to finish."
+        : ((result?.migration_finalize?.finalize_mode === "rolled_back") ? "Rollback finalized." : "Migration finalized.");
       await this.refreshSelected({ includeSearchRefresh: true });
     } catch (e) {
       this.actionError = e?.message || String(e);

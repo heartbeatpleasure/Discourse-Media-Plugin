@@ -30,6 +30,10 @@ export default RouteTemplate(
         <a class="btn" href="/admin/plugins/media-gallery-migrations">
           {{i18n "admin.media_gallery.migrations.short_title"}}
         </a>
+
+        <a class="btn" href="/admin/plugins/media-gallery-management">
+          {{i18n "admin.media_gallery.management.short_title"}}
+        </a>
       </div>
     </div>
   </template>

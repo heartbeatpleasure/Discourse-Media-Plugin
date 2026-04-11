@@ -55,7 +55,7 @@ module ::MediaGallery
       per_page = [(params[:per_page].presence || 24).to_i, 100].min
       offset = (page - 1) * per_page
 
-      items = MediaGallery::MediaItem.where(status: "ready").order(created_at: :desc)
+      items = apply_admin_visibility_filter(MediaGallery::MediaItem.where(status: "ready")).order(created_at: :desc)
 
       if params[:media_type].present? && MediaGallery::MediaItem::TYPES.include?(params[:media_type].to_s)
         items = items.where(media_type: params[:media_type].to_s)
@@ -97,7 +97,7 @@ module ::MediaGallery
       per_page = [(params[:per_page].presence || 24).to_i, 100].min
       offset = (page - 1) * per_page
 
-      items = MediaGallery::MediaItem.where(user_id: current_user.id).order(created_at: :desc)
+      items = apply_admin_visibility_filter(MediaGallery::MediaItem.where(user_id: current_user.id)).order(created_at: :desc)
 
       if params[:status].present? && MediaGallery::MediaItem::STATUSES.include?(params[:status].to_s)
         items = items.where(status: params[:status].to_s)
@@ -373,6 +373,7 @@ module ::MediaGallery
 
     def show
       item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
       raise Discourse::NotFound if !item.ready? && !can_manage_item?(item)
       render_json_dump(serialize_data(item, MediaGallery::MediaItemSerializer, root: false))
     end
@@ -398,6 +399,7 @@ module ::MediaGallery
 
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
       return render_json_error("not_found", status: 404) if item.blank?
+      ensure_item_visible_to_current_user!(item)
 
       unless item.ready?
         if item.status == "failed"
@@ -568,6 +570,7 @@ module ::MediaGallery
       # Only sessions for audio/video are counted.
       item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
       raise Discourse::NotFound if item.blank?
+      ensure_item_visible_to_current_user!(item)
       raise Discourse::NotFound unless item.ready?
       raise Discourse::NotFound unless MediaGallery::Token.asset_binding_valid?(media_item: item, kind: payload["kind"], payload: payload)
 
@@ -656,6 +659,7 @@ module ::MediaGallery
 
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
       unless item.ready?
         return render_default_thumbnail(item) if item.queued_or_processing? || item.status.to_s == "failed"
 
@@ -719,6 +723,7 @@ module ::MediaGallery
 
     def like
       item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
       raise Discourse::NotFound unless item.ready?
 
       like = MediaGallery::MediaLike.find_by(media_item_id: item.id, user_id: current_user.id)
@@ -732,6 +737,7 @@ module ::MediaGallery
 
     def unlike
       item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
       raise Discourse::NotFound unless item.ready?
 
       like = MediaGallery::MediaLike.find_by(media_item_id: item.id, user_id: current_user.id)
@@ -759,6 +765,20 @@ module ::MediaGallery
 
     def can_manage_item?(item)
       (current_user&.staff? || current_user&.admin?) || (guardian.user&.id == item.user_id)
+    end
+
+    def ensure_item_visible_to_current_user!(item)
+      return if item.blank?
+      return if !item.respond_to?(:admin_hidden?) || !item.admin_hidden?
+      return if current_user&.staff? || current_user&.admin?
+
+      raise Discourse::NotFound
+    end
+
+    def apply_admin_visibility_filter(scope)
+      return scope if current_user&.staff? || current_user&.admin?
+
+      scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = false")
     end
 
     def find_item_by_public_id!(public_id)

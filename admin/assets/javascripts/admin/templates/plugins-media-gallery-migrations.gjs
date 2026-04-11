@@ -840,7 +840,7 @@ export default RouteTemplate(
                   {{if @controller.isSwitching "Switching…" (i18n "admin.media_gallery.migrations.switch_button")}}
                 </button>
                 <button class="btn" type="button" {{on "click" @controller.cleanupSource}} disabled={{@controller.cleanupDisabled}}>
-                  {{if @controller.isCleaning "Cleaning…" (i18n "admin.media_gallery.migrations.cleanup_button")}}
+                  {{if @controller.isCleaning "Cleaning…" @controller.cleanupActionLabel}}
                 </button>
                 <button class="btn" type="button" {{on "click" @controller.rollbackToSource}} disabled={{@controller.rollbackDisabled}}>
                   {{if @controller.isRollingBack "Rolling back…" "Rollback"}}

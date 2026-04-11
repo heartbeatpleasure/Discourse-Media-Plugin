@@ -21,7 +21,9 @@ module ::MediaGallery
       return unless enforce_hls_rate_limit!(kind: :playlist, token: token)
 
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
-      deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
+      deny!(:item_not_ready, token: token) if item.blank?
+      deny!(:item_hidden, token: token) if item.respond_to?(:admin_hidden?) && item.admin_hidden? && !(current_user&.staff? || current_user&.admin?)
+      deny!(:item_not_ready, token: token) unless item.ready?
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
@@ -40,7 +42,9 @@ module ::MediaGallery
       return unless enforce_hls_rate_limit!(kind: :playlist, token: token)
 
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
-      deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
+      deny!(:item_not_ready, token: token) if item.blank?
+      deny!(:item_hidden, token: token) if item.respond_to?(:admin_hidden?) && item.admin_hidden? && !(current_user&.staff? || current_user&.admin?)
+      deny!(:item_not_ready, token: token) unless item.ready?
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
@@ -62,7 +66,9 @@ module ::MediaGallery
       return unless enforce_hls_rate_limit!(kind: :segment, token: token)
 
       item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
-      deny!(:item_not_ready, token: token) if item.blank? || !item.ready?
+      deny!(:item_not_ready, token: token) if item.blank?
+      deny!(:item_hidden, token: token) if item.respond_to?(:admin_hidden?) && item.admin_hidden? && !(current_user&.staff? || current_user&.admin?)
+      deny!(:item_not_ready, token: token) unless item.ready?
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
