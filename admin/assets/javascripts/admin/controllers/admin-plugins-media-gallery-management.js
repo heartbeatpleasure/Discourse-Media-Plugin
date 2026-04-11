@@ -195,11 +195,14 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   async _fetchJson(url, options = {}) {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
     const response = await fetch(url, {
       credentials: "same-origin",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
+        "X-Requested-With": "XMLHttpRequest",
         ...options.headers,
       },
       ...options,
