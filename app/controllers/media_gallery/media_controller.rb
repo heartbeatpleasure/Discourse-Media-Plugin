@@ -659,7 +659,9 @@ module ::MediaGallery
 
     def thumbnail
       item = find_item_by_public_id!(params[:public_id])
-      ensure_item_visible_to_current_user!(item)
+      unless admin_preview_request?
+        ensure_item_visible_to_current_user!(item)
+      end
       unless item.ready?
         return render_default_thumbnail(item) if item.queued_or_processing? || item.status.to_s == "failed"
 
@@ -772,6 +774,10 @@ module ::MediaGallery
       return if !item.respond_to?(:admin_hidden?) || !item.admin_hidden?
 
       raise Discourse::NotFound
+    end
+
+    def admin_preview_request?
+      current_user&.staff? && params[:admin_preview].to_s == "1"
     end
 
     def apply_admin_visibility_filter(scope)

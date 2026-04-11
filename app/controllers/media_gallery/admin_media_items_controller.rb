@@ -50,12 +50,18 @@ module ::MediaGallery
       changes["gender"] = [item.gender.to_s, subject] if item.gender.to_s != subject
       changes["tags"] = [Array(item.tags).map(&:to_s), tags] if Array(item.tags).map(&:to_s) != tags
 
-      if changes.blank?
+      if changes.blank? && note.blank?
         return render_json_dump(ok: true, item: management_item_payload(item), message: "No changes to save.")
       end
 
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
-      append_management_log!(meta, action: "update_metadata", item: item, note: note, changes: changes)
+      append_management_log!(
+        meta,
+        action: changes.present? ? "update_metadata" : "admin_note",
+        item: item,
+        note: note,
+        changes: changes.presence
+      )
 
       item.update!(
         title: title,
@@ -150,10 +156,12 @@ module ::MediaGallery
         title: item.title,
         status: item.status,
         created_at: item.created_at,
+        updated_at: item.updated_at,
         user_id: item.user_id,
         username: item.user&.username,
         media_type: item.media_type,
-        thumbnail_url: "/media/#{item.public_id}/thumbnail",
+        gender: item.gender,
+        thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
         error_message: item.error_message,
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: managed_storage_profile_key_for(item),
@@ -415,6 +423,9 @@ module ::MediaGallery
       backend = params[:backend].to_s.strip
       scope = scope.where(managed_storage_backend: backend) if %w[local s3].include?(backend)
 
+      gender = params[:gender].to_s.strip
+      scope = scope.where(gender: gender) if ::MediaGallery::MediaItem::GENDERS.include?(gender)
+
       status = params[:status].to_s.strip
       scope = scope.where(status: status) if status.present?
 
@@ -427,6 +438,20 @@ module ::MediaGallery
         scope = scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = true")
       when "visible"
         scope = scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = false")
+      end
+
+      sort = params[:sort].to_s.strip
+      scope = case sort
+      when "oldest"
+        scope.reorder(created_at: :asc)
+      when "title_asc"
+        scope.reorder(Arel.sql("LOWER(title) ASC"), created_at: :desc)
+      when "title_desc"
+        scope.reorder(Arel.sql("LOWER(title) DESC"), created_at: :desc)
+      when "updated_desc"
+        scope.reorder(updated_at: :desc)
+      else
+        scope.reorder(created_at: :desc)
       end
 
       scope
@@ -461,12 +486,14 @@ module ::MediaGallery
         title: item.title,
         status: item.status,
         created_at: item.created_at,
+        updated_at: item.updated_at,
         user_id: item.user_id,
         username: item.user&.username,
         media_type: item.media_type,
+        gender: item.gender,
         filesize_processed_bytes: item.filesize_processed_bytes,
         error_message: item.error_message,
-        thumbnail_url: "/media/#{item.public_id}/thumbnail",
+        thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: managed_storage_profile_key_for(item),
         managed_storage_profile_label: managed_storage_profile_label_for(item),
@@ -493,7 +520,7 @@ module ::MediaGallery
         updated_at: item.updated_at,
         user_id: item.user_id,
         username: item.user&.username,
-        thumbnail_url: "/media/#{item.public_id}/thumbnail",
+        thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
         error_message: item.error_message,
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: managed_storage_profile_key_for(item),

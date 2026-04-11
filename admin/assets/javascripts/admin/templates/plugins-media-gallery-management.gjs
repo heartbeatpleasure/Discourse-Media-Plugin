@@ -69,7 +69,7 @@ export default RouteTemplate(
       }
 
       .mg-management__filters {
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         align-items: end;
       }
 
@@ -107,7 +107,8 @@ export default RouteTemplate(
       }
 
       .mg-management__filters-footer,
-      .mg-management__actions {
+      .mg-management__actions,
+      .mg-management__tag-picker {
         display: flex;
         flex-wrap: wrap;
         gap: 0.75rem;
@@ -121,12 +122,6 @@ export default RouteTemplate(
 
       .mg-management__results-wrap {
         margin-top: 1rem;
-      }
-
-      .mg-management__results-list {
-        max-height: 72vh;
-        overflow: auto;
-        padding-right: 0.1rem;
       }
 
       .mg-management__result-card {
@@ -203,7 +198,8 @@ export default RouteTemplate(
         gap: 0.5rem;
       }
 
-      .mg-management__badge {
+      .mg-management__badge,
+      .mg-management__tag-chip {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -217,6 +213,11 @@ export default RouteTemplate(
         border: 1px solid var(--primary-low);
       }
 
+      .mg-management__tag-chip {
+        cursor: pointer;
+      }
+
+      .mg-management__tag-chip.is-selected,
       .mg-management__badge.is-success {
         background: var(--success-low);
         color: var(--success);
@@ -322,15 +323,30 @@ export default RouteTemplate(
         font-size: var(--font-down-1);
       }
 
-      .mg-management__changes {
-        display: block;
+      .mg-management__history-row {
+        display: grid;
+        gap: 0.25rem;
+      }
+
+      .mg-management__history-row-label {
+        font-weight: 600;
+        font-size: var(--font-down-1);
+      }
+
+      .mg-management__history-row-values {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        align-items: center;
         padding: 0.55rem 0.65rem;
         border-radius: 10px;
         background: var(--secondary);
         border: 1px solid var(--mg-border);
         font-size: var(--font-down-1);
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
+      }
+
+      .mg-management__history-arrow {
+        color: var(--mg-muted);
       }
 
       .mg-management__empty-state {
@@ -345,10 +361,6 @@ export default RouteTemplate(
       @media (max-width: 1100px) {
         .mg-management__grid {
           grid-template-columns: 1fr;
-        }
-
-        .mg-management__results-list {
-          max-height: none;
         }
       }
 
@@ -391,7 +403,7 @@ export default RouteTemplate(
           <div class="mg-management__panel-header">
             <div class="mg-management__panel-copy">
               <h2>Find media</h2>
-              <p class="mg-management__muted">Search by title, public ID, or type, then open an item to manage it.</p>
+              <p class="mg-management__muted">Search by title, public ID, or owner, then open an item to manage it.</p>
             </div>
           </div>
 
@@ -399,6 +411,15 @@ export default RouteTemplate(
             <div class="mg-management__field is-search">
               <label>Search</label>
               <input type="text" value={{@controller.searchQuery}} placeholder="Search by public_id / title / id..." {{on "input" @controller.onSearchInput}} />
+            </div>
+
+            <div class="mg-management__field">
+              <label>Backend</label>
+              <select value={{@controller.backendFilter}} {{on "change" @controller.onBackendFilterChange}}>
+                <option value="all">All</option>
+                <option value="local">Local</option>
+                <option value="s3">S3</option>
+              </select>
             </div>
 
             <div class="mg-management__field">
@@ -430,6 +451,39 @@ export default RouteTemplate(
                 <option value="hidden">Hidden</option>
               </select>
             </div>
+
+            <div class="mg-management__field">
+              <label>The file contains</label>
+              <select value={{@controller.genderFilter}} {{on "change" @controller.onGenderFilterChange}}>
+                <option value="all">All</option>
+                <option value="male">Male hearts</option>
+                <option value="female">Female hearts</option>
+                <option value="both">Both male and female hearts</option>
+                <option value="non_binary">Non-binary hearts</option>
+                <option value="objects">Heart-related objects</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+
+            <div class="mg-management__field">
+              <label>Limit</label>
+              <select value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </div>
+
+            <div class="mg-management__field">
+              <label>Sort</label>
+              <select value={{@controller.sortBy}} {{on "change" @controller.onSortChange}}>
+                <option value="newest">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="updated_desc">Recently updated</option>
+                <option value="title_asc">Title A–Z</option>
+                <option value="title_desc">Title Z–A</option>
+              </select>
+            </div>
           </div>
 
           <div class="mg-management__filters-footer">
@@ -437,7 +491,7 @@ export default RouteTemplate(
               <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
                 {{if @controller.isSearching "Searching…" "Search"}}
               </button>
-              <button class="btn" type="button" {{on "click" @controller.loadInitial}} disabled={{@controller.isSearching}}>Reset</button>
+              <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isSearching}}>Reset</button>
             </div>
             {{#if @controller.searchInfo}}
               <span class="mg-management__muted">{{@controller.searchInfo}}</span>
@@ -451,10 +505,10 @@ export default RouteTemplate(
           <div class="mg-management__results-wrap">
             {{#if @controller.searchResults.length}}
               <div class="mg-management__results-list">
-                {{#each @controller.decoratedSearchResults as |item|}}
+                {{#each @controller.decoratedSearchResults key="public_id" as |item|}}
                   <article class="mg-management__result-card {{if item.isSelected "is-selected"}}">
                     {{#if item.thumbnail_url}}
-                      <img class="mg-management__thumb" src={{item.thumbnail_url}} alt="thumbnail" />
+                      <img class="mg-management__thumb" loading="lazy" src={{item.thumbnail_url}} alt="thumbnail" />
                     {{else}}
                       <div class="mg-management__thumb-placeholder">No thumbnail</div>
                     {{/if}}
@@ -504,7 +558,7 @@ export default RouteTemplate(
           {{#if @controller.hasSelectedItem}}
             <div class="mg-management__selected-header">
               {{#if @controller.selectedItem.thumbnail_url}}
-                <img class="mg-management__selected-thumb" src={{@controller.selectedItem.thumbnail_url}} alt="thumbnail" />
+                <img class="mg-management__selected-thumb" loading="lazy" src={{@controller.selectedItem.thumbnail_url}} alt="thumbnail" />
               {{else}}
                 <div class="mg-management__selected-thumb-placeholder">No thumbnail available</div>
               {{/if}}
@@ -545,7 +599,7 @@ export default RouteTemplate(
 
                 <div class="mg-management__edit-grid" style="margin-top: 1rem;">
                   <div class="mg-management__field">
-                    <label>{{i18n "media_gallery.gender_label"}}</label>
+                    <label>The file contains</label>
                     <select value={{@controller.editGender}} {{on "change" @controller.onEditGender}}>
                       <option value="">{{i18n "media_gallery.genders.select_placeholder"}}</option>
                       <option value="male">{{i18n "media_gallery.genders.male"}}</option>
@@ -562,11 +616,7 @@ export default RouteTemplate(
                     {{#if @controller.usingAllowedTags}}
                       <div class="mg-management__tag-picker">
                         {{#each @controller.decoratedAllowedTagOptions as |tag|}}
-                          <button
-                            type="button"
-                            class="mg-management__tag-chip {{if tag.isSelected "is-selected"}}"
-                            {{on "click" (fn @controller.toggleTag tag.value)}}
-                          >
+                          <button type="button" class="mg-management__tag-chip {{if tag.isSelected "is-selected"}}" {{on "click" (fn @controller.toggleTag tag.value)}}>
                             {{tag.label}}
                           </button>
                         {{/each}}
@@ -579,13 +629,13 @@ export default RouteTemplate(
 
                 <div class="mg-management__field" style="margin-top: 1rem;">
                   <label>Admin note / reason</label>
-                  <textarea rows="3" value={{@controller.adminNote}} placeholder="Optional note for hide, unhide, edit, or delete" {{on "input" @controller.onAdminNote}}></textarea>
+                  <textarea rows="3" value={{@controller.adminNote}} placeholder="Optional note for save, hide, unhide, or delete" {{on "input" @controller.onAdminNote}}></textarea>
                 </div>
               </section>
 
               <section class="mg-management__editor-section">
                 <h3>Actions</h3>
-                <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, toggle visibility, queue a retry for failed items, or remove the item.</p>
+                <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, add an admin note, toggle visibility, queue a retry for failed items, or remove the item.</p>
                 <div class="mg-management__actions" style="margin-top: 1rem;">
                   <button class="btn btn-primary" type="button" {{on "click" @controller.saveChanges}} disabled={{@controller.saveDisabled}}>
                     {{if @controller.isSaving "Saving…" "Save changes"}}

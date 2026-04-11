@@ -33,6 +33,10 @@ function titleize(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function displayTagLabel(value) {
+  return titleize(String(value || "").trim());
+}
+
 function normalizeTags(tags) {
   return Array.isArray(tags)
     ? tags.map((tag) => String(tag || "").trim().toLowerCase()).filter(Boolean)
@@ -52,6 +56,13 @@ function arrayEqual(left, right) {
   return a.every((value, index) => String(value) === String(b[index]));
 }
 
+function genderLabel(value) {
+  return (
+    GENDER_OPTIONS.find((option) => option.value === value)?.label ||
+    stringifyValue(value)
+  );
+}
+
 function stringifyValue(value, key = "") {
   if (key === "gender") {
     return genderLabel(value);
@@ -62,7 +73,11 @@ function stringifyValue(value, key = "") {
   }
 
   if (Array.isArray(value)) {
-    return value.length ? value.map((entry) => String(entry || "").trim()).filter(Boolean).join(", ") : "—";
+    const entries = value
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+      .map(displayTagLabel);
+    return entries.length ? entries.join(", ") : "—";
   }
 
   const normalized = String(value ?? "");
@@ -77,6 +92,8 @@ function formatHistoryAction(action) {
       return "Hidden item";
     case "unhide":
       return "Made item visible";
+    case "admin_note":
+      return "Added admin note";
     default:
       return titleize(action || "change");
   }
@@ -115,19 +132,15 @@ function formatHistoryChanges(entry) {
     .filter(Boolean);
 }
 
-function genderLabel(value) {
-  return (
-    GENDER_OPTIONS.find((option) => option.value === value)?.label ||
-    stringifyValue(value)
-  );
-}
-
 export default class AdminPluginsMediaGalleryManagementController extends Controller {
   @tracked searchQuery = "";
+  @tracked backendFilter = "all";
   @tracked statusFilter = "all";
   @tracked mediaTypeFilter = "all";
   @tracked hiddenFilter = "all";
-  @tracked limit = 50;
+  @tracked genderFilter = "all";
+  @tracked limit = "50";
+  @tracked sortBy = "newest";
   @tracked searchResults = [];
   @tracked isSearching = false;
   @tracked searchError = "";
@@ -154,10 +167,13 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   resetState() {
     this.searchQuery = "";
+    this.backendFilter = "all";
     this.statusFilter = "all";
     this.mediaTypeFilter = "all";
     this.hiddenFilter = "all";
-    this.limit = 50;
+    this.genderFilter = "all";
+    this.limit = "50";
+    this.sortBy = "newest";
     this.searchResults = [];
     this.isSearching = false;
     this.searchError = "";
@@ -193,7 +209,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   get allowedTagOptions() {
     return Array.isArray(this.selectedItem?.allowed_tags)
-      ? this.selectedItem.allowed_tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+      ? this.selectedItem.allowed_tags
+          .map((tag) => String(tag || "").trim())
+          .filter(Boolean)
       : [];
   }
 
@@ -204,7 +222,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   get decoratedAllowedTagOptions() {
     return this.allowedTagOptions.map((tag) => ({
       value: String(tag || "").trim().toLowerCase(),
-      label: String(tag || "").trim(),
+      label: displayTagLabel(tag),
       isSelected: this.editTags.includes(String(tag || "").trim().toLowerCase()),
     }));
   }
@@ -230,13 +248,17 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     );
   }
 
+  get noteDirty() {
+    return !!String(this.adminNote || "").trim();
+  }
+
   get saveDisabled() {
     return (
       !this.hasSelectedItem ||
       this.isSaving ||
       !this.editTitle?.trim() ||
       !this.editGender ||
-      !this.metadataDirty
+      (!this.metadataDirty && !this.noteDirty)
     );
   }
 
@@ -275,7 +297,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
             : item?.status === "processing" || item?.status === "queued"
               ? "is-warning"
               : "",
-      visibilityBadgeClass: item?.hidden ? "is-warning" : "",
+      visibilityBadgeClass: item?.hidden ? "is-danger" : "is-success",
     }));
   }
 
@@ -290,7 +312,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   get selectedVisibilityBadgeClass() {
-    return this.selectedItem?.hidden ? "is-warning" : "";
+    return this.selectedItem?.hidden ? "is-danger" : "is-success";
   }
 
   get selectedDisplayStatus() {
@@ -308,7 +330,6 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       titleize(this.selectedItem?.managed_storage_backend)
     );
   }
-
 
   get selectedMetaRows() {
     const item = this.selectedItem || {};
@@ -399,6 +420,26 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.searchInfo = `${this.searchResults.length} item(s) found.`;
   }
 
+  _sortSearchResults(items) {
+    const entries = Array.isArray(items) ? [...items] : [];
+    const asTime = (value) => new Date(value || 0).getTime() || 0;
+
+    return entries.sort((a, b) => {
+      switch (this.sortBy) {
+        case "oldest":
+          return asTime(a?.created_at) - asTime(b?.created_at);
+        case "title_asc":
+          return String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { sensitivity: "base" });
+        case "title_desc":
+          return String(b?.title || "").localeCompare(String(a?.title || ""), undefined, { sensitivity: "base" });
+        case "updated_desc":
+          return asTime(b?.updated_at) - asTime(a?.updated_at);
+        default:
+          return asTime(b?.created_at) - asTime(a?.created_at);
+      }
+    });
+  }
+
   _matchesActiveFilters(item) {
     const query = String(this.searchQuery || "").trim().toLowerCase();
     if (query) {
@@ -410,11 +451,19 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       }
     }
 
+    if (this.backendFilter !== "all" && item?.managed_storage_backend !== this.backendFilter) {
+      return false;
+    }
+
     if (this.statusFilter !== "all" && item?.status !== this.statusFilter) {
       return false;
     }
 
     if (this.mediaTypeFilter !== "all" && item?.media_type !== this.mediaTypeFilter) {
+      return false;
+    }
+
+    if (this.genderFilter !== "all" && item?.gender !== this.genderFilter) {
       return false;
     }
 
@@ -440,9 +489,11 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       title: item.title,
       status: item.status,
       created_at: item.created_at,
+      updated_at: item.updated_at,
       user_id: item.user_id,
       username: item.username,
       media_type: item.media_type,
+      gender: item.gender,
       error_message: item.error_message,
       thumbnail_url: item.thumbnail_url,
       managed_storage_backend: item.managed_storage_backend,
@@ -460,7 +511,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     if (!this._matchesActiveFilters(next)) {
       if (index >= 0) {
         existing.splice(index, 1);
-        this.searchResults = existing;
+        this.searchResults = this._sortSearchResults(existing);
         this._updateSearchInfo();
       }
       return;
@@ -471,12 +522,16 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     } else {
       existing.unshift(next);
     }
-    this.searchResults = existing;
+    this.searchResults = this._sortSearchResults(existing);
     this._updateSearchInfo();
   }
 
   @action onSearchInput(event) {
     this.searchQuery = event?.target?.value || "";
+  }
+
+  @action onBackendFilterChange(event) {
+    this.backendFilter = event?.target?.value || "all";
   }
 
   @action onStatusFilterChange(event) {
@@ -489,6 +544,18 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   @action onHiddenFilterChange(event) {
     this.hiddenFilter = event?.target?.value || "all";
+  }
+
+  @action onGenderFilterChange(event) {
+    this.genderFilter = event?.target?.value || "all";
+  }
+
+  @action onLimitChange(event) {
+    this.limit = event?.target?.value || "50";
+  }
+
+  @action onSortChange(event) {
+    this.sortBy = event?.target?.value || "newest";
   }
 
   @action onEditTitle(event) {
@@ -528,6 +595,19 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   @action
+  async resetFilters() {
+    this.searchQuery = "";
+    this.backendFilter = "all";
+    this.statusFilter = "all";
+    this.mediaTypeFilter = "all";
+    this.hiddenFilter = "all";
+    this.genderFilter = "all";
+    this.limit = "50";
+    this.sortBy = "newest";
+    await this.search();
+  }
+
+  @action
   async search() {
     this.isSearching = true;
     this.searchError = "";
@@ -539,6 +619,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       if ((this.searchQuery || "").trim()) {
         params.set("q", this.searchQuery.trim());
       }
+      if (this.backendFilter !== "all") {
+        params.set("backend", this.backendFilter);
+      }
       if (this.statusFilter !== "all") {
         params.set("status", this.statusFilter);
       }
@@ -548,12 +631,16 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       if (this.hiddenFilter !== "all") {
         params.set("hidden", this.hiddenFilter);
       }
-      params.set("limit", String(this.limit));
+      if (this.genderFilter !== "all") {
+        params.set("gender", this.genderFilter);
+      }
+      params.set("limit", String(this.limit || "50"));
+      params.set("sort", String(this.sortBy || "newest"));
 
       const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/search.json?${params.toString()}`, {
         method: "GET",
       });
-      this.searchResults = Array.isArray(json?.items) ? json.items : [];
+      this.searchResults = this._sortSearchResults(Array.isArray(json?.items) ? json.items : []);
       this._updateSearchInfo();
     } catch (e) {
       this.searchResults = [];
@@ -571,7 +658,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     }
 
     this.selectedPublicId = publicId;
-    this.selectedItem = { ...(this.selectedItem?.public_id === publicId ? this.selectedItem : {}), ...item };
+    if (this.selectedItem?.public_id !== publicId) {
+      this.selectedItem = { ...item };
+    }
     await this.refreshSelected();
   }
 
