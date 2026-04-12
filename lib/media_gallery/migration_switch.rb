@@ -16,6 +16,8 @@ module ::MediaGallery
       plan = ::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile)
       validate_plan_for_switch!(plan)
 
+      ::MediaGallery::OperationLogger.info("migration_switch_started", item: item, operation: "switch", data: { target_profile: target_profile, requested_by: requested_by, mode: mode, auto_cleanup: !!auto_cleanup })
+
       target = (plan[:target] || plan["target"] || {}).deep_symbolize_keys
       source = (plan[:source] || plan["source"] || {}).deep_symbolize_keys
       target_backend = target[:backend].to_s
@@ -42,6 +44,7 @@ module ::MediaGallery
         "warnings" => Array(plan[:warnings] || plan["warnings"]),
         "auto_cleanup" => !!auto_cleanup
       }
+      ::MediaGallery::OperationErrors.clear_failure!(switch_state)
 
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
       meta[SWITCH_STATE_KEY] = switch_state
@@ -56,6 +59,8 @@ module ::MediaGallery
       item.extra_metadata = meta
       item.save!
 
+      ::MediaGallery::OperationLogger.info("migration_switch_completed", item: item, operation: "switch", data: { source_profile_key: switch_state["source_profile_key"], target_profile_key: switch_state["target_profile_key"], mode: mode, auto_cleanup: !!auto_cleanup })
+
       if auto_cleanup
         cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: requested_by, force: false)
         switch_state["cleanup_enqueued_at"] = cleanup_state["queued_at"] if cleanup_state.is_a?(Hash)
@@ -65,6 +70,9 @@ module ::MediaGallery
       end
 
       switch_state
+    rescue => e
+      ::MediaGallery::OperationLogger.error("migration_switch_failed", item: item, operation: "switch", data: { error: e.message, target_profile: target_profile, requested_by: requested_by, mode: mode, auto_cleanup: !!auto_cleanup })
+      raise e
     end
 
 

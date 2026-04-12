@@ -14,10 +14,16 @@ module ::MediaGallery
 
       cleanup_state = ::MediaGallery::MigrationCleanup.cleanup_state_for(item)
       rollback_state = ::MediaGallery::MigrationRollback.rollback_state_for(item)
+      switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item)
+
+      ::MediaGallery::OperationLogger.info("migration_finalize_started", item: item, operation: "finalize", data: { requested_by: requested_by, force: !!force })
 
       if rollback_state["status"].to_s == "rolled_back"
         return finalize_after_rollback!(item, cleanup_state: cleanup_state, rollback_state: rollback_state, requested_by: requested_by, force: force)
       end
+
+      raise "finalize_not_available" unless switch_state["status"].to_s == "switched"
+      raise "cleanup_failed_finalize_blocked" if cleanup_state["status"].to_s == "failed" && !force
 
       if cleanup_state["status"].to_s != "cleaned"
         cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: requested_by, force: force)
@@ -28,6 +34,7 @@ module ::MediaGallery
           "last_error" => nil,
         }
         save_finalize_state!(item, state)
+        ::MediaGallery::OperationErrors.clear_failure!(state)
         return state
       end
 
@@ -42,19 +49,23 @@ module ::MediaGallery
         "last_error" => nil,
       }
 
+      ::MediaGallery::OperationErrors.clear_failure!(state)
       persist_finalized_state!(item, state, requested_by: requested_by, reason: "finalized")
+      ::MediaGallery::OperationLogger.info("migration_finalize_completed", item: item, operation: "finalize", data: { finalize_mode: state["finalize_mode"], requested_by: requested_by, cleanup_status: state["cleanup_status"] || cleanup_state["status"] })
       state
     rescue => e
       state = finalize_state_for(item)
       state["status"] = "failed"
-      state["last_error"] = "#{e.class}: #{e.message}"
+      ::MediaGallery::OperationErrors.apply_failure!(state, e, operation: "finalize")
       state["updated_at"] = Time.now.utc.iso8601
       save_finalize_state!(item, state) if item&.persisted?
+      ::MediaGallery::OperationLogger.error("migration_finalize_failed", item: item, operation: "finalize", data: { error: state["last_error"], error_code: state["last_error_code"], requested_by: requested_by, force: !!force })
       raise e
     end
 
     def finalize_after_rollback!(item, cleanup_state:, rollback_state:, requested_by:, force: false)
       cleanup_status = cleanup_state["status"].to_s
+      raise "cleanup_failed_after_rollback" if cleanup_status == "failed" && !force
       if %w[queued cleaning].include?(cleanup_status) && !force
         state = {
           "status" => "pending_cleanup",
@@ -65,6 +76,7 @@ module ::MediaGallery
           "last_error" => nil,
         }
         save_finalize_state!(item, state)
+        ::MediaGallery::OperationErrors.clear_failure!(state)
         return state
       end
 
@@ -81,7 +93,9 @@ module ::MediaGallery
         "last_error" => nil,
       }
 
+      ::MediaGallery::OperationErrors.clear_failure!(state)
       persist_finalized_state!(item, state, requested_by: requested_by, reason: "finalized_after_rollback")
+      ::MediaGallery::OperationLogger.info("migration_finalize_completed", item: item, operation: "finalize", data: { finalize_mode: state["finalize_mode"], requested_by: requested_by, cleanup_status: state["cleanup_status"] })
       state
     end
     private_class_method :finalize_after_rollback!

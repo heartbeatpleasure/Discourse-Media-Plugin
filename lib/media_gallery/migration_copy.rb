@@ -16,6 +16,7 @@ module ::MediaGallery
 
       plan = ::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile)
       validate_plan_for_copy!(plan)
+      ensure_no_blocking_cycle!(item, force: force)
 
       state = copy_state_for(item)
       if %w[queued copying].include?(state["status"].to_s) && same_copy_target?(state, plan) && !force
@@ -33,7 +34,18 @@ module ::MediaGallery
 
       token = SecureRandom.hex(10)
       state = build_queued_state(plan: plan, requested_by: requested_by, run_token: token, force: force, auto_switch: auto_switch, auto_cleanup: auto_cleanup, full_migration: full_migration)
+      ::MediaGallery::OperationErrors.clear_failure!(state)
       save_copy_state!(item, state)
+
+      ::MediaGallery::OperationLogger.info("migration_copy_enqueued", item: item, operation: "copy", data: {
+        requested_by: requested_by,
+        source_profile_key: state["source_profile_key"],
+        target_profile_key: state["target_profile_key"],
+        auto_switch: !!auto_switch,
+        auto_cleanup: !!auto_cleanup,
+        full_migration: !!full_migration,
+        force: !!force,
+      })
 
       ::Jobs.enqueue(
         :media_gallery_copy_item_to_target,
@@ -55,6 +67,7 @@ module ::MediaGallery
 
       plan = ::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile)
       validate_plan_for_copy!(plan)
+      ensure_no_blocking_cycle!(item, force: force)
 
       current_state = copy_state_for(item)
       if current_state["status"].to_s == "copying" && current_state["run_token"].present? && run_token.present? && current_state["run_token"] != run_token && !force
@@ -74,10 +87,21 @@ module ::MediaGallery
 
       objects = flatten_plan_objects(plan)
       state = build_copying_state(plan: plan, prior_state: current_state, run_token: run_token.presence || current_state["run_token"], object_count: objects.length)
+      ::MediaGallery::OperationErrors.clear_failure!(state)
       state["auto_switch"] = !!auto_switch
       state["auto_cleanup"] = !!auto_cleanup
       state["full_migration"] = !!full_migration
       save_copy_state!(item, state)
+
+      ::MediaGallery::OperationLogger.info("migration_copy_started", item: item, operation: "copy", data: {
+        source_profile_key: state["source_profile_key"],
+        target_profile_key: state["target_profile_key"],
+        object_count: objects.length,
+        auto_switch: !!auto_switch,
+        auto_cleanup: !!auto_cleanup,
+        full_migration: !!full_migration,
+        force: !!force,
+      })
 
       copied = 0
       skipped = 0
@@ -127,8 +151,19 @@ module ::MediaGallery
       state["objects_failed"] = failed
       state["bytes_copied"] = bytes_copied
       state["verification_missing_on_target_count"] = remaining
-      state["last_error"] = nil
+      ::MediaGallery::OperationErrors.clear_failure!(state)
       save_copy_state!(item, state)
+
+      ::MediaGallery::OperationLogger.info("migration_copy_completed", item: item, operation: "copy", data: {
+        source_profile_key: state["source_profile_key"],
+        target_profile_key: state["target_profile_key"],
+        objects_copied: copied,
+        objects_skipped: skipped,
+        bytes_copied: bytes_copied,
+        full_migration: !!full_migration,
+        auto_switch: !!auto_switch,
+        auto_cleanup: !!auto_cleanup,
+      })
 
       if full_migration
         item.reload
@@ -190,8 +225,9 @@ module ::MediaGallery
       state = copy_state_for(item)
       state["status"] = "failed"
       state["finished_at"] = Time.now.utc.iso8601
-      state["last_error"] = "#{e.class}: #{e.message}"
+      ::MediaGallery::OperationErrors.apply_failure!(state, e, operation: "copy")
       save_copy_state!(item, state) if item&.persisted?
+      ::MediaGallery::OperationLogger.error("migration_copy_failed", item: item, operation: "copy", data: { error: state["last_error"], error_code: state["last_error_code"], source_profile_key: state["source_profile_key"], target_profile_key: state["target_profile_key"] })
       raise e
     end
 
@@ -270,6 +306,26 @@ module ::MediaGallery
     private_class_method :build_copying_state
 
 
+
+
+    def ensure_no_blocking_cycle!(item, force:)
+      return true if force
+
+      switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item)
+      cleanup_state = ::MediaGallery::MigrationCleanup.cleanup_state_for(item)
+      finalize_state = ::MediaGallery::MigrationFinalize.finalize_state_for(item)
+
+      if %w[queued cleaning].include?(cleanup_state["status"].to_s) || finalize_state["status"].to_s == "pending_cleanup"
+        raise "previous_cycle_cleanup_pending"
+      end
+
+      if %w[switched rolled_back].include?(switch_state["status"].to_s) && finalize_state["status"].to_s != "finalized"
+        raise "previous_cycle_not_finalized"
+      end
+
+      true
+    end
+    private_class_method :ensure_no_blocking_cycle!
 
     def same_copy_target?(state, plan)
       target_profile_key = state["target_profile_key"].to_s

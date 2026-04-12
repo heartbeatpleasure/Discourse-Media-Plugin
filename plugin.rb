@@ -17,6 +17,9 @@ end
 after_initialize do
   require_relative "lib/media_gallery/token"
   require_relative "lib/media_gallery/storage_settings_resolver"
+  require_relative "lib/media_gallery/operation_errors"
+  require_relative "lib/media_gallery/operation_logger"
+  require_relative "lib/media_gallery/orphan_inspector"
   require_relative "lib/media_gallery/storage_health"
   require_relative "lib/media_gallery/migration_preview"
   require_relative "lib/media_gallery/migration_run_history"

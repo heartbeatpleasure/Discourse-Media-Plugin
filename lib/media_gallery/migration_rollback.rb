@@ -15,7 +15,10 @@ module ::MediaGallery
 
       switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item)
       cleanup_state = ::MediaGallery::MigrationCleanup.cleanup_state_for(item)
-      validate_rollback!(item, switch_state, cleanup_state, force: force)
+      finalize_state = ::MediaGallery::MigrationFinalize.finalize_state_for(item)
+      validate_rollback!(item, switch_state, cleanup_state, finalize_state, force: force)
+
+      ::MediaGallery::OperationLogger.info("migration_rollback_started", item: item, operation: "rollback", data: { requested_by: requested_by, force: !!force })
 
       source_backend = switch_state["source_backend"].to_s
       source_profile_key = switch_state["source_profile_key"].to_s
@@ -35,6 +38,7 @@ module ::MediaGallery
         "target_profile_key" => item.managed_storage_profile.to_s,
         "last_error" => nil,
       }
+      ::MediaGallery::OperationErrors.clear_failure!(rollback_state)
 
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
       meta[ROLLBACK_STATE_KEY] = rollback_state
@@ -53,13 +57,16 @@ module ::MediaGallery
       item.extra_metadata = meta
       item.save!
 
+      ::MediaGallery::OperationLogger.info("migration_rollback_completed", item: item, operation: "rollback", data: { source_profile_key: rollback_state["source_profile_key"], target_profile_key: rollback_state["target_profile_key"], requested_by: requested_by, force: !!force })
+
       rollback_state
     rescue => e
       state = rollback_state_for(item)
       state["status"] = "failed"
       state["rolled_back_at"] ||= Time.now.utc.iso8601
-      state["last_error"] = "#{e.class}: #{e.message}"
+      ::MediaGallery::OperationErrors.apply_failure!(state, e, operation: "rollback")
       save_rollback_state!(item, state) if item&.persisted?
+      ::MediaGallery::OperationLogger.error("migration_rollback_failed", item: item, operation: "rollback", data: { error: state["last_error"], error_code: state["last_error_code"], requested_by: requested_by, force: !!force })
       raise e
     end
 
@@ -75,7 +82,7 @@ module ::MediaGallery
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
     end
 
-    def validate_rollback!(item, switch_state, cleanup_state, force: false)
+    def validate_rollback!(item, switch_state, cleanup_state, finalize_state, force: false)
       raise "switch_state_missing" unless switch_state.is_a?(Hash)
 
       allowed_statuses = %w[switched rolled_back]
@@ -83,6 +90,7 @@ module ::MediaGallery
       raise "rollback_source_profile_missing" if switch_state["source_profile_key"].to_s.blank?
       raise "rollback_source_backend_missing" if switch_state["source_backend"].to_s.blank?
       raise "rollback_source_already_cleaned" if cleanup_state["status"].to_s == "cleaned" && !force
+      raise "rollback_not_available_after_finalize" if finalize_state["status"].to_s == "finalized" && !force
 
       if item.managed_storage_profile.to_s == switch_state["source_profile_key"].to_s &&
            item.managed_storage_backend.to_s == switch_state["source_backend"].to_s && !force

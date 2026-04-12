@@ -19,6 +19,8 @@ module ::MediaGallery
     def verify!(item, target_profile: "target", requested_by: nil)
       raise "media_item_required" if item.blank?
 
+      ::MediaGallery::OperationLogger.info("migration_verify_started", item: item, operation: "verify", data: { target_profile: target_profile, requested_by: requested_by })
+
       plan = build_verification_plan(item, target_profile: target_profile)
       source = (plan[:source] || plan["source"] || {}).deep_symbolize_keys
       target = (plan[:target] || plan["target"] || {}).deep_symbolize_keys
@@ -79,17 +81,20 @@ module ::MediaGallery
         "warnings" => warnings,
         "last_error" => nil,
       }
+      ::MediaGallery::OperationErrors.clear_failure!(state)
 
       save_verify_state!(item, state)
+      ::MediaGallery::OperationLogger.info("migration_verify_completed", item: item, operation: "verify", data: { status: status, source_profile_key: state["source_profile_key"], target_profile_key: state["target_profile_key"], missing_on_target_count: state["missing_on_target_count"], mismatched_count: state["mismatched_count"] })
       { ok: status == "verified", public_id: item.public_id, verification: state, plan: plan }
     rescue => e
       state = {
         "status" => "failed",
         "verified_at" => Time.now.utc.iso8601,
         "requested_by" => requested_by.to_s.presence,
-        "last_error" => "#{e.class}: #{e.message}",
       }
+      ::MediaGallery::OperationErrors.apply_failure!(state, e, operation: "verify")
       save_verify_state!(item, state) if item&.persisted?
+      ::MediaGallery::OperationLogger.error("migration_verify_failed", item: item, operation: "verify", data: { error: state["last_error"], error_code: state["last_error_code"], target_profile: target_profile, requested_by: requested_by })
       raise e
     end
 

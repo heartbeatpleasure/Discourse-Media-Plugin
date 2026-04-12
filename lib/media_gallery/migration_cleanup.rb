@@ -15,6 +15,8 @@ module ::MediaGallery
       raise "item_not_ready" unless item.ready?
 
       switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item)
+      finalize_state = ::MediaGallery::MigrationFinalize.finalize_state_for(item)
+      raise "cleanup_already_finalized" if finalize_state["status"].to_s == "finalized" && !force
       context = cleanup_context_for(item, switch_state)
 
       state = cleanup_state_for(item)
@@ -28,7 +30,16 @@ module ::MediaGallery
 
       token = SecureRandom.hex(10)
       state = build_queued_state(context: context, requested_by: requested_by, force: force, run_token: token, auto_finalize: auto_finalize)
+      ::MediaGallery::OperationErrors.clear_failure!(state)
       save_cleanup_state!(item, state)
+
+      ::MediaGallery::OperationLogger.info("migration_cleanup_enqueued", item: item, operation: "cleanup", data: {
+        cleanup_mode: state["cleanup_mode"],
+        source_profile_key: state["source_profile_key"],
+        target_profile_key: state["target_profile_key"],
+        auto_finalize: !!auto_finalize,
+        force: !!force,
+      })
 
       ::Jobs.enqueue(:media_gallery_cleanup_source_after_switch, media_item_id: item.id, run_token: token, force: force, auto_finalize: auto_finalize)
       state
@@ -39,6 +50,8 @@ module ::MediaGallery
       raise "item_not_ready" unless item.ready?
 
       switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item)
+      finalize_state = ::MediaGallery::MigrationFinalize.finalize_state_for(item)
+      raise "cleanup_already_finalized" if finalize_state["status"].to_s == "finalized" && !force
       context = cleanup_context_for(item, switch_state)
 
       current_state = cleanup_state_for(item)
@@ -77,7 +90,17 @@ module ::MediaGallery
       raise "cleanup_target_incomplete:#{active_missing}" if active_missing.positive?
 
       state = build_cleaning_state(context: context, run_token: run_token.presence || current_state["run_token"], force: force, inactive_objects: inactive_objects, auto_finalize: auto_finalize)
+      ::MediaGallery::OperationErrors.clear_failure!(state)
       save_cleanup_state!(item, state)
+
+      ::MediaGallery::OperationLogger.info("migration_cleanup_started", item: item, operation: "cleanup", data: {
+        cleanup_mode: state["cleanup_mode"],
+        source_profile_key: state["source_profile_key"],
+        target_profile_key: state["target_profile_key"],
+        object_count: inactive_objects.length,
+        auto_finalize: !!auto_finalize,
+        force: !!force,
+      })
 
       grouped = group_objects_for_cleanup(item, inactive_objects)
       role_results = []
@@ -112,8 +135,17 @@ module ::MediaGallery
       state["deleted_delete_markers"] = deleted_delete_markers
       state["remaining_source_count"] = remaining
       state["role_results"] = role_results
-      state["last_error"] = nil
+      ::MediaGallery::OperationErrors.clear_failure!(state)
       save_cleanup_state!(item, state)
+
+      ::MediaGallery::OperationLogger.info("migration_cleanup_completed", item: item, operation: "cleanup", data: {
+        cleanup_mode: state["cleanup_mode"],
+        source_profile_key: state["source_profile_key"],
+        target_profile_key: state["target_profile_key"],
+        deleted_current: deleted_current,
+        deleted_versions: deleted_versions,
+        deleted_delete_markers: deleted_delete_markers,
+      })
 
       if auto_finalize
         ::MediaGallery::MigrationFinalize.finalize!(item.reload, requested_by: state["requested_by"], force: force)
@@ -124,8 +156,9 @@ module ::MediaGallery
       state = cleanup_state_for(item)
       state["status"] = "failed"
       state["finished_at"] = Time.now.utc.iso8601
-      state["last_error"] = "#{e.class}: #{e.message}"
+      ::MediaGallery::OperationErrors.apply_failure!(state, e, operation: "cleanup")
       save_cleanup_state!(item, state) if item&.persisted?
+      ::MediaGallery::OperationLogger.error("migration_cleanup_failed", item: item, operation: "cleanup", data: { error: state["last_error"], error_code: state["last_error_code"], cleanup_mode: state["cleanup_mode"], source_profile_key: state["source_profile_key"], target_profile_key: state["target_profile_key"] })
       raise e
     end
 

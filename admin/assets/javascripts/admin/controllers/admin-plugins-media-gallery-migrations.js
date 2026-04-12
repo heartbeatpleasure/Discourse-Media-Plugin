@@ -627,42 +627,42 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         status: copy.status || "idle",
         detail: copy.current_key ? `Current object: ${truncate(copy.current_key, 80)}` : ((copy.status || "idle") === "idle" ? "Copy not started" : `${copy.objects_copied || 0} copied • ${copy.objects_skipped || 0} skipped`),
         meta: copy.progress_total ? `${copy.progress_index || 0} / ${copy.progress_total} objects` : ((copy.status || "idle") === "idle" ? "No copy queued" : `${copy.object_count || 0} objects`),
-        error: copy.last_error,
+        error: copy.last_error_human || copy.last_error,
       }),
       buildStateCard({
         title: "Verify",
         status: verify.status || "idle",
         detail: verify.target_profile_key ? `${normalizeText(this.profileLabelForKey(verify.source_profile_key))} → ${normalizeText(this.profileLabelForKey(verify.target_profile_key))}` : "Target verification not run yet",
         meta: verify.target_profile_key ? (verify.missing_on_target_count === 0 ? "Target complete" : `${verify.missing_on_target_count || 0} objects still missing`) : "No verification recorded",
-        error: verify.last_error,
+        error: verify.last_error_human || verify.last_error,
       }),
       buildStateCard({
         title: "Switch",
         status: switchState.status || "idle",
         detail: switchState.target_profile_key ? `${normalizeText(this.profileLabelForKey(switchState.source_profile_key))} → ${normalizeText(this.profileLabelForKey(switchState.target_profile_key))}` : "No switch recorded yet",
         meta: switchState.switched_at ? `Switched ${formatDateTime(switchState.switched_at)}` : "Waiting for switch",
-        error: switchState.last_error,
+        error: switchState.last_error_human || switchState.last_error,
       }),
       buildStateCard({
         title: "Cleanup",
         status: cleanup.status || "idle",
         detail: cleanup.current_role ? `Role: ${prettyLabel(cleanup.current_role)}` : ((cleanup.cleanup_mode === "inactive_target_after_rollback" || switchState.status === "rolled_back") ? "Inactive target cleanup not started" : "Source cleanup not started"),
         meta: cleanup.progress_total ? `${cleanup.progress_index || 0} / ${cleanup.progress_total} role groups` : `${cleanup.object_count || 0} objects to purge`,
-        error: cleanup.last_error,
+        error: cleanup.last_error_human || cleanup.last_error,
       }),
       buildStateCard({
         title: "Rollback",
         status: rollback.status || "idle",
         detail: rollback.source_profile_key ? `Back to ${normalizeText(rollback.source_profile_key)}` : "Rollback not performed",
         meta: rollback.rolled_back_at ? `Rolled back ${formatDateTime(rollback.rolled_back_at)}` : "Source kept as rollback buffer until cleanup",
-        error: rollback.last_error,
+        error: rollback.last_error_human || rollback.last_error,
       }),
       buildStateCard({
         title: "Finalize",
         status: finalize.status || "idle",
         detail: finalize.status === "pending_cleanup" ? "Cleanup queued before finalization" : "Finalize marks the migrated item as complete",
         meta: finalize.finalized_at ? `Finalized ${formatDateTime(finalize.finalized_at)}` : (finalize.queued_at ? `Queued ${formatDateTime(finalize.queued_at)}` : "Not finalized"),
-        error: finalize.last_error,
+        error: finalize.last_error_human || finalize.last_error,
       }),
     ].filter(Boolean);
   }
@@ -1321,7 +1321,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       });
       await this.refreshSelected({ includeSearchRefresh: true });
       const copyStatus = this.selectedDiagnostics?.migration_copy?.status;
-      const copyError = this.selectedDiagnostics?.migration_copy?.last_error;
+      const copyError = this.selectedDiagnostics?.migration_copy?.last_error_human || this.selectedDiagnostics?.migration_copy?.last_error;
       if (copyStatus === "failed" && copyError) {
         this.actionError = copyError;
       } else if (copyStatus === "copied") {

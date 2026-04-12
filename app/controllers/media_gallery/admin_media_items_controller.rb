@@ -72,11 +72,12 @@ module ::MediaGallery
       )
 
       item.reload
+      ::MediaGallery::OperationLogger.info("admin_management_update", item: item, operation: "save", data: { changed_fields: changes.keys, note_present: note.present? })
       render_json_dump(ok: true, item: management_item_payload(item), message: "Item updated.")
     rescue ActiveRecord::RecordInvalid => e
-      render_json_error("validation_error", status: 422, extra: { details: e.record.errors.full_messages })
+      render_operation_error(e, operation: "save", item: item, status: 422, extra: { details: e.record.errors.full_messages })
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "save", item: item, status: 422)
     end
 
     # POST /admin/plugins/media-gallery/media-items/:public_id/visibility.json
@@ -121,9 +122,10 @@ module ::MediaGallery
 
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
       item.reload
+      ::MediaGallery::OperationLogger.info("admin_visibility_changed", item: item, operation: "visibility", data: { hidden: hidden, reason: reason, note_present: note.present? })
       render_json_dump(ok: true, item: management_item_payload(item), message: hidden ? "Item hidden." : "Item visible again.")
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "visibility", item: item, status: 422)
     end
 
     # DELETE /admin/plugins/media-gallery/media-items/:public_id/admin-destroy.json
@@ -131,20 +133,25 @@ module ::MediaGallery
       item = load_item!
       note = params[:admin_note].to_s.strip.presence
       public_id = item.public_id.to_s
+      title = item.title.to_s
+      delete_summary = nil
 
       item.with_lock do
         upload_ids = [item.original_upload_id, item.processed_upload_id, item.thumbnail_upload_id].compact.uniq
         uploads = upload_ids.present? ? ::Upload.where(id: upload_ids).to_a : []
 
-        delete_managed_assets_safely!(item)
-        uploads.each { |upload| destroy_upload_safely!(upload) }
-        log_admin_delete!(item, note: note)
+        delete_summary = build_delete_summary_for(item)
+        delete_managed_assets_safely!(item, delete_summary: delete_summary)
+        uploads.each { |upload| destroy_upload_safely!(upload, delete_summary: delete_summary) }
+        log_admin_delete!(item, note: note, delete_summary: delete_summary)
         item.destroy!
       end
 
-      render_json_dump(ok: true, public_id: public_id, deleted: true, message: "Item deleted.")
+      partial = Array(delete_summary&.dig("warnings")).present?
+      message = partial ? "Item deleted. Some storage cleanup steps failed; see delete summary." : "Item deleted. Storage cleanup completed."
+      render_json_dump(ok: true, public_id: public_id, title: title, deleted: true, delete_summary: delete_summary, message: message)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "delete", item: item, status: 422)
     end
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/diagnostics.json
@@ -177,11 +184,13 @@ module ::MediaGallery
         migration_rollback: ::MediaGallery::MigrationRollback.rollback_state_for(item),
         migration_finalize: ::MediaGallery::MigrationFinalize.finalize_state_for(item),
         migration_history: ::MediaGallery::MigrationRunHistory.history_for(item),
+        admin_diagnostics: build_admin_diagnostics(item),
+        orphan_cleanup_preview: ::MediaGallery::OrphanInspector.preview_for_item(item),
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
       )
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "diagnostics", item: item, status: 422)
     end
 
     def reset_processing
@@ -209,7 +218,7 @@ module ::MediaGallery
       target_profile = params[:target_profile].to_s.presence || "target"
       render_json_dump(::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile))
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "plan", item: item, status: 422)
     end
 
     def verify_target
@@ -218,7 +227,7 @@ module ::MediaGallery
       result = ::MediaGallery::MigrationVerify.verify!(item, target_profile: target_profile, requested_by: current_user.username)
       render_json_dump(result)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "verify", item: item, status: 422)
     end
 
     def copy_to_target
@@ -235,7 +244,7 @@ module ::MediaGallery
 
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "copy", item: item, status: 422)
     end
 
     def switch_to_target
@@ -251,7 +260,7 @@ module ::MediaGallery
 
       render_json_dump(ok: true, public_id: item.public_id, migration_switch: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "switch", item: item, status: 422)
     end
 
     def cleanup_source
@@ -259,7 +268,7 @@ module ::MediaGallery
       state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: current_user.username, force: boolean_param(:force))
       render_json_dump(ok: true, public_id: item.public_id, migration_cleanup: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "cleanup", item: item, status: 422)
     end
 
     def rollback_to_source
@@ -267,7 +276,7 @@ module ::MediaGallery
       state = ::MediaGallery::MigrationRollback.rollback!(item, requested_by: current_user.username, force: boolean_param(:force))
       render_json_dump(ok: true, public_id: item.public_id, migration_rollback: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "rollback", item: item, status: 422)
     end
 
     def finalize_migration
@@ -275,7 +284,7 @@ module ::MediaGallery
       state = ::MediaGallery::MigrationFinalize.finalize!(item, requested_by: current_user.username, force: boolean_param(:force))
       render_json_dump(ok: true, public_id: item.public_id, migration_finalize: state)
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "finalize", item: item, status: 422)
     end
 
     def clear_queued_state
@@ -301,12 +310,13 @@ module ::MediaGallery
         changed << key
       end
 
-      return render_json_error("no_queued_state_to_clear", status: 422) if changed.empty?
+      return render_operation_error("no_queued_state_to_clear", operation: "clear_state", item: item, status: 422) if changed.empty?
 
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
+      ::MediaGallery::OperationLogger.info("migration_queued_state_cleared", item: item, operation: "clear_state", data: { cleared: changed, requested_by: current_user.username })
       render_json_dump(ok: true, public_id: item.public_id, cleared: changed, message: "Queued state cleared.")
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "clear_state", item: item, status: 422)
     end
 
     def bulk_migrate
@@ -337,10 +347,12 @@ module ::MediaGallery
           results << { public_id: item.public_id, status: state["status"].to_s.presence || "queued" }
         rescue => e
           skipped += 1
-          results << { public_id: item.public_id, status: "skipped", error: e.message }
+          normalized = ::MediaGallery::OperationErrors.normalize(e, operation: "copy")
+          results << { public_id: item.public_id, status: "skipped", error: normalized[:message], error_code: normalized[:code] }
         end
       end
 
+      ::MediaGallery::OperationLogger.info("bulk_migration_enqueued", operation: "bulk_copy", data: { target_profile: target_profile, requested_count: items.length, queued_count: queued, skipped_count: skipped, requested_by: current_user.username })
       render_json_dump(
         ok: true,
         target_profile: target_profile,
@@ -350,7 +362,7 @@ module ::MediaGallery
         items: results
       )
     rescue => e
-      render_json_error(e.message, status: 422)
+      render_operation_error(e, operation: "bulk_copy", status: 422)
     end
 
     def retry_processing
@@ -377,7 +389,10 @@ module ::MediaGallery
       item.update!(status: "queued", error_message: nil, extra_metadata: meta)
       ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id, force_run: force)
 
+      ::MediaGallery::OperationLogger.info("processing_retry_enqueued", item: item, operation: "retry_processing", data: { requested_by: current_user.username, force: force })
       render_json_dump(ok: true, public_id: item.public_id, status: item.status)
+    rescue => e
+      render_operation_error(e, operation: "retry_processing", item: item, status: 422)
     end
 
     private
@@ -671,60 +686,194 @@ module ::MediaGallery
       store
     end
 
-    def delete_managed_assets_safely!(item)
+
+    def build_admin_diagnostics(item)
+      {
+        delete_semantics: {
+          mode: "hard_delete_best_effort",
+          summary: "The database row is removed immediately. Managed assets, uploads and private/original directories are then deleted best-effort in the same request.",
+        },
+        operations: {
+          copy: diagnostic_state_for(::MediaGallery::MigrationCopy.copy_state_for(item), operation: "copy"),
+          verify: diagnostic_state_for(::MediaGallery::MigrationVerify.verify_state_for(item), operation: "verify"),
+          switch: diagnostic_state_for(::MediaGallery::MigrationSwitch.switch_state_for(item), operation: "switch"),
+          cleanup: diagnostic_state_for(::MediaGallery::MigrationCleanup.cleanup_state_for(item), operation: "cleanup"),
+          rollback: diagnostic_state_for(::MediaGallery::MigrationRollback.rollback_state_for(item), operation: "rollback"),
+          finalize: diagnostic_state_for(::MediaGallery::MigrationFinalize.finalize_state_for(item), operation: "finalize"),
+        }
+      }
+    end
+
+    def diagnostic_state_for(state, operation:)
+      return {} unless state.is_a?(Hash) && state.present?
+
+      normalized = if state["last_error_human"].present?
+        {
+          code: state["last_error_code"],
+          detail: state["last_error_detail"],
+          message: state["last_error_human"],
+          retryable: state["retryable"],
+          recommended_action: state["recommended_action"],
+        }
+      elsif state["last_error"].present?
+        ::MediaGallery::OperationErrors.normalize(state["last_error"], operation: operation)
+      else
+        {}
+      end
+
+      {
+        status: state["status"].to_s,
+        error_code: normalized[:code],
+        error_detail: normalized[:detail],
+        error_message: normalized[:message],
+        retryable: normalized[:retryable],
+        recommended_action: normalized[:recommended_action],
+      }.compact
+    end
+
+    def render_operation_error(error, operation:, item: nil, status: 422, extra: nil)
+      normalized = ::MediaGallery::OperationErrors.normalize(error, operation: operation)
+      ::MediaGallery::OperationLogger.warn("admin_operation_failed", item: item, operation: operation, data: normalized.merge(extra: extra, requested_by: current_user&.username))
+
+      payload = {
+        error: normalized[:message],
+        code: normalized[:code],
+        detail: normalized[:detail],
+        retryable: normalized[:retryable],
+        recommended_action: normalized[:recommended_action],
+      }.compact
+      payload[:details] = extra[:details] if extra.is_a?(Hash) && extra[:details].present?
+
+      render json: payload, status: status
+    end
+
+    def build_delete_summary_for(item)
+      {
+        mode: "hard_delete_best_effort",
+        managed_assets: [],
+        uploads: [],
+        filesystem_paths: [],
+        warnings: [],
+      }
+    end
+
+    def delete_managed_assets_safely!(item, delete_summary:)
       public_id = item.public_id.to_s
 
-      begin
-        ["main", "thumbnail"].each do |role_name|
-          role = ::MediaGallery::AssetManifest.role_for(item, role_name)
-          next if role.blank?
-          next unless %w[local s3].include?(role["backend"].to_s)
+      ["main", "thumbnail"].each do |role_name|
+        role = ::MediaGallery::AssetManifest.role_for(item, role_name)
+        next if role.blank?
+        next unless %w[local s3].include?(role["backend"].to_s)
 
-          store = ::MediaGallery::StorageSettingsResolver.build_store(role["backend"])
-          store&.delete(role["key"].to_s)
+        deleted = false
+        warning = nil
+        begin
+          store = managed_store_for_role(role)
+          if store.blank?
+            warning = "store_missing"
+          else
+            deleted = !!store.delete(role["key"].to_s)
+            warning = "delete_failed" unless deleted
+          end
+        rescue => e
+          warning = "#{e.class}: #{e.message}"
         end
 
-        hls_role = ::MediaGallery::AssetManifest.role_for(item, "hls")
-        if hls_role.present? && %w[local s3].include?(hls_role["backend"].to_s)
-          store = ::MediaGallery::StorageSettingsResolver.build_store(hls_role["backend"])
-          prefix = hls_role["key_prefix"].presence || hls_role["key"].presence || ::MediaGallery::PrivateStorage.hls_root_rel_dir(public_id)
-          store&.delete_prefix(prefix.to_s) if prefix.present?
+        delete_summary["managed_assets"] << {
+          role: role_name,
+          backend: role["backend"].to_s,
+          key: role["key"].to_s,
+          deleted: deleted,
+          warning: warning,
+        }.compact
+        delete_summary["warnings"] << "#{role_name}: #{warning}" if warning.present?
+      end
+
+      hls_role = ::MediaGallery::AssetManifest.role_for(item, "hls")
+      if hls_role.present? && %w[local s3].include?(hls_role["backend"].to_s)
+        prefix = hls_role["key_prefix"].presence || hls_role["key"].presence || ::MediaGallery::PrivateStorage.hls_root_rel_dir(public_id)
+        deleted = false
+        warning = nil
+        begin
+          store = managed_store_for_role(hls_role)
+          if store.blank?
+            warning = "store_missing"
+          elsif prefix.present?
+            deleted = !!store.delete_prefix(prefix.to_s)
+            warning = "delete_prefix_failed" unless deleted
+          end
+        rescue => e
+          warning = "#{e.class}: #{e.message}"
         end
-      rescue => e
-        Rails.logger.warn("[media_gallery] failed to delete managed assets public_id=#{public_id}: #{e.class}: #{e.message}")
+
+        delete_summary["managed_assets"] << {
+          role: "hls",
+          backend: hls_role["backend"].to_s,
+          key_prefix: prefix.to_s,
+          deleted: deleted,
+          warning: warning,
+        }.compact
+        delete_summary["warnings"] << "hls: #{warning}" if warning.present?
       end
 
-      begin
-        dir = ::MediaGallery::PrivateStorage.item_private_dir(public_id)
-        FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
-      rescue => e
-        Rails.logger.warn("[media_gallery] failed to delete private dir public_id=#{public_id}: #{e.class}: #{e.message}")
+      [
+        { label: "private_dir", path: ::MediaGallery::PrivateStorage.item_private_dir(public_id) },
+        { label: "original_export_dir", path: ::MediaGallery::PrivateStorage.item_original_dir(public_id) },
+      ].each do |entry|
+        removed = false
+        warning = nil
+        begin
+          if entry[:path].present? && Dir.exist?(entry[:path])
+            FileUtils.rm_rf(entry[:path])
+            removed = !Dir.exist?(entry[:path])
+            warning = "filesystem_remove_failed" unless removed
+          else
+            removed = true
+          end
+        rescue => e
+          warning = "#{e.class}: #{e.message}"
+        end
+
+        delete_summary["filesystem_paths"] << { label: entry[:label], path: entry[:path].to_s, removed: removed, warning: warning }.compact
+        delete_summary["warnings"] << "#{entry[:label]}: #{warning}" if warning.present?
       end
 
-      begin
-        odir = ::MediaGallery::PrivateStorage.item_original_dir(public_id)
-        FileUtils.rm_rf(odir) if odir.present? && Dir.exist?(odir)
-      rescue => e
-        Rails.logger.warn("[media_gallery] failed to delete original export dir public_id=#{public_id}: #{e.class}: #{e.message}")
-      end
+      delete_summary["warnings"].uniq!
+      delete_summary["status"] = delete_summary["warnings"].present? ? "partial" : "complete"
+      delete_summary
     end
 
-    def destroy_upload_safely!(upload)
+    def destroy_upload_safely!(upload, delete_summary:)
       return if upload.blank?
 
-      if defined?(::UploadDestroyer)
-        ::UploadDestroyer.new(Discourse.system_user, upload).destroy
-      else
-        upload.destroy!
+      deleted = false
+      warning = nil
+      begin
+        if defined?(::UploadDestroyer)
+          ::UploadDestroyer.new(Discourse.system_user, upload).destroy
+          deleted = !::Upload.exists?(id: upload.id)
+        else
+          upload.destroy!
+          deleted = !::Upload.exists?(id: upload.id)
+        end
+        warning = "upload_delete_failed" unless deleted
+      rescue => e
+        warning = "#{e.class}: #{e.message}"
       end
-    rescue => e
-      Rails.logger.warn("[media_gallery] failed to destroy upload id=#{upload&.id}: #{e.class}: #{e.message}")
+
+      delete_summary["uploads"] << { id: upload.id, original_filename: upload.original_filename.to_s, deleted: deleted, warning: warning }.compact
+      delete_summary["warnings"] << "upload #{upload.id}: #{warning}" if warning.present?
+      deleted
     end
 
-    def log_admin_delete!(item, note: nil)
-      Rails.logger.info(
-        "[media_gallery] admin_delete public_id=#{item.public_id} admin=#{current_user.username} note=#{note.to_s.inspect} title=#{item.title.to_s.inspect}"
-      )
+    def log_admin_delete!(item, note: nil, delete_summary: nil)
+      event = delete_summary.is_a?(Hash) && delete_summary["warnings"].present? ? "admin_delete_partial" : "admin_delete_completed"
+      ::MediaGallery::OperationLogger.info(event, item: item, operation: "delete", data: {
+        admin: current_user.username,
+        note: note,
+        delete_summary: delete_summary,
+      })
     end
+
   end
 end
