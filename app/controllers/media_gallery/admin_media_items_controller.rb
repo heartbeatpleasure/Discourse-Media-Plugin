@@ -19,7 +19,7 @@ module ::MediaGallery
         serialize_search_item(item, has_hls: has_hls)
       end.compact
 
-      render_json_dump(items: items)
+      render_json_dump(items: items, search_profiles: search_profiles_summary)
     end
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/management.json
@@ -440,6 +440,11 @@ module ::MediaGallery
         scope = scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = false")
       end
 
+      profile = params[:profile].to_s.strip
+      if profile.present? && profile != "all"
+        scope = scope.where(managed_storage_profile: profile)
+      end
+
       sort = params[:sort].to_s.strip
       scope = case sort
       when "oldest"
@@ -462,6 +467,18 @@ module ::MediaGallery
       limit = 20 if limit <= 0
       limit = 100 if limit > 100
       limit
+    end
+
+    def search_profiles_summary
+      ::MediaGallery::StorageSettingsResolver.configured_profiles_summary.map do |profile|
+        {
+          value: profile[:profile_key].to_s,
+          label: profile[:label].to_s,
+          backend: profile[:backend].to_s,
+        }
+      end
+    rescue
+      []
     end
 
     def has_hls_filter

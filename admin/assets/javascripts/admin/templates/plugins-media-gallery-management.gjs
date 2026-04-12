@@ -68,6 +68,25 @@ export default RouteTemplate(
         font-size: var(--font-down-1);
       }
 
+      .mg-management__flash {
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        border: 1px solid var(--mg-border);
+        margin-bottom: 1rem;
+      }
+
+      .mg-management__flash.is-success {
+        background: var(--success-low);
+        border-color: var(--success-low-mid);
+        color: var(--success);
+      }
+
+      .mg-management__flash.is-danger {
+        background: var(--danger-low);
+        border-color: var(--danger-low-mid);
+        color: var(--danger);
+      }
+
       .mg-management__filters {
         grid-template-columns: repeat(4, minmax(0, 1fr));
         align-items: end;
@@ -81,7 +100,7 @@ export default RouteTemplate(
       }
 
       .mg-management__field.is-search {
-        grid-column: span 2;
+        grid-column: 1 / -1;
       }
 
       .mg-management__field label {
@@ -121,12 +140,12 @@ export default RouteTemplate(
       }
 
       .mg-management__results-wrap {
-        margin-top: 1rem;
+        margin-top: 0.5rem;
       }
 
       .mg-management__result-card {
         display: grid;
-        grid-template-columns: 88px minmax(0, 1fr) auto;
+        grid-template-columns: 128px minmax(0, 1fr) auto;
         gap: 0.9rem;
         align-items: center;
         padding: 0.9rem;
@@ -143,8 +162,8 @@ export default RouteTemplate(
 
       .mg-management__thumb,
       .mg-management__thumb-placeholder {
-        width: 88px;
-        height: 88px;
+        width: 128px;
+        aspect-ratio: 16 / 9;
         border-radius: 14px;
         border: 1px solid var(--mg-border);
         background: var(--secondary);
@@ -154,7 +173,8 @@ export default RouteTemplate(
         object-fit: cover;
       }
 
-      .mg-management__thumb-placeholder {
+      .mg-management__thumb-placeholder,
+      .mg-management__selected-thumb-placeholder {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -198,13 +218,17 @@ export default RouteTemplate(
         gap: 0.5rem;
       }
 
+      .mg-management__badge-row.is-compact {
+        gap: 0.35rem;
+      }
+
       .mg-management__badge,
       .mg-management__tag-chip {
         display: inline-flex;
         align-items: center;
         justify-content: center;
         border-radius: 999px;
-        padding: 0.25rem 0.65rem;
+        padding: 0.22rem 0.58rem;
         font-size: var(--font-down-1);
         line-height: 1.2;
         white-space: nowrap;
@@ -246,7 +270,7 @@ export default RouteTemplate(
         border: 1px solid var(--mg-border);
         border-radius: 16px;
         background: var(--mg-surface-alt);
-        padding: 0.9rem;
+        padding: 0.95rem;
       }
 
       .mg-management__summary-card {
@@ -285,15 +309,9 @@ export default RouteTemplate(
         object-fit: cover;
       }
 
-      .mg-management__selected-thumb-placeholder {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        color: var(--mg-muted);
-        font-size: var(--font-down-1);
-        padding: 0.75rem;
-        box-sizing: border-box;
+      .mg-management__selected-badges {
+        grid-column: 1 / -1;
+        padding-top: 0.1rem;
       }
 
       .mg-management__editor {
@@ -307,12 +325,14 @@ export default RouteTemplate(
       }
 
       .mg-management__history-list {
-        gap: 0.75rem;
+        gap: 0.9rem;
       }
 
       .mg-management__history-card {
         display: grid;
-        gap: 0.45rem;
+        gap: 0.7rem;
+        background: var(--secondary);
+        box-shadow: inset 0 0 0 1px var(--mg-border);
       }
 
       .mg-management__history-meta {
@@ -321,6 +341,13 @@ export default RouteTemplate(
         gap: 0.5rem 0.85rem;
         color: var(--mg-muted);
         font-size: var(--font-down-1);
+      }
+
+      .mg-management__history-note {
+        padding: 0.55rem 0.7rem;
+        border-radius: 12px;
+        border: 1px solid var(--mg-border);
+        background: var(--mg-surface-alt);
       }
 
       .mg-management__history-row {
@@ -340,7 +367,7 @@ export default RouteTemplate(
         align-items: center;
         padding: 0.55rem 0.65rem;
         border-radius: 10px;
-        background: var(--secondary);
+        background: var(--mg-surface-alt);
         border: 1px solid var(--mg-border);
         font-size: var(--font-down-1);
       }
@@ -365,31 +392,19 @@ export default RouteTemplate(
       }
 
       @media (max-width: 800px) {
-        .mg-management__selected-header {
-          grid-template-columns: 1fr;
-        }
-
+        .mg-management__selected-header,
         .mg-management__filters {
           grid-template-columns: 1fr;
         }
 
-        .mg-management__field.is-search {
-          grid-column: auto;
-        }
-
         .mg-management__result-card {
-          grid-template-columns: 72px minmax(0, 1fr);
-        }
-
-        .mg-management__result-card > :last-child {
-          grid-column: 1 / -1;
-          justify-self: start;
+          grid-template-columns: 1fr;
         }
 
         .mg-management__thumb,
         .mg-management__thumb-placeholder {
-          width: 72px;
-          height: 72px;
+          width: 100%;
+          max-width: 180px;
         }
       }
     </style>
@@ -398,109 +413,128 @@ export default RouteTemplate(
       <h1>{{i18n "admin.media_gallery.management.title"}}</h1>
       <p>{{i18n "admin.media_gallery.management.description"}}</p>
 
+      <section class="mg-management__panel">
+        <div class="mg-management__panel-header">
+          <div class="mg-management__panel-copy">
+            <h2>Find media</h2>
+            <p class="mg-management__muted">Search by title, public ID, or owner, then open an item to manage it.</p>
+          </div>
+        </div>
+
+        <div class="mg-management__filters">
+          <div class="mg-management__field is-search">
+            <label>Search</label>
+            <input type="text" value={{@controller.searchQuery}} placeholder="Search by public_id / title / id..." {{on "input" @controller.onSearchInput}} />
+          </div>
+
+          <div class="mg-management__field">
+            <label>Backend</label>
+            <select value={{@controller.backendFilter}} {{on "change" @controller.onBackendFilterChange}}>
+              <option value="all">All</option>
+              <option value="local">Local</option>
+              <option value="s3">S3</option>
+            </select>
+          </div>
+
+          <div class="mg-management__field">
+            <label>Storage profile</label>
+            <select value={{@controller.profileFilter}} {{on "change" @controller.onProfileFilterChange}}>
+              <option value="all">All</option>
+              {{#each @controller.profileOptions as |profile|}}
+                <option value={{profile.value}}>{{profile.label}}</option>
+              {{/each}}
+            </select>
+          </div>
+
+          <div class="mg-management__field">
+            <label>Status</label>
+            <select value={{@controller.statusFilter}} {{on "change" @controller.onStatusFilterChange}}>
+              <option value="all">All</option>
+              <option value="ready">Ready</option>
+              <option value="queued">Queued</option>
+              <option value="processing">Processing</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+
+          <div class="mg-management__field">
+            <label>Type</label>
+            <select value={{@controller.mediaTypeFilter}} {{on "change" @controller.onMediaTypeFilterChange}}>
+              <option value="all">All</option>
+              <option value="image">Image</option>
+              <option value="audio">Audio</option>
+              <option value="video">Video</option>
+            </select>
+          </div>
+
+          <div class="mg-management__field">
+            <label>Visibility</label>
+            <select value={{@controller.hiddenFilter}} {{on "change" @controller.onHiddenFilterChange}}>
+              <option value="all">All</option>
+              <option value="visible">Visible</option>
+              <option value="hidden">Hidden</option>
+            </select>
+          </div>
+
+          <div class="mg-management__field">
+            <label>The file contains</label>
+            <select value={{@controller.genderFilter}} {{on "change" @controller.onGenderFilterChange}}>
+              <option value="all">All</option>
+              <option value="male">Male hearts</option>
+              <option value="female">Female hearts</option>
+              <option value="both">Both male and female hearts</option>
+              <option value="non_binary">Non-binary hearts</option>
+              <option value="objects">Heart-related objects</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          <div class="mg-management__field">
+            <label>Limit</label>
+            <select value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+
+          <div class="mg-management__field">
+            <label>Sort</label>
+            <select value={{@controller.sortBy}} {{on "change" @controller.onSortChange}}>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="updated_desc">Recently updated</option>
+              <option value="title_asc">Title A–Z</option>
+              <option value="title_desc">Title Z–A</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="mg-management__filters-footer">
+          <div class="mg-management__actions">
+            <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
+              {{if @controller.isSearching "Searching…" "Search"}}
+            </button>
+            <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isSearching}}>Reset</button>
+          </div>
+          {{#if @controller.searchInfo}}
+            <span class="mg-management__muted">{{@controller.searchInfo}}</span>
+          {{/if}}
+        </div>
+
+        {{#if @controller.searchError}}
+          <div class="mg-management__flash is-danger" style="margin-top: 1rem;">{{@controller.searchError}}</div>
+        {{/if}}
+      </section>
+
       <div class="mg-management__grid">
         <section class="mg-management__panel">
           <div class="mg-management__panel-header">
             <div class="mg-management__panel-copy">
-              <h2>Find media</h2>
-              <p class="mg-management__muted">Search by title, public ID, or owner, then open an item to manage it.</p>
+              <h2>Results</h2>
+              <span class="mg-management__muted">Open an item from the current search result to manage it.</span>
             </div>
           </div>
-
-          <div class="mg-management__filters">
-            <div class="mg-management__field is-search">
-              <label>Search</label>
-              <input type="text" value={{@controller.searchQuery}} placeholder="Search by public_id / title / id..." {{on "input" @controller.onSearchInput}} />
-            </div>
-
-            <div class="mg-management__field">
-              <label>Backend</label>
-              <select value={{@controller.backendFilter}} {{on "change" @controller.onBackendFilterChange}}>
-                <option value="all">All</option>
-                <option value="local">Local</option>
-                <option value="s3">S3</option>
-              </select>
-            </div>
-
-            <div class="mg-management__field">
-              <label>Status</label>
-              <select value={{@controller.statusFilter}} {{on "change" @controller.onStatusFilterChange}}>
-                <option value="all">All</option>
-                <option value="ready">Ready</option>
-                <option value="queued">Queued</option>
-                <option value="processing">Processing</option>
-                <option value="failed">Failed</option>
-              </select>
-            </div>
-
-            <div class="mg-management__field">
-              <label>Type</label>
-              <select value={{@controller.mediaTypeFilter}} {{on "change" @controller.onMediaTypeFilterChange}}>
-                <option value="all">All</option>
-                <option value="image">Image</option>
-                <option value="audio">Audio</option>
-                <option value="video">Video</option>
-              </select>
-            </div>
-
-            <div class="mg-management__field">
-              <label>Visibility</label>
-              <select value={{@controller.hiddenFilter}} {{on "change" @controller.onHiddenFilterChange}}>
-                <option value="all">All</option>
-                <option value="visible">Visible</option>
-                <option value="hidden">Hidden</option>
-              </select>
-            </div>
-
-            <div class="mg-management__field">
-              <label>The file contains</label>
-              <select value={{@controller.genderFilter}} {{on "change" @controller.onGenderFilterChange}}>
-                <option value="all">All</option>
-                <option value="male">Male hearts</option>
-                <option value="female">Female hearts</option>
-                <option value="both">Both male and female hearts</option>
-                <option value="non_binary">Non-binary hearts</option>
-                <option value="objects">Heart-related objects</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-
-            <div class="mg-management__field">
-              <label>Limit</label>
-              <select value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
-                <option value="20">20</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-              </select>
-            </div>
-
-            <div class="mg-management__field">
-              <label>Sort</label>
-              <select value={{@controller.sortBy}} {{on "change" @controller.onSortChange}}>
-                <option value="newest">Newest</option>
-                <option value="oldest">Oldest</option>
-                <option value="updated_desc">Recently updated</option>
-                <option value="title_asc">Title A–Z</option>
-                <option value="title_desc">Title Z–A</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="mg-management__filters-footer">
-            <div class="mg-management__actions">
-              <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
-                {{if @controller.isSearching "Searching…" "Search"}}
-              </button>
-              <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isSearching}}>Reset</button>
-            </div>
-            {{#if @controller.searchInfo}}
-              <span class="mg-management__muted">{{@controller.searchInfo}}</span>
-            {{/if}}
-          </div>
-
-          {{#if @controller.searchError}}
-            <div class="alert alert-error" style="margin-top: 1rem;">{{@controller.searchError}}</div>
-          {{/if}}
 
           <div class="mg-management__results-wrap">
             {{#if @controller.searchResults.length}}
@@ -517,7 +551,7 @@ export default RouteTemplate(
                       <div class="mg-management__result-title">{{item.title}}</div>
                       <div class="mg-management__result-subtitle">{{item.public_id}}</div>
                       <div class="mg-management__muted">by {{item.username}}</div>
-                      <div class="mg-management__badge-row">
+                      <div class="mg-management__badge-row is-compact">
                         <span class="mg-management__badge {{item.statusBadgeClass}}">{{item.displayStatus}}</span>
                         <span class="mg-management__badge">{{item.displayMediaType}}</span>
                         <span class="mg-management__badge">{{item.displayStorage}}</span>
@@ -549,10 +583,10 @@ export default RouteTemplate(
           </div>
 
           {{#if @controller.noticeMessage}}
-            <div class="alert alert-info" style="margin-bottom: 1rem;">{{@controller.noticeMessage}}</div>
+            <div class={{@controller.noticeClass}}>{{@controller.noticeMessage}}</div>
           {{/if}}
           {{#if @controller.selectionError}}
-            <div class="alert alert-error" style="margin-bottom: 1rem;">{{@controller.selectionError}}</div>
+            <div class="mg-management__flash is-danger">{{@controller.selectionError}}</div>
           {{/if}}
 
           {{#if @controller.hasSelectedItem}}
@@ -566,13 +600,13 @@ export default RouteTemplate(
               <div class="mg-management__selected-header-copy">
                 <div class="mg-management__selected-title">{{@controller.selectedItem.title}}</div>
                 <div class="mg-management__selected-subtitle">{{@controller.selectedItem.public_id}}</div>
-                <div class="mg-management__muted">by {{@controller.selectedItem.username}}</div>
-                <div class="mg-management__badge-row">
-                  <span class="mg-management__badge {{@controller.selectedStatusBadgeClass}}">{{@controller.selectedDisplayStatus}}</span>
-                  <span class="mg-management__badge">{{@controller.selectedDisplayMediaType}}</span>
-                  <span class="mg-management__badge">{{@controller.selectedDisplayStorage}}</span>
-                  <span class="mg-management__badge {{@controller.selectedVisibilityBadgeClass}}">{{if @controller.selectedItem.hidden "Hidden" "Visible"}}</span>
-                </div>
+              </div>
+
+              <div class="mg-management__badge-row mg-management__selected-badges">
+                <span class="mg-management__badge {{@controller.selectedStatusBadgeClass}}">{{@controller.selectedDisplayStatus}}</span>
+                <span class="mg-management__badge">{{@controller.selectedDisplayMediaType}}</span>
+                <span class="mg-management__badge">{{@controller.selectedDisplayStorage}}</span>
+                <span class="mg-management__badge {{@controller.selectedVisibilityBadgeClass}}">{{if @controller.selectedItem.hidden "Hidden" "Visible"}}</span>
               </div>
             </div>
 
@@ -669,7 +703,7 @@ export default RouteTemplate(
                           <strong>{{entry.actionLabel}}</strong>
                         </div>
                         {{#if entry.note}}
-                          <div>{{entry.note}}</div>
+                          <div class="mg-management__history-note">{{entry.note}}</div>
                         {{/if}}
                         {{#if entry.changeRows.length}}
                           <div class="mg-management__history-list">

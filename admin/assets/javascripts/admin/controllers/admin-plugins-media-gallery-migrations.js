@@ -171,6 +171,7 @@ function buildThumbnailUrl(publicId, { item = null, diagnostics = null } = {}) {
 export default class AdminPluginsMediaGalleryMigrationsController extends Controller {
   @tracked searchQuery = "";
   @tracked backendFilter = "all";
+  @tracked profileFilter = "all";
   @tracked statusFilter = "all";
   @tracked mediaTypeFilter = "all";
   @tracked hlsFilter = "all";
@@ -213,6 +214,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   @tracked activeHealth = null;
   @tracked targetHealth = null;
+  @tracked availableSearchProfiles = [];
   @tracked activeProfileSummary = null;
   @tracked availableTargetProfiles = [];
   @tracked selectedTargetProfile = "";
@@ -250,6 +252,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this._stopAutoRefresh();
     this.searchQuery = "";
     this.backendFilter = "all";
+    this.profileFilter = "all";
     this.statusFilter = "all";
     this.mediaTypeFilter = "all";
     this.hlsFilter = "all";
@@ -288,6 +291,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.forceAction = false;
     this.activeHealth = null;
     this.targetHealth = null;
+    this.availableSearchProfiles = [];
     this.activeProfileSummary = null;
     this.availableTargetProfiles = [];
     this.selectedTargetProfile = "";
@@ -368,6 +372,22 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   get hasSearchResults() {
     return this.resultCards.length > 0;
+  }
+
+  get searchProfileOptions() {
+    const seen = new Set();
+    return (Array.isArray(this.availableSearchProfiles) ? this.availableSearchProfiles : [])
+      .map((profile) => ({
+        value: String(profile?.value || profile?.profile_key || "").trim(),
+        label: String(profile?.label || profile?.value || profile?.profile_key || "").trim(),
+      }))
+      .filter((profile) => {
+        if (!profile.value || seen.has(profile.value)) {
+          return false;
+        }
+        seen.add(profile.value);
+        return true;
+      });
   }
 
   get hasSelectedItem() {
@@ -1041,6 +1061,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     const q = (this.searchQuery || "").trim();
     if (q) params.set("q", q);
     if (this.backendFilter && this.backendFilter !== "all") params.set("backend", this.backendFilter);
+    if (this.profileFilter && this.profileFilter !== "all") params.set("profile", this.profileFilter);
     if (this.statusFilter && this.statusFilter !== "all") params.set("status", this.statusFilter);
     if (this.mediaTypeFilter && this.mediaTypeFilter !== "all") params.set("media_type", this.mediaTypeFilter);
     if (this.hlsFilter && this.hlsFilter !== "all") params.set("has_hls", this.hlsFilter === "yes" ? "true" : "false");
@@ -1069,11 +1090,12 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   @action onSearchInput(event) { this.searchQuery = event?.target?.value || ""; }
   @action onBackendFilterChange(event) { this.backendFilter = event?.target?.value || "all"; }
+  @action onProfileFilterChange(event) { this.profileFilter = event?.target?.value || "all"; }
   @action onStatusFilterChange(event) { this.statusFilter = event?.target?.value || "all"; }
   @action onMediaTypeFilterChange(event) { this.mediaTypeFilter = event?.target?.value || "all"; }
   @action onHlsFilterChange(event) { this.hlsFilter = event?.target?.value || "all"; }
   @action onSortByChange(event) { this.sortBy = event?.target?.value || "created_at_desc"; }
-  @action onLimitInput(event) {
+  @action onLimitChange(event) {
     const value = parseInt(event?.target?.value, 10);
     this.limit = Number.isFinite(value) && value > 0 ? Math.min(value, 100) : 50;
   }
@@ -1092,6 +1114,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   async resetFilters() {
     this.searchQuery = "";
     this.backendFilter = "all";
+    this.profileFilter = "all";
     this.statusFilter = "all";
     this.mediaTypeFilter = "all";
     this.hlsFilter = "all";
@@ -1120,6 +1143,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         return;
       }
       const json = await response.json();
+      this.availableSearchProfiles = Array.isArray(json?.search_profiles) ? json.search_profiles : this.availableSearchProfiles;
       this.searchResults = Array.isArray(json?.items) ? json.items : [];
       const visibleIds = new Set(this.searchResults.map((row) => row.public_id));
       this.selectedBulkPublicIds = this.selectedBulkPublicIds.filter((publicId) => visibleIds.has(publicId));

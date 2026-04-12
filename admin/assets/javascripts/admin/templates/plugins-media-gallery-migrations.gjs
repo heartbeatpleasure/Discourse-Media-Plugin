@@ -645,6 +645,16 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-migrations__field">
+            <label>Storage profile</label>
+            <select value={{@controller.profileFilter}} {{on "change" @controller.onProfileFilterChange}}>
+              <option value="all">all</option>
+              {{#each @controller.searchProfileOptions as |profile|}}
+                <option value={{profile.value}}>{{profile.label}}</option>
+              {{/each}}
+            </select>
+          </div>
+
+          <div class="mg-migrations__field">
             <label>{{i18n "admin.media_gallery.migrations.status_filter"}}</label>
             <select value={{@controller.statusFilter}} {{on "change" @controller.onStatusFilterChange}}>
               <option value="all">all</option>
@@ -676,7 +686,11 @@ export default RouteTemplate(
 
           <div class="mg-migrations__field">
             <label>{{i18n "admin.media_gallery.migrations.limit_label"}}</label>
-            <input type="number" min="1" max="100" value={{@controller.limit}} {{on "input" @controller.onLimitInput}} />
+            <select value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
           </div>
 
           <div class="mg-migrations__field">
