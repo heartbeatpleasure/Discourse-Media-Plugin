@@ -168,6 +168,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isRetrying = false;
   @tracked availableSearchProfiles = [];
 
+  searchAbortController = null;
+  selectionAbortController = null;
+
   resetState() {
     this.searchQuery = "";
     this.backendFilter = "all";
@@ -207,6 +210,12 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   async loadInitial() {
     await this.search();
+  }
+
+  willDestroy() {
+    this.searchAbortController?.abort?.();
+    this.selectionAbortController?.abort?.();
+    super.willDestroy(...arguments);
   }
 
   get hasSelectedItem() {
@@ -424,6 +433,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         "X-Requested-With": "XMLHttpRequest",
         ...options.headers,
       },
+      signal: options.signal,
       ...options,
     });
 
@@ -648,6 +658,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   @action
   async search() {
+    this.searchAbortController?.abort?.();
+    const controller = new AbortController();
+    this.searchAbortController = controller;
+
     this.isSearching = true;
     this.searchError = "";
     this.searchInfo = "";
@@ -681,14 +695,21 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
       const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/search.json?${params.toString()}`, {
         method: "GET",
+        signal: controller.signal,
       });
       this.availableSearchProfiles = Array.isArray(json?.search_profiles) ? json.search_profiles : this.availableSearchProfiles;
       this.searchResults = this._sortSearchResults(Array.isArray(json?.items) ? json.items : []);
       this._updateSearchInfo();
     } catch (e) {
+      if (e?.name === "AbortError") {
+        return;
+      }
       this.searchResults = [];
       this.searchError = e?.message || String(e);
     } finally {
+      if (this.searchAbortController === controller) {
+        this.searchAbortController = null;
+      }
       this.isSearching = false;
     }
   }
@@ -713,6 +734,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       return;
     }
 
+    this.selectionAbortController?.abort?.();
+    const controller = new AbortController();
+    this.selectionAbortController = controller;
+
     this.isLoadingSelection = true;
     this.selectionError = "";
     this.noticeMessage = "";
@@ -721,12 +746,19 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     try {
       const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/management.json`, {
         method: "GET",
+        signal: controller.signal,
       });
       this.selectedItem = json;
       this._syncEditForm(json);
     } catch (e) {
+      if (e?.name === "AbortError") {
+        return;
+      }
       this.selectionError = e?.message || String(e);
     } finally {
+      if (this.selectionAbortController === controller) {
+        this.selectionAbortController = null;
+      }
       this.isLoadingSelection = false;
     }
   }
@@ -864,7 +896,6 @@ This cannot be undone.`)) {
       this.selectionError = e?.message || String(e);
     } finally {
       this.isRetrying = false;
-    this.availableSearchProfiles = [];
     }
   }
 }

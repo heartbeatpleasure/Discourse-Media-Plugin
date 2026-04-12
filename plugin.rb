@@ -21,6 +21,7 @@ after_initialize do
   require_relative "lib/media_gallery/security_review"
   require_relative "lib/media_gallery/operation_errors"
   require_relative "lib/media_gallery/operation_logger"
+  require_relative "lib/media_gallery/operation_coordinator"
   require_relative "lib/media_gallery/orphan_inspector"
   require_relative "lib/media_gallery/storage_health"
   require_relative "lib/media_gallery/migration_preview"

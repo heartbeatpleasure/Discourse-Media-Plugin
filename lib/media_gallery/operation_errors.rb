@@ -73,6 +73,16 @@ module ::MediaGallery
         present("Source and target use the same storage profile. Choose a different target profile.", retryable: false)
       when "source_and_target_same_location"
         present("Source and target point to the same storage location. Migration would not change anything.", retryable: false)
+      when "copy_in_progress"
+        present("A copy operation is currently running for this item.", recommended_action: "Wait for copy to finish before starting another action.")
+      when "cleanup_in_progress"
+        present("A cleanup operation is currently running for this item.", recommended_action: "Wait for cleanup to finish before starting another action.")
+      when "verify_in_progress"
+        present("A verify operation is currently running for this item.", recommended_action: "Wait for verify to finish before starting another action.")
+      when "finalize_in_progress"
+        present("Finalize is still pending for this item.", recommended_action: "Wait for finalize/cleanup to finish before starting another action.")
+      when "processing_in_progress"
+        present("This item is still being processed. Migration actions are blocked for now.", recommended_action: "Wait for processing to finish before running migration actions.")
       when "copy_already_in_progress"
         present("A copy operation is already running for this item.", recommended_action: "Wait for copy to finish or clear the queued state if it is stuck.")
       when "cleanup_already_in_progress"

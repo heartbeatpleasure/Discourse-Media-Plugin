@@ -18,8 +18,20 @@ module ::MediaGallery
 
     def verify!(item, target_profile: "target", requested_by: nil)
       raise "media_item_required" if item.blank?
+      ::MediaGallery::OperationCoordinator.ensure_operation_allowed!(item, requested_operation: "verify")
 
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       ::MediaGallery::OperationLogger.info("migration_verify_started", item: item, operation: "verify", data: { target_profile: target_profile, requested_by: requested_by })
+
+      runtime_cache = build_runtime_cache
+      verifying_state = {
+        "status" => "verifying",
+        "started_at" => Time.now.utc.iso8601,
+        "requested_by" => requested_by.to_s.presence,
+        "target_profile" => target_profile.to_s,
+      }
+      ::MediaGallery::OperationErrors.clear_failure!(verifying_state)
+      save_verify_state!(item, verifying_state)
 
       plan = build_verification_plan(item, target_profile: target_profile)
       source = (plan[:source] || plan["source"] || {}).deep_symbolize_keys
@@ -46,7 +58,7 @@ module ::MediaGallery
         elsif same_profile || same_location
           "same_profile"
         else
-          verification = verify_plan_objects(plan)
+          verification = verify_plan_objects(plan, runtime_cache: runtime_cache)
           if verification[:object_count].to_i <= 0
             "incomplete"
           elsif verification[:missing_on_target_count].to_i.zero? && verification[:mismatched_count].to_i.zero?
@@ -80,6 +92,7 @@ module ::MediaGallery
         "mismatches" => Array(verification[:mismatches]).first(DIGEST_DETAIL_LIMIT),
         "warnings" => warnings,
         "last_error" => nil,
+        "duration_ms" => elapsed_ms(started_at),
       }
       ::MediaGallery::OperationErrors.clear_failure!(state)
 
@@ -91,6 +104,7 @@ module ::MediaGallery
         "status" => "failed",
         "verified_at" => Time.now.utc.iso8601,
         "requested_by" => requested_by.to_s.presence,
+        "duration_ms" => elapsed_ms(started_at),
       }
       ::MediaGallery::OperationErrors.apply_failure!(state, e, operation: "verify")
       save_verify_state!(item, state) if item&.persisted?
@@ -173,7 +187,7 @@ module ::MediaGallery
     end
     private_class_method :target_summary_for
 
-    def verify_plan_objects(plan)
+    def verify_plan_objects(plan, runtime_cache: nil)
       source_summary = (plan[:source] || plan["source"] || {}).deep_symbolize_keys
       target_summary = (plan[:target] || plan["target"] || {}).deep_symbolize_keys
       source_store = store_for_summary(source_summary)
@@ -204,6 +218,7 @@ module ::MediaGallery
       roles = Array(plan[:roles] || plan["roles"])
       result[:object_count] = roles.sum { |role_row| Array(role_row[:objects] || role_row["objects"]).length }
 
+      runtime_cache ||= build_runtime_cache
       Dir.mktmpdir("media_gallery_verify") do |tmpdir|
         roles.each do |role_row|
           role_name = (role_row[:name] || role_row["name"]).to_s
@@ -218,6 +233,7 @@ module ::MediaGallery
               source_store: source_store,
               target_store: target_store,
               tmpdir: tmpdir,
+              runtime_cache: runtime_cache,
             )
             next
           end
@@ -228,23 +244,24 @@ module ::MediaGallery
             source_store: source_store,
             target_store: target_store,
             tmpdir: tmpdir,
+            runtime_cache: runtime_cache,
           )
         end
       end
 
-      verify_hls_manifest_consistency!(result, plan: plan, target_store: target_store)
+      verify_hls_manifest_consistency!(result, plan: plan, target_store: target_store, runtime_cache: runtime_cache)
       result[:warnings].uniq!
       result
     end
     private_class_method :verify_plan_objects
 
-    def verify_standard_role_objects!(result, objects:, source_store:, target_store:, tmpdir:)
+    def verify_standard_role_objects!(result, objects:, source_store:, target_store:, tmpdir:, runtime_cache: nil)
       Array(objects).each_with_index do |object, index|
         key = object[:key].to_s
         next if key.blank?
 
-        source_info = normalize_info(source_store.object_info(key))
-        target_info = normalize_info(target_store.object_info(key))
+        source_info = object_info_cached(runtime_cache, source_store, key)
+        target_info = object_info_cached(runtime_cache, target_store, key)
 
         if !source_info[:exists]
           result[:mismatched_count] += 1
@@ -274,8 +291,8 @@ module ::MediaGallery
           next
         end
 
-        source_digest = digest_for_object(store: source_store, key: key, info: source_info, tmpdir: tmpdir, label: "src", index: index)
-        target_digest = digest_for_object(store: target_store, key: key, info: target_info, tmpdir: tmpdir, label: "dst", index: index)
+        source_digest = digest_for_object(store: source_store, key: key, info: source_info, tmpdir: tmpdir, label: "src", index: index, runtime_cache: runtime_cache)
+        target_digest = digest_for_object(store: target_store, key: key, info: target_info, tmpdir: tmpdir, label: "dst", index: index, runtime_cache: runtime_cache)
 
         if source_digest.blank? || target_digest.blank?
           result[:warnings] << "digest_unavailable"
@@ -293,11 +310,11 @@ module ::MediaGallery
     end
     private_class_method :verify_standard_role_objects!
 
-    def verify_hls_role_objects!(result, role:, objects:, source_store:, target_store:, tmpdir:)
+    def verify_hls_role_objects!(result, role:, objects:, source_store:, target_store:, tmpdir:, runtime_cache: nil)
       object_rows = Array(objects).map { |obj| obj.is_a?(Hash) ? obj.deep_symbolize_keys : {} }
       prefix = role["key_prefix"].to_s.presence || derive_hls_prefix_from_objects(object_rows)
-      source_key_set = build_key_set_for_prefix(source_store, prefix, fallback_objects: object_rows)
-      target_key_set = build_key_set_for_prefix(target_store, prefix, fallback_objects: object_rows)
+      source_key_set = Set.new(object_rows.map { |obj| obj[:key].to_s }.reject(&:blank?))
+      target_key_set = build_key_set_for_prefix(target_store, prefix, fallback_objects: object_rows, runtime_cache: runtime_cache)
 
       object_rows.each_with_index do |object, index|
         key = object[:key].to_s
@@ -382,14 +399,18 @@ module ::MediaGallery
     end
     private_class_method :skip_expensive_digest_for_object?
 
-    def digest_for_object(store:, key:, info:, tmpdir:, label:, index:)
+    def digest_for_object(store:, key:, info:, tmpdir:, label:, index:, runtime_cache: nil)
       checksum = info[:checksum_sha256].to_s.presence
       return checksum if checksum.present?
+
+      cache = (runtime_cache ||= build_runtime_cache)[:digest]
+      cache_key = [store.backend.to_s, store.object_id, key.to_s, info[:etag].to_s, info[:bytes].to_i]
+      return cache[cache_key] if cache.key?(cache_key)
 
       tmp_path = File.join(tmpdir, "#{label}_#{index}_#{SecureRandom.hex(6)}")
       begin
         store.download_to_file!(key, tmp_path)
-        Digest::SHA256.file(tmp_path).hexdigest
+        cache[cache_key] = Digest::SHA256.file(tmp_path).hexdigest
       ensure
         FileUtils.rm_f(tmp_path)
       end
@@ -398,7 +419,7 @@ module ::MediaGallery
     end
     private_class_method :digest_for_object
 
-    def verify_hls_manifest_consistency!(result, plan:, target_store:)
+    def verify_hls_manifest_consistency!(result, plan:, target_store:, runtime_cache: nil)
       roles = Array(plan[:roles] || plan["roles"])
       roles.each do |role_row|
         next unless (role_row[:name] || role_row["name"]).to_s == "hls"
@@ -407,8 +428,8 @@ module ::MediaGallery
         role = (role_row[:role] || role_row["role"] || {}).deep_stringify_keys
         objects = Array(role_row[:objects] || role_row["objects"]).map { |obj| (obj.is_a?(Hash) ? obj.deep_stringify_keys : {}) }
         prefix = role["key_prefix"].to_s.presence || derive_hls_prefix_from_objects(objects)
-        target_keys = build_key_set_for_prefix(target_store, prefix, fallback_objects: objects).to_a
-        consistency = verify_single_hls_role(target_store: target_store, role: role, objects: objects, target_keys: target_keys)
+        target_keys = build_key_set_for_prefix(target_store, prefix, fallback_objects: objects, runtime_cache: runtime_cache).to_a
+        consistency = verify_single_hls_role(target_store: target_store, role: role, objects: objects, target_keys: target_keys, runtime_cache: runtime_cache)
 
         if consistency[:ok]
           result[:hls_manifest_verified_count] += 1
@@ -427,7 +448,7 @@ module ::MediaGallery
     end
     private_class_method :verify_hls_manifest_consistency!
 
-    def verify_single_hls_role(target_store:, role:, objects:, target_keys: nil)
+    def verify_single_hls_role(target_store:, role:, objects:, target_keys: nil, runtime_cache: nil)
       return { ok: false, errors: ["target_store_missing"], warnings: [] } if target_store.blank?
 
       prefix = role["key_prefix"].to_s
@@ -452,7 +473,7 @@ module ::MediaGallery
       errors << "missing_master_playlist: #{master_key}" unless target_has_key.call(master_key)
       return { ok: false, errors: errors, warnings: warnings } if errors.present?
 
-      master_refs = playlist_refs(read_text(target_store, master_key))
+      master_refs = playlist_refs(read_text(target_store, master_key, runtime_cache: runtime_cache))
       variant_keys = master_refs.select { |ref| ref.downcase.end_with?(".m3u8") }.map { |ref| normalize_playlist_reference(master_key, ref) }.uniq
       errors << "master_has_no_variant_playlists" if variant_keys.empty?
 
@@ -468,7 +489,7 @@ module ::MediaGallery
           next
         end
 
-        refs = playlist_refs(read_text(target_store, variant_key))
+        refs = playlist_refs(read_text(target_store, variant_key, runtime_cache: runtime_cache))
         segment_refs = refs.select { |ref| segment_like_reference?(ref) }
         errors << "variant_has_no_segments: #{variant_key}" if segment_refs.empty?
 
@@ -493,9 +514,9 @@ module ::MediaGallery
     end
     private_class_method :verify_single_hls_role
 
-    def build_key_set_for_prefix(store, prefix, fallback_objects: [])
+    def build_key_set_for_prefix(store, prefix, fallback_objects: [], runtime_cache: nil)
       keys = []
-      keys = Array(store&.list_prefix(prefix)).map(&:to_s) if store.present? && prefix.present?
+      keys = list_prefix_cached(runtime_cache, store, prefix) if store.present? && prefix.present?
       keys = Array(fallback_objects).map { |obj| obj.is_a?(Hash) ? (obj[:key] || obj["key"]).to_s : obj.to_s } if keys.blank?
       Set.new(keys.reject(&:blank?))
     rescue => e
@@ -517,9 +538,14 @@ module ::MediaGallery
     end
     private_class_method :derive_hls_prefix_from_objects
 
-    def read_text(store, key)
+    def read_text(store, key, runtime_cache: nil)
+      cache = (runtime_cache ||= build_runtime_cache)[:read_text]
+      cache_key = [store.backend.to_s, key.to_s]
+      return cache[cache_key] if cache.key?(cache_key)
+
       value = store.read(key)
-      value.respond_to?(:force_encoding) ? value.force_encoding("UTF-8") : value.to_s
+      normalized = value.respond_to?(:force_encoding) ? value.force_encoding("UTF-8") : value.to_s
+      cache[cache_key] = normalized
     end
     private_class_method :read_text
 
@@ -566,6 +592,38 @@ module ::MediaGallery
       value.present? ? value : ::MediaGallery::Hls::DEFAULT_VARIANT
     end
     private_class_method :variant_name_from_playlist_key
+
+    def build_runtime_cache
+      {
+        object_info: {},
+        list_prefix: {},
+        read_text: {},
+        digest: {},
+      }
+    end
+    private_class_method :build_runtime_cache
+
+    def object_info_cached(runtime_cache, store, key)
+      cache = (runtime_cache ||= build_runtime_cache)[:object_info]
+      cache_key = [store.backend.to_s, store.object_id, key.to_s]
+      cache[cache_key] ||= normalize_info(store.object_info(key))
+    end
+    private_class_method :object_info_cached
+
+    def list_prefix_cached(runtime_cache, store, prefix)
+      cache = (runtime_cache ||= build_runtime_cache)[:list_prefix]
+      cache_key = [store.backend.to_s, store.object_id, prefix.to_s]
+      cache[cache_key] ||= Array(store.list_prefix(prefix)).map(&:to_s)
+    end
+    private_class_method :list_prefix_cached
+
+    def elapsed_ms(started_at)
+      return nil unless started_at
+      ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000.0).round
+    rescue
+      nil
+    end
+    private_class_method :elapsed_ms
 
     def append_mismatch!(result, attrs)
       result[:mismatches] << attrs.stringify_keys

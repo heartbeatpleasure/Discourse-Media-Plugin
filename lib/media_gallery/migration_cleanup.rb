@@ -13,6 +13,7 @@ module ::MediaGallery
     def enqueue_cleanup!(item, requested_by: nil, force: false, auto_finalize: false)
       raise "media_item_required" if item.blank?
       raise "item_not_ready" unless item.ready?
+      ::MediaGallery::OperationCoordinator.ensure_operation_allowed!(item, requested_operation: "cleanup") unless force
 
       switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item)
       finalize_state = ::MediaGallery::MigrationFinalize.finalize_state_for(item)

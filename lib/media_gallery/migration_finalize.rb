@@ -11,6 +11,7 @@ module ::MediaGallery
     def finalize!(item, requested_by: nil, force: false)
       raise "media_item_required" if item.blank?
       raise "item_not_ready" unless item.ready?
+      ::MediaGallery::OperationCoordinator.ensure_operation_allowed!(item, requested_operation: "finalize") unless force
 
       cleanup_state = ::MediaGallery::MigrationCleanup.cleanup_state_for(item)
       rollback_state = ::MediaGallery::MigrationRollback.rollback_state_for(item)

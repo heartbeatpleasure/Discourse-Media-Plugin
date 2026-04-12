@@ -226,6 +226,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   autoRefreshTimer = null;
   autoRefreshIntervalMs = 5000;
   autoRefreshSearchCounter = 0;
+  searchAbortController = null;
+  selectionAbortController = null;
+  storageAbortController = null;
 
   _readStoredTargetProfile() {
     try {
@@ -313,6 +316,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   willDestroy() {
     this._stopAutoRefresh();
+    this.searchAbortController?.abort?.();
+    this.selectionAbortController?.abort?.();
+    this.storageAbortController?.abort?.();
     super.willDestroy(...arguments);
   }
 
@@ -1127,6 +1133,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   @action
   async search() {
+    this.searchAbortController?.abort?.();
+    const controller = new AbortController();
+    this.searchAbortController = controller;
+
     this.isSearching = true;
     this.searchError = "";
     this.searchInfo = "";
@@ -1136,6 +1146,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         method: "GET",
         headers: { Accept: "application/json" },
         credentials: "same-origin",
+        signal: controller.signal,
       });
       if (!response.ok) {
         this.searchError = await this._extractError(response);
@@ -1156,9 +1167,15 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         this.selectedItem = refreshedSelection;
       }
     } catch (e) {
+      if (e?.name === "AbortError") {
+        return;
+      }
       this.searchError = e?.message || String(e);
       this.searchResults = [];
     } finally {
+      if (this.searchAbortController === controller) {
+        this.searchAbortController = null;
+      }
       this.isSearching = false;
       this._syncAutoRefresh();
     }
@@ -1237,6 +1254,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   async refreshSelected(options = {}) {
     if (!this.selectedPublicId) return;
 
+    this.selectionAbortController?.abort?.();
+    const controller = new AbortController();
+    this.selectionAbortController = controller;
+
     const preserveMessages = !!options.preserveMessages;
     const includeSearchRefresh = !!options.includeSearchRefresh;
     const updateResults = options.updateResults !== false;
@@ -1249,7 +1270,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
     try {
       const publicId = encodeURIComponent(this.selectedPublicId);
-      const diagnostics = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${publicId}/diagnostics.json`);
+      const diagnostics = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${publicId}/diagnostics.json`, {
+        signal: controller.signal,
+      });
       this.selectedDiagnostics = diagnostics;
       this.selectedVerification = diagnostics?.migration_verify || null;
 
@@ -1270,8 +1293,14 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         this.selectedPlanLoaded = false;
       }
     } catch (e) {
+      if (e?.name === "AbortError") {
+        return;
+      }
       this.selectedError = e?.message || String(e);
     } finally {
+      if (this.selectionAbortController === controller) {
+        this.selectionAbortController = null;
+      }
       this.isLoadingSelection = false;
       this._syncAutoRefresh();
     }
@@ -1319,7 +1348,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
           auto_cleanup: this.autoCleanup,
         }),
       });
-      await this.refreshSelected({ includeSearchRefresh: true });
+      await this.refreshSelected({ includeSearchRefresh: false });
       const copyStatus = this.selectedDiagnostics?.migration_copy?.status;
       const copyError = this.selectedDiagnostics?.migration_copy?.last_error_human || this.selectedDiagnostics?.migration_copy?.last_error;
       if (copyStatus === "failed" && copyError) {
@@ -1375,7 +1404,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         }),
       });
       this.lastActionMessage = "Switch completed.";
-      await this.refreshSelected({ includeSearchRefresh: true });
+      await this.refreshSelected({ includeSearchRefresh: false });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1397,7 +1426,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         body: JSON.stringify({ force: this.forceAction }),
       });
       this.lastActionMessage = "Cleanup queued/completed.";
-      await this.refreshSelected({ includeSearchRefresh: true });
+      await this.refreshSelected({ includeSearchRefresh: false });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1419,7 +1448,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         body: JSON.stringify({ force: this.forceAction }),
       });
       this.lastActionMessage = "Rollback completed.";
-      await this.refreshSelected({ includeSearchRefresh: true });
+      await this.refreshSelected({ includeSearchRefresh: false });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1443,7 +1472,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.lastActionMessage = result?.migration_finalize?.status === "pending_cleanup"
         ? "Finalize is waiting for cleanup to finish."
         : ((result?.migration_finalize?.finalize_mode === "rolled_back") ? "Rollback finalized." : "Migration finalized.");
-      await this.refreshSelected({ includeSearchRefresh: true });
+      await this.refreshSelected({ includeSearchRefresh: false });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1465,7 +1494,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         headers: this._actionHeaders(),
       });
       this.lastActionMessage = result?.message || "Queued state cleared.";
-      await this.refreshSelected({ includeSearchRefresh: true });
+      await this.refreshSelected({ includeSearchRefresh: false });
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1543,11 +1572,15 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
   @action
   async loadStorageHealth(profile) {
+    this.storageAbortController?.abort?.();
+    const controller = new AbortController();
+    this.storageAbortController = controller;
+
     this.storageBusy = true;
     this.storageError = "";
     const requestedProfile = profile === "target" ? this.selectedTargetProfileKey : profile;
     try {
-      const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/health.json?profile=${encodeURIComponent(requestedProfile)}`);
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/storage/health.json?profile=${encodeURIComponent(requestedProfile)}`, { signal: controller.signal });
       if (profile === "active") {
         this.activeHealth = json;
       } else {
@@ -1556,14 +1589,24 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         this._persistTargetProfile(this.selectedTargetProfile);
       }
     } catch (e) {
+      if (e?.name === "AbortError") {
+        return;
+      }
       this.storageError = e?.message || String(e);
     } finally {
+      if (this.storageAbortController === controller) {
+        this.storageAbortController = null;
+      }
       this.storageBusy = false;
     }
   }
 
   @action
   async runStorageProbe(profile) {
+    this.storageAbortController?.abort?.();
+    const controller = new AbortController();
+    this.storageAbortController = controller;
+
     this.storageBusy = true;
     this.storageError = "";
     const requestedProfile = profile === "target" ? this.selectedTargetProfileKey : profile;
@@ -1572,12 +1615,19 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         method: "POST",
         headers: this._actionHeaders(),
         body: JSON.stringify({ profile: requestedProfile }),
+        signal: controller.signal,
       });
       if (profile === "active") this.activeProbe = json;
       else this.targetProbe = json;
     } catch (e) {
+      if (e?.name === "AbortError") {
+        return;
+      }
       this.storageError = e?.message || String(e);
     } finally {
+      if (this.storageAbortController === controller) {
+        this.storageAbortController = null;
+      }
       this.storageBusy = false;
     }
   }

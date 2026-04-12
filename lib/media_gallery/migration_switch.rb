@@ -12,6 +12,7 @@ module ::MediaGallery
     def switch!(item, target_profile: "target", requested_by: nil, mode: "manual", auto_cleanup: false)
       raise "media_item_required" if item.blank?
       raise "item_not_ready" unless item.ready?
+      ::MediaGallery::OperationCoordinator.ensure_operation_allowed!(item, requested_operation: "switch")
 
       plan = ::MediaGallery::MigrationPreview.preview(item, target_profile: target_profile)
       validate_plan_for_switch!(plan)

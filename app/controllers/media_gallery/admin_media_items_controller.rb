@@ -701,6 +701,12 @@ module ::MediaGallery
           cleanup: diagnostic_state_for(::MediaGallery::MigrationCleanup.cleanup_state_for(item), operation: "cleanup"),
           rollback: diagnostic_state_for(::MediaGallery::MigrationRollback.rollback_state_for(item), operation: "rollback"),
           finalize: diagnostic_state_for(::MediaGallery::MigrationFinalize.finalize_state_for(item), operation: "finalize"),
+        },
+        runtime: {
+          processing_active: ::MediaGallery::OperationCoordinator.processing_active?(item),
+          copy_active: ::MediaGallery::OperationCoordinator.copy_active?(::MediaGallery::MigrationCopy.copy_state_for(item)),
+          cleanup_active: ::MediaGallery::OperationCoordinator.cleanup_active?(::MediaGallery::MigrationCleanup.cleanup_state_for(item)),
+          finalize_pending: ::MediaGallery::OperationCoordinator.finalize_pending?(::MediaGallery::MigrationFinalize.finalize_state_for(item)),
         }
       }
     end
@@ -724,6 +730,7 @@ module ::MediaGallery
 
       {
         status: state["status"].to_s,
+        duration_ms: state["duration_ms"],
         error_code: normalized[:code],
         error_detail: normalized[:detail],
         error_message: normalized[:message],
