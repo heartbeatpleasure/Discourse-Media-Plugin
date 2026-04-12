@@ -29,7 +29,11 @@ module ::MediaGallery
     end
 
     def allowed_tags
-      list_setting(SiteSetting.media_gallery_allowed_tags).map(&:downcase)
+      MediaGallery::TextSanitizer.tag_list(
+        list_setting(SiteSetting.media_gallery_allowed_tags),
+        max_count: 500,
+        max_length: 40
+      )
     end
 
     # Members-only: always requires a logged-in user.

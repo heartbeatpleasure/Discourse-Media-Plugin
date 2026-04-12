@@ -45,8 +45,13 @@ module ::MediaGallery
     end
 
     def normalize_tags
-      self.tags ||= []
-      self.tags = self.tags.map { |t| t.to_s.strip.downcase }.reject(&:blank?).uniq
+      max = SiteSetting.media_gallery_max_tags_per_item.to_i
+      self.tags = ::MediaGallery::TextSanitizer.tag_list(
+        self.tags || [],
+        max_count: (max.positive? ? max : 10),
+        max_length: 40,
+        allowed: MediaGallery::Permissions.allowed_tags
+      )
     end
 
     def tags_are_reasonable
@@ -59,7 +64,7 @@ module ::MediaGallery
       allowed = MediaGallery::Permissions.allowed_tags
       return if allowed.blank?
 
-      invalid = tags - allowed.map { |t| t.to_s.strip.downcase }
+      invalid = tags - allowed
       errors.add(:tags, "contains invalid tags") if invalid.any?
     end
 

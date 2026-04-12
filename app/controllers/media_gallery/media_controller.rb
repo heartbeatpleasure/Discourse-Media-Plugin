@@ -68,8 +68,12 @@ module ::MediaGallery
       end
 
       if params[:tags].present?
-        tags = params[:tags].is_a?(Array) ? params[:tags] : params[:tags].to_s.split(",")
-        tags = tags.map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
+        tags = ::MediaGallery::TextSanitizer.tag_list(
+          params[:tags],
+          max_count: [SiteSetting.media_gallery_max_tags_per_item.to_i, 50].max,
+          max_length: 40,
+          allowed: MediaGallery::Permissions.allowed_tags
+        )
         if tags.present?
           # Be defensive about the DB column type.
           # Some installs may have tags as text[]; others as varchar[] (older schema).
@@ -190,8 +194,12 @@ module ::MediaGallery
         return render_json_error("private_storage_unavailable", status: 500, message: "Private storage is currently unavailable. Please contact an administrator.")
       end
 
-      tags = params[:tags]
-      tags = tags.is_a?(Array) ? tags : tags.to_s.split(",") if tags.present?
+      tags = ::MediaGallery::TextSanitizer.tag_list(
+        params[:tags],
+        max_count: [SiteSetting.media_gallery_max_tags_per_item.to_i, 10].max,
+        max_length: 40,
+        allowed: MediaGallery::Permissions.allowed_tags
+      )
 
       extra_metadata = params[:extra_metadata]
       extra_metadata = {} if extra_metadata.blank?
@@ -225,7 +233,7 @@ module ::MediaGallery
         watermark_enabled: watermark_enabled,
         watermark_preset_id: watermark_preset_id,
         gender: subject.presence,
-        tags: (tags || []).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq,
+        tags: tags,
         original_upload_id: upload.id,
         status: status,
         processed_upload_id: (status == "ready" && !managed_storage ? upload.id : nil),
@@ -277,12 +285,12 @@ module ::MediaGallery
       end
 
       description = ::MediaGallery::TextSanitizer.plain_text(params[:description], max_length: 4000, allow_newlines: true)
-      tags =
-        begin
-          raw = params[:tags]
-          arr = raw.is_a?(Array) ? raw : raw.to_s.split(",")
-          arr.map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
-        end
+      tags = ::MediaGallery::TextSanitizer.tag_list(
+        params[:tags],
+        max_count: [SiteSetting.media_gallery_max_tags_per_item.to_i, 10].max,
+        max_length: 40,
+        allowed: MediaGallery::Permissions.allowed_tags
+      )
 
       item.update!(
         title: title,
