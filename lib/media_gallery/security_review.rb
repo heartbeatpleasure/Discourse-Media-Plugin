@@ -60,13 +60,13 @@ module ::MediaGallery
       [
         finding("Broken Access Control", "implemented", "Admin endpoints use admin-only controllers; owner/staff checks protect update/delete/retry; hidden items are denied on public media endpoints."),
         finding("Cryptographic Failures", "implemented", "Playback tokens are signed with Rails MessageVerifier and can be bound to the current asset generation."),
-        finding("Injection", "implemented_with_framework_controls", "Search/filter inputs use constrained allow-lists or parameterized queries; no raw user input is interpolated into storage keys."),
+        finding("Injection", "implemented_with_framework_controls", "Search/filter inputs use constrained allow-lists or parameterized queries; user-editable text fields are normalized to plain text before storage."),
         finding("Insecure Design", "implemented", "Copy/verify/switch/cleanup/rollback/finalize remain explicit steps with admin-only access and diagnostics."),
         finding("Security Misconfiguration", "manual_validation_required", "Validate bucket privacy, CORS, proxy timeouts, and production-only secrets outside plugin code."),
         finding("Identification and Authentication Failures", "implemented", "Logged-in access, group-based viewing, token TTL, optional user/IP binding, revoke, and heartbeat/session limits are available."),
         finding("Software and Data Integrity Failures", "manual_validation_required", "Confirm deployment process, plugin provenance, and dependency/update hygiene in your operations workflow."),
         finding("Security Logging and Monitoring Failures", "implemented", "Structured operation logging and admin diagnostics are available; production log routing still needs operator setup."),
-        finding("SSRF", "limited_surface_manual_validation_required", "The plugin does not proxy arbitrary user URLs for playback; validate any external forensic fetch workflows separately."),
+        finding("SSRF", "implemented_with_admin_only_restrictions", "Forensics source URL mode is admin-only and restricted to same-site media or upload paths rather than arbitrary remote destinations."),
         finding("CSRF", "implemented", "Sensitive write/token-issuing media endpoints require a verified CSRF request or same-origin browser context."),
       ]
     end

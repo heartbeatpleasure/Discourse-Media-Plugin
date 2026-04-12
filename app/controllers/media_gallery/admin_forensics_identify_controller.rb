@@ -31,7 +31,10 @@ module ::MediaGallery
         return render json: { errors: ["unknown_public_id", public_id] }, status: 422
       end
 
-      action_url = "/admin/plugins/media-gallery/forensics-identify/#{public_id}.json"
+      action_url = CGI.escapeHTML("/admin/plugins/media-gallery/forensics-identify/#{public_id}.json")
+      csrf_token = CGI.escapeHTML(form_authenticity_token.to_s)
+      public_id_label = CGI.escapeHTML(public_id)
+      media_item_id_label = CGI.escapeHTML(item.id.to_s)
 
       html = <<~HTML
         <div class="wrap">
@@ -42,12 +45,12 @@ module ::MediaGallery
           </p>
 
           <ul>
-            <li><strong>public_id:</strong> #{CGI.escapeHTML(public_id)}</li>
-            <li><strong>media_item_id:</strong> #{item.id}</li>
+            <li><strong>public_id:</strong> #{public_id_label}</li>
+            <li><strong>media_item_id:</strong> #{media_item_id_label}</li>
           </ul>
 
           <form action="#{action_url}" method="post" enctype="multipart/form-data">
-            <input type="hidden" name="authenticity_token" value="#{form_authenticity_token}">
+            <input type="hidden" name="authenticity_token" value="#{csrf_token}">
 
             <p>
               <label>Leaked file: <input type="file" name="file" required></label>
@@ -1045,6 +1048,43 @@ module ::MediaGallery
       [top, second]
     end
 
+    def source_url_allowed_host_and_port?(uri)
+      allowed = [safe_base_uri, safe_request_base_uri].compact
+      return false if allowed.blank?
+
+      allowed.any? do |base_uri|
+        uri.host.to_s == base_uri.host.to_s && normalized_port(uri) == normalized_port(base_uri)
+      end
+    end
+
+    def source_url_allowed_path?(uri)
+      path = uri.path.to_s
+      path.start_with?("/media/hls/", "/media/stream/", "/uploads/", "/secure-uploads/")
+    end
+
+    def safe_base_uri
+      URI.parse(Discourse.base_url)
+    rescue
+      nil
+    end
+
+    def safe_request_base_uri
+      base = request&.base_url.to_s
+      return nil if base.blank?
+      URI.parse(base)
+    rescue
+      nil
+    end
+
+    def normalized_port(uri)
+      return uri.port if uri.port.present?
+      uri.scheme.to_s == "https" ? 443 : 80
+    end
+
+    def forward_cookie_for_source_url?(uri)
+      uri.path.to_s.start_with?("/media/hls/")
+    end
+
     def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:, media_item:)
       url = source_url.to_s.strip
       raise "source_url is blank" if url.blank?
@@ -1053,15 +1093,9 @@ module ::MediaGallery
       uri = URI.parse(url) rescue nil
       raise "source_url is not a valid http(s) URL" if uri.blank? || uri.host.blank? || !%w[http https].include?(uri.scheme)
 
-      # Security: only allow URLs on this Discourse host for now.
-      # (If you later need CDN support, we can add an allowlist site setting.)
-      base_host = (URI.parse(Discourse.base_url).host rescue nil)
-      req_host = request&.host
-      allowed_hosts = [base_host, req_host].compact.uniq
-
-      unless allowed_hosts.include?(uri.host)
-        raise "Only URLs on this site are allowed (#{allowed_hosts.join(', ')})."
-      end
+      raise "source_url credentials are not allowed" if uri.user.present? || uri.password.present?
+      raise "Only URLs on this site and port are allowed." unless source_url_allowed_host_and_port?(uri)
+      raise "Only media playback or upload URLs on this site are allowed." unless source_url_allowed_path?(uri)
 
       seg = segment_seconds.to_i
       seg = 6 if seg <= 0
@@ -1311,7 +1345,7 @@ module ::MediaGallery
       # If the URL requires authentication (e.g. ensure_logged_in), forward cookies from
       # the admin's browser session. This makes URL-mode usable for protected endpoints.
       cookie = request&.headers&.[]("Cookie").to_s
-      req["Cookie"] = cookie if cookie.present?
+      req["Cookie"] = cookie if cookie.present? && forward_cookie_for_source_url?(uri)
       req["Accept"] = "application/vnd.apple.mpegurl, */*"
 
       res = http.request(req)

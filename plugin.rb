@@ -34,6 +34,7 @@ after_initialize do
   require_relative "lib/media_gallery/migration_finalize"
   require_relative "lib/media_gallery/processing_workspace"
   require_relative "lib/media_gallery/source_acquirer"
+  require_relative "lib/media_gallery/text_sanitizer"
   require_relative "lib/media_gallery/asset_store"
   require_relative "lib/media_gallery/local_asset_store"
   require_relative "lib/media_gallery/s3_asset_store"

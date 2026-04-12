@@ -33,16 +33,16 @@ module ::MediaGallery
     # PUT /admin/plugins/media-gallery/media-items/:public_id/admin-update.json
     def admin_update
       item = load_item!
-      title = params[:title].to_s.strip
+      title = ::MediaGallery::TextSanitizer.plain_text(params[:title], max_length: 200, allow_newlines: false)
       return render_json_error("title_required", status: 422) if title.blank?
 
       subject = params[:gender].to_s.strip
       return render_json_error("gender_required", status: 422) if subject.blank?
       return render_json_error("invalid_gender", status: 422) unless ::MediaGallery::MediaItem::GENDERS.include?(subject)
 
-      description = params[:description].to_s.strip
+      description = ::MediaGallery::TextSanitizer.plain_text(params[:description], max_length: 4000, allow_newlines: true)
       tags = normalize_tags_param(params[:tags])
-      note = params[:admin_note].to_s.strip.presence
+      note = ::MediaGallery::TextSanitizer.plain_text(params[:admin_note], max_length: 2000, allow_newlines: true).presence
 
       changes = {}
       changes["title"] = [item.title, title] if item.title.to_s != title
@@ -84,7 +84,7 @@ module ::MediaGallery
     def visibility
       item = load_item!
       hidden = boolean_param(:hidden)
-      note = params[:admin_note].to_s.strip.presence
+      note = ::MediaGallery::TextSanitizer.plain_text(params[:admin_note], max_length: 2000, allow_newlines: true).presence
       reason = params[:reason].to_s.strip.presence || note
       now = Time.now.utc.iso8601
 
@@ -131,7 +131,7 @@ module ::MediaGallery
     # DELETE /admin/plugins/media-gallery/media-items/:public_id/admin-destroy.json
     def admin_destroy
       item = load_item!
-      note = params[:admin_note].to_s.strip.presence
+      note = ::MediaGallery::TextSanitizer.plain_text(params[:admin_note], max_length: 2000, allow_newlines: true).presence
       public_id = item.public_id.to_s
       title = item.title.to_s
       delete_summary = nil
@@ -422,7 +422,7 @@ module ::MediaGallery
 
     def filtered_search_scope
       scope = ::MediaGallery::MediaItem.includes(:user).order(created_at: :desc)
-      q = params[:q].to_s.strip
+      q = ::MediaGallery::TextSanitizer.search_query(params[:q], max_length: 200)
 
       if q.present?
         if q =~ /\A\d+\z/
@@ -674,7 +674,8 @@ module ::MediaGallery
         false
       end
     rescue => e
-      "error: #{e.class}: #{e.message}"
+      ::MediaGallery::OperationLogger.warn("diagnostic_role_exists_failed", item: @current_item, operation: "diagnostics", data: { role_name: role_name, error_class: e.class.name, error_message: e.message })
+      false
     end
 
     def managed_store_for_role(role)

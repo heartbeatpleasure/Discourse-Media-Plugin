@@ -8,7 +8,9 @@ module ::MediaGallery
     before_action :ensure_admin
 
     def index
-      limit = [params[:limit].to_i, 200].reject(&:zero?).min || 50
+      limit = params[:limit].to_i
+      limit = 50 if limit <= 0
+      limit = 200 if limit > 200
 
       exports =
         MediaGallery::MediaForensicsExport
@@ -23,7 +25,6 @@ module ::MediaGallery
               rows_count: e.rows_count,
               sha256: e.sha256,
               storage: storage,
-              file_path: e.file_path,
               file_bytes: e.file_bytes,
               file_exists: e.file_exists?,
               created_at: e.created_at

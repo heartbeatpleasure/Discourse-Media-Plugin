@@ -53,8 +53,8 @@ module ::MediaGallery
     end
     
     def index
-      page = (params[:page].presence || 1).to_i
-      per_page = [(params[:per_page].presence || 24).to_i, 100].min
+      page = positive_page_param(params[:page], default: 1)
+      per_page = bounded_per_page_param(params[:per_page], default: 24, max: 100)
       offset = (page - 1) * per_page
 
       items = apply_admin_visibility_filter(MediaGallery::MediaItem.where(status: "ready")).order(created_at: :desc)
@@ -95,8 +95,8 @@ module ::MediaGallery
     end
 
     def my
-      page = (params[:page].presence || 1).to_i
-      per_page = [(params[:per_page].presence || 24).to_i, 100].min
+      page = positive_page_param(params[:page], default: 1)
+      per_page = bounded_per_page_param(params[:per_page], default: 24, max: 100)
       offset = (page - 1) * per_page
 
       items = apply_admin_visibility_filter(MediaGallery::MediaItem.where(user_id: current_user.id)).order(created_at: :desc)
@@ -120,7 +120,7 @@ module ::MediaGallery
       upload_id = params[:upload_id].to_i
       return render_json_error("invalid_upload_id") if upload_id <= 0
 
-      title = params[:title].to_s.strip
+      title = ::MediaGallery::TextSanitizer.plain_text(params[:title], max_length: 200, allow_newlines: false)
       return render_json_error("title_required") if title.blank?
 
       subject = params[:gender].to_s.strip
@@ -187,7 +187,7 @@ module ::MediaGallery
         Rails.logger.error(
           "[media_gallery] private storage preflight failed request_id=#{request.request_id} error=#{e.class}: #{e.message}"
         )
-        return render_json_error("private_storage_unavailable", status: 500, message: "private_storage_unavailable: #{e.message}"[0, 300])
+        return render_json_error("private_storage_unavailable", status: 500, message: "Private storage is currently unavailable. Please contact an administrator.")
       end
 
       tags = params[:tags]
@@ -219,7 +219,7 @@ module ::MediaGallery
         public_id: SecureRandom.uuid,
         user_id: current_user.id,
         title: title,
-        description: params[:description].to_s,
+        description: ::MediaGallery::TextSanitizer.plain_text(params[:description], max_length: 4000, allow_newlines: true).presence,
         extra_metadata: (extra_metadata.is_a?(Hash) ? extra_metadata : { "raw" => extra_metadata.to_s }),
         media_type: media_type,
         watermark_enabled: watermark_enabled,
@@ -267,7 +267,7 @@ module ::MediaGallery
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless can_manage_item?(item)
 
-      title = params[:title].to_s.strip
+      title = ::MediaGallery::TextSanitizer.plain_text(params[:title], max_length: 200, allow_newlines: false)
       return render_json_error("title_required") if title.blank?
 
       subject = params[:gender].to_s.strip
@@ -276,7 +276,7 @@ module ::MediaGallery
         return render_json_error("invalid_gender")
       end
 
-      description = params[:description].to_s.strip
+      description = ::MediaGallery::TextSanitizer.plain_text(params[:description], max_length: 4000, allow_newlines: true)
       tags =
         begin
           raw = params[:tags]
@@ -843,7 +843,21 @@ module ::MediaGallery
       item
     end
 
-        def playback_limit_message(code)
+    
+    def positive_page_param(value, default: 1)
+      page = value.to_i
+      page = default if page <= 0
+      page
+    end
+
+    def bounded_per_page_param(value, default:, max:)
+      per_page = value.to_i
+      per_page = default if per_page <= 0
+      per_page = max if per_page > max
+      per_page
+    end
+
+    def playback_limit_message(code)
       case code.to_s
       when "rate_limited"
         "Playback rate limited. Please wait and try again."
