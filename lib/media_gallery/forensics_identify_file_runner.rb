@@ -92,9 +92,9 @@ module ::MediaGallery
             likely_timeout_layer: async_mode ? "background_job_budget" : "discourse_web_worker_or_reverse_proxy",
             recommendation: async_mode ? "raise_filemode_budgets" : "raise_filemode_budget_or_infrastructure_timeouts",
             user_message: if async_mode
-              "Analyse bereikte de ingestelde background job tijdslimiet (soft=#{soft_budget}s, engine=#{engine_budget}s). Verhoog de file-mode budgets in plugin settings voor grotere uploads."
+              "Analysis reached the configured background job time limit (soft=#{soft_budget}s, engine=#{engine_budget}s). Increase the file-mode budgets in plugin settings for larger uploads."
             else
-              "Analyse bereikte de ingestelde file-mode tijdslimiet (soft=#{soft_budget}s, engine=#{engine_budget}s). Op Discourse is de backend-timeout in productie vaak ~30s; verhoog deze budgets alleen samen met je infrastructuur-timeouts (bijv. Unicorn/web worker en eventuele reverse proxy)."
+              "Analysis reached the configured file-mode time limit (soft=#{soft_budget}s, engine=#{engine_budget}s). In production, the Discourse backend timeout is often around 30s; only raise these budgets together with your infrastructure timeouts (for example Unicorn/web worker and any reverse proxy)."
             end,
           },
           observed: { variants: "", confidences: [] },
@@ -115,7 +115,7 @@ module ::MediaGallery
             conclusive: false,
             debug_id: debug_id,
             recommendation: "check_server_logs",
-            user_message: "Interne fout tijdens analyse (debug_id=#{debug_id}). Kijk in production.log voor details.",
+            user_message: "Internal error during analysis (debug_id=#{debug_id}). Check production.log for details.",
           },
           observed: { variants: "", confidences: [] },
           candidates: [],
@@ -286,15 +286,15 @@ module ::MediaGallery
           meta["likely_timeout_layer"] ||= meta["async_mode"] ? "background_job_budget" : "plugin_budget_before_full_signal"
           meta["recommendation"] = meta["async_mode"] ? "raise_filemode_budgets" : "raise_filemode_budget_or_infrastructure_timeouts"
           meta["user_message"] ||= begin
-            msg = "Analyse stopte voordat er genoeg watermark-signaal was opgebouwd"
+            msg = "Analysis stopped before enough watermark signal was accumulated"
             parts = []
             parts << "engine=#{engine_budget.to_i}s" if engine_budget > 0
             parts << "soft=#{soft_budget.to_i}s" if soft_budget > 0
             msg += " (#{parts.join(', ')})" if parts.present?
             msg + if meta["async_mode"]
-              ". Dit wijst vaker op een ingestelde job-limiet dan op een verkeerd public_id. Verhoog de file-mode budgets in plugin settings voor grotere uploads."
+              ". This more often points to a configured job limit than to a wrong public_id. Increase the file-mode budgets in plugin settings for larger uploads."
             else
-              ". Dit wijst vaker op een tijdslimiet dan op een verkeerd public_id. Verhoog eerst de file-mode budgets in plugin settings; ga alleen richting ~30s of hoger als je ook de Discourse/web-worker timeout en eventuele reverse-proxy timeout verhoogt."
+              ". This more often points to a timeout than to a wrong public_id. Increase the file-mode budgets in plugin settings first; only go towards ~30s or higher if you also increase the Discourse/web-worker timeout and any reverse-proxy timeout."
             end
           end
           result["candidates"] = []
@@ -305,7 +305,7 @@ module ::MediaGallery
         meta["conclusive"] = false
         meta["recommendation"] = "check_public_id_or_use_hls_url"
         meta["user_message"] =
-          "Geen betrouwbaar watermark-signaal gevonden voor deze public_id. Dit betekent meestal een verkeerd public_id, of dat de upload geen afgeleide is van deze video (of zwaar ge-reencode/cropped). Probeer: (1) juiste public_id, (2) clip dichter bij originele HLS download, of (3) HLS URL-mode."
+          "No reliable watermark signal was found for this public_id. This usually means the public_id is wrong, or the upload is not derived from this video (or has been heavily re-encoded/cropped). Try: (1) the correct public_id, (2) a clip closer to the original HLS download, or (3) HLS URL mode."
 
         result["candidates"] = []
       end

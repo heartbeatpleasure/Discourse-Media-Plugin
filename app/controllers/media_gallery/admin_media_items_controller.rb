@@ -186,6 +186,7 @@ module ::MediaGallery
         migration_history: ::MediaGallery::MigrationRunHistory.history_for(item),
         admin_diagnostics: build_admin_diagnostics(item),
         orphan_cleanup_preview: ::MediaGallery::OrphanInspector.preview_for_item(item),
+        security_review: ::MediaGallery::SecurityReview.for_item(item),
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
       )

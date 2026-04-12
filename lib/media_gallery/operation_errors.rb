@@ -62,73 +62,73 @@ module ::MediaGallery
     def map_error(code, detail:, operation:)
       case code.to_s
       when "media_item_required"
-        present("No media-item was geselecteerd.", retryable: false)
+        present("No media item was selected.", retryable: false)
       when "item_not_ready"
-        present("Dit item is nog niet ready. Alleen ready items kunnen deze actie uitvoeren.")
+        present("This item is not ready yet. Only ready items can use this action.")
       when "migration_plan_missing"
-        present("Er kon geen geldig migratieplan voor dit item worden opgebouwd.", recommended_action: "Refresh het item en probeer opnieuw.")
+        present("A valid migration plan could not be built for this item.", recommended_action: "Refresh the item and try again.")
       when "target_profile_not_configured"
-        present("Het doelprofiel is niet geconfigureerd of niet beschikbaar.", retryable: false, recommended_action: "Controleer de storage settings en run een probe.")
+        present("The target profile is not configured or is unavailable.", retryable: false, recommended_action: "Check the storage settings and run a probe.")
       when "source_and_target_same_profile"
-        present("Bron en doel gebruiken hetzelfde storageprofiel. Kies een ander doelprofiel.", retryable: false)
+        present("Source and target use the same storage profile. Choose a different target profile.", retryable: false)
       when "source_and_target_same_location"
-        present("Bron en doel wijzen naar dezelfde storage-locatie. Migreren zou niets veranderen.", retryable: false)
+        present("Source and target point to the same storage location. Migration would not change anything.", retryable: false)
       when "copy_already_in_progress"
-        present("Er draait al een copy voor dit item.", recommended_action: "Wacht tot copy klaar is of clear de queued state als het vastgelopen is.")
+        present("A copy operation is already running for this item.", recommended_action: "Wait for copy to finish or clear the queued state if it is stuck.")
       when "cleanup_already_in_progress"
-        present("Er draait al een cleanup voor dit item.", recommended_action: "Wacht tot cleanup klaar is of clear de queued state als het vastgelopen is.")
+        present("A cleanup operation is already running for this item.", recommended_action: "Wait for cleanup to finish or clear the queued state if it is stuck.")
       when "cleanup_already_finalized"
-        present("Deze migratiecyclus is al gefinalized. Cleanup kan alleen nog met force.", retryable: false)
+        present("This migration cycle is already finalized. Cleanup is only available with force.", retryable: false)
       when "previous_cycle_cleanup_pending"
-        present("De vorige migratiecyclus heeft nog een open cleanup/finalize-stap.", retryable: false, recommended_action: "Rond eerst cleanup/finalize af of gebruik force als je zeker weet waarom.")
+        present("The previous migration cycle still has an open cleanup/finalize step.", retryable: false, recommended_action: "Finish cleanup/finalize first or use force only if you understand why.")
       when "previous_cycle_not_finalized"
-        present("De vorige migratiecyclus is nog niet afgerond.", retryable: false, recommended_action: "Finalize de huidige cyclus of gebruik force als je bewust een nieuwe cyclus wilt starten.")
+        present("The previous migration cycle is not finished yet.", retryable: false, recommended_action: "Finalize the current cycle or use force only if you intentionally want to start a new cycle.")
       when "target_not_fully_copied"
-        present("Het doel is nog niet compleet gekopieerd. Switch is daarom geblokkeerd.", recommended_action: "Run eerst copy en verify.")
+        present("The target is not fully copied yet. Switch is blocked.", recommended_action: "Run copy and verify first.")
       when "cleanup_target_incomplete"
-        present("Cleanup is geblokkeerd omdat het actieve doel nog niet compleet is.", recommended_action: "Run verify op het actieve doel voordat je cleanup doet.")
+        present("Cleanup is blocked because the active target is not complete yet.", recommended_action: "Run verify on the active target before cleanup.")
       when "cleanup_remaining_source_objects"
-        present("Cleanup heeft niet alle bronobjecten kunnen opruimen.", recommended_action: "Controleer de delete-resultaten en retry cleanup als dat veilig is.")
+        present("Cleanup could not remove all source objects.", recommended_action: "Review the delete results and retry cleanup if it is safe.")
       when "cleanup_source_profile_changed_since_switch"
-        present("Cleanup is gestopt omdat het bronprofiel sinds de switch is veranderd.", retryable: false, recommended_action: "Controleer de storageconfiguratie voordat je verdergaat.")
+        present("Cleanup stopped because the source profile changed after the switch.", retryable: false, recommended_action: "Check the storage configuration before continuing.")
       when "cleanup_target_profile_changed_since_switch"
-        present("Cleanup is gestopt omdat het actieve doelprofiel sinds de switch is veranderd.", retryable: false, recommended_action: "Controleer de storageconfiguratie voordat je verdergaat.")
+        present("Cleanup stopped because the active target profile changed after the switch.", retryable: false, recommended_action: "Check the storage configuration before continuing.")
       when "switch_state_missing"
-        present("Er is nog geen switch-state voor dit item.", retryable: false, recommended_action: "Voer eerst copy en switch uit.")
+        present("There is no switch state for this item yet.", retryable: false, recommended_action: "Run copy and switch first.")
       when "rollback_source_missing"
-        present("Rollback is geblokkeerd omdat het oorspronkelijke bronobject ontbreekt#{detail.present? ? ": #{detail}" : "."}", retryable: false)
+        present("Rollback is blocked because the original source object is missing#{detail.present? ? ": #{detail}" : "."}", retryable: false)
       when "rollback_not_available"
-        present("Rollback is op dit moment niet beschikbaar voor deze state.", retryable: false)
+        present("Rollback is not available for this state right now.", retryable: false)
       when "rollback_not_available_after_finalize"
-        present("Rollback is geblokkeerd omdat deze migratiecyclus al gefinalized is.", retryable: false, recommended_action: "Start een nieuwe migratiecyclus als je opnieuw wilt wisselen.")
+        present("Rollback is blocked because this migration cycle is already finalized.", retryable: false, recommended_action: "Start a new migration cycle if you want to switch again.")
       when "already_on_source_profile"
-        present("Het item staat al terug op het bronprofiel.", retryable: false)
+        present("The item is already back on the source profile.", retryable: false)
       when "copy_verification_incomplete"
-        present("Copy is afgerond, maar het doel mist nog objecten#{detail.present? ? ": #{detail}" : "."}", recommended_action: "Run verify en controleer de ontbrekende objecten voordat je switched.")
+        present("Copy finished, but the target is still missing objects#{detail.present? ? ": #{detail}" : "."}", recommended_action: "Run verify and review the missing objects before switching.")
       when "source_object_missing"
-        present("Een bronobject ontbreekt#{detail.present? ? ": #{detail}" : "."}", recommended_action: "Controleer source storage en probeer copy opnieuw.")
+        present("A source object is missing#{detail.present? ? ": #{detail}" : "."}", recommended_action: "Check source storage and try copy again.")
       when "verify_store_missing"
-        present("Verify kon geen bron- of doelstore openen.", recommended_action: "Controleer de storage health/probe.")
+        present("Verify could not open the source or target store.", recommended_action: "Check storage health/probe.")
       when "finalize_not_available"
-        present("Finalize is nog niet beschikbaar voor deze cyclus.", retryable: false, recommended_action: "Voer eerst switch uit of rond rollback af.")
+        present("Finalize is not available for this cycle yet.", retryable: false, recommended_action: "Run switch first or finish rollback.")
       when "cleanup_failed_finalize_blocked"
-        present("Finalize is geblokkeerd omdat cleanup eerder faalde.", retryable: false, recommended_action: "Herstel cleanup of force finalize alleen als je de situatie begrijpt.")
+        present("Finalize is blocked because cleanup failed earlier.", retryable: false, recommended_action: "Fix cleanup or force finalize only if you understand the situation.")
       when "cleanup_failed_after_rollback"
-        present("Rollback kan pas gefinalized worden nadat de cleanup-fout is opgelost.", retryable: false, recommended_action: "Retry cleanup op het inactieve target of gebruik force als je bewust afziet van cleanup.")
+        present("Rollback can only be finalized after the cleanup failure is resolved.", retryable: false, recommended_action: "Retry cleanup on the inactive target or use force only if you intentionally skip cleanup.")
       when "no_queued_state_to_clear"
-        present("Er was geen queued of running state om te clearen.", retryable: false)
+        present("There was no queued or running state to clear.", retryable: false)
       when "delete_partial_failure"
-        present("Het item is verwijderd, maar niet alle storage cleanup-stappen zijn gelukt.", retryable: false, recommended_action: "Controleer de delete summary en logs voor resterende assets.")
+        present("The item was deleted, but not all storage cleanup steps completed successfully.", retryable: false, recommended_action: "Check the delete summary and logs for remaining assets.")
       else
         fallback_message = case operation.to_s
-        when "copy" then "Copy is mislukt."
-        when "verify" then "Verify is mislukt."
-        when "switch" then "Switch is mislukt."
-        when "cleanup" then "Cleanup is mislukt."
-        when "rollback" then "Rollback is mislukt."
-        when "finalize" then "Finalize is mislukt."
-        when "delete" then "Delete is mislukt."
-        else "De actie is mislukt."
+        when "copy" then "Copy failed."
+        when "verify" then "Verify failed."
+        when "switch" then "Switch failed."
+        when "cleanup" then "Cleanup failed."
+        when "rollback" then "Rollback failed."
+        when "finalize" then "Finalize failed."
+        when "delete" then "Delete failed."
+        else "The action failed."
         end
 
         suffix = code.to_s.present? ? " (#{code})" : ""

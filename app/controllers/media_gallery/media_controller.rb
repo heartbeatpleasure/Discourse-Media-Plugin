@@ -18,6 +18,8 @@ module ::MediaGallery
                    only: [:index, :plugin_config, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :retry_processing, :destroy, :update]
 
     before_action :ensure_can_upload, only: [:create]
+    before_action :ensure_secure_write_request!, only: [:create, :update, :destroy, :retry_processing, :like, :unlike, :heartbeat, :revoke]
+    before_action :ensure_secure_play_request!, only: [:play]
 
     # NOTE: do not name this action `config` (conflicts with ActionController::Base#config)
     def plugin_config
@@ -505,6 +507,8 @@ module ::MediaGallery
       # keep this lightweight: avoid callbacks/validations
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
+      set_sensitive_json_headers!
+
       if use_hls
         render_json_dump(
           playback: "hls",
@@ -593,6 +597,7 @@ module ::MediaGallery
         end
       end
 
+      set_sensitive_json_headers!
       render_json_dump(ok: true)
     rescue Discourse::NotFound
       raise
@@ -628,6 +633,7 @@ module ::MediaGallery
         ip: request.remote_ip.to_s
       )
 
+      set_sensitive_json_headers!
       render_json_dump(ok: true)
     rescue Discourse::NotFound
       raise
@@ -752,6 +758,53 @@ module ::MediaGallery
     end
 
     private
+
+    def ensure_secure_write_request!
+      return if ::MediaGallery::RequestSecurity.secure_write_request?(self)
+
+      ::MediaGallery::OperationLogger.warn(
+        "request_blocked",
+        operation: action_name,
+        item: nil,
+        data: {
+          reason: "csrf_or_same_origin_failed",
+          origin: request.headers["Origin"].to_s.presence,
+          referer: request.referer.to_s.presence,
+          sec_fetch_site: request.headers["Sec-Fetch-Site"].to_s.presence,
+          method: request.request_method
+        }
+      )
+
+      set_sensitive_json_headers!
+      render_json_error("forbidden", status: 403, message: "Forbidden")
+    end
+
+    def ensure_secure_play_request!
+      return if ::MediaGallery::RequestSecurity.secure_token_issue_request?(self)
+
+      ::MediaGallery::OperationLogger.warn(
+        "request_blocked",
+        operation: action_name,
+        item: nil,
+        data: {
+          reason: "same_origin_required_for_play",
+          origin: request.headers["Origin"].to_s.presence,
+          referer: request.referer.to_s.presence,
+          sec_fetch_site: request.headers["Sec-Fetch-Site"].to_s.presence,
+          method: request.request_method
+        }
+      )
+
+      set_sensitive_json_headers!
+      render_json_error("forbidden", status: 403, message: "Forbidden")
+    end
+
+    def set_sensitive_json_headers!
+      response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
+      response.headers["Pragma"] = "no-cache"
+      response.headers["Expires"] = "0"
+      response.headers["X-Content-Type-Options"] = "nosniff"
+    end
 
     def ensure_plugin_enabled
       raise Discourse::NotFound unless SiteSetting.media_gallery_enabled
