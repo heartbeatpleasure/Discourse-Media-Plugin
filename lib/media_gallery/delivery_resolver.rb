@@ -2,7 +2,7 @@
 
 module ::MediaGallery
   class DeliveryResolver
-    Result = Struct.new(:mode, :backend, :local_path, :redirect_url, :bytes, :content_type, :filename, :data, :key, keyword_init: true)
+    Result = Struct.new(:mode, :backend, :local_path, :redirect_url, :bytes, :content_type, :filename, :data, :key, :store, keyword_init: true)
 
     def initialize(item, role_name)
       @item = item
@@ -71,25 +71,45 @@ module ::MediaGallery
     def resolve_s3_role(role, expires_in: nil)
       store = managed_store_for_role(role, expected_backend: "s3")
       return nil if store.blank?
-      return nil unless store.exists?(role["key"].to_s)
 
-      ttl = expires_in.to_i
-      ttl = ::MediaGallery::StorageSettingsResolver.presign_ttl_for_profile_key(managed_profile_key) if ttl <= 0
-      ttl = 300 if ttl <= 0
+      key = role["key"].to_s
+      return nil if key.blank?
+      return nil unless store.exists?(key)
+
+      content_type = role["content_type"].presence || default_content_type
+      filename = default_filename(file_extension_from_role(role))
+      bytes = role["bytes"].to_i
+
+      if s3_redirect_delivery_enabled?
+        ttl = expires_in.to_i
+        ttl = ::MediaGallery::StorageSettingsResolver.presign_ttl_for_profile_key(managed_profile_key) if ttl <= 0
+        ttl = 300 if ttl <= 0
+
+        return Result.new(
+          mode: :redirect,
+          backend: "s3",
+          redirect_url: store.presigned_get_url(
+            key,
+            expires_in: ttl,
+            response_content_type: content_type,
+            response_content_disposition: "inline"
+          ),
+          bytes: bytes,
+          content_type: content_type,
+          filename: filename,
+          key: key,
+          store: store
+        )
+      end
 
       Result.new(
-        mode: :redirect,
+        mode: :proxy,
         backend: "s3",
-        redirect_url: store.presigned_get_url(
-          role["key"].to_s,
-          expires_in: ttl,
-          response_content_type: role["content_type"].presence || default_content_type,
-          response_content_disposition: "inline"
-        ),
-        bytes: role["bytes"].to_i,
-        content_type: role["content_type"].presence || default_content_type,
-        filename: default_filename(file_extension_from_role(role)),
-        key: role["key"].to_s
+        bytes: bytes,
+        content_type: content_type,
+        filename: filename,
+        key: key,
+        store: store
       )
     rescue => e
       Rails.logger.warn("[media_gallery] delivery resolve s3 failed item_id=#{@item&.id} role=#{@role_name} error=#{e.class}: #{e.message}")
@@ -98,6 +118,12 @@ module ::MediaGallery
 
     def managed_profile_key
       @item.try(:managed_storage_profile).to_s.presence
+    end
+
+    def s3_redirect_delivery_enabled?
+      ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect"
+    rescue
+      true
     end
 
     def managed_store_for_role(role, expected_backend: nil)

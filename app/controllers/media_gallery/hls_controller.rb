@@ -114,6 +114,10 @@ module ::MediaGallery
         return redirect_to(delivery[:redirect_url], allow_other_host: true, status: 307)
       end
 
+      if delivery[:mode] == :proxy
+        return send_remote_segment(delivery, segment)
+      end
+
       abs = delivery[:local_path]
       raise Discourse::NotFound unless abs.present? && File.exist?(abs)
 
@@ -278,17 +282,26 @@ module ::MediaGallery
         raise Discourse::NotFound if key.blank?
 
         if role["backend"].to_s == "s3"
-          ttl = ::MediaGallery::StorageSettingsResolver.presign_ttl_for_profile_key(item.managed_storage_profile)
-          ttl = 300 if ttl <= 0
+          if s3_redirect_delivery_enabled?
+            ttl = ::MediaGallery::StorageSettingsResolver.presign_ttl_for_profile_key(item.managed_storage_profile)
+            ttl = 300 if ttl <= 0
+
+            return {
+              mode: :redirect,
+              redirect_url: store.presigned_get_url(
+                key,
+                expires_in: ttl,
+                response_content_type: segment_content_type(segment),
+                response_content_disposition: "inline"
+              )
+            }
+          end
 
           return {
-            mode: :redirect,
-            redirect_url: store.presigned_get_url(
-              key,
-              expires_in: ttl,
-              response_content_type: segment_content_type(segment),
-              response_content_disposition: "inline"
-            )
+            mode: :proxy,
+            store: store,
+            key: key,
+            content_type: segment_content_type(segment)
           }
         end
 
@@ -300,6 +313,32 @@ module ::MediaGallery
       abs = resolve_segment_abs_path(item.public_id, variant, segment, ab: ab)
       raise Discourse::NotFound unless abs.present? && File.exist?(abs)
       { mode: :local, local_path: abs }
+    end
+
+    def send_remote_segment(delivery, segment)
+      store = delivery[:store]
+      key = delivery[:key].to_s
+      raise Discourse::NotFound if store.blank? || key.blank?
+
+      if request.head?
+        bytes = delivery[:bytes].to_i
+        if bytes <= 0
+          info = store.object_info(key)
+          bytes = info[:bytes].to_i if info.is_a?(Hash)
+        end
+        response.headers["Content-Length"] = bytes.to_s if bytes.positive?
+        return head :ok
+      end
+
+      data = store.read(key)
+      response.headers["Content-Length"] = data.to_s.b.bytesize.to_s
+      send_data(data, type: delivery[:content_type].presence || segment_content_type(segment), disposition: "inline")
+    end
+
+    def s3_redirect_delivery_enabled?
+      ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect"
+    rescue
+      true
     end
 
     def segment_rel_from_abs(abs_path)

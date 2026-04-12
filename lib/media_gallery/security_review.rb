@@ -11,8 +11,10 @@ module ::MediaGallery
 
       warnings = []
       warnings << "S3 presigned URL TTL is high; keep it short for private playback." if presign_ttl > 600
-      warnings << "When using S3 HLS delivery, verify bucket CORS only allows the forum origin and required methods/headers." if active_backend == "s3" && hls_enabled
-      warnings << "Confirm the S3 bucket is not publicly readable; playback should rely on short redirects/presigned URLs." if active_backend == "s3"
+      if active_backend == "s3" && hls_enabled && ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect"
+        warnings << "When using S3 HLS redirect delivery, verify bucket CORS only allows the forum origin and required methods/headers."
+      end
+      warnings << "Confirm the S3 bucket is not publicly readable; playback should rely on app-auth plus proxy delivery or short-lived redirects." if active_backend == "s3"
       warnings << "Bind stream tokens to user and/or IP for stronger replay resistance when acceptable for your audience." if !SiteSetting.media_gallery_bind_stream_to_user && !SiteSetting.media_gallery_bind_stream_to_ip
 
       {
@@ -115,10 +117,21 @@ module ::MediaGallery
         active_backend: active_backend,
         hls_enabled: hls_enabled,
         s3_presign_ttl_seconds: presign_ttl,
-        expected_delivery_model: active_backend == "s3" ? "app-auth plus short redirect/presigned object retrieval" : "local or X-Accel delivery after app auth",
+        expected_delivery_model: expected_delivery_model(active_backend),
       }
     end
     private_class_method :cors_signed_url_review
+
+    def expected_delivery_model(active_backend)
+      return "local or X-Accel delivery after app auth" unless active_backend == "s3"
+
+      if ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect"
+        "app-auth plus short redirect/presigned object retrieval"
+      else
+        "app-auth plus server-side proxy delivery (origin URL hidden from the browser)"
+      end
+    end
+    private_class_method :expected_delivery_model
 
     def manual_checks_required(active_backend:, hls_enabled:)
       checks = [
@@ -131,7 +144,7 @@ module ::MediaGallery
         checks << "Confirm endpoint/region/path-style settings match the intended provider and bucket."
       end
 
-      if active_backend == "s3" && hls_enabled
+      if active_backend == "s3" && hls_enabled && ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect"
         checks << "Confirm bucket CORS explicitly allows the forum origin for segment delivery."
         checks << "Validate real browser HLS playback end-to-end with short-lived presigned URLs."
       end

@@ -81,6 +81,58 @@ module ::MediaGallery
       destination_path
     end
 
+
+    def read_range(key, start_pos:, end_pos: nil)
+      abs = absolute_path_for(key)
+      raise Errno::ENOENT, abs unless File.exist?(abs)
+
+      start_pos = start_pos.to_i
+      raise RangeError, "invalid_range_start" if start_pos.negative?
+
+      file_size = File.size(abs)
+      raise RangeError, "range_not_satisfiable" if start_pos >= file_size
+
+      finish = end_pos.nil? ? (file_size - 1) : end_pos.to_i
+      finish = file_size - 1 if finish >= file_size
+      raise RangeError, "range_not_satisfiable" if finish < start_pos
+
+      length = (finish - start_pos) + 1
+      IO.binread(abs, length, start_pos)
+    end
+
+    def stream(key, range: nil)
+      abs = absolute_path_for(key)
+      raise Errno::ENOENT, abs unless File.exist?(abs)
+
+      start_pos = 0
+      finish = nil
+      if range.present?
+        match = range.to_s.match(/\Abytes=(\d+)-(\d*)\z/i)
+        raise RangeError, "invalid_range_header" if match.blank?
+
+        start_pos = match[1].to_i
+        finish = match[2].present? ? match[2].to_i : nil
+      end
+
+      File.open(abs, "rb") do |io|
+        io.seek(start_pos, IO::SEEK_SET) if start_pos.positive?
+        remaining = finish.present? ? ((finish - start_pos) + 1) : nil
+
+        loop do
+          break if remaining == 0
+
+          chunk_size = remaining.present? ? [remaining, 512.kilobytes].min : 512.kilobytes
+          chunk = io.read(chunk_size)
+          break if chunk.blank?
+
+          yield chunk
+          remaining -= chunk.bytesize if remaining.present?
+        end
+      end
+
+      true
+    end
+
     def delete(key)
       abs = absolute_path_for(key)
       FileUtils.rm_f(abs)

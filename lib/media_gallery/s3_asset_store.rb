@@ -97,6 +97,36 @@ module ::MediaGallery
       destination_path
     end
 
+
+    def read_range(key, start_pos:, end_pos: nil)
+      start_pos = start_pos.to_i
+      raise RangeError, "invalid_range_start" if start_pos.negative?
+
+      range_value = "bytes=#{start_pos}-"
+      range_value << end_pos.to_i.to_s if end_pos.present?
+
+      response = client.get_object(
+        bucket: bucket,
+        key: normalized_key(key),
+        range: range_value,
+      )
+      response.body.read
+    end
+
+    def stream(key, range: nil)
+      params = {
+        bucket: bucket,
+        key: normalized_key(key),
+      }
+      params[:range] = range.to_s if range.present?
+
+      client.get_object(params) do |chunk|
+        yield chunk
+      end
+
+      true
+    end
+
     def delete(key)
       client.delete_object(bucket: bucket, key: normalized_key(key))
       true

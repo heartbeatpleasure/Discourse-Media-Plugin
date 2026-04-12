@@ -245,7 +245,7 @@ module ::MediaGallery
         filesize_processed_bytes: (status == "ready" && !managed_storage ? upload.filesize : nil),
         managed_storage_backend: (managed_storage ? ::MediaGallery::StorageSettingsResolver.active_backend : nil),
         managed_storage_profile: (managed_storage ? ::MediaGallery::StorageSettingsResolver.active_profile_key : nil),
-        delivery_mode: (managed_storage ? (::MediaGallery::StorageSettingsResolver.active_backend == "s3" ? "s3_redirect" : "local_stream") : nil)
+        delivery_mode: (managed_storage ? managed_delivery_mode_for_backend(::MediaGallery::StorageSettingsResolver.active_backend) : nil)
       )
 
       if status == "queued"
@@ -989,20 +989,39 @@ module ::MediaGallery
       role = ::MediaGallery::AssetManifest.role_for(item, "thumbnail")
       return nil if role.blank?
 
-      store = ::MediaGallery::StorageSettingsResolver.build_store(role["backend"])
+      store = delivery.store
+      if store.blank?
+        profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
+        store = profile_key.present? ? ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key) : nil
+        store ||= ::MediaGallery::StorageSettingsResolver.build_store(role["backend"])
+      end
       return nil if store.blank?
 
-      data = store.read(role["key"].to_s)
+      key = delivery.key.presence || role["key"].to_s
+      return nil if key.blank?
+
+      data = store.read(key)
       {
         mode: :memory,
         data: data,
-        content_type: role["content_type"].presence || "image/jpeg",
+        content_type: delivery.content_type.presence || role["content_type"].presence || "image/jpeg",
         filename: delivery.filename,
         last_modified: item.updated_at || Time.now
       }
     rescue => e
       Rails.logger.warn("[media_gallery] thumbnail resolve failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
       nil
+    end
+
+    def managed_delivery_mode_for_backend(backend)
+      if backend.to_s == "s3"
+        ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect" ? "s3_redirect" : "s3_proxy"
+      else
+        mode = ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s
+        mode == "x_accel" ? "x_accel" : "local_stream"
+      end
+    rescue
+      backend.to_s == "s3" ? "s3_redirect" : "local_stream"
     end
 
     def thumbnail_cache_max_age_seconds

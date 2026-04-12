@@ -30,6 +30,15 @@ module ::MediaGallery
       raise NotImplementedError
     end
 
+
+    def read_range(key, start_pos:, end_pos: nil)
+      raise NotImplementedError
+    end
+
+    def stream(key, range: nil, &blk)
+      raise NotImplementedError
+    end
+
     def delete(key)
       raise NotImplementedError
     end

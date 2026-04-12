@@ -144,7 +144,7 @@ module ::MediaGallery
 
     def delivery_mode_for_backend(backend)
       if backend.to_s == "s3"
-        "s3_redirect"
+        ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect" ? "s3_redirect" : "s3_proxy"
       else
         mode = ::MediaGallery::StorageSettingsResolver.default_delivery_mode
         mode == "x_accel" ? "x_accel" : "local_stream"

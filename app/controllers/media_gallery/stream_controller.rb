@@ -51,19 +51,14 @@ module ::MediaGallery
 
       local_path = delivery[:local_path]
       content_type = delivery[:content_type]
-      filename = delivery[:filename]
+      apply_private_stream_headers!
+
+      if delivery[:mode] == :proxy
+        return stream_proxy_delivery(delivery)
+      end
+
       raise Discourse::NotFound if local_path.blank? || !File.exist?(local_path)
-
       file_size = File.size(local_path)
-
-      response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
-      response.headers["Pragma"] = "no-cache"
-      response.headers["Expires"] = "0"
-      response.headers["X-Content-Type-Options"] = "nosniff"
-      response.headers["Accept-Ranges"] = "bytes"
-      # Avoid advertising a "downloadable" filename (and extensions like .mp4) in the headers.
-      # The browser can still play inline based on Content-Type.
-      response.headers["Content-Disposition"] = "inline"
 
       if request.head?
         response.headers["Content-Type"] = content_type
@@ -71,34 +66,19 @@ module ::MediaGallery
         return head :ok
       end
 
-      # Support Range requests (video players rely on this)
-      range = request.headers["Range"].to_s
-      range = request.headers["HTTP_RANGE"].to_s if range.blank?
+      parsed_range = parse_requested_byte_range(file_size)
+      return if parsed_range == :invalid
+      if parsed_range.present?
+        start_pos, end_pos = parsed_range
+        length = (end_pos - start_pos) + 1
+        data = IO.binread(local_path, length, start_pos)
 
-      if range.present? && range.start_with?("bytes=")
-        m = range.match(/bytes=(\d+)-(\d*)/i)
-        if m
-          start_pos = m[1].to_i
-          end_pos = m[2].present? ? m[2].to_i : (file_size - 1)
+        response.status = 206
+        response.headers["Content-Type"] = content_type
+        response.headers["Content-Range"] = "bytes #{start_pos}-#{end_pos}/#{file_size}"
+        response.headers["Content-Length"] = length.to_s
 
-          if start_pos >= file_size
-            response.headers["Content-Range"] = "bytes */#{file_size}"
-            return head 416
-          end
-
-          end_pos = file_size - 1 if end_pos >= file_size
-          if start_pos <= end_pos
-            length = (end_pos - start_pos) + 1
-            data = IO.binread(local_path, length, start_pos)
-
-            response.status = 206
-            response.headers["Content-Type"] = content_type
-            response.headers["Content-Range"] = "bytes #{start_pos}-#{end_pos}/#{file_size}"
-            response.headers["Content-Length"] = length.to_s
-
-            return send_data(data, type: content_type, disposition: "inline", status: 206)
-          end
-        end
+        return send_data(data, type: content_type, disposition: "inline", status: 206)
       end
 
       response.headers["Content-Type"] = content_type
@@ -107,6 +87,89 @@ module ::MediaGallery
     end
 
     private
+
+    def apply_private_stream_headers!
+      response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
+      response.headers["Pragma"] = "no-cache"
+      response.headers["Expires"] = "0"
+      response.headers["X-Content-Type-Options"] = "nosniff"
+      response.headers["Accept-Ranges"] = "bytes"
+      response.headers["Content-Disposition"] = "inline"
+    end
+
+    def extract_range_header
+      value = request.headers["Range"].to_s
+      value = request.headers["HTTP_RANGE"].to_s if value.blank?
+      value.presence
+    end
+
+    def parse_requested_byte_range(file_size)
+      range = extract_range_header
+      return nil unless range.present? && range.start_with?("bytes=")
+
+      match = range.match(/bytes=(\d+)-(\d*)/i)
+      return nil if match.blank?
+
+      start_pos = match[1].to_i
+      end_pos = match[2].present? ? match[2].to_i : (file_size - 1)
+
+      if start_pos >= file_size
+        response.headers["Content-Range"] = "bytes */#{file_size}"
+        head 416
+        return :invalid
+      end
+
+      end_pos = file_size - 1 if end_pos >= file_size
+      return nil unless start_pos <= end_pos
+
+      [start_pos, end_pos]
+    end
+
+    def stream_proxy_delivery(delivery)
+      store = delivery[:store]
+      key = delivery[:key].to_s
+      raise Discourse::NotFound if store.blank? || key.blank?
+
+      content_type = delivery[:content_type].presence || "application/octet-stream"
+      file_size = delivery[:bytes].to_i
+
+      if file_size <= 0 || content_type.blank?
+        info = store.object_info(key)
+        file_size = info[:bytes].to_i if file_size <= 0 && info.is_a?(Hash)
+        content_type = info[:content_type].to_s.presence || content_type if info.is_a?(Hash)
+      end
+
+      if request.head?
+        response.headers["Content-Type"] = content_type
+        response.headers["Content-Length"] = file_size.to_s if file_size.positive?
+        return head :ok
+      end
+
+      parsed_range = file_size.positive? ? parse_requested_byte_range(file_size) : nil
+      return if parsed_range == :invalid
+
+      if parsed_range.present?
+        start_pos, end_pos = parsed_range
+        data = store.read_range(key, start_pos: start_pos, end_pos: end_pos)
+        length = data.to_s.b.bytesize
+
+        response.status = 206
+        response.headers["Content-Type"] = content_type
+        response.headers["Content-Range"] = "bytes #{start_pos}-#{end_pos}/#{file_size}"
+        response.headers["Content-Length"] = length.to_s
+        return send_data(data, type: content_type, disposition: "inline", status: 206)
+      end
+
+      response.status = 200
+      response.headers["Content-Type"] = content_type
+      response.headers["Content-Length"] = file_size.to_s if file_size.positive?
+      self.response_body = Enumerator.new do |yielder|
+        store.stream(key) do |chunk|
+          yielder << chunk
+        end
+      end
+      nil
+    end
 
     def resolve_file(item, payload, kind)
       # Backwards compat: old tokens carried an Upload id.
@@ -150,7 +213,10 @@ module ::MediaGallery
         local_path: delivery.local_path,
         redirect_url: delivery.redirect_url,
         content_type: delivery.content_type,
-        filename: delivery.filename
+        filename: delivery.filename,
+        bytes: delivery.bytes,
+        key: delivery.key,
+        store: delivery.store
       }
     end
 
