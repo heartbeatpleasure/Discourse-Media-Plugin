@@ -393,7 +393,11 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         }
         seen.add(profile.value);
         return true;
-      });
+      })
+      .map((profile) => ({
+        ...profile,
+        selected: profile.value === this.profileFilter,
+      }));
   }
 
   get hasSelectedItem() {

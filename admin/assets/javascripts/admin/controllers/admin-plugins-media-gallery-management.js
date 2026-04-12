@@ -243,7 +243,11 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         }
         seen.add(profile.value);
         return true;
-      });
+      })
+      .map((profile) => ({
+        ...profile,
+        selected: profile.value === this.profileFilter,
+      }));
   }
 
   get usingAllowedTags() {

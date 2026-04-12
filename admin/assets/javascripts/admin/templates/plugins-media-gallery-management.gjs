@@ -465,7 +465,7 @@ export default RouteTemplate(
             <select value={{@controller.profileFilter}} {{on "change" @controller.onProfileFilterChange}}>
               <option value="all">All</option>
               {{#each @controller.profileOptions as |profile|}}
-                <option value={{profile.value}}>{{profile.label}}</option>
+                <option value={{profile.value}} selected={{profile.selected}}>{{profile.label}}</option>
               {{/each}}
             </select>
           </div>

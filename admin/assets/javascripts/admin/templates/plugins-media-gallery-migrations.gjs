@@ -307,6 +307,8 @@ export default RouteTemplate(
           font-weight: 700;
           font-size: var(--font-up-1);
           line-height: 1.25;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .mg-migrations__result-meta,
@@ -678,7 +680,7 @@ export default RouteTemplate(
             <select value={{@controller.profileFilter}} {{on "change" @controller.onProfileFilterChange}}>
               <option value="all">all</option>
               {{#each @controller.searchProfileOptions as |profile|}}
-                <option value={{profile.value}}>{{profile.label}}</option>
+                <option value={{profile.value}} selected={{profile.selected}}>{{profile.label}}</option>
               {{/each}}
             </select>
           </div>

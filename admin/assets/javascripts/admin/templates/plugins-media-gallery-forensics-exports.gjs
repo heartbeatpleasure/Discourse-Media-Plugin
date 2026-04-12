@@ -1,18 +1,7 @@
 import RouteTemplate from "ember-route-template";
+import { fn } from "@ember/helper";
+import { on } from "@ember/modifier";
 import { i18n } from "discourse-i18n";
-
-// NOTE: Discourse's Rails router is typically constrained to a limited set of
-// formats (json/html/*). Using a .csv extension can cause the request to be
-// treated as format=csv and miss the route, resulting in a 404 HTML error page.
-// So we keep the URL extension-less and let Content-Disposition provide the
-// correct filename.
-function downloadHref(base, id, gz = false) {
-  let url = `${base}/${id}`;
-  if (gz) {
-    url += "?gz=1";
-  }
-  return url;
-}
 
 export default RouteTemplate(
   <template>
@@ -29,14 +18,9 @@ export default RouteTemplate(
         <ul>
           {{#each @controller.exports as |exp|}}
             <li>
-              <a
-                href={{downloadHref @controller.downloadBase exp.id}}
-                rel="noopener noreferrer"
-                target="_blank"
-                data-auto-route="false"
-              >
+              <button type="button" class="btn btn-link" {{on "click" (fn @controller.downloadExport exp false)}}>
                 {{exp.filename}}
-              </a>
+              </button>
 
               <span>
                 &nbsp;—
@@ -50,14 +34,9 @@ export default RouteTemplate(
 
               <span>
                 &nbsp;[
-                <a
-                  href={{downloadHref @controller.downloadBase exp.id true}}
-                  rel="noopener noreferrer"
-                  target="_blank"
-                  data-auto-route="false"
-                >
+                <button type="button" class="btn btn-link" {{on "click" (fn @controller.downloadExport exp true)}}>
                   {{i18n "admin.media_gallery.forensics_exports.download_gz"}}
-                </a>
+                </button>
                 ]
               </span>
             </li>
