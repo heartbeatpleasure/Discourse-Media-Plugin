@@ -316,6 +316,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         item?.managed_storage_profile_label ||
         item?.managed_storage_profile ||
         titleize(item?.managed_storage_backend),
+      displayMeta: [item?.username ? `by ${item.username}` : "", formatDateTime(item?.created_at)]
+        .filter(Boolean)
+        .join(" • "),
       statusBadgeClass:
         item?.status === "ready"
           ? "is-success"

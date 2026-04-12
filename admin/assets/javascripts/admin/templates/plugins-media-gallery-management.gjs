@@ -146,8 +146,11 @@ export default RouteTemplate(
       .mg-management__result-card {
         display: grid;
         grid-template-columns: 128px minmax(0, 1fr) auto;
-        gap: 0.9rem;
-        align-items: center;
+        grid-template-areas:
+          "thumb main action"
+          "badges badges badges";
+        gap: 0.85rem 1rem;
+        align-items: start;
         padding: 0.9rem;
         border: 1px solid var(--mg-border);
         border-radius: 16px;
@@ -167,6 +170,8 @@ export default RouteTemplate(
         border-radius: 14px;
         border: 1px solid var(--mg-border);
         background: var(--secondary);
+        grid-area: thumb;
+        align-self: start;
       }
 
       .mg-management__thumb {
@@ -191,6 +196,11 @@ export default RouteTemplate(
         flex-direction: column;
         gap: 0.35rem;
         min-width: 0;
+      }
+
+      .mg-management__result-copy {
+        grid-area: main;
+        align-self: start;
       }
 
       .mg-management__result-title,
@@ -220,6 +230,15 @@ export default RouteTemplate(
 
       .mg-management__badge-row.is-compact {
         gap: 0.35rem;
+      }
+
+      .mg-management__result-badges {
+        grid-area: badges;
+      }
+
+      .mg-management__result-action {
+        grid-area: action;
+        align-self: start;
       }
 
       .mg-management__badge,
@@ -399,6 +418,11 @@ export default RouteTemplate(
 
         .mg-management__result-card {
           grid-template-columns: 1fr;
+          grid-template-areas:
+            "thumb"
+            "main"
+            "badges"
+            "action";
         }
 
         .mg-management__thumb,
@@ -550,18 +574,21 @@ export default RouteTemplate(
                     <div class="mg-management__result-copy">
                       <div class="mg-management__result-title">{{item.title}}</div>
                       <div class="mg-management__result-subtitle">{{item.public_id}}</div>
-                      <div class="mg-management__muted">by {{item.username}}</div>
-                      <div class="mg-management__badge-row is-compact">
-                        <span class="mg-management__badge {{item.statusBadgeClass}}">{{item.displayStatus}}</span>
-                        <span class="mg-management__badge">{{item.displayMediaType}}</span>
-                        <span class="mg-management__badge">{{item.displayStorage}}</span>
-                        <span class="mg-management__badge {{item.visibilityBadgeClass}}">{{item.displayVisibility}}</span>
-                      </div>
+                      {{#if item.displayMeta}}
+                        <div class="mg-management__muted">{{item.displayMeta}}</div>
+                      {{/if}}
                     </div>
 
-                    <button class="btn" type="button" {{on "click" (fn @controller.selectItem item)}}>
+                    <button class="btn mg-management__result-action" type="button" {{on "click" (fn @controller.selectItem item)}}>
                       {{if item.isSelected "Selected" "Open"}}
                     </button>
+
+                    <div class="mg-management__badge-row is-compact mg-management__result-badges">
+                      <span class="mg-management__badge {{item.statusBadgeClass}}">{{item.displayStatus}}</span>
+                      <span class="mg-management__badge">{{item.displayMediaType}}</span>
+                      <span class="mg-management__badge">{{item.displayStorage}}</span>
+                      <span class="mg-management__badge {{item.visibilityBadgeClass}}">{{item.displayVisibility}}</span>
+                    </div>
                   </article>
                 {{/each}}
               </div>

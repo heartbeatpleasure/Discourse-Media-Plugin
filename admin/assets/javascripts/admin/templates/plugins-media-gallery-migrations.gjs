@@ -192,9 +192,14 @@ export default RouteTemplate(
           gap: 0.75rem;
         }
 
+        .mg-migrations__inline-actions {
+          grid-area: action;
+          align-self: start;
+        }
+
         .mg-migrations__filters {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 0.85rem;
           align-items: end;
         }
@@ -216,10 +221,13 @@ export default RouteTemplate(
           min-height: 42px;
           box-sizing: border-box;
           width: 100%;
+          border: 1px solid var(--mg-border);
+          border-radius: 12px;
+          background: var(--primary-very-low);
         }
 
         .mg-migrations__field.is-search {
-          grid-column: span 2;
+          grid-column: 1 / -1;
         }
 
         .mg-migrations__filters-footer {
@@ -239,8 +247,11 @@ export default RouteTemplate(
         .mg-migrations__result-card {
           display: grid;
           grid-template-columns: auto 96px minmax(0, 1fr) auto;
-          gap: 0.95rem;
-          align-items: center;
+          grid-template-areas:
+            "select thumb main action"
+            "select badges badges badges";
+          gap: 0.75rem 0.95rem;
+          align-items: start;
           padding: 0.85rem;
           border: 1px solid var(--mg-border);
           border-radius: 16px;
@@ -267,6 +278,11 @@ export default RouteTemplate(
           background: var(--primary-very-low);
         }
 
+        .mg-migrations__thumb {
+          grid-area: thumb;
+          align-self: start;
+        }
+
         .mg-migrations__selected-thumb {
           width: 140px;
           height: 96px;
@@ -278,7 +294,12 @@ export default RouteTemplate(
           min-width: 0;
           display: flex;
           flex-direction: column;
-          gap: 0.45rem;
+          gap: 0.35rem;
+        }
+
+        .mg-migrations__result-main {
+          grid-area: main;
+          align-self: start;
         }
 
         .mg-migrations__result-title,
@@ -307,7 +328,11 @@ export default RouteTemplate(
         .mg-migrations__warning-list {
           display: flex;
           flex-wrap: wrap;
-          gap: 0.5rem;
+          gap: 0.35rem;
+        }
+
+        .mg-migrations__result-tags {
+          grid-area: badges;
         }
 
         .mg-migrations__selected-header {
@@ -373,6 +398,7 @@ export default RouteTemplate(
           display: flex;
           align-items: center;
           justify-content: center;
+          grid-area: select;
         }
 
         .mg-migrations__result-select input {
@@ -459,13 +485,16 @@ export default RouteTemplate(
             grid-column: span 1;
           }
 
-          .mg-migrations__result-card {
-            grid-template-columns: auto 72px minmax(0, 1fr);
+          .mg-migrations__filters {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
-          .mg-migrations__result-card > :last-child {
-            grid-column: 1 / -1;
-            justify-self: start;
+          .mg-migrations__result-card {
+            grid-template-columns: auto 72px minmax(0, 1fr);
+            grid-template-areas:
+              "select thumb main"
+              "badges badges badges"
+              "action action action";
           }
 
           .mg-migrations__selected-header {
@@ -707,7 +736,6 @@ export default RouteTemplate(
         </div>
 
         <div class="mg-migrations__filters-footer">
-          <span class="mg-migrations__muted">{{@controller.searchInfo}}</span>
           <div class="mg-migrations__filters-actions">
             <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
               {{if @controller.isSearching "Searching…" (i18n "admin.media_gallery.migrations.search_button")}}
@@ -716,6 +744,7 @@ export default RouteTemplate(
               Reset
             </button>
           </div>
+          <span class="mg-migrations__muted">{{@controller.searchInfo}}</span>
         </div>
 
         {{#if @controller.bulkActionMessage}}
@@ -780,18 +809,19 @@ export default RouteTemplate(
                     <div class="mg-migrations__result-title">{{item.titleLabel}}</div>
                     <div class="mg-migrations__public-id">{{item.publicIdLabel}}</div>
                     <div class="mg-migrations__result-meta mg-migrations__muted">{{item.metaLabel}}</div>
-                    <div class="mg-migrations__result-tags">
-                      <span class={{item.statusClass}}>{{item.statusLabel}}</span>
-                      <span class={{item.mediaTypeClass}}>{{item.mediaTypeLabel}}</span>
-                      <span class="mg-migrations__badge">{{item.backendLabel}} · {{item.profileLabel}}</span>
-                      <span class={{item.hlsClass}}>{{item.hasHlsLabel}}</span>
-                    </div>
                   </div>
 
                   <div class="mg-migrations__inline-actions">
                     <button class="btn btn-small" type="button" {{on "click" (fn @controller.selectItem item)}}>
                       {{if item.isSelected "Selected" (i18n "admin.media_gallery.migrations.select_button")}}
                     </button>
+                  </div>
+
+                  <div class="mg-migrations__result-tags">
+                    <span class={{item.statusClass}}>{{item.statusLabel}}</span>
+                    <span class={{item.mediaTypeClass}}>{{item.mediaTypeLabel}}</span>
+                    <span class="mg-migrations__badge">{{item.profileLabel}}</span>
+                    <span class={{item.hlsClass}}>{{item.hasHlsLabel}}</span>
                   </div>
                 </article>
               {{/each}}
