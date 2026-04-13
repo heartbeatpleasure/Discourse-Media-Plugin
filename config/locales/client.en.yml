@@ -127,6 +127,11 @@ en:
           short_title: "Management"
           description: "Search, edit, hide, retry, or delete media items from one admin page."
 
+        logs:
+          title: "Logs"
+          short_title: "Logs"
+          description: "Phase 1 of the Logs page. This tab is intentionally minimal so the admin route can be validated safely before we add backend logging and filters."
+
         migrations:
           title: "Migration manager"
           short_title: "Migrations"

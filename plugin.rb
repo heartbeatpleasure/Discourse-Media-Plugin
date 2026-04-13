@@ -88,6 +88,7 @@ after_initialize do
     get "/admin/plugins/media-gallery-test-downloads" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-migrations" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-management" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-logs" => "admin/plugins#index", constraints: AdminConstraint.new
 
     get "/media-library" => "media_gallery/library#index"
 

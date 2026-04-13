@@ -34,6 +34,10 @@ export default RouteTemplate(
         <a class="btn" href="/admin/plugins/media-gallery-management">
           {{i18n "admin.media_gallery.management.short_title"}}
         </a>
+
+        <a class="btn" href="/admin/plugins/media-gallery-logs">
+          {{i18n "admin.media_gallery.logs.short_title"}}
+        </a>
       </div>
     </div>
   </template>
