@@ -48,7 +48,8 @@ module ::MediaGallery
           opacity_percent: MediaGallery::Watermark.global_opacity_percent,
           size_percent: MediaGallery::Watermark.global_size_percent,
           margin_px: MediaGallery::Watermark.global_margin_px
-        }
+        },
+        playback_overlay: MediaGallery::PlaybackOverlay.client_enabled_config
       )
     end
     
@@ -488,6 +489,18 @@ module ::MediaGallery
       token = MediaGallery::Token.generate(payload, purpose: (use_hls ? "hls" : "stream"))
       expires_at = payload["exp"]
 
+      overlay_payload = nil
+      if item.media_type.to_s == "video" || item.media_type.to_s == "image"
+        overlay_payload = MediaGallery::PlaybackOverlay.build_or_reuse_payload(
+          media_item: item,
+          user: current_user,
+          request: request,
+          token: token,
+          fingerprint_id: fingerprint_id,
+          reuse_code: params[:overlay_code_reuse].to_s.presence
+        )
+      end
+
       # Track active tokens (best effort). This does not affect playback.
       MediaGallery::Security.track_token!(token: token, exp: expires_at, user_id: user_id, ip: ip)
 
@@ -533,7 +546,8 @@ module ::MediaGallery
             heartbeat_enabled: heartbeat_enabled,
             heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
             heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds
-          }
+          },
+          overlay: overlay_payload
         )
       else
         render_json_dump(
@@ -553,7 +567,8 @@ module ::MediaGallery
             heartbeat_enabled: heartbeat_enabled,
             heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
             heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds
-          }
+          },
+          overlay: overlay_payload
         )
       end
     rescue => e

@@ -35,6 +35,10 @@ module ::Jobs
       # Purge in batches (avoid loading)
       scope.in_batches(of: BATCH_SIZE).delete_all
 
+      if defined?(::MediaGallery::PlaybackOverlay)
+        ::MediaGallery::PlaybackOverlay.purge_older_than!(cutoff)
+      end
+
       prune_exports_if_needed!
     rescue => e
       Rails.logger.error("[media_gallery] forensics retention failed: #{e.class}: #{e.message}")

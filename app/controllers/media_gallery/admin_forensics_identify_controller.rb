@@ -160,6 +160,25 @@ module ::MediaGallery
       render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name }, status: 404
     end
 
+
+    # GET /admin/plugins/media-gallery/forensics-identify/overlay-lookup(.json)
+    def overlay_lookup
+      code = params[:code].to_s.strip.upcase.gsub(/[^A-Z0-9]/, "")
+      return render_json_dump(ok: true, matches: []) if code.blank?
+
+      public_id = params[:public_id].to_s.strip.presence
+      matches = ::MediaGallery::PlaybackOverlay.lookup_by_code(code: code, public_id: public_id, limit: 25)
+
+      render_json_dump(
+        ok: true,
+        code: code,
+        public_id: public_id,
+        matches: matches
+      )
+    rescue => e
+      render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name }, status: 500
+    end
+
     # POST /admin/plugins/media-gallery/forensics-identify/:public_id(.json)
     # Accepts either:
     # - file: uploaded leak copy

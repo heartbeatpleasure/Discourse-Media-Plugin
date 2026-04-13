@@ -52,12 +52,14 @@ after_initialize do
   require_relative "lib/media_gallery/forensics_identify_tasks"
   require_relative "lib/media_gallery/forensics_identify_file_runner"
   require_relative "lib/media_gallery/watermark"   # ✅ NEW
+  require_relative "lib/media_gallery/playback_overlay"
   require_relative "lib/media_gallery/forensics_identify"
 
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_fingerprint.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_playback_session.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/media_overlay_session.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_forensics_export.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_fingerprints_controller.rb", __dir__)
@@ -95,6 +97,8 @@ after_initialize do
     # Download (admin-only). Support both /:id and /:id.csv.
     get "/admin/plugins/media-gallery/forensics-exports/:id" => "media_gallery/admin_forensics_exports#download", constraints: { id: /\d+/ }
     get "/admin/plugins/media-gallery/forensics-exports/:id.csv" => "media_gallery/admin_forensics_exports#download", constraints: { id: /\d+/ }
+
+    get "/admin/plugins/media-gallery/forensics-identify/overlay-lookup" => "media_gallery/admin_forensics_identify#overlay_lookup", defaults: { format: :json }
 
     # Admin-only: upload a leaked copy to identify likely user/fingerprint.
     get "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#show"

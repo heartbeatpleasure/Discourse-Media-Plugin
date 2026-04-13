@@ -31,6 +31,102 @@ export default RouteTemplate(
               </div>
             </div>
 
+
+            <div class="control-group">
+              <label class="control-label">
+                Overlay/session code lookup
+              </label>
+              <div class="controls">
+                <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                  <input
+                    type="text"
+                    value={{@controller.lookupCode}}
+                    placeholder="e.g. 7KQ2AB"
+                    maxlength="12"
+                    {{on "input" @controller.onLookupCodeInput}}
+                  />
+                  <button
+                    type="button"
+                    class="btn"
+                    disabled={{@controller.lookupBusy}}
+                    {{on "click" @controller.lookupOverlayCode}}
+                  >
+                    {{#if @controller.lookupBusy}}Searching…{{else}}Lookup code{{/if}}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn"
+                    disabled={{@controller.lookupBusy}}
+                    {{on "click" @controller.clearLookup}}
+                  >
+                    Clear lookup
+                  </button>
+                </div>
+                <div style="opacity:0.8; margin-top: 0.35rem;">
+                  Searches the frontend playback overlay/session code. If a public_id is filled in above, the lookup is narrowed to that media item.
+                </div>
+                {{#if @controller.lookupError}}
+                  <div class="alert alert-info" style="margin-top:0.75rem;">{{@controller.lookupError}}</div>
+                {{/if}}
+                {{#if @controller.hasLookupMatches}}
+                  <div style="margin-top:0.9rem; overflow:auto;">
+                    <table class="table">
+                      <thead>
+                        <tr>
+                          <th>Code</th>
+                          <th>User</th>
+                          <th>Media</th>
+                          <th>Type</th>
+                          <th>Fingerprint</th>
+                          <th>Seen</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {{#each @controller.lookupMatches as |match|}}
+                          <tr>
+                            <td><code>{{match.overlay_code}}</code></td>
+                            <td>
+                              {{#if match.name}}
+                                {{match.name}} ·
+                              {{/if}}
+                              {{match.username}}
+                              {{#if match.user_id}}
+                                <div style="opacity:0.75;">ID {{match.user_id}}</div>
+                              {{/if}}
+                            </td>
+                            <td>
+                              {{match.media_public_id}}
+                              {{#if match.media_title}}
+                                <div style="opacity:0.8;">{{match.media_title}}</div>
+                              {{/if}}
+                            </td>
+                            <td>{{match.media_type}}</td>
+                            <td>
+                              {{#if match.fingerprint_id}}
+                                {{match.fingerprint_id}}
+                              {{else}}
+                                —
+                              {{/if}}
+                            </td>
+                            <td>
+                              {{#if match.updated_at}}
+                                {{match.updated_at}}
+                              {{else}}
+                                {{match.created_at}}
+                              {{/if}}
+                              {{#if match.rendered_text}}
+                                <div style="opacity:0.75;">{{match.rendered_text}}</div>
+                              {{/if}}
+                            </td>
+                          </tr>
+                        {{/each}}
+                      </tbody>
+                    </table>
+                  </div>
+                {{/if}}
+              </div>
+            </div>
+
             <div class="control-group">
               <label class="control-label">
                 {{i18n "admin.media_gallery.forensics_identify.source_url_label"}}

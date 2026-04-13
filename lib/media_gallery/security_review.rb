@@ -94,6 +94,8 @@ module ::MediaGallery
         bind_to_session: (SiteSetting.respond_to?(:media_gallery_bind_stream_to_session) && !!SiteSetting.media_gallery_bind_stream_to_session),
         revoke_enabled: !!SiteSetting.media_gallery_revoke_enabled,
         heartbeat_enabled: !!SiteSetting.media_gallery_heartbeat_enabled,
+        playback_overlay_video_enabled: (SiteSetting.respond_to?(:media_gallery_playback_overlay_video_enabled) && !!SiteSetting.media_gallery_playback_overlay_video_enabled),
+        playback_overlay_image_enabled: (SiteSetting.respond_to?(:media_gallery_playback_overlay_image_enabled) && !!SiteSetting.media_gallery_playback_overlay_image_enabled),
         max_active_tokens_per_user: SiteSetting.media_gallery_max_active_tokens_per_user.to_i,
         max_active_tokens_per_ip: SiteSetting.media_gallery_max_active_tokens_per_ip.to_i,
         max_concurrent_sessions_per_user: SiteSetting.media_gallery_max_concurrent_sessions_per_user.to_i,

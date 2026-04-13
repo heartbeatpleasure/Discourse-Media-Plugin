@@ -166,6 +166,67 @@ plugins:
     client: false
 
 
+
+
+  # Lightweight frontend playback overlay (shown only inside /media-library preview, not burned into files).
+  media_gallery_playback_overlay_video_enabled:
+    default: false
+    client: false
+
+  media_gallery_playback_overlay_video_show_username:
+    default: true
+    client: false
+
+  media_gallery_playback_overlay_video_show_timestamp:
+    default: true
+    client: false
+
+  media_gallery_playback_overlay_video_show_session_code:
+    default: true
+    client: false
+
+  media_gallery_playback_overlay_image_enabled:
+    default: false
+    client: false
+
+  media_gallery_playback_overlay_image_show_username:
+    default: true
+    client: false
+
+  media_gallery_playback_overlay_image_show_timestamp:
+    default: true
+    client: false
+
+  media_gallery_playback_overlay_image_show_session_code:
+    default: true
+    client: false
+
+  media_gallery_playback_overlay_positions:
+    default: "top_left|top_right|center_left|center_right"
+    type: list
+    client: false
+
+  media_gallery_playback_overlay_opacity_percent:
+    default: 28
+    type: integer
+    min: 10
+    max: 100
+    client: false
+
+  media_gallery_playback_overlay_font_size_px:
+    default: 14
+    type: integer
+    min: 10
+    max: 28
+    client: false
+
+  media_gallery_playback_overlay_move_interval_seconds:
+    default: 18
+    type: integer
+    min: 0
+    max: 300
+    client: false
+
   # Storage hardening (Option A): store processed media + thumbs outside /uploads.
   # When enabled, the plugin streams files from /shared via tokenized URLs only.
   media_gallery_private_storage_enabled:

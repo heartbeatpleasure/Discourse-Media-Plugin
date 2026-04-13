@@ -27,6 +27,12 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked statusMessage = "";
   @tracked activeTaskId = null;
 
+  // Overlay/session code lookup
+  @tracked lookupCode = "";
+  @tracked lookupMatches = [];
+  @tracked lookupBusy = false;
+  @tracked lookupError = "";
+
   get hasResult() {
     return !!this.result;
   }
@@ -440,6 +446,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return (this.candidates?.length || 0) > 3;
   }
 
+  get hasLookupMatches() {
+    return (this.lookupMatches?.length || 0) > 0;
+  }
+
   get showNoSearchMatches() {
     const q = this.searchQuery || "";
     return (
@@ -530,6 +540,14 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   @action
+  onLookupCodeInput(event) {
+    this.lookupCode = String(event?.target?.value || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .trim();
+  }
+
+  @action
   onMaxSamplesInput(event) {
     const v = parseInt(event?.target?.value, 10);
     this.maxSamples = Number.isFinite(v) ? v : 60;
@@ -552,6 +570,12 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   @action
+  clearLookup() {
+    this.lookupError = "";
+    this.lookupMatches = [];
+  }
+
+  @action
   clear() {
     this.error = "";
     this.statusMessage = "";
@@ -562,6 +586,52 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     }
     this.result = null;
     this.resultJson = "";
+  }
+
+  @action
+  async lookupOverlayCode() {
+    this.lookupError = "";
+    this.lookupMatches = [];
+
+    const code = String(this.lookupCode || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .trim();
+
+    if (!code) {
+      this.lookupError = "Enter a session code first.";
+      return;
+    }
+
+    this.lookupBusy = true;
+    try {
+      const params = new URLSearchParams({ code });
+      if (this.publicId) {
+        params.set("public_id", this.publicId);
+      }
+
+      const response = await fetch(`/admin/plugins/media-gallery/forensics-identify/overlay-lookup.json?${params.toString()}`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        const err = await this._extractError(response);
+        this.lookupError = `HTTP ${response.status}: ${err}`;
+        return;
+      }
+
+      const json = await response.json();
+      this.lookupMatches = Array.isArray(json?.matches) ? json.matches : [];
+      if (!this.lookupMatches.length) {
+        this.lookupError = "No matches found for that session code.";
+      }
+    } catch (e) {
+      this.lookupError = e?.message || String(e);
+    } finally {
+      this.lookupBusy = false;
+    }
   }
 
   async _extractError(response) {
