@@ -218,11 +218,13 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
       this.events = Array.isArray(data?.events) ? data.events : [];
       this.summary = data?.summary || null;
       this.filterOptions = data?.filter_options || this.filterOptions;
+      this.error = String(data?.error || "").trim();
       this.lastLoadedAt = new Date();
     } catch (error) {
       let message = "Unable to load logs.";
       try {
         message =
+          error?.jqXHR?.responseJSON?.error ||
           error?.jqXHR?.responseJSON?.errors?.join(" ") ||
           error?.jqXHR?.responseText ||
           error?.message ||
@@ -245,13 +247,14 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @action updateLimit(event) { this.limit = event?.target?.value ?? "100"; }
 
   @action
-  async submitFilters(event) {
+  async applyFilters(event) {
     event?.preventDefault?.();
     await this.refreshLogs();
   }
 
   @action
-  async resetFilters() {
+  async resetFilters(event) {
+    event?.preventDefault?.();
     this.query = "";
     this.severity = "all";
     this.eventType = "all";

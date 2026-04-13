@@ -54,6 +54,10 @@ module ::MediaGallery
     end
 
     def search(filters = {})
+      hours = normalize_hours(filters[:hours])
+      limit = normalize_limit(filters[:limit])
+      return empty_search(hours:, limit:, error: "Log table is not available yet. Run the plugin migration first.") unless table_present?
+
       scope = ::MediaGallery::MediaLogEvent.includes(:user, :media_item).order(created_at: :desc)
 
       severity = filters[:severity].to_s.strip
@@ -62,9 +66,6 @@ module ::MediaGallery
       event_type = filters[:event_type].to_s.strip
       scope = scope.where(event_type: event_type) if event_type.present? && event_type != "all"
 
-      hours = filters[:hours].to_i
-      hours = 168 if hours <= 0
-      hours = 24 * 90 if hours > 24 * 90
       scope = scope.where("created_at >= ?", hours.hours.ago)
 
       query = filters[:q].to_s.strip
@@ -76,21 +77,23 @@ module ::MediaGallery
         )
       end
 
-      limit = filters[:limit].to_i
-      limit = 100 if limit <= 0
-      limit = 250 if limit > 250
-
       rows = scope.limit(limit).to_a
       {
         scope: scope,
         rows: rows,
         hours: hours,
         limit: limit,
+        error: nil,
       }
+    rescue => e
+      Rails.logger.warn("[media_gallery] log search failed #{e.class}: #{e.message}")
+      empty_search(hours:, limit:, error: "Unable to query logs. #{e.class}: #{e.message}")
     end
 
     def summary(scope:, rows:, hours:)
-      total_scope_count = scope.count
+      return empty_summary(hours:, rows_count: rows.length) unless table_present? && scope.present?
+
+      total_scope_count = safe_count(scope)
       last_24h_scope = ::MediaGallery::MediaLogEvent.where("created_at >= ?", 24.hours.ago)
       recent_rows = ::MediaGallery::MediaLogEvent.where("created_at >= ?", 24.hours.ago).pluck(:created_at)
       hourly_counts = Array.new(24, 0)
@@ -103,17 +106,17 @@ module ::MediaGallery
         hourly_counts[index] += 1
       end
 
-      top_event_types = scope.reorder(nil).group(:event_type).count.sort_by { |_, count| -count }.first(6).map do |name, count|
+      top_event_types = safe_group_count(scope, :event_type).sort_by { |_, count| -count }.first(6).map do |name, count|
         { event_type: name, count: count }
       end
 
-      severity_counts = scope.reorder(nil).group(:severity).count
+      severity_counts = safe_group_count(scope, :severity)
       {
         filtered_count: total_scope_count,
-        last_24h_count: last_24h_scope.count,
-        unique_users: scope.reorder(nil).where.not(user_id: nil).distinct.count(:user_id),
-        unique_media_items: scope.reorder(nil).where.not(media_item_id: nil).distinct.count(:media_item_id),
-        unique_ips: scope.reorder(nil).where.not(ip: [nil, ""]).distinct.count(:ip),
+        last_24h_count: safe_count(last_24h_scope),
+        unique_users: safe_distinct_count(scope, :user_id),
+        unique_media_items: safe_distinct_count(scope, :media_item_id),
+        unique_ips: safe_distinct_count(scope.where.not(ip: [nil, ""]), :ip),
         severity_counts: severity_counts,
         top_event_types: top_event_types,
         hourly_counts: hourly_counts.each_with_index.map do |count, index|
@@ -123,6 +126,9 @@ module ::MediaGallery
         active_hours_window: hours,
         shown_rows: rows.length,
       }
+    rescue => e
+      Rails.logger.warn("[media_gallery] log summary failed #{e.class}: #{e.message}")
+      empty_summary(hours:, rows_count: rows.length)
     end
 
     def serialize_rows(rows)
@@ -154,12 +160,16 @@ module ::MediaGallery
           details_pretty: pretty_details(row.details),
         }
       end
+    rescue => e
+      Rails.logger.warn("[media_gallery] log serialization failed #{e.class}: #{e.message}")
+      []
     end
 
     def event_type_options
       return [] unless table_present?
       ::MediaGallery::MediaLogEvent.distinct.order(:event_type).limit(100).pluck(:event_type).compact
-    rescue
+    rescue => e
+      Rails.logger.warn("[media_gallery] log event type options failed #{e.class}: #{e.message}")
       []
     end
 
@@ -176,6 +186,66 @@ module ::MediaGallery
       end
     end
     private_class_method :normalize_severity
+
+    def normalize_hours(value)
+      hours = value.to_i
+      return 168 if hours <= 0
+      [hours, 24 * 90].min
+    end
+    private_class_method :normalize_hours
+
+    def normalize_limit(value)
+      limit = value.to_i
+      return 100 if limit <= 0
+      [limit, 250].min
+    end
+    private_class_method :normalize_limit
+
+    def empty_search(hours:, limit:, error: nil)
+      { scope: nil, rows: [], hours: hours, limit: limit, error: error }
+    end
+    private_class_method :empty_search
+
+    def empty_summary(hours:, rows_count: 0)
+      now = Time.zone.now
+      {
+        filtered_count: 0,
+        last_24h_count: 0,
+        unique_users: 0,
+        unique_media_items: 0,
+        unique_ips: 0,
+        severity_counts: {},
+        top_event_types: [],
+        hourly_counts: (0..23).map do |index|
+          point_time = (now.beginning_of_hour - (23 - index).hours)
+          { label: point_time.strftime("%H:%M"), count: 0 }
+        end,
+        active_hours_window: hours,
+        shown_rows: rows_count,
+      }
+    end
+    private_class_method :empty_summary
+
+    def safe_count(scope)
+      scope.reorder(nil).count
+    rescue
+      0
+    end
+    private_class_method :safe_count
+
+    def safe_group_count(scope, column)
+      scope.reorder(nil).group(column).count
+    rescue
+      {}
+    end
+    private_class_method :safe_group_count
+
+    def safe_distinct_count(scope, column)
+      scope.reorder(nil).where.not(column => nil).distinct.count(column)
+    rescue
+      0
+    end
+    private_class_method :safe_distinct_count
 
     def sanitize_details(value)
       hash = value.is_a?(Hash) ? value.deep_stringify_keys : {}
