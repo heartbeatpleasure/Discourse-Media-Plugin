@@ -8,7 +8,7 @@ module ::MediaGallery
     module_function
 
     CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".freeze
-    DEFAULT_POSITIONS = %w[top_left top_right center_left center_right].freeze
+    DEFAULT_POSITIONS = %w[top_left top_center top_right center_left center+40 center_right bottom_left bottom_center bottom_right].freeze
     VALID_POSITIONS = %w[
       top_left
       top_right
@@ -131,6 +131,8 @@ module ::MediaGallery
         opacity_percent: opacity_percent,
         font_size_px: font_size_px,
         move_interval_seconds: move_interval_seconds,
+        background_enabled: background_enabled?,
+        background_opacity_percent: background_opacity_percent,
         positions: configured_positions
       }
     end
@@ -147,29 +149,47 @@ module ::MediaGallery
         opacity_percent: opacity_percent,
         font_size_px: font_size_px,
         move_interval_seconds: move_interval_seconds,
+        background_enabled: background_enabled?,
+        background_opacity_percent: background_opacity_percent,
         positions: effective_positions_for_record(record)
       }
     end
 
     def effective_positions_for_record(record)
       item = record.media_item
-      positions = configured_positions.dup
+      positions = configured_positions.deep_dup
       if item.present? && item.respond_to?(:watermark_enabled) && item.watermark_enabled
         burned_position = SiteSetting.respond_to?(:media_gallery_watermark_position) ? SiteSetting.media_gallery_watermark_position.to_s : nil
-        positions.reject! { |entry| entry.to_s == burned_position.to_s }
+        positions.reject! do |entry|
+          entry[:key].to_s == burned_position.to_s && entry[:offset_y_px].to_i.abs < 24
+        end
       end
-      positions = DEFAULT_POSITIONS.dup if positions.blank?
+      positions = parsed_default_positions if positions.blank?
       positions
     end
 
     def configured_positions
       raw = SiteSetting.respond_to?(:media_gallery_playback_overlay_positions) ? SiteSetting.media_gallery_playback_overlay_positions : nil
-      values = normalize_list(raw).map(&:to_s).map(&:strip).reject(&:blank?)
-      values.select! { |entry| VALID_POSITIONS.include?(entry) }
-      values = DEFAULT_POSITIONS.dup if values.blank?
-      values.uniq
+      parsed = normalize_list(raw).map { |entry| parse_position_entry(entry) }.compact
+      parsed = parsed_default_positions if parsed.blank?
+      dedupe_position_entries(parsed)
     rescue
-      DEFAULT_POSITIONS.dup
+      parsed_default_positions
+    end
+
+
+    def background_enabled?
+      return true unless SiteSetting.respond_to?(:media_gallery_playback_overlay_background_enabled)
+      SiteSetting.media_gallery_playback_overlay_background_enabled
+    rescue
+      true
+    end
+
+    def background_opacity_percent
+      n = SiteSetting.respond_to?(:media_gallery_playback_overlay_background_opacity_percent) ? SiteSetting.media_gallery_playback_overlay_background_opacity_percent.to_i : 45
+      [[n, 0].max, 100].min
+    rescue
+      45
     end
 
     def opacity_percent
@@ -307,6 +327,37 @@ module ::MediaGallery
     def token_sha256(token)
       return nil if token.to_s.blank?
       Digest::SHA256.hexdigest(token.to_s)
+    end
+
+    def parse_position_entry(entry)
+      raw = entry.to_s.strip
+      return nil if raw.blank?
+
+      pattern = /\A(?<key>#{VALID_POSITIONS.join("|")})(?:\s*(?<offset>[+-]\s*\d+)\s*(?:px)?)?\z/i
+      match = raw.match(pattern)
+      return nil unless match
+
+      key = match[:key].to_s.downcase
+      offset = match[:offset].to_s.gsub(/\s+/, "")
+      {
+        key: key,
+        offset_y_px: offset.present? ? offset.to_i : 0,
+        raw: raw
+      }
+    end
+
+    def parsed_default_positions
+      DEFAULT_POSITIONS.map { |entry| parse_position_entry(entry) }.compact
+    end
+
+    def dedupe_position_entries(entries)
+      seen = {}
+      entries.each_with_object([]) do |entry, ary|
+        fingerprint = [entry[:key].to_s, entry[:offset_y_px].to_i]
+        next if seen[fingerprint]
+        seen[fingerprint] = true
+        ary << entry
+      end
     end
 
     def normalize_list(raw)

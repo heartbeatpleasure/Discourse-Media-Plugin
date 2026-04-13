@@ -202,8 +202,19 @@ plugins:
     client: false
 
   media_gallery_playback_overlay_positions:
-    default: "top_left|top_right|center_left|center_right"
+    default: "top_left|top_center|top_right|center_left|center+40|center_right|bottom_left|bottom_center|bottom_right"
     type: list
+    client: false
+
+  media_gallery_playback_overlay_background_enabled:
+    default: true
+    client: false
+
+  media_gallery_playback_overlay_background_opacity_percent:
+    default: 45
+    type: integer
+    min: 0
+    max: 100
     client: false
 
   media_gallery_playback_overlay_opacity_percent:
