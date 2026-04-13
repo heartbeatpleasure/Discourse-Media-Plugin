@@ -130,7 +130,8 @@ module ::MediaGallery
         },
         opacity_percent: opacity_percent,
         font_size_px: font_size_px,
-        move_interval_seconds: move_interval_seconds,
+        move_interval_seconds: move_interval_seconds_for("video"),
+        image_move_interval_seconds: move_interval_seconds_for("image"),
         background_enabled: background_enabled?,
         background_opacity_percent: background_opacity_percent,
         positions: configured_positions
@@ -148,7 +149,7 @@ module ::MediaGallery
         fingerprint_id_present: record.fingerprint_id.present?,
         opacity_percent: opacity_percent,
         font_size_px: font_size_px,
-        move_interval_seconds: move_interval_seconds,
+        move_interval_seconds: move_interval_seconds_for(media_type),
         background_enabled: background_enabled?,
         background_opacity_percent: background_opacity_percent,
         positions: effective_positions_for_record(record)
@@ -208,12 +209,14 @@ module ::MediaGallery
       14
     end
 
-    def move_interval_seconds
-      n = SiteSetting.respond_to?(:media_gallery_playback_overlay_move_interval_seconds) ? SiteSetting.media_gallery_playback_overlay_move_interval_seconds.to_i : 18
+    def move_interval_seconds_for(media_type)
+      key = media_type.to_s == "image" ? :media_gallery_playback_overlay_image_move_interval_seconds : :media_gallery_playback_overlay_move_interval_seconds
+      default_value = media_type.to_s == "image" ? 0 : 18
+      n = SiteSetting.respond_to?(key) ? SiteSetting.public_send(key).to_i : default_value
       return 0 if n <= 0
       [[n, 5].max, 300].min
     rescue
-      18
+      default_value
     end
 
     def show_username_for?(media_type)
