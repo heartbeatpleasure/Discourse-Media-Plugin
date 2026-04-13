@@ -1082,7 +1082,7 @@ module ::MediaGallery
     end
 
     def forward_cookie_for_source_url?(uri)
-      uri.path.to_s.start_with?("/media/hls/")
+      uri.path.to_s.start_with?("/media/hls/", "/media/stream/")
     end
 
     def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:, media_item:)

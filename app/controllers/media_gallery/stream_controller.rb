@@ -29,6 +29,10 @@ module ::MediaGallery
         raise Discourse::NotFound
       end
 
+      unless MediaGallery::Token.request_session_binding_valid?(payload: payload, request: request, cookies: cookies)
+        raise Discourse::NotFound
+      end
+
       item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
       raise Discourse::NotFound if item.blank?
       ensure_item_visible_to_current_user!(item)

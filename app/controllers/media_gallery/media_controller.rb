@@ -472,13 +472,17 @@ module ::MediaGallery
         return render_json_error(err2, status: 429, message: playback_limit_message(err2)) unless ok2
       end
 
+      session_binding = MediaGallery::Token.ensure_session_binding_cookie!(request: request, cookies: cookies)
+
       payload = MediaGallery::Token.build_stream_payload(
         media_item: item,
         upload_id: (use_hls ? nil : upload_id.presence),
         kind: (use_hls ? "hls" : "main"),
         user: current_user,
         request: request,
-        fingerprint_id: fingerprint_id
+        fingerprint_id: fingerprint_id,
+        cookies: cookies,
+        session_binding: session_binding
       )
 
       token = MediaGallery::Token.generate(payload, purpose: (use_hls ? "hls" : "stream"))
@@ -579,6 +583,10 @@ module ::MediaGallery
         raise Discourse::NotFound
       end
 
+      unless MediaGallery::Token.request_session_binding_valid?(payload: payload, request: request, cookies: cookies)
+        raise Discourse::NotFound
+      end
+
       # Only sessions for audio/video are counted.
       item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
       raise Discourse::NotFound if item.blank?
@@ -631,6 +639,10 @@ module ::MediaGallery
       end
 
       if payload["ip"].present? && request.remote_ip.to_s != payload["ip"].to_s
+        raise Discourse::NotFound
+      end
+
+      unless MediaGallery::Token.request_session_binding_valid?(payload: payload, request: request, cookies: cookies)
         raise Discourse::NotFound
       end
 

@@ -562,6 +562,10 @@ plugins:
     default: false
     client: false
 
+  media_gallery_bind_stream_to_session:
+    default: true
+    client: false
+
   # Tooling
   media_gallery_ffmpeg_path:
     default: "ffmpeg"

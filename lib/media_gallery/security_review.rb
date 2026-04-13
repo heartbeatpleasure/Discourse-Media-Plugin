@@ -15,7 +15,9 @@ module ::MediaGallery
         warnings << "When using S3 HLS redirect delivery, verify bucket CORS only allows the forum origin and required methods/headers."
       end
       warnings << "Confirm the S3 bucket is not publicly readable; playback should rely on app-auth plus proxy delivery or short-lived redirects." if active_backend == "s3"
-      warnings << "Bind stream tokens to user and/or IP for stronger replay resistance when acceptable for your audience." if !SiteSetting.media_gallery_bind_stream_to_user && !SiteSetting.media_gallery_bind_stream_to_ip
+      if !SiteSetting.media_gallery_bind_stream_to_user && !SiteSetting.media_gallery_bind_stream_to_ip && !(SiteSetting.respond_to?(:media_gallery_bind_stream_to_session) && SiteSetting.media_gallery_bind_stream_to_session)
+        warnings << "Bind stream tokens to user, browser session, and/or IP for stronger replay resistance when acceptable for your audience."
+      end
 
       {
         generated_at: Time.now.utc.iso8601,
@@ -89,6 +91,7 @@ module ::MediaGallery
         stream_ttl_minutes: SiteSetting.media_gallery_stream_token_ttl_minutes.to_i,
         bind_to_user: !!SiteSetting.media_gallery_bind_stream_to_user,
         bind_to_ip: !!SiteSetting.media_gallery_bind_stream_to_ip,
+        bind_to_session: (SiteSetting.respond_to?(:media_gallery_bind_stream_to_session) && !!SiteSetting.media_gallery_bind_stream_to_session),
         revoke_enabled: !!SiteSetting.media_gallery_revoke_enabled,
         heartbeat_enabled: !!SiteSetting.media_gallery_heartbeat_enabled,
         max_active_tokens_per_user: SiteSetting.media_gallery_max_active_tokens_per_user.to_i,

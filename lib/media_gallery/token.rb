@@ -3,12 +3,15 @@
 require "base64"
 require "digest"
 require "json"
+require "securerandom"
 
 module ::MediaGallery
   module Token
     module_function
 
     ASSET_BINDING_VERSION = 1
+    SESSION_BINDING_VERSION = 1
+    SESSION_BINDING_COOKIE = "_media_gallery_pb"
 
     # Uses Rails secret_key_base under the hood; scoped by purpose.
     #
@@ -63,7 +66,7 @@ module ::MediaGallery
     end
 
     # upload_id is optional. When omitted, StreamController will resolve the file from MediaItem + kind.
-    def build_stream_payload(media_item:, kind:, user:, request:, upload_id: nil, fingerprint_id: nil)
+    def build_stream_payload(media_item:, kind:, user:, request:, upload_id: nil, fingerprint_id: nil, cookies: nil, session_binding: nil)
       exp = Time.now.to_i + ttl_seconds
 
       payload = {
@@ -86,8 +89,97 @@ module ::MediaGallery
         payload["ip"] = request.remote_ip
       end
 
+      session_binding ||= current_request_session_binding(request: request, cookies: cookies)
+      payload["session_binding"] = session_binding if session_binding.present?
+
       payload
     end
+
+    def ensure_session_binding_cookie!(request:, cookies:)
+      return nil unless session_binding_enabled?
+      return nil if cookies.blank?
+
+      raw = read_session_binding_cookie(cookies)
+      if raw.blank?
+        raw = "v#{SESSION_BINDING_VERSION}:#{SecureRandom.hex(24)}"
+        write_session_binding_cookie!(request: request, cookies: cookies, value: raw)
+      end
+
+      digest_session_binding(raw)
+    rescue
+      nil
+    end
+
+    def request_session_binding_valid?(payload:, request:, cookies:)
+      bound = payload.is_a?(Hash) ? payload["session_binding"].to_s : ""
+      return true if bound.blank?
+
+      current = current_request_session_binding(request: request, cookies: cookies)
+      return false if current.blank?
+      return false if current.bytesize != bound.bytesize
+
+      ActiveSupport::SecurityUtils.secure_compare(bound, current)
+    rescue
+      false
+    end
+
+    def current_request_session_binding(request:, cookies:)
+      return nil unless session_binding_enabled?
+      return nil if cookies.blank?
+
+      raw = read_session_binding_cookie(cookies)
+      return nil if raw.blank?
+
+      digest_session_binding(raw)
+    rescue
+      nil
+    end
+
+    def session_binding_enabled?
+      SiteSetting.respond_to?(:media_gallery_bind_stream_to_session) && SiteSetting.media_gallery_bind_stream_to_session
+    rescue
+      false
+    end
+
+    def read_session_binding_cookie(cookies)
+      if cookies.respond_to?(:signed)
+        cookies.signed[SESSION_BINDING_COOKIE].presence || cookies[SESSION_BINDING_COOKIE].presence
+      elsif cookies.respond_to?(:[])
+        cookies[SESSION_BINDING_COOKIE].presence
+      end
+    rescue
+      nil
+    end
+    private_class_method :read_session_binding_cookie
+
+    def write_session_binding_cookie!(request:, cookies:, value:)
+      options = {
+        value: value,
+        httponly: true,
+        same_site: :lax,
+        path: "/"
+      }
+
+      secure_cookie = false
+      secure_cookie ||= request.respond_to?(:ssl?) && request.ssl?
+      secure_cookie ||= SiteSetting.respond_to?(:force_https) && SiteSetting.force_https
+      options[:secure] = true if secure_cookie
+
+      if cookies.respond_to?(:signed)
+        cookies.signed[SESSION_BINDING_COOKIE] = options
+      else
+        cookies[SESSION_BINDING_COOKIE] = options[:value]
+      end
+    rescue
+      nil
+    end
+    private_class_method :write_session_binding_cookie!
+
+    def digest_session_binding(raw)
+      return nil if raw.blank?
+      "v#{SESSION_BINDING_VERSION}:#{Digest::SHA256.hexdigest(raw.to_s)}"
+    end
+    private_class_method :digest_session_binding
 
     def asset_binding_valid?(media_item:, kind:, payload:)
       return false if media_item.blank? || payload.blank?

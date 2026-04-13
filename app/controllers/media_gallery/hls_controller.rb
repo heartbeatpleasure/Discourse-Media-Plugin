@@ -171,6 +171,10 @@ module ::MediaGallery
         deny!(:ip_mismatch, token: token)
       end
 
+      unless MediaGallery::Token.request_session_binding_valid?(payload: payload, request: request, cookies: cookies)
+        deny!(:session_binding_mismatch, token: token)
+      end
+
       payload
     end
 
