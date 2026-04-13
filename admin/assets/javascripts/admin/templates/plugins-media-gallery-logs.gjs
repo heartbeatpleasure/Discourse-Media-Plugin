@@ -1,5 +1,4 @@
 import RouteTemplate from "ember-route-template";
-import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { i18n } from "discourse-i18n";
 
@@ -17,10 +16,10 @@ export default RouteTemplate(
         gap: 1rem;
       }
 
+      .media-gallery-admin-logs p,
       .media-gallery-admin-logs h1,
       .media-gallery-admin-logs h2,
-      .media-gallery-admin-logs h3,
-      .media-gallery-admin-logs p {
+      .media-gallery-admin-logs h3 {
         margin: 0;
       }
 
@@ -29,6 +28,8 @@ export default RouteTemplate(
         border: 1px solid var(--mg-border);
         border-radius: var(--mg-radius);
         padding: 1rem 1.125rem;
+        min-width: 0;
+        overflow: hidden;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
@@ -40,15 +41,41 @@ export default RouteTemplate(
         margin-bottom: 0.9rem;
       }
 
+      .mg-logs__panel-copy,
+      .mg-logs__event-copy,
+      .mg-logs__event-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+
       .mg-logs__muted {
         color: var(--mg-muted);
         font-size: var(--font-down-1);
       }
 
-      .mg-logs__filters {
+      .mg-logs__flash {
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        border: 1px solid var(--mg-border);
+      }
+
+      .mg-logs__flash.is-danger {
+        background: var(--danger-low);
+        border-color: var(--danger-low-mid);
+        color: var(--danger);
+      }
+
+      .mg-logs__filters,
+      .mg-logs__summary-grid,
+      .mg-logs__insight-grid,
+      .mg-logs__top-list {
         display: grid;
+        gap: 1rem;
+      }
+
+      .mg-logs__filters {
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 0.9rem;
         align-items: end;
       }
 
@@ -78,8 +105,8 @@ export default RouteTemplate(
         min-height: 42px;
       }
 
-      .mg-logs__filters-footer,
-      .mg-logs__header-actions {
+      .mg-logs__actions,
+      .mg-logs__filters-footer {
         display: flex;
         flex-wrap: wrap;
         gap: 0.75rem;
@@ -92,9 +119,7 @@ export default RouteTemplate(
       }
 
       .mg-logs__summary-grid {
-        display: grid;
         grid-template-columns: repeat(6, minmax(0, 1fr));
-        gap: 0.9rem;
       }
 
       .mg-logs__summary-card {
@@ -128,52 +153,12 @@ export default RouteTemplate(
         line-height: 1.1;
       }
 
-      .mg-logs__insights-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
-        gap: 1rem;
+      .mg-logs__insight-grid {
+        grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
       }
 
-      .mg-logs__bars {
-        display: grid;
-        grid-template-columns: repeat(24, minmax(0, 1fr));
-        gap: 0.35rem;
-        align-items: end;
-        min-height: 118px;
-        margin-top: 0.75rem;
-      }
-
-      .mg-logs__bar {
-        display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        justify-content: flex-end;
-        gap: 0.35rem;
-        min-width: 0;
-      }
-
-      .mg-logs__bar-fill {
-        width: 100%;
-        border-radius: 999px;
-        background: var(--tertiary);
-        min-height: 8px;
-      }
-
-      .mg-logs__bar-label {
-        font-size: 10px;
-        color: var(--mg-muted);
-        writing-mode: vertical-rl;
-        transform: rotate(180deg);
-        white-space: nowrap;
-      }
-
-      .mg-logs__top-list {
-        display: grid;
-        gap: 0.65rem;
-        margin-top: 0.75rem;
-      }
-
-      .mg-logs__top-row {
+      .mg-logs__top-row,
+      .mg-logs__insight-row {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         gap: 0.75rem;
@@ -182,6 +167,32 @@ export default RouteTemplate(
         border-radius: 14px;
         background: var(--mg-surface-alt);
         border: 1px solid var(--mg-border);
+      }
+
+      .mg-logs__badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: 0.22rem 0.58rem;
+        font-size: var(--font-down-1);
+        line-height: 1.2;
+        white-space: nowrap;
+        background: var(--primary-very-low);
+        color: var(--primary-high);
+        border: 1px solid var(--primary-low);
+      }
+
+      .mg-logs__badge.is-warning {
+        background: var(--tertiary-very-low);
+        color: var(--tertiary);
+        border-color: var(--tertiary-low);
+      }
+
+      .mg-logs__badge.is-danger {
+        background: var(--danger-low);
+        color: var(--danger);
+        border-color: var(--danger-low-mid);
       }
 
       .mg-logs__table-wrap {
@@ -206,85 +217,31 @@ export default RouteTemplate(
         color: var(--mg-muted);
         font-size: var(--font-down-1);
         font-weight: 700;
-        position: sticky;
-        top: 0;
         background: var(--mg-surface);
-        z-index: 1;
-      }
-
-      .mg-logs__event-meta,
-      .mg-logs__event-copy {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-      }
-
-      .mg-logs__badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 999px;
-        padding: 0.22rem 0.58rem;
-        font-size: var(--font-down-1);
-        line-height: 1.2;
-        white-space: nowrap;
-        background: var(--primary-very-low);
-        color: var(--primary-high);
-        border: 1px solid var(--primary-low);
-      }
-
-      .mg-logs__badge.is-info {
-        background: var(--primary-very-low);
-      }
-
-      .mg-logs__badge.is-warning {
-        background: var(--tertiary-very-low);
-        color: var(--tertiary);
-        border-color: var(--tertiary-low);
-      }
-
-      .mg-logs__badge.is-danger {
-        background: var(--danger-low);
-        color: var(--danger);
-        border-color: var(--danger-low-mid);
       }
 
       .mg-logs__details {
-        margin-top: 0.55rem;
-      }
-
-      .mg-logs__details summary {
-        cursor: pointer;
-        color: var(--tertiary);
+        margin-top: 0.35rem;
+        max-width: 34rem;
       }
 
       .mg-logs__details pre {
-        margin: 0.6rem 0 0;
-        padding: 0.75rem;
+        margin: 0;
+        padding: 0.7rem;
         background: var(--primary-very-low);
         border-radius: 12px;
         border: 1px solid var(--mg-border);
         white-space: pre-wrap;
         word-break: break-word;
         font-size: var(--font-down-1);
-      }
-
-      .mg-logs__notice {
-        border-radius: 12px;
-        padding: 0.85rem 1rem;
-        border: 1px solid var(--mg-border);
-      }
-
-      .mg-logs__notice.is-error {
-        background: var(--danger-low);
-        border-color: var(--danger-low-mid);
-        color: var(--danger);
+        max-height: 14rem;
+        overflow: auto;
       }
 
       @media (max-width: 1100px) {
         .mg-logs__summary-grid,
         .mg-logs__filters,
-        .mg-logs__insights-grid {
+        .mg-logs__insight-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
@@ -292,7 +249,7 @@ export default RouteTemplate(
       @media (max-width: 800px) {
         .mg-logs__summary-grid,
         .mg-logs__filters,
-        .mg-logs__insights-grid {
+        .mg-logs__insight-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -301,11 +258,11 @@ export default RouteTemplate(
     <div class="media-gallery-admin-logs">
       <div class="mg-logs__panel">
         <div class="mg-logs__panel-header">
-          <div>
+          <div class="mg-logs__panel-copy">
             <h1>{{i18n "admin.media_gallery.logs.title"}}</h1>
             <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.description"}}</p>
           </div>
-          <div class="mg-logs__header-actions">
+          <div class="mg-logs__actions">
             <a class="btn" href="/admin/plugins/media-gallery">{{i18n "admin.media_gallery.logs.back_to_overview"}}</a>
             <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.refreshLogs}}>
               {{#if @controller.isLoading}}
@@ -321,14 +278,19 @@ export default RouteTemplate(
           <div class="mg-logs__filters">
             <div class="mg-logs__field is-search">
               <label>{{i18n "admin.media_gallery.logs.search_label"}}</label>
-              <input type="text" value={{@controller.query}} placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}} {{on "input" @controller.updateQuery}} />
+              <input
+                type="text"
+                value={{@controller.query}}
+                placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}}
+                {{on "input" @controller.updateQuery}}
+              />
             </div>
 
             <div class="mg-logs__field">
               <label>{{i18n "admin.media_gallery.logs.severity_label"}}</label>
               <select value={{@controller.severity}} {{on "change" @controller.updateSeverity}}>
                 {{#each @controller.severityOptions as |option|}}
-                  <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+                  <option value={{option.value}}>{{option.label}}</option>
                 {{/each}}
               </select>
             </div>
@@ -337,7 +299,7 @@ export default RouteTemplate(
               <label>{{i18n "admin.media_gallery.logs.event_type_label"}}</label>
               <select value={{@controller.eventType}} {{on "change" @controller.updateEventType}}>
                 {{#each @controller.eventTypeOptions as |option|}}
-                  <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+                  <option value={{option.value}}>{{option.label}}</option>
                 {{/each}}
               </select>
             </div>
@@ -371,7 +333,7 @@ export default RouteTemplate(
                 · {{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}
               {{/if}}
             </div>
-            <div class="mg-logs__header-actions">
+            <div class="mg-logs__actions">
               <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.resetFilters}}>{{i18n "admin.media_gallery.logs.reset"}}</button>
               <button class="btn btn-primary" type="submit" disabled={{@controller.isLoading}}>{{i18n "admin.media_gallery.logs.apply"}}</button>
             </div>
@@ -380,45 +342,28 @@ export default RouteTemplate(
       </div>
 
       {{#if @controller.error}}
-        <div class="mg-logs__notice is-error">{{@controller.error}}</div>
+        <div class="mg-logs__flash is-danger">{{@controller.error}}</div>
       {{/if}}
 
       <div class="mg-logs__summary-grid">
         {{#each @controller.summaryCards as |card|}}
-          <div class="mg-logs__summary-card is-{{card.tone}}">
+          <div class={{card.className}}>
             <div class="mg-logs__summary-label">{{card.label}}</div>
             <div class="mg-logs__summary-value">{{card.value}}</div>
           </div>
         {{/each}}
       </div>
 
-      <div class="mg-logs__insights-grid">
+      <div class="mg-logs__insight-grid">
         <div class="mg-logs__panel">
           <div class="mg-logs__panel-header">
-            <div>
-              <h2>{{i18n "admin.media_gallery.logs.activity_title"}}</h2>
-              <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.activity_description"}}</p>
-            </div>
-          </div>
-          <div class="mg-logs__bars">
-            {{#each @controller.hourlyBars as |bar|}}
-              <div class="mg-logs__bar">
-                <div class="mg-logs__bar-fill" style={{bar.style}}></div>
-                <div class="mg-logs__bar-label">{{bar.label}}</div>
-              </div>
-            {{/each}}
-          </div>
-        </div>
-
-        <div class="mg-logs__panel">
-          <div class="mg-logs__panel-header">
-            <div>
+            <div class="mg-logs__panel-copy">
               <h2>{{i18n "admin.media_gallery.logs.top_events_title"}}</h2>
               <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.top_events_description"}}</p>
             </div>
           </div>
           <div class="mg-logs__top-list">
-            {{#if @controller.topEventTypes.length}}
+            {{#if @controller.hasTopEventTypes}}
               {{#each @controller.topEventTypes as |entry|}}
                 <div class="mg-logs__top-row">
                   <div>{{entry.event_type}}</div>
@@ -430,11 +375,38 @@ export default RouteTemplate(
             {{/if}}
           </div>
         </div>
+
+        <div class="mg-logs__panel">
+          <div class="mg-logs__panel-header">
+            <div class="mg-logs__panel-copy">
+              <h2>Current filter snapshot</h2>
+              <p class="mg-logs__muted">Quick operational totals for the current log selection.</p>
+            </div>
+          </div>
+          <div class="mg-logs__top-list">
+            <div class="mg-logs__insight-row">
+              <div>Unique media items</div>
+              <div class="mg-logs__badge">{{@controller.uniqueMediaCount}}</div>
+            </div>
+            <div class="mg-logs__insight-row">
+              <div>Unique IPs</div>
+              <div class="mg-logs__badge">{{@controller.uniqueIpCount}}</div>
+            </div>
+            <div class="mg-logs__insight-row">
+              <div>Selected window</div>
+              <div class="mg-logs__badge">{{@controller.hours}}h</div>
+            </div>
+            <div class="mg-logs__insight-row">
+              <div>Row cap</div>
+              <div class="mg-logs__badge">{{@controller.limit}}</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="mg-logs__panel">
         <div class="mg-logs__panel-header">
-          <div>
+          <div class="mg-logs__panel-copy">
             <h2>{{i18n "admin.media_gallery.logs.recent_events_title"}}</h2>
             <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.recent_events_description"}}</p>
           </div>
@@ -465,7 +437,7 @@ export default RouteTemplate(
                     <td>
                       <div class="mg-logs__event-copy">
                         <div style="display:flex; gap:0.45rem; flex-wrap:wrap; align-items:center;">
-                          <span class="mg-logs__badge {{event.severityClass}}">{{event.severityLabel}}</span>
+                          <span class={{event.badgeClass}}>{{event.severityLabel}}</span>
                           <strong>{{event.eventLabel}}</strong>
                         </div>
                         {{#if event.message}}
@@ -509,10 +481,9 @@ export default RouteTemplate(
                     </td>
                     <td>
                       {{#if event.hasDetails}}
-                        <details class="mg-logs__details">
-                          <summary>{{i18n "admin.media_gallery.logs.show_details"}}</summary>
-                          <pre>{{event.details_pretty}}</pre>
-                        </details>
+                        <div class="mg-logs__details">
+                          <pre>{{event.detailsPreview}}</pre>
+                        </div>
                       {{else}}
                         <span class="mg-logs__muted">—</span>
                       {{/if}}

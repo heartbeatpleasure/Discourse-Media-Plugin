@@ -25,6 +25,11 @@ function titleize(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function numberValue(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked query = "";
   @tracked severity = "all";
@@ -36,8 +41,12 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked error = "";
   @tracked events = [];
   @tracked summary = null;
-  @tracked filterOptions = { severities: ["all", "info", "warning", "danger"], event_types: ["all"] };
+  @tracked filterOptions = {
+    severities: ["all", "info", "warning", "danger"],
+    event_types: ["all"],
+  };
   @tracked lastLoadedAt = null;
+  @tracked hasLoadedOnce = false;
 
   resetState() {
     this.query = "";
@@ -49,11 +58,19 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.error = "";
     this.events = [];
     this.summary = null;
-    this.filterOptions = { severities: ["all", "info", "warning", "danger"], event_types: ["all"] };
+    this.filterOptions = {
+      severities: ["all", "info", "warning", "danger"],
+      event_types: ["all"],
+    };
     this.lastLoadedAt = null;
+    this.hasLoadedOnce = false;
   }
 
   async loadInitial() {
+    if (this.hasLoadedOnce || this.isLoading) {
+      return;
+    }
+    this.hasLoadedOnce = true;
     await this.refreshLogs();
   }
 
@@ -69,7 +86,6 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return list.map((value) => ({
       value,
       label: value === "all" ? "All severities" : titleize(value),
-      selected: String(value) === String(this.severity),
     }));
   }
 
@@ -81,55 +97,97 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return list.map((value) => ({
       value,
       label: value === "all" ? "All event types" : titleize(value),
-      selected: String(value) === String(this.eventType),
     }));
   }
 
   get decoratedEvents() {
-    return (Array.isArray(this.events) ? this.events : []).map((event) => ({
-      ...event,
-      severityClass: `is-${String(event?.severity || "info")}`,
-      severityLabel: titleize(event?.severity || "info"),
-      eventLabel: titleize(event?.event_type || "event"),
-      createdLabel: formatDateTime(event?.created_at),
-      userLabel: event?.name || event?.username || (event?.user_id ? `User #${event.user_id}` : "—"),
-      mediaLabel: event?.media_title || event?.media_public_id || (event?.media_item_id ? `Item #${event.media_item_id}` : "—"),
-      hasDetails: !!String(event?.details_pretty || "").trim(),
-    }));
+    return (Array.isArray(this.events) ? this.events : []).map((event) => {
+      const severity = String(event?.severity || "info");
+      let badgeClass = "mg-logs__badge";
+      if (severity === "warning") {
+        badgeClass += " is-warning";
+      } else if (severity === "danger") {
+        badgeClass += " is-danger";
+      }
+
+      return {
+        ...event,
+        badgeClass,
+        severityLabel: titleize(severity),
+        eventLabel: titleize(event?.event_type || "event"),
+        createdLabel: formatDateTime(event?.created_at),
+        userLabel:
+          event?.name ||
+          event?.username ||
+          (event?.user_id ? `User #${event.user_id}` : "—"),
+        mediaLabel:
+          event?.media_title ||
+          event?.media_public_id ||
+          (event?.media_item_id ? `Item #${event.media_item_id}` : "—"),
+        detailsPreview: String(event?.details_pretty || "").trim(),
+        hasDetails: !!String(event?.details_pretty || "").trim(),
+      };
+    });
   }
 
   get summaryCards() {
     const summary = this.summary || {};
     const severityCounts = summary.severity_counts || {};
+
     return [
-      { label: "Shown", value: summary.shown_rows ?? this.events.length ?? 0, tone: "neutral" },
-      { label: "Filtered total", value: summary.filtered_count ?? 0, tone: "neutral" },
-      { label: "Last 24h", value: summary.last_24h_count ?? 0, tone: "neutral" },
-      { label: "Warning", value: severityCounts.warning ?? 0, tone: "warning" },
-      { label: "Danger", value: severityCounts.danger ?? 0, tone: "danger" },
-      { label: "Unique users", value: summary.unique_users ?? 0, tone: "neutral" },
+      {
+        label: "Shown rows",
+        value: summary.shown_rows ?? this.events.length ?? 0,
+        className: "mg-logs__summary-card",
+      },
+      {
+        label: "Filtered total",
+        value: summary.filtered_count ?? 0,
+        className: "mg-logs__summary-card",
+      },
+      {
+        label: "Last 24h",
+        value: summary.last_24h_count ?? 0,
+        className: "mg-logs__summary-card",
+      },
+      {
+        label: "Warnings",
+        value: severityCounts.warning ?? 0,
+        className: "mg-logs__summary-card is-warning",
+      },
+      {
+        label: "Danger",
+        value: severityCounts.danger ?? 0,
+        className: "mg-logs__summary-card is-danger",
+      },
+      {
+        label: "Unique users",
+        value: summary.unique_users ?? 0,
+        className: "mg-logs__summary-card",
+      },
     ];
   }
 
   get topEventTypes() {
-    return Array.isArray(this.summary?.top_event_types) ? this.summary.top_event_types : [];
+    return Array.isArray(this.summary?.top_event_types)
+      ? this.summary.top_event_types
+      : [];
+  }
+
+  get hasTopEventTypes() {
+    return this.topEventTypes.length > 0;
   }
 
   get lastLoadedLabel() {
     return this.lastLoadedAt ? formatDateTime(this.lastLoadedAt) : "";
   }
 
-  get hourlyBars() {
-    const rows = Array.isArray(this.summary?.hourly_counts) ? this.summary.hourly_counts : [];
-    const max = rows.reduce((memo, entry) => Math.max(memo, Number(entry?.count || 0)), 0) || 1;
-    return rows.map((entry) => {
-      const count = Number(entry?.count || 0);
-      return {
-        label: entry?.label || "",
-        count,
-        style: `height: ${Math.max(8, Math.round((count / max) * 92))}px;`,
-      };
-    });
+  get uniqueMediaCount() {
+    return numberValue(this.summary?.unique_media_items);
+  }
+
+  get uniqueIpCount() {
+    return numberValue(this.summary?.unique_ips);
   }
 
   buildQueryParams() {
@@ -147,6 +205,10 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
   @action
   async refreshLogs() {
+    if (this.isLoading) {
+      return;
+    }
+
     this.isLoading = true;
     this.error = "";
 
@@ -166,7 +228,7 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
           error?.message ||
           message;
       } catch {
-        // ignore
+        // ignore parse errors
       }
       this.error = message;
       this.events = [];
