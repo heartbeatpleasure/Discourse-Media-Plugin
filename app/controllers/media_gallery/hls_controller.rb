@@ -227,6 +227,21 @@ module ::MediaGallery
       Rails.logger.warn(
         "[media_gallery] HLS denied reason=#{reason} token=#{token_fingerprint(token)} ip=#{request.remote_ip} user_id=#{current_user&.id} request_id=#{request.request_id}"
       )
+      ::MediaGallery::LogEvents.record(
+        event_type: "hls_denied",
+        severity: "warning",
+        category: "playback",
+        request: request,
+        user: current_user,
+        message: reason.to_s,
+        details: {
+          reason: reason.to_s,
+          public_id: params[:public_id].to_s.presence,
+          variant: params[:variant].to_s.presence,
+          segment: params[:segment].to_s.presence,
+          token_present: token.present?,
+        },
+      )
     rescue
     end
 

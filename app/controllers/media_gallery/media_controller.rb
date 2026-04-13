@@ -463,14 +463,36 @@ module ::MediaGallery
       end
 
       ok, err = MediaGallery::Security.enforce_active_token_limits!(user_id: user_id, ip: ip)
-      return render_json_error(err, status: 429, message: playback_limit_message(err)) unless ok
+      unless ok
+        log_security_event(
+          event_type: "play_token_limit_reached",
+          severity: "warning",
+          category: "playback",
+          user: current_user,
+          media_item: item,
+          message: err,
+          details: { ip: ip, media_public_id: item.public_id, playback: (use_hls ? "hls" : "stream") },
+        )
+        return render_json_error(err, status: 429, message: playback_limit_message(err))
+      end
 
       streaming_session = item.media_type.to_s == "video" || item.media_type.to_s == "audio"
       heartbeat_enabled = streaming_session && MediaGallery::Security.heartbeat_enabled?
 
       if heartbeat_enabled
         ok2, err2 = MediaGallery::Security.enforce_new_session_limits!(user_id: user_id, ip: ip)
-        return render_json_error(err2, status: 429, message: playback_limit_message(err2)) unless ok2
+        unless ok2
+          log_security_event(
+            event_type: "new_session_limit_reached",
+            severity: "warning",
+            category: "playback",
+            user: current_user,
+            media_item: item,
+            message: err2,
+            details: { ip: ip, media_public_id: item.public_id, playback: (use_hls ? "hls" : "stream") },
+          )
+          return render_json_error(err2, status: 429, message: playback_limit_message(err2))
+        end
       end
 
       session_binding = MediaGallery::Token.ensure_session_binding_cookie!(request: request, cookies: cookies)
@@ -524,6 +546,17 @@ module ::MediaGallery
 
         ok3, err3 = MediaGallery::Security.enforce_session_limits!(user_id: user_id, ip: ip)
         if !ok3
+          log_security_event(
+            event_type: "concurrent_session_limit_reached",
+            severity: "warning",
+            category: "playback",
+            user: current_user,
+            media_item: item,
+            overlay_code: overlay_payload.is_a?(Hash) ? overlay_payload[:overlay_code] || overlay_payload["overlay_code"] : nil,
+            fingerprint_id: fingerprint_id,
+            message: err3,
+            details: { ip: ip, media_public_id: item.public_id, playback: (use_hls ? "hls" : "stream") },
+          )
           MediaGallery::Security.revoke!(token: token, exp: expires_at, user_id: user_id, ip: ip)
           return render_json_error(err3, status: 429, message: playback_limit_message(err3))
         end
@@ -533,6 +566,22 @@ module ::MediaGallery
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
       set_sensitive_json_headers!
+      log_security_event(
+        event_type: "play_token_issued",
+        severity: "info",
+        category: "playback",
+        user: current_user,
+        media_item: item,
+        overlay_code: overlay_payload.is_a?(Hash) ? overlay_payload[:overlay_code] || overlay_payload["overlay_code"] : nil,
+        fingerprint_id: fingerprint_id,
+        message: use_hls ? "hls" : "stream",
+        details: {
+          media_public_id: item.public_id,
+          playback: (use_hls ? "hls" : "stream"),
+          heartbeat_enabled: heartbeat_enabled,
+          overlay_enabled: overlay_payload.present?,
+        },
+      )
 
       if use_hls
         render_json_dump(
@@ -588,26 +637,41 @@ module ::MediaGallery
       raise Discourse::NotFound if MediaGallery::Security.revoked?(token)
 
       payload = MediaGallery::Token.verify_any(token)
-      raise Discourse::NotFound if payload.blank?
+      if payload.blank?
+        log_security_event(event_type: "heartbeat_denied", severity: "warning", category: "playback", user: current_user, message: "invalid_or_expired_token", details: { token_present: token.present? })
+        raise Discourse::NotFound
+      end
 
       if payload["user_id"].present? && current_user.id != payload["user_id"].to_i
+        log_security_event(event_type: "heartbeat_denied", severity: "warning", category: "playback", user: current_user, message: "user_mismatch", details: { media_item_id: payload["media_item_id"], fingerprint_id: payload["fingerprint_id"] })
         raise Discourse::NotFound
       end
 
       if payload["ip"].present? && request.remote_ip.to_s != payload["ip"].to_s
+        log_security_event(event_type: "heartbeat_denied", severity: "warning", category: "playback", user: current_user, message: "ip_mismatch", details: { media_item_id: payload["media_item_id"], fingerprint_id: payload["fingerprint_id"] })
         raise Discourse::NotFound
       end
 
       unless MediaGallery::Token.request_session_binding_valid?(payload: payload, request: request, cookies: cookies)
+        log_security_event(event_type: "heartbeat_denied", severity: "warning", category: "playback", user: current_user, overlay_code: payload["overlay_code"], fingerprint_id: payload["fingerprint_id"], message: "session_binding_mismatch", details: { media_item_id: payload["media_item_id"] })
         raise Discourse::NotFound
       end
 
       # Only sessions for audio/video are counted.
       item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
-      raise Discourse::NotFound if item.blank?
+      if item.blank?
+        log_security_event(event_type: "heartbeat_denied", severity: "warning", category: "playback", user: current_user, overlay_code: payload["overlay_code"], fingerprint_id: payload["fingerprint_id"], message: "media_item_missing", details: { media_item_id: payload["media_item_id"] })
+        raise Discourse::NotFound
+      end
       ensure_item_visible_to_current_user!(item)
-      raise Discourse::NotFound unless item.ready?
-      raise Discourse::NotFound unless MediaGallery::Token.asset_binding_valid?(media_item: item, kind: payload["kind"], payload: payload)
+      unless item.ready?
+        log_security_event(event_type: "heartbeat_denied", severity: "warning", category: "playback", user: current_user, media_item: item, overlay_code: payload["overlay_code"], fingerprint_id: payload["fingerprint_id"], message: "item_not_ready")
+        raise Discourse::NotFound
+      end
+      unless MediaGallery::Token.asset_binding_valid?(media_item: item, kind: payload["kind"], payload: payload)
+        log_security_event(event_type: "heartbeat_denied", severity: "warning", category: "playback", user: current_user, media_item: item, overlay_code: payload["overlay_code"], fingerprint_id: payload["fingerprint_id"], message: "asset_binding_mismatch")
+        raise Discourse::NotFound
+      end
 
       streaming_session = item.media_type.to_s == "video" || item.media_type.to_s == "audio"
 
@@ -623,6 +687,17 @@ module ::MediaGallery
 
         ok, err = MediaGallery::Security.enforce_session_limits!(user_id: user_id, ip: ip)
         if !ok
+          log_security_event(
+            event_type: "heartbeat_session_limit_reached",
+            severity: "warning",
+            category: "playback",
+            user: current_user,
+            media_item: item,
+            overlay_code: payload["overlay_code"],
+            fingerprint_id: payload["fingerprint_id"],
+            message: err,
+            details: { media_public_id: item.public_id, ip: ip },
+          )
           MediaGallery::Security.revoke!(token: token, exp: payload["exp"], user_id: user_id, ip: ip)
           return render_json_error(err, status: 429, message: playback_limit_message(err))
         end
@@ -650,14 +725,17 @@ module ::MediaGallery
       return render_json_dump(ok: true) if payload.blank?
 
       if payload["user_id"].present? && current_user.id != payload["user_id"].to_i
+        log_security_event(event_type: "revoke_denied", severity: "warning", category: "playback", user: current_user, message: "user_mismatch", details: { media_item_id: payload["media_item_id"] })
         raise Discourse::NotFound
       end
 
       if payload["ip"].present? && request.remote_ip.to_s != payload["ip"].to_s
+        log_security_event(event_type: "revoke_denied", severity: "warning", category: "playback", user: current_user, message: "ip_mismatch", details: { media_item_id: payload["media_item_id"] })
         raise Discourse::NotFound
       end
 
       unless MediaGallery::Token.request_session_binding_valid?(payload: payload, request: request, cookies: cookies)
+        log_security_event(event_type: "revoke_denied", severity: "warning", category: "playback", user: current_user, overlay_code: payload["overlay_code"], fingerprint_id: payload["fingerprint_id"], message: "session_binding_mismatch", details: { media_item_id: payload["media_item_id"] })
         raise Discourse::NotFound
       end
 
@@ -692,6 +770,14 @@ module ::MediaGallery
       RateLimiter.new(nil, key, per_min, 1.minute).performed!
       true
     rescue RateLimiter::LimitExceeded
+      log_security_event(
+        event_type: "play_rate_limited",
+        severity: "warning",
+        category: "playback",
+        user: current_user,
+        message: "rate_limited",
+        details: { ip: request.remote_ip.to_s },
+      )
       render_json_error("rate_limited", status: 429, message: playback_limit_message("rate_limited"))
       false
     end
@@ -809,6 +895,19 @@ module ::MediaGallery
           method: request.request_method
         }
       )
+      log_security_event(
+        event_type: "request_blocked",
+        severity: "warning",
+        category: "request_security",
+        message: "csrf_or_same_origin_failed",
+        details: {
+          reason: "csrf_or_same_origin_failed",
+          origin: request.headers["Origin"].to_s.presence,
+          referer: request.referer.to_s.presence,
+          sec_fetch_site: request.headers["Sec-Fetch-Site"].to_s.presence,
+          method: request.request_method,
+        },
+      )
 
       set_sensitive_json_headers!
       render_json_error("forbidden", status: 403, message: "Forbidden")
@@ -829,9 +928,38 @@ module ::MediaGallery
           method: request.request_method
         }
       )
+      log_security_event(
+        event_type: "play_request_blocked",
+        severity: "warning",
+        category: "request_security",
+        message: "same_origin_required_for_play",
+        details: {
+          reason: "same_origin_required_for_play",
+          origin: request.headers["Origin"].to_s.presence,
+          referer: request.referer.to_s.presence,
+          sec_fetch_site: request.headers["Sec-Fetch-Site"].to_s.presence,
+          method: request.request_method,
+        },
+      )
 
       set_sensitive_json_headers!
       render_json_error("forbidden", status: 403, message: "Forbidden")
+    end
+
+
+    def log_security_event(event_type:, severity: "info", category: "general", user: nil, media_item: nil, overlay_code: nil, fingerprint_id: nil, message: nil, details: nil)
+      ::MediaGallery::LogEvents.record(
+        event_type: event_type,
+        severity: severity,
+        category: category,
+        request: request,
+        user: user || current_user,
+        media_item: media_item,
+        overlay_code: overlay_code,
+        fingerprint_id: fingerprint_id,
+        message: message,
+        details: details,
+      )
     end
 
     def set_sensitive_json_headers!

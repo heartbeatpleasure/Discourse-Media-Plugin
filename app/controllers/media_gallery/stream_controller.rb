@@ -15,32 +15,33 @@ module ::MediaGallery
 
     # GET/HEAD /media/stream/:token(.:ext)
     def show
+      token = params[:token].to_s
       # If the client revoked this token (overlay closed/ended), deny access.
-      raise Discourse::NotFound if MediaGallery::Security.revoked?(params[:token].to_s)
+      deny_stream!(:token_revoked, token: token) if MediaGallery::Security.revoked?(token)
 
-      payload = MediaGallery::Token.verify(params[:token].to_s)
-      raise Discourse::NotFound if payload.blank?
+      payload = MediaGallery::Token.verify(token)
+      deny_stream!(:invalid_or_expired_token, token: token) if payload.blank?
 
       if payload["user_id"].present? && current_user.id != payload["user_id"].to_i
-        raise Discourse::NotFound
+        deny_stream!(:user_mismatch, token: token, payload: payload)
       end
 
       if payload["ip"].present? && request.remote_ip.to_s != payload["ip"].to_s
-        raise Discourse::NotFound
+        deny_stream!(:ip_mismatch, token: token, payload: payload)
       end
 
       unless MediaGallery::Token.request_session_binding_valid?(payload: payload, request: request, cookies: cookies)
-        raise Discourse::NotFound
+        deny_stream!(:session_binding_mismatch, token: token, payload: payload)
       end
 
       item = MediaGallery::MediaItem.find_by(id: payload["media_item_id"])
-      raise Discourse::NotFound if item.blank?
+      deny_stream!(:media_item_missing, token: token, payload: payload) if item.blank?
       ensure_item_visible_to_current_user!(item)
-      raise Discourse::NotFound unless item.ready?
+      deny_stream!(:item_not_ready, token: token, payload: payload, item: item) unless item.ready?
 
       kind = payload["kind"].to_s
       unless MediaGallery::Token.asset_binding_valid?(media_item: item, kind: kind, payload: payload)
-        raise Discourse::NotFound
+        deny_stream!(:asset_binding_mismatch, token: token, payload: payload, item: item)
       end
 
       kind = "main" if kind.blank?
@@ -91,6 +92,29 @@ module ::MediaGallery
     end
 
     private
+
+
+    def deny_stream!(reason, token:, payload: nil, item: nil)
+      MediaGallery::LogEvents.record(
+        event_type: "stream_denied",
+        severity: "warning",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+        fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+        message: reason.to_s,
+        details: {
+          reason: reason.to_s,
+          token_kind: payload.is_a?(Hash) ? payload["kind"] : nil,
+          media_item_id: payload.is_a?(Hash) ? payload["media_item_id"] : nil,
+          media_public_id: item&.public_id,
+          token_present: token.present?,
+        },
+      )
+      raise Discourse::NotFound
+    end
 
     def apply_private_stream_headers!
       response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"

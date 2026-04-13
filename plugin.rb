@@ -54,6 +54,7 @@ after_initialize do
   require_relative "lib/media_gallery/watermark"   # ✅ NEW
   require_relative "lib/media_gallery/playback_overlay"
   require_relative "lib/media_gallery/forensics_identify"
+  require_relative "lib/media_gallery/log_events"
 
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
@@ -61,11 +62,13 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/media_playback_session.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_overlay_session.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_forensics_export.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/media_log_event.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_fingerprints_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_media_items_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_logs_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_storage_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
@@ -89,6 +92,7 @@ after_initialize do
     get "/admin/plugins/media-gallery-migrations" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-management" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-logs" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-logs" => "admin/plugins#index", constraints: AdminConstraint.new
 
     get "/media-library" => "media_gallery/library#index"
 
@@ -111,6 +115,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/profiles" => "media_gallery/admin_storage#profiles", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/health" => "media_gallery/admin_storage#health", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/logs" => "media_gallery/admin_logs#index", defaults: { format: :json }
     post "/admin/plugins/media-gallery/storage/probe" => "media_gallery/admin_storage#probe", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/management" => "media_gallery/admin_media_items#management", defaults: { format: :json }
     put "/admin/plugins/media-gallery/media-items/:public_id/admin-update" => "media_gallery/admin_media_items#admin_update", defaults: { format: :json }
