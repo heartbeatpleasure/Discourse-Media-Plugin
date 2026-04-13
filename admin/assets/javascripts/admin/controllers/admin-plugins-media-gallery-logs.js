@@ -25,186 +25,93 @@ function titleize(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function numberValue(value) {
-  const n = Number(value || 0);
-  return Number.isFinite(n) ? n : 0;
+function coerceArray(value) {
+  return Array.isArray(value) ? value : [];
 }
 
 export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked query = "";
-  @tracked severity = "all";
-  @tracked eventType = "all";
-  @tracked hours = "168";
-  @tracked limit = "100";
-
   @tracked isLoading = false;
   @tracked error = "";
   @tracked events = [];
-  @tracked summary = null;
-  @tracked filterOptions = {
-    severities: ["all", "info", "warning", "danger"],
-    event_types: ["all"],
-  };
+  @tracked summary = {};
+  @tracked topEventTypes = [];
   @tracked lastLoadedAt = null;
   @tracked hasLoadedOnce = false;
 
   resetState() {
     this.query = "";
-    this.severity = "all";
-    this.eventType = "all";
-    this.hours = "168";
-    this.limit = "100";
     this.isLoading = false;
     this.error = "";
     this.events = [];
-    this.summary = null;
-    this.filterOptions = {
-      severities: ["all", "info", "warning", "danger"],
-      event_types: ["all"],
-    };
+    this.summary = {};
+    this.topEventTypes = [];
     this.lastLoadedAt = null;
     this.hasLoadedOnce = false;
   }
 
-  async loadInitial() {
-    if (this.hasLoadedOnce || this.isLoading) {
-      return;
+  buildQuery() {
+    const params = new URLSearchParams();
+    const query = String(this.query || "").trim();
+    if (query) {
+      params.set("q", query);
     }
-    this.hasLoadedOnce = true;
-    await this.refreshLogs();
-  }
-
-  get hasEvents() {
-    return Array.isArray(this.events) && this.events.length > 0;
-  }
-
-  get severityOptions() {
-    const list = Array.isArray(this.filterOptions?.severities)
-      ? this.filterOptions.severities
-      : ["all", "info", "warning", "danger"];
-
-    return list.map((value) => ({
-      value,
-      label: value === "all" ? "All severities" : titleize(value),
-    }));
-  }
-
-  get eventTypeOptions() {
-    const list = Array.isArray(this.filterOptions?.event_types)
-      ? this.filterOptions.event_types
-      : ["all"];
-
-    return list.map((value) => ({
-      value,
-      label: value === "all" ? "All event types" : titleize(value),
-    }));
+    params.set("hours", "168");
+    params.set("limit", "100");
+    return params.toString();
   }
 
   get decoratedEvents() {
-    return (Array.isArray(this.events) ? this.events : []).map((event) => {
-      const severity = String(event?.severity || "info");
-      let badgeClass = "mg-logs__badge";
-      if (severity === "warning") {
-        badgeClass += " is-warning";
-      } else if (severity === "danger") {
-        badgeClass += " is-danger";
-      }
-
-      return {
-        ...event,
-        badgeClass,
-        severityLabel: titleize(severity),
-        eventLabel: titleize(event?.event_type || "event"),
-        createdLabel: formatDateTime(event?.created_at),
-        userLabel:
-          event?.name ||
-          event?.username ||
-          (event?.user_id ? `User #${event.user_id}` : "—"),
-        mediaLabel:
-          event?.media_title ||
-          event?.media_public_id ||
-          (event?.media_item_id ? `Item #${event.media_item_id}` : "—"),
-        detailsPreview: String(event?.details_pretty || "").trim(),
-        hasDetails: !!String(event?.details_pretty || "").trim(),
-      };
-    });
+    return coerceArray(this.events).map((event) => ({
+      id: event?.id,
+      createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
+      eventLabel: titleize(event?.event_type || "event"),
+      severityLabel: titleize(event?.severity || "info"),
+      category: event?.category || "general",
+      message: event?.message || "",
+      userLabel:
+        event?.name ||
+        event?.username ||
+        (event?.user_id ? `User #${event.user_id}` : "—"),
+      mediaLabel:
+        event?.media_title ||
+        event?.media_public_id ||
+        (event?.media_item_id ? `Item #${event.media_item_id}` : "—"),
+      requestLabel: [event?.method, event?.path].filter(Boolean).join(" ") || "—",
+      overlayCode: event?.overlay_code || "",
+      fingerprintId: event?.fingerprint_id || "",
+      ip: event?.ip || "",
+      detailsPreview: String(event?.details_pretty || "").trim(),
+    }));
   }
 
-  get summaryCards() {
-    const summary = this.summary || {};
-    const severityCounts = summary.severity_counts || {};
-
-    return [
-      {
-        label: "Shown rows",
-        value: summary.shown_rows ?? this.events.length ?? 0,
-        className: "mg-logs__summary-card",
-      },
-      {
-        label: "Filtered total",
-        value: summary.filtered_count ?? 0,
-        className: "mg-logs__summary-card",
-      },
-      {
-        label: "Last 24h",
-        value: summary.last_24h_count ?? 0,
-        className: "mg-logs__summary-card",
-      },
-      {
-        label: "Warnings",
-        value: severityCounts.warning ?? 0,
-        className: "mg-logs__summary-card is-warning",
-      },
-      {
-        label: "Danger",
-        value: severityCounts.danger ?? 0,
-        className: "mg-logs__summary-card is-danger",
-      },
-      {
-        label: "Unique users",
-        value: summary.unique_users ?? 0,
-        className: "mg-logs__summary-card",
-      },
-    ];
+  get shownRows() {
+    return Number(this.summary?.shown_rows || this.events.length || 0);
   }
 
-  get topEventTypes() {
-    return Array.isArray(this.summary?.top_event_types)
-      ? this.summary.top_event_types
-      : [];
+  get filteredCount() {
+    return Number(this.summary?.filtered_count || 0);
   }
 
-  get hasTopEventTypes() {
-    return this.topEventTypes.length > 0;
+  get last24hCount() {
+    return Number(this.summary?.last_24h_count || 0);
+  }
+
+  get uniqueUsers() {
+    return Number(this.summary?.unique_users || 0);
   }
 
   get lastLoadedLabel() {
     return this.lastLoadedAt ? formatDateTime(this.lastLoadedAt) : "";
   }
 
-  get uniqueMediaCount() {
-    return numberValue(this.summary?.unique_media_items);
-  }
-
-  get uniqueIpCount() {
-    return numberValue(this.summary?.unique_ips);
-  }
-
-  buildQueryParams() {
-    const params = new URLSearchParams();
-    const query = String(this.query || "").trim();
-    if (query) {
-      params.set("q", query);
-    }
-    params.set("severity", String(this.severity || "all"));
-    params.set("event_type", String(this.eventType || "all"));
-    params.set("hours", String(this.hours || "168"));
-    params.set("limit", String(this.limit || "100"));
-    return params.toString();
+  @action
+  updateQuery(event) {
+    this.query = event?.target?.value ?? "";
   }
 
   @action
-  async refreshLogs() {
+  async loadLogs() {
     if (this.isLoading) {
       return;
     }
@@ -213,13 +120,13 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.error = "";
 
     try {
-      const query = this.buildQueryParams();
-      const data = await ajax(`/admin/plugins/media-gallery/logs.json?${query}`);
-      this.events = Array.isArray(data?.events) ? data.events : [];
-      this.summary = data?.summary || null;
-      this.filterOptions = data?.filter_options || this.filterOptions;
+      const data = await ajax(`/admin/plugins/media-gallery/logs.json?${this.buildQuery()}`);
+      this.events = coerceArray(data?.events);
+      this.summary = data?.summary || {};
+      this.topEventTypes = coerceArray(data?.summary?.top_event_types);
       this.error = String(data?.error || "").trim();
       this.lastLoadedAt = new Date();
+      this.hasLoadedOnce = true;
     } catch (error) {
       let message = "Unable to load logs.";
       try {
@@ -230,36 +137,27 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
           error?.message ||
           message;
       } catch {
-        // ignore parse errors
+        // ignore parse failures
       }
       this.error = message;
       this.events = [];
-      this.summary = null;
+      this.summary = {};
+      this.topEventTypes = [];
     } finally {
       this.isLoading = false;
     }
   }
 
-  @action updateQuery(event) { this.query = event?.target?.value ?? ""; }
-  @action updateSeverity(event) { this.severity = event?.target?.value ?? "all"; }
-  @action updateEventType(event) { this.eventType = event?.target?.value ?? "all"; }
-  @action updateHours(event) { this.hours = event?.target?.value ?? "168"; }
-  @action updateLimit(event) { this.limit = event?.target?.value ?? "100"; }
-
   @action
-  async applyFilters(event) {
+  async search(event) {
     event?.preventDefault?.();
-    await this.refreshLogs();
+    await this.loadLogs();
   }
 
   @action
-  async resetFilters(event) {
+  async clearSearch(event) {
     event?.preventDefault?.();
     this.query = "";
-    this.severity = "all";
-    this.eventType = "all";
-    this.hours = "168";
-    this.limit = "100";
-    await this.refreshLogs();
+    await this.loadLogs();
   }
 }

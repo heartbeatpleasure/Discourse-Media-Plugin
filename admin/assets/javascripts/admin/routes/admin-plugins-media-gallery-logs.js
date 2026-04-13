@@ -6,10 +6,5 @@ export default class AdminPluginsMediaGalleryLogsRoute extends DiscourseRoute {
     if (typeof controller?.resetState === "function") {
       controller.resetState();
     }
-    if (typeof controller?.loadInitial === "function") {
-      Promise.resolve(controller.loadInitial()).catch(() => {
-        // controller handles its own error state; avoid unhandled promise noise
-      });
-    }
   }
 }
