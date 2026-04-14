@@ -58,7 +58,7 @@ module ::MediaGallery
       limit = normalize_limit(filters[:limit])
       return empty_search(hours:, limit:, error: "Log table is not available yet. Run the plugin migration first.") unless table_present?
 
-      scope = ::MediaGallery::MediaLogEvent.includes(:user, :media_item).order(created_at: :desc)
+      scope = ::MediaGallery::MediaLogEvent.includes(:user, :media_item).order(log_events_table[:created_at].desc)
 
       severity = filters[:severity].to_s.strip
       scope = scope.where(severity: severity) if severity.present? && severity != "all"
@@ -66,7 +66,7 @@ module ::MediaGallery
       event_type = filters[:event_type].to_s.strip
       scope = scope.where(event_type: event_type) if event_type.present? && event_type != "all"
 
-      scope = scope.where("created_at >= ?", hours.hours.ago)
+      scope = scope.where(log_events_table[:created_at].gteq(hours.hours.ago))
 
       query = filters[:q].to_s.strip
       if query.present?
@@ -94,8 +94,8 @@ module ::MediaGallery
       return empty_summary(hours:, rows_count: rows.length) unless table_present? && scope.present?
 
       total_scope_count = safe_count(scope)
-      last_24h_scope = ::MediaGallery::MediaLogEvent.where("created_at >= ?", 24.hours.ago)
-      recent_rows = ::MediaGallery::MediaLogEvent.where("created_at >= ?", 24.hours.ago).pluck(:created_at)
+      last_24h_scope = ::MediaGallery::MediaLogEvent.where(log_events_table[:created_at].gteq(24.hours.ago))
+      recent_rows = ::MediaGallery::MediaLogEvent.where(log_events_table[:created_at].gteq(24.hours.ago)).pluck(:created_at)
       hourly_counts = Array.new(24, 0)
       now = Time.zone.now
       recent_rows.each do |created_at|
@@ -116,7 +116,7 @@ module ::MediaGallery
         last_24h_count: safe_count(last_24h_scope),
         unique_users: safe_distinct_count(scope, :user_id),
         unique_media_items: safe_distinct_count(scope, :media_item_id),
-        unique_ips: safe_distinct_count(scope.where.not(ip: [nil, ""]), :ip),
+        unique_ips: safe_distinct_count(scope.where.not(log_events_table_name => { ip: [nil, ""] }), :ip),
         severity_counts: severity_counts,
         top_event_types: top_event_types,
         hourly_counts: hourly_counts.each_with_index.map do |count, index|
@@ -234,14 +234,14 @@ module ::MediaGallery
     private_class_method :safe_count
 
     def safe_group_count(scope, column)
-      scope.reorder(nil).group(column).count
+      scope.reorder(nil).group(qualified_log_column_name(column)).count
     rescue
       {}
     end
     private_class_method :safe_group_count
 
     def safe_distinct_count(scope, column)
-      scope.reorder(nil).where.not(column => nil).distinct.count(column)
+      scope.reorder(nil).where.not(log_events_table_name => { column => nil }).distinct.count(qualified_log_column_name(column))
     rescue
       0
     end
@@ -307,5 +307,20 @@ module ::MediaGallery
       ""
     end
     private_class_method :pretty_details
+
+    def log_events_table
+      ::MediaGallery::MediaLogEvent.arel_table
+    end
+    private_class_method :log_events_table
+
+    def log_events_table_name
+      ::MediaGallery::MediaLogEvent.table_name
+    end
+    private_class_method :log_events_table_name
+
+    def qualified_log_column_name(column)
+      "#{log_events_table_name}.#{column}"
+    end
+    private_class_method :qualified_log_column_name
   end
 end
