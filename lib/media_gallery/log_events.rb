@@ -57,20 +57,19 @@ module ::MediaGallery
       hours = normalize_hours(filters[:hours])
       limit = normalize_limit(filters[:limit])
       sort = normalize_sort(filters[:sort])
-      return empty_search(hours:, limit:, sort:, error: "Log table is not available yet. Run the plugin migration first.") unless table_present?
+
+      return empty_search(
+        hours: hours,
+        limit: limit,
+        sort: sort,
+        error: "Log table is not available yet. Run the plugin migration first.",
+      ) unless table_present?
 
       scope = ::MediaGallery::MediaLogEvent.includes(:user, :media_item)
-
-      severity = filters[:severity].to_s.strip
-      scope = scope.where(log_events_table_name => { severity: severity }) if severity.present? && severity != "all"
-
-      category = filters[:category].to_s.strip
-      scope = scope.where(log_events_table_name => { category: category }) if category.present? && category != "all"
-
-      event_type = filters[:event_type].to_s.strip
-      scope = scope.where(log_events_table_name => { event_type: event_type }) if event_type.present? && event_type != "all"
-
       scope = scope.where(log_events_table[:created_at].gteq(hours.hours.ago))
+      scope = apply_severity_filter(scope, filters[:severity])
+      scope = apply_partial_filter(scope, :category, filters[:category])
+      scope = apply_partial_filter(scope, :event_type, filters[:event_type])
 
       query = filters[:q].to_s.strip
       scope = apply_query(scope, query) if query.present?
@@ -87,40 +86,42 @@ module ::MediaGallery
       }
     rescue => e
       Rails.logger.warn("[media_gallery] log search failed #{e.class}: #{e.message}")
-      empty_search(hours:, limit:, sort:, error: "Unable to query logs. #{e.class}: #{e.message}")
+      empty_search(hours: hours, limit: limit, sort: sort, error: "Unable to query logs. #{e.class}: #{e.message}")
     end
 
     def summary(scope:, rows:, hours:)
-      return empty_summary(hours:, rows_count: rows.length) unless table_present? && scope.present?
+      return empty_summary(hours: hours, rows_count: rows.length) unless table_present? && scope.present?
 
       total_scope_count = safe_count(scope)
       last_24h_scope = scope.where(log_events_table[:created_at].gteq(24.hours.ago))
       recent_rows = ::MediaGallery::MediaLogEvent.where(log_events_table[:created_at].gteq(24.hours.ago)).pluck(:created_at)
       hourly_counts = Array.new(24, 0)
       now = Time.zone.now
+
       recent_rows.each do |created_at|
         next unless created_at
+
         age_hours = ((now - created_at) / 3600.0).floor
         next if age_hours.negative? || age_hours > 23
-        index = 23 - age_hours
-        hourly_counts[index] += 1
+
+        hourly_counts[23 - age_hours] += 1
       end
 
-      top_event_types = safe_group_count(scope, :event_type).sort_by { |_, count| -count }.first(6).map do |name, count|
-        { event_type: name, count: count }
-      end
+      top_event_types = safe_group_count(scope, :event_type)
+        .sort_by { |_, count| -count }
+        .first(6)
+        .map { |name, count| { event_type: name, count: count } }
 
-      severity_counts = safe_group_count(scope, :severity)
       {
         filtered_count: total_scope_count,
         last_24h_count: safe_count(last_24h_scope),
         unique_users: safe_distinct_count(scope, :user_id),
         unique_media_items: safe_distinct_count(scope, :media_item_id),
         unique_ips: safe_distinct_count(scope.where.not(log_events_table_name => { ip: [nil, ""] }), :ip),
-        severity_counts: severity_counts,
+        severity_counts: safe_group_count(scope, :severity),
         top_event_types: top_event_types,
         hourly_counts: hourly_counts.each_with_index.map do |count, index|
-          point_time = (now.beginning_of_hour - (23 - index).hours)
+          point_time = now.beginning_of_hour - (23 - index).hours
           { label: point_time.strftime("%H:%M"), count: count }
         end,
         active_hours_window: hours,
@@ -128,13 +129,14 @@ module ::MediaGallery
       }
     rescue => e
       Rails.logger.warn("[media_gallery] log summary failed #{e.class}: #{e.message}")
-      empty_summary(hours:, rows_count: rows.length)
+      empty_summary(hours: hours, rows_count: rows.length)
     end
 
     def serialize_rows(rows)
       rows.map do |row|
         item = row.media_item
         user = row.user
+
         {
           id: row.id,
           event_type: row.event_type,
@@ -198,6 +200,7 @@ module ::MediaGallery
     def normalize_hours(value)
       hours = value.to_i
       return 168 if hours <= 0
+
       [hours, 24 * 90].min
     end
     private_class_method :normalize_hours
@@ -205,6 +208,7 @@ module ::MediaGallery
     def normalize_limit(value)
       limit = value.to_i
       return 100 if limit <= 0
+
       [limit, 250].min
     end
     private_class_method :normalize_limit
@@ -222,6 +226,7 @@ module ::MediaGallery
 
     def empty_summary(hours:, rows_count: 0)
       now = Time.zone.now
+
       {
         filtered_count: 0,
         last_24h_count: 0,
@@ -231,7 +236,7 @@ module ::MediaGallery
         severity_counts: {},
         top_event_types: [],
         hourly_counts: (0..23).map do |index|
-          point_time = (now.beginning_of_hour - (23 - index).hours)
+          point_time = now.beginning_of_hour - (23 - index).hours
           { label: point_time.strftime("%H:%M"), count: 0 }
         end,
         active_hours_window: hours,
@@ -255,7 +260,10 @@ module ::MediaGallery
     private_class_method :safe_group_count
 
     def safe_distinct_count(scope, column)
-      scope.reorder(nil).where.not(log_events_table_name => { column => nil }).distinct.count(qualified_log_column_name(column))
+      scope.reorder(nil)
+        .where.not(log_events_table_name => { column => nil })
+        .distinct
+        .count(qualified_log_column_name(column))
     rescue
       0
     end
@@ -272,8 +280,26 @@ module ::MediaGallery
         .limit(100)
         .pluck(column)
         .compact
+    rescue
+      []
     end
     private_class_method :safe_option_values
+
+    def apply_severity_filter(scope, severity)
+      value = severity.to_s.strip
+      return scope if value.blank? || value == "all"
+
+      scope.where(log_events_table_name => { severity: normalize_severity(value) })
+    end
+    private_class_method :apply_severity_filter
+
+    def apply_partial_filter(scope, column, value)
+      term = value.to_s.strip
+      return scope if term.blank?
+
+      scope.where("#{qualified_log_column_name(column)} ILIKE :term", term: "%#{::ActiveRecord::Base.sanitize_sql_like(term)}%")
+    end
+    private_class_method :apply_partial_filter
 
     def apply_query(scope, query)
       pattern = "%#{::ActiveRecord::Base.sanitize_sql_like(query)}%"
@@ -325,8 +351,10 @@ module ::MediaGallery
 
     def sanitize_details(value)
       hash = value.is_a?(Hash) ? value.deep_stringify_keys : {}
+
       hash.each_with_object({}) do |(key, raw), result|
         next if raw.nil?
+
         sanitized = sanitize_detail_value(raw)
         result[truncate(key, 80)] = sanitized unless sanitized.nil?
       end
@@ -353,6 +381,7 @@ module ::MediaGallery
 
     def request_path(request)
       return nil if request.blank?
+
       request.fullpath.to_s.presence || request.path.to_s.presence
     rescue
       nil
@@ -362,6 +391,7 @@ module ::MediaGallery
     def user_agent_hash(value)
       text = value.to_s.strip
       return nil if text.blank?
+
       Digest::SHA1.hexdigest(text)[0, 16]
     rescue
       nil
@@ -371,6 +401,7 @@ module ::MediaGallery
     def truncate(value, max)
       text = value.to_s
       return nil if text.blank?
+
       text.length > max ? text[0, max] : text
     end
     private_class_method :truncate
@@ -378,6 +409,7 @@ module ::MediaGallery
     def pretty_details(value)
       hash = value.is_a?(Hash) ? value : {}
       return "" if hash.blank?
+
       JSON.pretty_generate(hash)
     rescue
       ""

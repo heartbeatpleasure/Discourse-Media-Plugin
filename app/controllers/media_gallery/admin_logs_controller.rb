@@ -25,16 +25,16 @@ module ::MediaGallery
         filters: {
           q: params[:q].to_s,
           severity: params[:severity].to_s.presence || "all",
-          category: params[:category].to_s.presence || "all",
-          event_type: params[:event_type].to_s.presence || "all",
+          category: params[:category].to_s,
+          event_type: params[:event_type].to_s,
           hours: search[:hours],
           limit: search[:limit],
           sort: search[:sort],
         },
         filter_options: {
           severities: %w[all info success warning danger],
-          categories: ["all"] + ::MediaGallery::LogEvents.category_options,
-          event_types: ["all"] + ::MediaGallery::LogEvents.event_type_options,
+          categories: ::MediaGallery::LogEvents.category_options,
+          event_types: ::MediaGallery::LogEvents.event_type_options,
         },
         error: search[:error].presence,
       )
@@ -46,16 +46,16 @@ module ::MediaGallery
         filters: {
           q: params[:q].to_s,
           severity: params[:severity].to_s.presence || "all",
-          category: params[:category].to_s.presence || "all",
-          event_type: params[:event_type].to_s.presence || "all",
+          category: params[:category].to_s,
+          event_type: params[:event_type].to_s,
           hours: normalized_hours,
           limit: normalized_limit,
           sort: normalized_sort,
         },
         filter_options: {
           severities: %w[all info success warning danger],
-          categories: ["all"],
-          event_types: ["all"],
+          categories: [],
+          event_types: [],
         },
         error: "Unable to load logs. #{e.class}: #{e.message}",
       )
@@ -66,12 +66,14 @@ module ::MediaGallery
     def normalized_hours
       value = params[:hours].to_i
       return 168 if value <= 0
+
       [value, 24 * 90].min
     end
 
     def normalized_limit
       value = params[:limit].to_i
       return 100 if value <= 0
+
       [value, 250].min
     end
 

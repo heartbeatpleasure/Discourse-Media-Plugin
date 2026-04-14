@@ -67,30 +67,12 @@ export default RouteTemplate(
         font-size: var(--font-down-1);
       }
 
-      .mg-logs__filters {
+      .mg-logs__filter-form {
         display: grid;
-        grid-template-columns: minmax(280px, 2.2fr) repeat(5, minmax(140px, 1fr));
         gap: 0.9rem;
-        align-items: end;
       }
 
-      .mg-logs__field {
-        display: flex;
-        flex-direction: column;
-        gap: 0.4rem;
-        min-width: 0;
-      }
-
-      .mg-logs__field.is-search {
-        grid-column: span 2;
-      }
-
-      .mg-logs__field label {
-        color: var(--mg-muted);
-        font-size: var(--font-down-1);
-        font-weight: 600;
-      }
-
+      .mg-logs__search-box,
       .mg-logs__field input,
       .mg-logs__field select {
         width: 100%;
@@ -100,6 +82,30 @@ export default RouteTemplate(
         background: var(--primary-very-low);
         min-height: 42px;
         padding: 0.55rem 0.8rem;
+      }
+
+      .mg-logs__filters {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.9rem;
+      }
+
+      .mg-logs__field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        min-width: 0;
+      }
+
+      .mg-logs__field label {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        font-weight: 600;
+      }
+
+      .mg-logs__field-hint {
+        color: var(--mg-muted);
+        font-size: var(--font-down-2);
       }
 
       .mg-logs__stats {
@@ -311,13 +317,9 @@ export default RouteTemplate(
         color: var(--danger);
       }
 
-      @media (max-width: 1250px) {
+      @media (max-width: 1100px) {
         .mg-logs__filters {
           grid-template-columns: repeat(3, minmax(0, 1fr));
-        }
-
-        .mg-logs__field.is-search {
-          grid-column: 1 / -1;
         }
       }
 
@@ -362,92 +364,97 @@ export default RouteTemplate(
           </div>
         </div>
 
-        <div class="mg-logs__filters">
-          <div class="mg-logs__field is-search">
-            <label>Search</label>
-            <input
-              type="text"
-              value={{@controller.query}}
-              placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}}
-              {{on "input" @controller.updateQuery}}
-              {{on "keydown" @controller.onSearchKeydown}}
-            />
+        <form class="mg-logs__filter-form" {{on "submit" @controller.search}}>
+          <input
+            class="mg-logs__search-box"
+            type="text"
+            value={{@controller.query}}
+            placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}}
+            {{on "input" @controller.updateQuery}}
+          />
+
+          <div class="mg-logs__filters">
+            <div class="mg-logs__field">
+              <label>Severity</label>
+              <select value={{@controller.severityFilter}} {{on "change" @controller.updateSeverityFilter}}>
+                <option value="all">All severities</option>
+                <option value="info">Info</option>
+                <option value="success">Success</option>
+                <option value="warning">Warning</option>
+                <option value="danger">Error / danger</option>
+              </select>
+            </div>
+
+            <div class="mg-logs__field">
+              <label>Category</label>
+              <input
+                type="text"
+                value={{@controller.categoryFilter}}
+                placeholder="playback, security, forensics…"
+                {{on "input" @controller.updateCategoryFilter}}
+              />
+              <div class="mg-logs__field-hint">Partial match</div>
+            </div>
+
+            <div class="mg-logs__field">
+              <label>Event type</label>
+              <input
+                type="text"
+                value={{@controller.eventTypeFilter}}
+                placeholder="play_token_issued…"
+                {{on "input" @controller.updateEventTypeFilter}}
+              />
+              <div class="mg-logs__field-hint">Partial match</div>
+            </div>
+
+            <div class="mg-logs__field">
+              <label>Time window</label>
+              <select value={{@controller.hoursFilter}} {{on "change" @controller.updateHoursFilter}}>
+                <option value="24">Last 24 hours</option>
+                <option value="72">Last 3 days</option>
+                <option value="168">Last 7 days</option>
+                <option value="720">Last 30 days</option>
+                <option value="2160">Last 90 days</option>
+              </select>
+            </div>
+
+            <div class="mg-logs__field">
+              <label>Limit</label>
+              <select value={{@controller.limit}} {{on "change" @controller.updateLimit}}>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="250">250</option>
+              </select>
+            </div>
           </div>
 
-          <div class="mg-logs__field">
-            <label>Severity</label>
-            <select value={{@controller.severityFilter}} {{on "change" @controller.onSeverityFilterChange}}>
-              <option value="all">All severities</option>
-              <option value="info">Info</option>
-              <option value="success">Success</option>
-              <option value="warning">Warning</option>
-              <option value="danger">Error / danger</option>
-            </select>
+          <div class="mg-logs__filters">
+            <div class="mg-logs__field">
+              <label>Sort</label>
+              <select value={{@controller.sortBy}} {{on "change" @controller.updateSort}}>
+                <option value="created_at_desc">Newest first</option>
+                <option value="created_at_asc">Oldest first</option>
+              </select>
+            </div>
           </div>
 
-          <div class="mg-logs__field">
-            <label>Category</label>
-            <select value={{@controller.categoryFilter}} {{on "change" @controller.onCategoryFilterChange}}>
-              <option value="all">All categories</option>
-              {{#each @controller.categoryOptions as |option|}}
-                <option value={{option.value}}>{{option.label}}</option>
-              {{/each}}
-            </select>
-          </div>
+          <div class="mg-logs__filters-footer">
+            <div class="mg-logs__actions">
+              <button class="btn btn-primary" type="submit" disabled={{@controller.isLoading}}>
+                {{if @controller.isLoading "Searching…" "Search"}}
+              </button>
+              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.clearFilters}}>Clear</button>
+            </div>
 
-          <div class="mg-logs__field">
-            <label>Event type</label>
-            <select value={{@controller.eventTypeFilter}} {{on "change" @controller.onEventTypeFilterChange}}>
-              <option value="all">All event types</option>
-              {{#each @controller.eventTypeOptions as |option|}}
-                <option value={{option.value}}>{{option.label}}</option>
-              {{/each}}
-            </select>
+            <div class="mg-logs__muted">
+              {{@controller.searchInfo}}
+              {{#if @controller.lastLoadedAt}}
+                · {{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}
+              {{/if}}
+            </div>
           </div>
-
-          <div class="mg-logs__field">
-            <label>Time window</label>
-            <select value={{@controller.hoursFilter}} {{on "change" @controller.onHoursFilterChange}}>
-              {{#each @controller.hoursOptions as |option|}}
-                <option value={{option.value}}>{{option.label}}</option>
-              {{/each}}
-            </select>
-          </div>
-
-          <div class="mg-logs__field">
-            <label>Limit</label>
-            <select value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
-              {{#each @controller.limitOptions as |option|}}
-                <option value={{option}}>{{option}}</option>
-              {{/each}}
-            </select>
-          </div>
-
-          <div class="mg-logs__field">
-            <label>Sort</label>
-            <select value={{@controller.sortBy}} {{on "change" @controller.onSortChange}}>
-              {{#each @controller.sortOptions as |option|}}
-                <option value={{option.value}}>{{option.label}}</option>
-              {{/each}}
-            </select>
-          </div>
-        </div>
-
-        <div class="mg-logs__filters-footer">
-          <div class="mg-logs__actions">
-            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>
-              {{if @controller.isLoading "Searching…" "Search"}}
-            </button>
-            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.resetFilters}}>Reset</button>
-          </div>
-
-          <div class="mg-logs__muted">
-            {{@controller.searchInfo}}
-            {{#if @controller.lastLoadedAt}}
-              · {{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}
-            {{/if}}
-          </div>
-        </div>
+        </form>
       </div>
 
       {{#if @controller.error}}
@@ -539,7 +546,7 @@ export default RouteTemplate(
           {{#if @controller.hasLoadedOnce}}
             <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_results"}}</div>
           {{else}}
-            <div class="mg-logs__muted">No data loaded yet.</div>
+            <div class="mg-logs__muted">Use the filters above and click search to load log events.</div>
           {{/if}}
         {{/if}}
       </div>
