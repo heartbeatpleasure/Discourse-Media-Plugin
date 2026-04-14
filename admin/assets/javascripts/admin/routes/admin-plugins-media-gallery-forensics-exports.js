@@ -1,6 +1,21 @@
 import { ajax } from "discourse/lib/ajax";
 import DiscourseRoute from "discourse/routes/discourse";
 
+function decorateExport(exp) {
+  const rowsCount = Number(exp?.rows_count || 0);
+  const isDatabaseStorage = exp?.storage === "db";
+  const isReady = isDatabaseStorage || Boolean(exp?.file_exists);
+
+  return {
+    ...exp,
+    rowsLabel: `${rowsCount} rows`,
+    storageLabel: isDatabaseStorage ? "Database" : "File storage",
+    availabilityLabel: isReady ? "Ready" : "Missing file",
+    availabilityClass: isReady ? "is-success" : "is-warning",
+    storageClass: isDatabaseStorage ? "is-info" : "",
+  };
+}
+
 export default class AdminPluginsMediaGalleryForensicsExportsRoute extends DiscourseRoute {
   model() {
     return ajax("/admin/plugins/media-gallery/forensics-exports.json").catch((e) => {
@@ -28,7 +43,7 @@ export default class AdminPluginsMediaGalleryForensicsExportsRoute extends Disco
 
     controller.setProperties({
       model,
-      exports: model?.exports || [],
+      exports: (model?.exports || []).map(decorateExport),
       error: model?.error,
       downloadBase: "/admin/plugins/media-gallery/forensics-exports",
     });
