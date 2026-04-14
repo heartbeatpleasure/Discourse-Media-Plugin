@@ -25,10 +25,10 @@ module ::MediaGallery
         filters: {
           q: params[:q].to_s,
           severity: params[:severity].to_s.presence || "all",
-          category: params[:category].to_s,
-          event_type: params[:event_type].to_s,
-          hours: search[:hours],
-          limit: search[:limit],
+          category: params[:category].to_s.presence || "all",
+          event_type: params[:event_type].to_s.presence || "all",
+          hours: search[:hours].to_s,
+          limit: search[:limit].to_s,
           sort: search[:sort],
         },
         filter_options: {
@@ -46,10 +46,10 @@ module ::MediaGallery
         filters: {
           q: params[:q].to_s,
           severity: params[:severity].to_s.presence || "all",
-          category: params[:category].to_s,
-          event_type: params[:event_type].to_s,
-          hours: normalized_hours,
-          limit: normalized_limit,
+          category: params[:category].to_s.presence || "all",
+          event_type: params[:event_type].to_s.presence || "all",
+          hours: normalized_hours.to_s,
+          limit: normalized_limit.to_s,
           sort: normalized_sort,
         },
         filter_options: {
@@ -72,13 +72,13 @@ module ::MediaGallery
 
     def normalized_limit
       value = params[:limit].to_i
-      return 100 if value <= 0
+      return 25 if value <= 0
 
       [value, 250].min
     end
 
     def normalized_sort
-      value = params[:sort].to_s
+      value = params[:sort].to_s.strip
       %w[created_at_desc created_at_asc].include?(value) ? value : "created_at_desc"
     end
   end

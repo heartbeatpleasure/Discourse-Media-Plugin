@@ -1,7 +1,6 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
-import { scheduleOnce } from "@ember/runloop";
 import { ajax } from "discourse/lib/ajax";
 
 const HOURS_LABELS = {
@@ -37,15 +36,12 @@ function normalizeText(value, fallback = "—") {
   return text ? text : fallback;
 }
 
-function prettyLabel(value) {
-  return normalizeText(value, "")
+function titleize(value) {
+  const text = String(value || "")
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
 
-function titleize(value) {
-  const text = prettyLabel(value);
   return text ? text.replace(/\b\w/g, (char) => char.toUpperCase()) : "—";
 }
 
@@ -60,24 +56,9 @@ function uniqueStrings(values) {
         .map((value) => String(value || "").trim())
         .filter(Boolean)
     ),
-  ];
-}
-
-function normalizedOptionList(values, selectedValue = "") {
-  const items = uniqueStrings(values);
-  const selected = String(selectedValue || "").trim();
-
-  if (selected && !items.includes(selected)) {
-    items.push(selected);
-  }
-
-  return items
-    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
-    .map((value) => ({
-      id: value,
-      value,
-      label: titleize(value),
-    }));
+  ].sort((left, right) =>
+    left.localeCompare(right, undefined, { sensitivity: "base" })
+  );
 }
 
 function severityTone(value) {
@@ -111,6 +92,7 @@ function categoryTone(value) {
     case "forensics":
       return "warning";
     case "delivery":
+    case "migration":
       return "success";
     case "error":
     case "failure":
@@ -120,12 +102,14 @@ function categoryTone(value) {
   }
 }
 
-function badgeClass(baseClass, tone, isSoft = false) {
-  const classes = [baseClass, `is-${tone}`];
-  if (isSoft) {
-    classes.push("is-soft");
-  }
-  return classes.join(" ");
+function buildBadgeClass(tone, soft = false) {
+  return [
+    "mg-logs__badge",
+    `is-${tone}`,
+    soft ? "is-soft" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function buildUserLabel(event) {
@@ -133,17 +117,11 @@ function buildUserLabel(event) {
   const username = normalizeText(event?.username, "");
 
   if (name && username && name.toLowerCase() !== username.toLowerCase()) {
-    return {
-      value: name,
-      meta: `@${username}`,
-    };
+    return { value: name, meta: `@${username}` };
   }
 
   if (name || username) {
-    return {
-      value: name || username,
-      meta: "",
-    };
+    return { value: name || username, meta: "" };
   }
 
   return {
@@ -157,17 +135,11 @@ function buildMediaLabel(event) {
   const publicId = normalizeText(event?.media_public_id, "");
 
   if (title && publicId && title !== publicId) {
-    return {
-      value: title,
-      meta: publicId,
-    };
+    return { value: title, meta: publicId };
   }
 
   if (title || publicId) {
-    return {
-      value: title || publicId,
-      meta: "",
-    };
+    return { value: title || publicId, meta: "" };
   }
 
   return {
@@ -178,13 +150,16 @@ function buildMediaLabel(event) {
 
 function buildFact(label, value, options = {}) {
   const text = normalizeText(value);
-
   return {
-    id: `${label}-${text}-${options.meta || ""}`,
     label,
     value: text,
     meta: normalizeText(options.meta, ""),
-    isWide: Boolean(options.isWide),
+    itemClass: [
+      "mg-logs__fact",
+      options.isWide ? "is-wide" : null,
+    ]
+      .filter(Boolean)
+      .join(" "),
     valueClass: [
       "mg-logs__fact-value",
       options.isMono ? "mg-logs__fact-value--mono" : null,
@@ -194,145 +169,133 @@ function buildFact(label, value, options = {}) {
   };
 }
 
-function decorateTopEventTypes(entries) {
-  return coerceArray(entries).map((entry) => ({
-    id: String(entry?.event_type || "event"),
-    eventLabel: titleize(entry?.event_type || "event"),
-    count: Number(entry?.count || 0),
-  }));
+function decorateEvent(event) {
+  const user = buildUserLabel(event);
+  const media = buildMediaLabel(event);
+  const facts = [
+    buildFact("User", user.value, { meta: user.meta }),
+    buildFact("Media", media.value, { meta: media.meta }),
+    buildFact("IP address", event?.ip, { isMono: true }),
+    buildFact("Overlay code", event?.overlay_code, { isMono: true }),
+    buildFact("Request", [event?.method, event?.path].filter(Boolean).join(" "), {
+      isWide: true,
+      isMono: true,
+    }),
+    buildFact("Fingerprint", event?.fingerprint_id, {
+      isWide: true,
+      isMono: true,
+    }),
+    buildFact("Request ID", event?.request_id, {
+      isWide: true,
+      isMono: true,
+    }),
+    buildFact("Message", event?.message, { isWide: true }),
+  ].filter((fact) => fact.value !== "—");
+
+  return {
+    id: event?.id,
+    createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
+    eventLabel: titleize(event?.event_type || "event"),
+    severityLabel: titleize(event?.severity || "info"),
+    severityBadgeClass: buildBadgeClass(severityTone(event?.severity)),
+    categoryLabel: titleize(event?.category || "general"),
+    categoryBadgeClass: buildBadgeClass(categoryTone(event?.category), true),
+    detailsPreview: String(event?.details_pretty || "").trim(),
+    facts,
+  };
 }
 
-function decorateEvents(events) {
-  return coerceArray(events).map((event) => {
-    const user = buildUserLabel(event);
-    const media = buildMediaLabel(event);
-    const facts = [
-      buildFact("User", user.value, { meta: user.meta }),
-      buildFact("Media", media.value, { meta: media.meta }),
-      buildFact("IP address", event?.ip, { isMono: true }),
-      buildFact("Overlay code", event?.overlay_code, { isMono: true }),
-      buildFact("Request", [event?.method, event?.path].filter(Boolean).join(" "), {
-        isWide: true,
-        isMono: true,
-      }),
-      buildFact("Fingerprint", event?.fingerprint_id, { isWide: true, isMono: true }),
-      buildFact("Request ID", event?.request_id, { isWide: true, isMono: true }),
-      buildFact("Message", event?.message, { isWide: true }),
-    ].filter((fact) => fact.value !== "—");
-
-    return {
-      id: event?.id,
-      createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
-      eventLabel: titleize(event?.event_type || "event"),
-      severityLabel: titleize(event?.severity || "info"),
-      severityBadgeClass: badgeClass("mg-logs__badge", severityTone(event?.severity)),
-      categoryLabel: titleize(event?.category || "general"),
-      categoryBadgeClass: badgeClass("mg-logs__badge", categoryTone(event?.category), true),
-      facts,
-      detailsPreview: String(event?.details_pretty || "").trim(),
-    };
-  });
+function decorateTopEvent(entry) {
+  return {
+    eventLabel: titleize(entry?.event_type || "event"),
+    count: Number(entry?.count || 0),
+  };
 }
 
 export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked query = "";
   @tracked severityFilter = "all";
-  @tracked categoryFilter = "";
-  @tracked eventTypeFilter = "";
+  @tracked categoryFilter = "all";
+  @tracked eventTypeFilter = "all";
   @tracked hoursFilter = "168";
-  @tracked limit = "100";
+  @tracked limit = "25";
   @tracked sortBy = "created_at_desc";
-  @tracked categoryOptions = [];
-  @tracked eventTypeOptions = [];
-  @tracked renderedCategoryOptions = [];
-  @tracked renderedEventTypeOptions = [];
-  @tracked decoratedEventRows = [];
-  @tracked decoratedTopEventRows = [];
   @tracked isLoading = false;
   @tracked error = "";
   @tracked events = [];
   @tracked summary = {};
   @tracked topEventTypes = [];
+  @tracked categoryOptions = [];
+  @tracked eventTypeOptions = [];
   @tracked lastLoadedAt = null;
   @tracked hasLoadedOnce = false;
-  _initialLoadScheduled = false;
 
   resetState() {
     this.query = "";
     this.severityFilter = "all";
-    this.categoryFilter = "";
-    this.eventTypeFilter = "";
+    this.categoryFilter = "all";
+    this.eventTypeFilter = "all";
     this.hoursFilter = "168";
-    this.limit = "100";
+    this.limit = "25";
     this.sortBy = "created_at_desc";
-    this.categoryOptions = [];
-    this.eventTypeOptions = [];
-    this.renderedCategoryOptions = [];
-    this.renderedEventTypeOptions = [];
-    this.decoratedEventRows = [];
-    this.decoratedTopEventRows = [];
     this.isLoading = false;
     this.error = "";
     this.events = [];
     this.summary = {};
     this.topEventTypes = [];
+    this.categoryOptions = [];
+    this.eventTypeOptions = [];
     this.lastLoadedAt = null;
     this.hasLoadedOnce = false;
-    this._initialLoadScheduled = false;
-  }
-
-  loadInitial() {
-    if (this._initialLoadScheduled) {
-      return;
-    }
-
-    this._initialLoadScheduled = true;
-    scheduleOnce("afterRender", this, this.loadLogs);
   }
 
   buildQuery() {
     const params = new URLSearchParams();
     const query = String(this.query || "").trim();
-    const category = String(this.categoryFilter || "").trim();
-    const eventType = String(this.eventTypeFilter || "").trim();
 
     if (query) {
       params.set("q", query);
     }
 
-    if (this.severityFilter && this.severityFilter !== "all") {
+    if (this.severityFilter !== "all") {
       params.set("severity", this.severityFilter);
     }
 
-    if (category) {
-      params.set("category", category);
+    if (this.categoryFilter !== "all") {
+      params.set("category", this.categoryFilter);
     }
 
-    if (eventType) {
-      params.set("event_type", eventType);
+    if (this.eventTypeFilter !== "all") {
+      params.set("event_type", this.eventTypeFilter);
     }
 
     params.set("hours", this.hoursFilter || "168");
-    params.set("limit", this.limit || "100");
+    params.set("limit", this.limit || "25");
     params.set("sort", this.sortBy || "created_at_desc");
 
     return params.toString();
   }
 
-  get availableCategoryOptions() {
-    return this.renderedCategoryOptions;
-  }
-
-  get availableEventTypeOptions() {
-    return this.renderedEventTypeOptions;
-  }
-
   get decoratedEvents() {
-    return this.decoratedEventRows;
+    return coerceArray(this.events).map((event) => decorateEvent(event));
   }
 
   get decoratedTopEventTypes() {
-    return this.decoratedTopEventRows;
+    return coerceArray(this.topEventTypes).map((entry) => decorateTopEvent(entry));
+  }
+
+  get availableCategoryOptions() {
+    return uniqueStrings(this.categoryOptions).map((value) => ({
+      value,
+      label: titleize(value),
+    }));
+  }
+
+  get availableEventTypeOptions() {
+    return uniqueStrings(this.eventTypeOptions).map((value) => ({
+      value,
+      label: titleize(value),
+    }));
   }
 
   get filteredCount() {
@@ -349,10 +312,6 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
   get uniqueMediaItems() {
     return Number(this.summary?.unique_media_items || 0);
-  }
-
-  get uniqueIps() {
-    return Number(this.summary?.unique_ips || 0);
   }
 
   get shownRows() {
@@ -379,35 +338,24 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return parts.join(" · ");
   }
 
-  applyResponseFilters(filters = {}) {
-    this.query = String(filters?.q ?? this.query ?? "");
-    this.severityFilter = String(filters?.severity || this.severityFilter || "all");
-    this.categoryFilter = String(filters?.category ?? this.categoryFilter ?? "");
-    this.eventTypeFilter = String(filters?.event_type ?? this.eventTypeFilter ?? "");
-    this.hoursFilter = String(filters?.hours || this.hoursFilter || "168");
-    this.limit = String(filters?.limit || this.limit || "100");
-    this.sortBy = String(filters?.sort || this.sortBy || "created_at_desc");
-  }
+  applyResponse(data = {}) {
+    const filters = data?.filters || {};
+    this.query = String(filters?.q || "");
+    this.severityFilter = String(filters?.severity || "all");
+    this.categoryFilter = String(filters?.category || "all");
+    this.eventTypeFilter = String(filters?.event_type || "all");
+    this.hoursFilter = String(filters?.hours || "168");
+    this.limit = String(filters?.limit || "25");
+    this.sortBy = String(filters?.sort || "created_at_desc");
 
-  applyFilterOptions(filterOptions = {}) {
-    this.categoryOptions = uniqueStrings(filterOptions?.categories);
-    this.eventTypeOptions = uniqueStrings(filterOptions?.event_types);
-    this.renderedCategoryOptions = normalizedOptionList(
-      this.categoryOptions,
-      this.categoryFilter
-    );
-    this.renderedEventTypeOptions = normalizedOptionList(
-      this.eventTypeOptions,
-      this.eventTypeFilter
-    );
-  }
-
-  applyData(data = {}) {
+    this.categoryOptions = uniqueStrings(data?.filter_options?.categories);
+    this.eventTypeOptions = uniqueStrings(data?.filter_options?.event_types);
     this.events = coerceArray(data?.events);
     this.summary = data?.summary || {};
     this.topEventTypes = coerceArray(data?.summary?.top_event_types);
-    this.decoratedEventRows = decorateEvents(this.events);
-    this.decoratedTopEventRows = decorateTopEventTypes(this.topEventTypes);
+    this.error = String(data?.error || "").trim();
+    this.lastLoadedAt = new Date();
+    this.hasLoadedOnce = true;
   }
 
   @action
@@ -422,12 +370,12 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
   @action
   updateCategoryFilter(event) {
-    this.categoryFilter = event?.target?.value ?? "";
+    this.categoryFilter = event?.target?.value || "all";
   }
 
   @action
   updateEventTypeFilter(event) {
-    this.eventTypeFilter = event?.target?.value ?? "";
+    this.eventTypeFilter = event?.target?.value || "all";
   }
 
   @action
@@ -437,7 +385,7 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
   @action
   updateLimit(event) {
-    this.limit = event?.target?.value || "100";
+    this.limit = event?.target?.value || "25";
   }
 
   @action
@@ -456,17 +404,10 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
     try {
       const queryString = this.buildQuery();
-      const url = queryString
-        ? `/admin/plugins/media-gallery/logs.json?${queryString}`
-        : "/admin/plugins/media-gallery/logs.json";
-      const data = await ajax(url);
-
-      this.applyResponseFilters(data?.filters);
-      this.applyFilterOptions(data?.filter_options);
-      this.applyData(data);
-      this.error = String(data?.error || "").trim();
-      this.lastLoadedAt = new Date();
-      this.hasLoadedOnce = true;
+      const data = await ajax(
+        `/admin/plugins/media-gallery/logs.json${queryString ? `?${queryString}` : ""}`
+      );
+      this.applyResponse(data);
     } catch (error) {
       let message = "Unable to load logs.";
 
@@ -485,8 +426,6 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
       this.events = [];
       this.summary = {};
       this.topEventTypes = [];
-      this.decoratedEventRows = [];
-      this.decoratedTopEventRows = [];
       this.hasLoadedOnce = true;
     } finally {
       this.isLoading = false;
@@ -504,10 +443,10 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     event?.preventDefault?.();
     this.query = "";
     this.severityFilter = "all";
-    this.categoryFilter = "";
-    this.eventTypeFilter = "";
+    this.categoryFilter = "all";
+    this.eventTypeFilter = "all";
     this.hoursFilter = "168";
-    this.limit = "100";
+    this.limit = "25";
     this.sortBy = "created_at_desc";
     await this.loadLogs();
   }

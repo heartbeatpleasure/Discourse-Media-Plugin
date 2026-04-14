@@ -90,14 +90,7 @@ export default RouteTemplate(
 
       .mg-logs__filters-row {
         display: grid;
-        gap: 0.9rem;
-      }
-
-      .mg-logs__filters-row--primary {
-        grid-template-columns: 1.05fr 1fr 1fr;
-      }
-
-      .mg-logs__filters-row--secondary {
+        gap: 1rem;
         grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
@@ -108,13 +101,11 @@ export default RouteTemplate(
         min-width: 0;
       }
 
-      .mg-logs__field--compact {
-        max-width: none;
-      }
-
       .mg-logs__field label {
         font-weight: 600;
-        font-size: var(--font-down-1);
+        font-size: var(--font-up-1);
+        line-height: 1.2;
+        color: var(--primary-high);
       }
 
       .mg-logs__stats {
@@ -327,21 +318,17 @@ export default RouteTemplate(
       }
 
       @media (max-width: 1100px) {
-        .mg-logs__filters-row--primary,
-        .mg-logs__filters-row--secondary {
+        .mg-logs__filters-row,
+        .mg-logs__stats {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
       @media (max-width: 900px) {
-        .mg-logs__stats {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
         .mg-logs__event-header,
         .mg-logs__filters-footer {
-          grid-template-columns: 1fr;
           display: grid;
+          grid-template-columns: 1fr;
         }
 
         .mg-logs__event-time {
@@ -351,15 +338,10 @@ export default RouteTemplate(
       }
 
       @media (max-width: 700px) {
-        .mg-logs__filters-row--primary,
-        .mg-logs__filters-row--secondary,
+        .mg-logs__filters-row,
         .mg-logs__facts,
         .mg-logs__stats {
           grid-template-columns: 1fr;
-        }
-
-        .mg-logs__field--compact {
-          max-width: none;
         }
       }
     </style>
@@ -379,7 +361,7 @@ export default RouteTemplate(
           </div>
         </div>
 
-        <form class="mg-logs__filter-form" {{on "submit" @controller.search}}>
+        <div class="mg-logs__filter-form">
           <input
             class="mg-logs__search-box"
             type="text"
@@ -388,7 +370,7 @@ export default RouteTemplate(
             {{on "input" @controller.updateQuery}}
           />
 
-          <div class="mg-logs__filters-row mg-logs__filters-row--primary">
+          <div class="mg-logs__filters-row">
             <div class="mg-logs__field">
               <label>Severity</label>
               <select value={{@controller.severityFilter}} {{on "change" @controller.updateSeverityFilter}}>
@@ -403,8 +385,8 @@ export default RouteTemplate(
             <div class="mg-logs__field">
               <label>Category</label>
               <select value={{@controller.categoryFilter}} {{on "change" @controller.updateCategoryFilter}}>
-                <option value="">All categories</option>
-                {{#each @controller.availableCategoryOptions key="id" as |option|}}
+                <option value="all">All categories</option>
+                {{#each @controller.availableCategoryOptions as |option|}}
                   <option value={{option.value}}>{{option.label}}</option>
                 {{/each}}
               </select>
@@ -413,15 +395,15 @@ export default RouteTemplate(
             <div class="mg-logs__field">
               <label>Event type</label>
               <select value={{@controller.eventTypeFilter}} {{on "change" @controller.updateEventTypeFilter}}>
-                <option value="">All event types</option>
-                {{#each @controller.availableEventTypeOptions key="id" as |option|}}
+                <option value="all">All event types</option>
+                {{#each @controller.availableEventTypeOptions as |option|}}
                   <option value={{option.value}}>{{option.label}}</option>
                 {{/each}}
               </select>
             </div>
           </div>
 
-          <div class="mg-logs__filters-row mg-logs__filters-row--secondary">
+          <div class="mg-logs__filters-row">
             <div class="mg-logs__field">
               <label>Time window</label>
               <select value={{@controller.hoursFilter}} {{on "change" @controller.updateHoursFilter}}>
@@ -433,7 +415,7 @@ export default RouteTemplate(
               </select>
             </div>
 
-            <div class="mg-logs__field mg-logs__field--compact">
+            <div class="mg-logs__field">
               <label>Limit</label>
               <select value={{@controller.limit}} {{on "change" @controller.updateLimit}}>
                 <option value="25">25</option>
@@ -443,7 +425,7 @@ export default RouteTemplate(
               </select>
             </div>
 
-            <div class="mg-logs__field mg-logs__field--compact">
+            <div class="mg-logs__field">
               <label>Sort</label>
               <select value={{@controller.sortBy}} {{on "change" @controller.updateSort}}>
                 <option value="created_at_desc">Newest first</option>
@@ -454,7 +436,7 @@ export default RouteTemplate(
 
           <div class="mg-logs__filters-footer">
             <div class="mg-logs__actions">
-              <button class="btn btn-primary" type="submit" disabled={{@controller.isLoading}}>
+              <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>
                 {{if @controller.isLoading "Searching…" "Search"}}
               </button>
               <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.clearFilters}}>Clear</button>
@@ -467,7 +449,7 @@ export default RouteTemplate(
               {{/if}}
             </div>
           </div>
-        </form>
+        </div>
       </div>
 
       {{#if @controller.error}}
@@ -501,7 +483,7 @@ export default RouteTemplate(
 
         {{#if @controller.decoratedTopEventTypes.length}}
           <div class="mg-logs__top-list">
-            {{#each @controller.decoratedTopEventTypes key="id" as |entry|}}
+            {{#each @controller.decoratedTopEventTypes as |entry|}}
               <div class="mg-logs__top-item">
                 <span>{{entry.eventLabel}}</span>
                 <span class="mg-logs__badge">{{entry.count}}</span>
@@ -521,7 +503,7 @@ export default RouteTemplate(
 
         {{#if @controller.decoratedEvents.length}}
           <div class="mg-logs__event-list">
-            {{#each @controller.decoratedEvents key="id" as |event|}}
+            {{#each @controller.decoratedEvents as |event|}}
               <article class="mg-logs__event">
                 <div class="mg-logs__event-header">
                   <div class="mg-logs__event-heading">
@@ -535,8 +517,8 @@ export default RouteTemplate(
                 </div>
 
                 <div class="mg-logs__facts">
-                  {{#each event.facts key="id" as |fact|}}
-                    <div class="mg-logs__fact {{if fact.isWide 'is-wide'}}">
+                  {{#each event.facts as |fact|}}
+                    <div class={{fact.itemClass}}>
                       <div class="mg-logs__fact-label">{{fact.label}}</div>
                       <div class={{fact.valueClass}}>{{fact.value}}</div>
                       {{#if fact.meta}}
@@ -555,12 +537,10 @@ export default RouteTemplate(
               </article>
             {{/each}}
           </div>
+        {{else if @controller.hasLoadedOnce}}
+          <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_results"}}</div>
         {{else}}
-          {{#if @controller.hasLoadedOnce}}
-            <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_results"}}</div>
-          {{else}}
-            <div class="mg-logs__muted">Use the filters above and click search to load log events.</div>
-          {{/if}}
+          <div class="mg-logs__muted">Loading recent log events…</div>
         {{/if}}
       </div>
     </div>

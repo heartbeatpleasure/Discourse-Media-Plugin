@@ -5,11 +5,11 @@ require "json"
 
 module ::MediaGallery
   module LogEvents
-    module_function
+    extend self
 
-    MAX_TEXT = 500
+    MAX_TEXT = 1000
+    MAX_REQUEST_ID = 128
     MAX_PATH = 500
-    MAX_REQUEST_ID = 100
     MAX_OVERLAY_CODE = 32
     MAX_FINGERPRINT_ID = 128
     MAX_IP = 80
@@ -48,7 +48,7 @@ module ::MediaGallery
     end
 
     def table_present?
-      ::ActiveRecord::Base.connection.data_source_exists?("media_gallery_log_events")
+      ::ActiveRecord::Base.connection.data_source_exists?(log_events_table_name)
     rescue
       false
     end
@@ -58,27 +58,33 @@ module ::MediaGallery
       limit = normalize_limit(filters[:limit])
       sort = normalize_sort(filters[:sort])
 
-      return empty_search(
-        hours: hours,
-        limit: limit,
-        sort: sort,
-        error: "Log table is not available yet. Run the plugin migration first.",
-      ) unless table_present?
+      return empty_search(hours: hours, limit: limit, sort: sort, error: "Log table is not available yet. Run the plugin migration first.") unless table_present?
 
       scope = ::MediaGallery::MediaLogEvent.includes(:user, :media_item)
-      scope = scope.where(log_events_table[:created_at].gteq(hours.hours.ago))
-      scope = apply_severity_filter(scope, filters[:severity])
-      scope = apply_partial_filter(scope, :category, filters[:category])
-      scope = apply_partial_filter(scope, :event_type, filters[:event_type])
+      scope = scope.where("#{qualified_log_column_name(:created_at)} >= ?", hours.hours.ago)
+
+      severity = filters[:severity].to_s.strip
+      if severity.present? && severity != "all"
+        scope = scope.where(log_events_table_name => { severity: normalize_severity(severity) })
+      end
+
+      category = filters[:category].to_s.strip
+      if category.present? && category != "all"
+        scope = scope.where(log_events_table_name => { category: category })
+      end
+
+      event_type = filters[:event_type].to_s.strip
+      if event_type.present? && event_type != "all"
+        scope = scope.where(log_events_table_name => { event_type: event_type })
+      end
 
       query = filters[:q].to_s.strip
       scope = apply_query(scope, query) if query.present?
       scope = apply_sort(scope, sort)
 
-      rows = scope.limit(limit).to_a
       {
         scope: scope,
-        rows: rows,
+        rows: scope.limit(limit).to_a,
         hours: hours,
         limit: limit,
         sort: sort,
@@ -93,8 +99,8 @@ module ::MediaGallery
       return empty_summary(hours: hours, rows_count: rows.length) unless table_present? && scope.present?
 
       total_scope_count = safe_count(scope)
-      last_24h_scope = scope.where(log_events_table[:created_at].gteq(24.hours.ago))
-      recent_rows = ::MediaGallery::MediaLogEvent.where(log_events_table[:created_at].gteq(24.hours.ago)).pluck(:created_at)
+      last_24h_scope = scope.where("#{qualified_log_column_name(:created_at)} >= ?", 24.hours.ago)
+      recent_rows = ::MediaGallery::MediaLogEvent.where("#{qualified_log_column_name(:created_at)} >= ?", 24.hours.ago).pluck(:created_at)
       hourly_counts = Array.new(24, 0)
       now = Time.zone.now
 
@@ -207,7 +213,7 @@ module ::MediaGallery
 
     def normalize_limit(value)
       limit = value.to_i
-      return 100 if limit <= 0
+      return 25 if limit <= 0
 
       [limit, 250].min
     end
@@ -226,7 +232,6 @@ module ::MediaGallery
 
     def empty_summary(hours:, rows_count: 0)
       now = Time.zone.now
-
       {
         filtered_count: 0,
         last_24h_count: 0,
@@ -260,10 +265,7 @@ module ::MediaGallery
     private_class_method :safe_group_count
 
     def safe_distinct_count(scope, column)
-      scope.reorder(nil)
-        .where.not(log_events_table_name => { column => nil })
-        .distinct
-        .count(qualified_log_column_name(column))
+      scope.reorder(nil).where.not(log_events_table_name => { column => nil }).distinct.count(qualified_log_column_name(column))
     rescue
       0
     end
@@ -272,14 +274,11 @@ module ::MediaGallery
     def safe_option_values(column)
       return [] unless table_present?
 
-      arel_column = log_events_table[column]
-
-      ::MediaGallery::MediaLogEvent
-        .unscoped
-        .where(arel_column.not_eq(nil).and(arel_column.not_eq("")))
-        .reorder(nil)
+      ::MediaGallery::MediaLogEvent.unscoped
+        .where.not(log_events_table_name => { column => [nil, ""] })
         .distinct
-        .order(arel_column.asc)
+        .reorder(nil)
+        .order(qualified_log_column_name(column))
         .limit(100)
         .pluck(column)
         .compact
@@ -290,22 +289,6 @@ module ::MediaGallery
       []
     end
     private_class_method :safe_option_values
-
-    def apply_severity_filter(scope, severity)
-      value = severity.to_s.strip
-      return scope if value.blank? || value == "all"
-
-      scope.where(log_events_table_name => { severity: normalize_severity(value) })
-    end
-    private_class_method :apply_severity_filter
-
-    def apply_partial_filter(scope, column, value)
-      term = value.to_s.strip
-      return scope if term.blank?
-
-      scope.where("#{qualified_log_column_name(column)} ILIKE :term", term: "%#{::ActiveRecord::Base.sanitize_sql_like(term)}%")
-    end
-    private_class_method :apply_partial_filter
 
     def apply_query(scope, query)
       pattern = "%#{::ActiveRecord::Base.sanitize_sql_like(query)}%"
@@ -348,16 +331,15 @@ module ::MediaGallery
     def apply_sort(scope, sort)
       case sort
       when "created_at_asc"
-        scope.order(log_events_table[:created_at].asc)
+        scope.order("#{qualified_log_column_name(:created_at)} ASC")
       else
-        scope.order(log_events_table[:created_at].desc)
+        scope.order("#{qualified_log_column_name(:created_at)} DESC")
       end
     end
     private_class_method :apply_sort
 
     def sanitize_details(value)
       hash = value.is_a?(Hash) ? value.deep_stringify_keys : {}
-
       hash.each_with_object({}) do |(key, raw), result|
         next if raw.nil?
 
@@ -421,11 +403,6 @@ module ::MediaGallery
       ""
     end
     private_class_method :pretty_details
-
-    def log_events_table
-      ::MediaGallery::MediaLogEvent.arel_table
-    end
-    private_class_method :log_events_table
 
     def log_events_table_name
       ::MediaGallery::MediaLogEvent.table_name
