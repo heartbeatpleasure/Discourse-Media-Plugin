@@ -3,6 +3,22 @@ import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
 import { ajax } from "discourse/lib/ajax";
 
+const DEFAULT_SEVERITIES = ["all", "info", "success", "warning", "danger"];
+const DEFAULT_CATEGORIES = ["all"];
+const DEFAULT_EVENT_TYPES = ["all"];
+const HOURS_OPTIONS = [
+  { value: "24", label: "Last 24 hours" },
+  { value: "72", label: "Last 3 days" },
+  { value: "168", label: "Last 7 days" },
+  { value: "720", label: "Last 30 days" },
+  { value: "2160", label: "Last 90 days" },
+];
+const LIMIT_OPTIONS = ["25", "50", "100", "250"];
+const SORT_OPTIONS = [
+  { value: "created_at_desc", label: "Newest first" },
+  { value: "created_at_asc", label: "Oldest first" },
+];
+
 function formatDateTime(value) {
   if (!value) {
     return "—";
@@ -156,8 +172,27 @@ function buildFact(label, value, options = {}) {
   };
 }
 
+function makeOption(value, currentValue, labelBuilder) {
+  return {
+    value,
+    label: labelBuilder(value),
+    selected: String(currentValue) === String(value),
+  };
+}
+
+function allOptionLabel(value, noun) {
+  return value === "all" ? `All ${noun}` : titleize(value);
+}
+
 export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked query = "";
+  @tracked severityFilter = "all";
+  @tracked categoryFilter = "all";
+  @tracked eventTypeFilter = "all";
+  @tracked hoursFilter = "168";
+  @tracked limit = "100";
+  @tracked sortBy = "created_at_desc";
+  @tracked filterOptions = {};
   @tracked isLoading = false;
   @tracked error = "";
   @tracked events = [];
@@ -168,6 +203,13 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
   resetState() {
     this.query = "";
+    this.severityFilter = "all";
+    this.categoryFilter = "all";
+    this.eventTypeFilter = "all";
+    this.hoursFilter = "168";
+    this.limit = "100";
+    this.sortBy = "created_at_desc";
+    this.filterOptions = {};
     this.isLoading = false;
     this.error = "";
     this.events = [];
@@ -183,9 +225,54 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     if (query) {
       params.set("q", query);
     }
-    params.set("hours", "168");
-    params.set("limit", "100");
+
+    params.set("severity", this.severityFilter || "all");
+    params.set("category", this.categoryFilter || "all");
+    params.set("event_type", this.eventTypeFilter || "all");
+    params.set("hours", this.hoursFilter || "168");
+    params.set("limit", this.limit || "100");
+    params.set("sort", this.sortBy || "created_at_desc");
     return params.toString();
+  }
+
+  get severityOptions() {
+    const values = coerceArray(this.filterOptions?.severities);
+    const source = values.length ? values : DEFAULT_SEVERITIES;
+    return source.map((value) => makeOption(value, this.severityFilter, (entry) => allOptionLabel(entry, "severities")));
+  }
+
+  get categoryOptions() {
+    const values = coerceArray(this.filterOptions?.categories);
+    const source = values.length ? values : DEFAULT_CATEGORIES;
+    return source.map((value) => makeOption(value, this.categoryFilter, (entry) => allOptionLabel(entry, "categories")));
+  }
+
+  get eventTypeOptions() {
+    const values = coerceArray(this.filterOptions?.event_types);
+    const source = values.length ? values : DEFAULT_EVENT_TYPES;
+    return source.map((value) => makeOption(value, this.eventTypeFilter, (entry) => allOptionLabel(entry, "event types")));
+  }
+
+  get hoursOptions() {
+    return HOURS_OPTIONS.map((entry) => ({
+      ...entry,
+      selected: this.hoursFilter === entry.value,
+    }));
+  }
+
+  get limitOptions() {
+    return LIMIT_OPTIONS.map((value) => ({
+      value,
+      label: value,
+      selected: this.limit === value,
+    }));
+  }
+
+  get sortOptions() {
+    return SORT_OPTIONS.map((entry) => ({
+      ...entry,
+      selected: this.sortBy === entry.value,
+    }));
   }
 
   get decoratedTopEventTypes() {
@@ -251,9 +338,74 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return this.lastLoadedAt ? formatDateTime(this.lastLoadedAt) : "";
   }
 
+  get searchInfo() {
+    if (!this.hasLoadedOnce) {
+      return "Choose filters and run a search to inspect matching log events.";
+    }
+
+    const parts = [`${this.filteredCount} match${this.filteredCount === 1 ? "" : "es"}`];
+    const timeOption = HOURS_OPTIONS.find((entry) => entry.value === this.hoursFilter);
+    if (timeOption) {
+      parts.push(timeOption.label);
+    }
+    parts.push(`showing ${this.shownRows}`);
+    return parts.join(" · ");
+  }
+
+  applyResponseFilters(filters = {}, filterOptions = {}) {
+    this.query = String(filters?.q ?? this.query ?? "");
+    this.severityFilter = String(filters?.severity || this.severityFilter || "all");
+    this.categoryFilter = String(filters?.category || this.categoryFilter || "all");
+    this.eventTypeFilter = String(filters?.event_type || this.eventTypeFilter || "all");
+    this.hoursFilter = String(filters?.hours || this.hoursFilter || "168");
+    this.limit = String(filters?.limit || this.limit || "100");
+    this.sortBy = String(filters?.sort || this.sortBy || "created_at_desc");
+    this.filterOptions = filterOptions || {};
+  }
+
   @action
   updateQuery(event) {
     this.query = event?.target?.value ?? "";
+  }
+
+  @action
+  onSeverityFilterChange(event) {
+    this.severityFilter = event?.target?.value || "all";
+  }
+
+  @action
+  onCategoryFilterChange(event) {
+    this.categoryFilter = event?.target?.value || "all";
+  }
+
+  @action
+  onEventTypeFilterChange(event) {
+    this.eventTypeFilter = event?.target?.value || "all";
+  }
+
+  @action
+  onHoursFilterChange(event) {
+    this.hoursFilter = event?.target?.value || "168";
+  }
+
+  @action
+  onLimitChange(event) {
+    this.limit = event?.target?.value || "100";
+  }
+
+  @action
+  onSortChange(event) {
+    this.sortBy = event?.target?.value || "created_at_desc";
+  }
+
+  @action
+  async onSearchKeydown(event) {
+    if (event?.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    await this.loadLogs();
   }
 
   @action
@@ -271,6 +423,7 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
       this.summary = data?.summary || {};
       this.topEventTypes = coerceArray(data?.summary?.top_event_types);
       this.error = String(data?.error || "").trim();
+      this.applyResponseFilters(data?.filters, data?.filter_options);
       this.lastLoadedAt = new Date();
       this.hasLoadedOnce = true;
     } catch (error) {
@@ -301,9 +454,15 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   }
 
   @action
-  async clearSearch(event) {
+  async resetFilters(event) {
     event?.preventDefault?.();
     this.query = "";
+    this.severityFilter = "all";
+    this.categoryFilter = "all";
+    this.eventTypeFilter = "all";
+    this.hoursFilter = "168";
+    this.limit = "100";
+    this.sortBy = "created_at_desc";
     await this.loadLogs();
   }
 }

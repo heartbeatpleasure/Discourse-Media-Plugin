@@ -19,7 +19,8 @@ export default RouteTemplate(
       .media-gallery-admin-logs p,
       .media-gallery-admin-logs h1,
       .media-gallery-admin-logs h2,
-      .media-gallery-admin-logs h3 {
+      .media-gallery-admin-logs h3,
+      .media-gallery-admin-logs label {
         margin: 0;
       }
 
@@ -48,7 +49,8 @@ export default RouteTemplate(
       }
 
       .mg-logs__actions,
-      .mg-logs__filters-footer,
+      .mg-logs__filters-actions,
+      .mg-logs__filters-meta,
       .mg-logs__badge-row {
         display: flex;
         flex-wrap: wrap;
@@ -56,9 +58,8 @@ export default RouteTemplate(
         align-items: center;
       }
 
-      .mg-logs__filters-footer {
+      .mg-logs__filters-meta {
         justify-content: space-between;
-        margin-top: 1rem;
       }
 
       .mg-logs__muted {
@@ -66,7 +67,32 @@ export default RouteTemplate(
         font-size: var(--font-down-1);
       }
 
-      .mg-logs__search-box {
+      .mg-logs__filters {
+        display: grid;
+        grid-template-columns: minmax(260px, 2.2fr) repeat(5, minmax(140px, 1fr));
+        gap: 0.9rem;
+        align-items: end;
+      }
+
+      .mg-logs__field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        min-width: 0;
+      }
+
+      .mg-logs__field.is-search {
+        grid-column: span 2;
+      }
+
+      .mg-logs__field label {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        font-weight: 600;
+      }
+
+      .mg-logs__field input,
+      .mg-logs__field select {
         width: 100%;
         box-sizing: border-box;
         border: 1px solid var(--mg-border);
@@ -74,6 +100,14 @@ export default RouteTemplate(
         background: var(--primary-very-low);
         min-height: 42px;
         padding: 0.55rem 0.8rem;
+      }
+
+      .mg-logs__filters-footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.9rem;
+        align-items: center;
+        margin-top: 1rem;
       }
 
       .mg-logs__stats {
@@ -285,13 +319,25 @@ export default RouteTemplate(
         color: var(--danger);
       }
 
+      @media (max-width: 1250px) {
+        .mg-logs__filters {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .mg-logs__field.is-search {
+          grid-column: 1 / -1;
+        }
+      }
+
       @media (max-width: 900px) {
         .mg-logs__stats {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
-        .mg-logs__event-header {
+        .mg-logs__event-header,
+        .mg-logs__filters-footer {
           grid-template-columns: 1fr;
+          display: grid;
         }
 
         .mg-logs__event-time {
@@ -301,6 +347,7 @@ export default RouteTemplate(
       }
 
       @media (max-width: 700px) {
+        .mg-logs__filters,
         .mg-logs__facts,
         .mg-logs__stats {
           grid-template-columns: 1fr;
@@ -323,19 +370,87 @@ export default RouteTemplate(
           </div>
         </div>
 
-        <input class="mg-logs__search-box" type="text" value={{@controller.query}} placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}} {{on "input" @controller.updateQuery}} />
-
-        <div class="mg-logs__filters-footer">
-          <div class="mg-logs__actions">
-            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>Search</button>
-            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.clearSearch}}>Clear</button>
+        <div class="mg-logs__filters">
+          <div class="mg-logs__field is-search">
+            <label>Search</label>
+            <input
+              type="text"
+              value={{@controller.query}}
+              placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}}
+              {{on "input" @controller.updateQuery}}
+              {{on "keydown" @controller.onSearchKeydown}}
+            />
           </div>
 
-          {{#if @controller.lastLoadedAt}}
-            <span class="mg-logs__muted">{{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}</span>
-          {{else}}
-            <span class="mg-logs__muted">Click refresh to load the latest log events.</span>
-          {{/if}}
+          <div class="mg-logs__field">
+            <label>Severity</label>
+            <select value={{@controller.severityFilter}} {{on "change" @controller.onSeverityFilterChange}}>
+              {{#each @controller.severityOptions as |option|}}
+                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+              {{/each}}
+            </select>
+          </div>
+
+          <div class="mg-logs__field">
+            <label>Category</label>
+            <select value={{@controller.categoryFilter}} {{on "change" @controller.onCategoryFilterChange}}>
+              {{#each @controller.categoryOptions as |option|}}
+                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+              {{/each}}
+            </select>
+          </div>
+
+          <div class="mg-logs__field">
+            <label>Event type</label>
+            <select value={{@controller.eventTypeFilter}} {{on "change" @controller.onEventTypeFilterChange}}>
+              {{#each @controller.eventTypeOptions as |option|}}
+                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+              {{/each}}
+            </select>
+          </div>
+
+          <div class="mg-logs__field">
+            <label>Time window</label>
+            <select value={{@controller.hoursFilter}} {{on "change" @controller.onHoursFilterChange}}>
+              {{#each @controller.hoursOptions as |option|}}
+                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+              {{/each}}
+            </select>
+          </div>
+
+          <div class="mg-logs__field">
+            <label>Limit</label>
+            <select value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
+              {{#each @controller.limitOptions as |option|}}
+                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+              {{/each}}
+            </select>
+          </div>
+
+          <div class="mg-logs__field">
+            <label>Sort</label>
+            <select value={{@controller.sortBy}} {{on "change" @controller.onSortChange}}>
+              {{#each @controller.sortOptions as |option|}}
+                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+              {{/each}}
+            </select>
+          </div>
+        </div>
+
+        <div class="mg-logs__filters-footer">
+          <div class="mg-logs__filters-actions">
+            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>
+              {{if @controller.isLoading "Searching…" "Search"}}
+            </button>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.resetFilters}}>Reset</button>
+          </div>
+
+          <div class="mg-logs__filters-meta">
+            <span class="mg-logs__muted">{{@controller.searchInfo}}</span>
+            {{#if @controller.lastLoadedAt}}
+              <span class="mg-logs__muted">{{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}</span>
+            {{/if}}
+          </div>
         </div>
       </div>
 

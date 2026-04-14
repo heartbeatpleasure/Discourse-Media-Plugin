@@ -56,26 +56,25 @@ module ::MediaGallery
     def search(filters = {})
       hours = normalize_hours(filters[:hours])
       limit = normalize_limit(filters[:limit])
-      return empty_search(hours:, limit:, error: "Log table is not available yet. Run the plugin migration first.") unless table_present?
+      sort = normalize_sort(filters[:sort])
+      return empty_search(hours:, limit:, sort:, error: "Log table is not available yet. Run the plugin migration first.") unless table_present?
 
-      scope = ::MediaGallery::MediaLogEvent.includes(:user, :media_item).order(log_events_table[:created_at].desc)
+      scope = ::MediaGallery::MediaLogEvent.includes(:user, :media_item)
 
       severity = filters[:severity].to_s.strip
-      scope = scope.where(severity: severity) if severity.present? && severity != "all"
+      scope = scope.where(log_events_table_name => { severity: severity }) if severity.present? && severity != "all"
+
+      category = filters[:category].to_s.strip
+      scope = scope.where(log_events_table_name => { category: category }) if category.present? && category != "all"
 
       event_type = filters[:event_type].to_s.strip
-      scope = scope.where(event_type: event_type) if event_type.present? && event_type != "all"
+      scope = scope.where(log_events_table_name => { event_type: event_type }) if event_type.present? && event_type != "all"
 
       scope = scope.where(log_events_table[:created_at].gteq(hours.hours.ago))
 
       query = filters[:q].to_s.strip
-      if query.present?
-        pattern = "%#{::ActiveRecord::Base.sanitize_sql_like(query)}%"
-        scope = scope.left_outer_joins(:user, :media_item).where(
-          "media_gallery_log_events.event_type ILIKE :q OR media_gallery_log_events.message ILIKE :q OR media_gallery_log_events.overlay_code ILIKE :q OR media_gallery_log_events.fingerprint_id ILIKE :q OR media_gallery_log_events.ip ILIKE :q OR media_gallery_log_events.request_id ILIKE :q OR media_gallery_log_events.media_public_id ILIKE :q OR users.username ILIKE :q OR users.name ILIKE :q OR media_gallery_media_items.public_id ILIKE :q OR media_gallery_media_items.title ILIKE :q",
-          q: pattern,
-        )
-      end
+      scope = apply_query(scope, query) if query.present?
+      scope = apply_sort(scope, sort)
 
       rows = scope.limit(limit).to_a
       {
@@ -83,18 +82,19 @@ module ::MediaGallery
         rows: rows,
         hours: hours,
         limit: limit,
+        sort: sort,
         error: nil,
       }
     rescue => e
       Rails.logger.warn("[media_gallery] log search failed #{e.class}: #{e.message}")
-      empty_search(hours:, limit:, error: "Unable to query logs. #{e.class}: #{e.message}")
+      empty_search(hours:, limit:, sort:, error: "Unable to query logs. #{e.class}: #{e.message}")
     end
 
     def summary(scope:, rows:, hours:)
       return empty_summary(hours:, rows_count: rows.length) unless table_present? && scope.present?
 
       total_scope_count = safe_count(scope)
-      last_24h_scope = ::MediaGallery::MediaLogEvent.where(log_events_table[:created_at].gteq(24.hours.ago))
+      last_24h_scope = scope.where(log_events_table[:created_at].gteq(24.hours.ago))
       recent_rows = ::MediaGallery::MediaLogEvent.where(log_events_table[:created_at].gteq(24.hours.ago)).pluck(:created_at)
       hourly_counts = Array.new(24, 0)
       now = Time.zone.now
@@ -166,10 +166,16 @@ module ::MediaGallery
     end
 
     def event_type_options
-      return [] unless table_present?
-      ::MediaGallery::MediaLogEvent.distinct.order(:event_type).limit(100).pluck(:event_type).compact
+      safe_option_values(:event_type)
     rescue => e
       Rails.logger.warn("[media_gallery] log event type options failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def category_options
+      safe_option_values(:category)
+    rescue => e
+      Rails.logger.warn("[media_gallery] log category options failed #{e.class}: #{e.message}")
       []
     end
 
@@ -177,9 +183,11 @@ module ::MediaGallery
       case value.to_s.strip.downcase
       when "debug", "info", "notice"
         "info"
+      when "ok", "success"
+        "success"
       when "warn", "warning"
         "warning"
-      when "error", "danger"
+      when "error", "danger", "failed", "failure"
         "danger"
       else
         "info"
@@ -201,8 +209,14 @@ module ::MediaGallery
     end
     private_class_method :normalize_limit
 
-    def empty_search(hours:, limit:, error: nil)
-      { scope: nil, rows: [], hours: hours, limit: limit, error: error }
+    def normalize_sort(value)
+      sort = value.to_s.strip
+      %w[created_at_desc created_at_asc].include?(sort) ? sort : "created_at_desc"
+    end
+    private_class_method :normalize_sort
+
+    def empty_search(hours:, limit:, sort:, error: nil)
+      { scope: nil, rows: [], hours: hours, limit: limit, sort: sort, error: error }
     end
     private_class_method :empty_search
 
@@ -246,6 +260,68 @@ module ::MediaGallery
       0
     end
     private_class_method :safe_distinct_count
+
+    def safe_option_values(column)
+      return [] unless table_present?
+
+      ::MediaGallery::MediaLogEvent
+        .where.not(log_events_table_name => { column => [nil, ""] })
+        .distinct
+        .reorder(nil)
+        .order(qualified_log_column_name(column))
+        .limit(100)
+        .pluck(column)
+        .compact
+    end
+    private_class_method :safe_option_values
+
+    def apply_query(scope, query)
+      pattern = "%#{::ActiveRecord::Base.sanitize_sql_like(query)}%"
+      exact_id = Integer(query, exception: false)
+      bindings = { q: pattern }
+      clauses = [
+        "#{qualified_log_column_name(:event_type)} ILIKE :q",
+        "#{qualified_log_column_name(:category)} ILIKE :q",
+        "#{qualified_log_column_name(:severity)} ILIKE :q",
+        "#{qualified_log_column_name(:message)} ILIKE :q",
+        "#{qualified_log_column_name(:overlay_code)} ILIKE :q",
+        "#{qualified_log_column_name(:fingerprint_id)} ILIKE :q",
+        "#{qualified_log_column_name(:ip)} ILIKE :q",
+        "#{qualified_log_column_name(:request_id)} ILIKE :q",
+        "#{qualified_log_column_name(:media_public_id)} ILIKE :q",
+        "#{qualified_log_column_name(:path)} ILIKE :q",
+        "#{qualified_log_column_name(:method)} ILIKE :q",
+        "CAST(#{qualified_log_column_name(:details)} AS text) ILIKE :q",
+        "users.username ILIKE :q",
+        "users.name ILIKE :q",
+        "media_gallery_media_items.public_id ILIKE :q",
+        "media_gallery_media_items.title ILIKE :q",
+      ]
+
+      if exact_id
+        bindings[:exact_id] = exact_id
+        clauses.concat(
+          [
+            "#{qualified_log_column_name(:id)} = :exact_id",
+            "#{qualified_log_column_name(:user_id)} = :exact_id",
+            "#{qualified_log_column_name(:media_item_id)} = :exact_id",
+          ],
+        )
+      end
+
+      scope.left_outer_joins(:user, :media_item).where(clauses.join(" OR "), bindings)
+    end
+    private_class_method :apply_query
+
+    def apply_sort(scope, sort)
+      case sort
+      when "created_at_asc"
+        scope.order(log_events_table[:created_at].asc)
+      else
+        scope.order(log_events_table[:created_at].desc)
+      end
+    end
+    private_class_method :apply_sort
 
     def sanitize_details(value)
       hash = value.is_a?(Hash) ? value.deep_stringify_keys : {}
