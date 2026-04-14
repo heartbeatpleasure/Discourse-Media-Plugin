@@ -272,14 +272,20 @@ module ::MediaGallery
     def safe_option_values(column)
       return [] unless table_present?
 
+      arel_column = log_events_table[column]
+
       ::MediaGallery::MediaLogEvent
-        .where.not(log_events_table_name => { column => [nil, ""] })
-        .distinct
+        .unscoped
+        .where(arel_column.not_eq(nil).and(arel_column.not_eq("")))
         .reorder(nil)
-        .order(qualified_log_column_name(column))
+        .distinct
+        .order(arel_column.asc)
         .limit(100)
         .pluck(column)
         .compact
+        .map(&:to_s)
+        .map(&:strip)
+        .reject(&:blank?)
     rescue
       []
     end

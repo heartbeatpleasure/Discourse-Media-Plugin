@@ -81,7 +81,11 @@ export default RouteTemplate(
         border-radius: 12px;
         background: var(--primary-very-low);
         min-height: 42px;
-        padding: 0.55rem 0.8rem;
+        padding: 0 0.85rem;
+      }
+
+      .mg-logs__search-box {
+        padding: 0 0.95rem;
       }
 
       .mg-logs__filters-row {
@@ -94,29 +98,23 @@ export default RouteTemplate(
       }
 
       .mg-logs__filters-row--secondary {
-        grid-template-columns: 1fr 1fr 1fr;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
       .mg-logs__field {
         display: flex;
         flex-direction: column;
-        gap: 0.4rem;
+        gap: 0.35rem;
         min-width: 0;
       }
 
       .mg-logs__field--compact {
-        max-width: 16rem;
+        max-width: none;
       }
 
       .mg-logs__field label {
-        color: var(--mg-muted);
-        font-size: var(--font-down-1);
         font-weight: 600;
-      }
-
-      .mg-logs__field-hint {
-        color: var(--mg-muted);
-        font-size: var(--font-down-2);
+        font-size: var(--font-down-1);
       }
 
       .mg-logs__stats {
@@ -406,7 +404,7 @@ export default RouteTemplate(
               <label>Category</label>
               <select value={{@controller.categoryFilter}} {{on "change" @controller.updateCategoryFilter}}>
                 <option value="">All categories</option>
-                {{#each @controller.availableCategoryOptions as |option|}}
+                {{#each @controller.availableCategoryOptions key="id" as |option|}}
                   <option value={{option.value}}>{{option.label}}</option>
                 {{/each}}
               </select>
@@ -416,7 +414,7 @@ export default RouteTemplate(
               <label>Event type</label>
               <select value={{@controller.eventTypeFilter}} {{on "change" @controller.updateEventTypeFilter}}>
                 <option value="">All event types</option>
-                {{#each @controller.availableEventTypeOptions as |option|}}
+                {{#each @controller.availableEventTypeOptions key="id" as |option|}}
                   <option value={{option.value}}>{{option.label}}</option>
                 {{/each}}
               </select>
@@ -503,7 +501,7 @@ export default RouteTemplate(
 
         {{#if @controller.decoratedTopEventTypes.length}}
           <div class="mg-logs__top-list">
-            {{#each @controller.decoratedTopEventTypes as |entry|}}
+            {{#each @controller.decoratedTopEventTypes key="id" as |entry|}}
               <div class="mg-logs__top-item">
                 <span>{{entry.eventLabel}}</span>
                 <span class="mg-logs__badge">{{entry.count}}</span>
@@ -523,7 +521,7 @@ export default RouteTemplate(
 
         {{#if @controller.decoratedEvents.length}}
           <div class="mg-logs__event-list">
-            {{#each @controller.decoratedEvents as |event|}}
+            {{#each @controller.decoratedEvents key="id" as |event|}}
               <article class="mg-logs__event">
                 <div class="mg-logs__event-header">
                   <div class="mg-logs__event-heading">
@@ -537,7 +535,7 @@ export default RouteTemplate(
                 </div>
 
                 <div class="mg-logs__facts">
-                  {{#each event.facts as |fact|}}
+                  {{#each event.facts key="id" as |fact|}}
                     <div class="mg-logs__fact {{if fact.isWide 'is-wide'}}">
                       <div class="mg-logs__fact-label">{{fact.label}}</div>
                       <div class={{fact.valueClass}}>{{fact.value}}</div>

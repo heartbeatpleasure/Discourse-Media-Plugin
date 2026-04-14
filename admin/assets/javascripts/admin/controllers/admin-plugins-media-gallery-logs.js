@@ -1,6 +1,7 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
+import { scheduleOnce } from "@ember/runloop";
 import { ajax } from "discourse/lib/ajax";
 
 const HOURS_LABELS = {
@@ -53,7 +54,13 @@ function coerceArray(value) {
 }
 
 function uniqueStrings(values) {
-  return [...new Set(coerceArray(values).map((value) => String(value || "").trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      coerceArray(values)
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    ),
+  ];
 }
 
 function normalizedOptionList(values, selectedValue = "") {
@@ -64,7 +71,13 @@ function normalizedOptionList(values, selectedValue = "") {
     items.push(selected);
   }
 
-  return items.sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+  return items
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
+    .map((value) => ({
+      id: value,
+      value,
+      label: titleize(value),
+    }));
 }
 
 function severityTone(value) {
@@ -167,6 +180,7 @@ function buildFact(label, value, options = {}) {
   const text = normalizeText(value);
 
   return {
+    id: `${label}-${text}-${options.meta || ""}`,
     label,
     value: text,
     meta: normalizeText(options.meta, ""),
@@ -180,6 +194,46 @@ function buildFact(label, value, options = {}) {
   };
 }
 
+function decorateTopEventTypes(entries) {
+  return coerceArray(entries).map((entry) => ({
+    id: String(entry?.event_type || "event"),
+    eventLabel: titleize(entry?.event_type || "event"),
+    count: Number(entry?.count || 0),
+  }));
+}
+
+function decorateEvents(events) {
+  return coerceArray(events).map((event) => {
+    const user = buildUserLabel(event);
+    const media = buildMediaLabel(event);
+    const facts = [
+      buildFact("User", user.value, { meta: user.meta }),
+      buildFact("Media", media.value, { meta: media.meta }),
+      buildFact("IP address", event?.ip, { isMono: true }),
+      buildFact("Overlay code", event?.overlay_code, { isMono: true }),
+      buildFact("Request", [event?.method, event?.path].filter(Boolean).join(" "), {
+        isWide: true,
+        isMono: true,
+      }),
+      buildFact("Fingerprint", event?.fingerprint_id, { isWide: true, isMono: true }),
+      buildFact("Request ID", event?.request_id, { isWide: true, isMono: true }),
+      buildFact("Message", event?.message, { isWide: true }),
+    ].filter((fact) => fact.value !== "—");
+
+    return {
+      id: event?.id,
+      createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
+      eventLabel: titleize(event?.event_type || "event"),
+      severityLabel: titleize(event?.severity || "info"),
+      severityBadgeClass: badgeClass("mg-logs__badge", severityTone(event?.severity)),
+      categoryLabel: titleize(event?.category || "general"),
+      categoryBadgeClass: badgeClass("mg-logs__badge", categoryTone(event?.category), true),
+      facts,
+      detailsPreview: String(event?.details_pretty || "").trim(),
+    };
+  });
+}
+
 export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked query = "";
   @tracked severityFilter = "all";
@@ -190,6 +244,10 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked sortBy = "created_at_desc";
   @tracked categoryOptions = [];
   @tracked eventTypeOptions = [];
+  @tracked renderedCategoryOptions = [];
+  @tracked renderedEventTypeOptions = [];
+  @tracked decoratedEventRows = [];
+  @tracked decoratedTopEventRows = [];
   @tracked isLoading = false;
   @tracked error = "";
   @tracked events = [];
@@ -197,6 +255,7 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked topEventTypes = [];
   @tracked lastLoadedAt = null;
   @tracked hasLoadedOnce = false;
+  _initialLoadScheduled = false;
 
   resetState() {
     this.query = "";
@@ -208,6 +267,10 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.sortBy = "created_at_desc";
     this.categoryOptions = [];
     this.eventTypeOptions = [];
+    this.renderedCategoryOptions = [];
+    this.renderedEventTypeOptions = [];
+    this.decoratedEventRows = [];
+    this.decoratedTopEventRows = [];
     this.isLoading = false;
     this.error = "";
     this.events = [];
@@ -215,10 +278,16 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.topEventTypes = [];
     this.lastLoadedAt = null;
     this.hasLoadedOnce = false;
+    this._initialLoadScheduled = false;
   }
 
-  async loadInitial() {
-    await this.loadLogs();
+  loadInitial() {
+    if (this._initialLoadScheduled) {
+      return;
+    }
+
+    this._initialLoadScheduled = true;
+    scheduleOnce("afterRender", this, this.loadLogs);
   }
 
   buildQuery() {
@@ -250,57 +319,20 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return params.toString();
   }
 
-  get decoratedTopEventTypes() {
-    return coerceArray(this.topEventTypes).map((entry) => ({
-      eventLabel: titleize(entry?.event_type || "event"),
-      count: Number(entry?.count || 0),
-    }));
-  }
-
   get availableCategoryOptions() {
-    return normalizedOptionList(this.categoryOptions, this.categoryFilter).map((value) => ({
-      value,
-      label: titleize(value),
-    }));
+    return this.renderedCategoryOptions;
   }
 
   get availableEventTypeOptions() {
-    return normalizedOptionList(this.eventTypeOptions, this.eventTypeFilter).map((value) => ({
-      value,
-      label: titleize(value),
-    }));
+    return this.renderedEventTypeOptions;
   }
 
   get decoratedEvents() {
-    return coerceArray(this.events).map((event) => {
-      const user = buildUserLabel(event);
-      const media = buildMediaLabel(event);
-      const facts = [
-        buildFact("User", user.value, { meta: user.meta }),
-        buildFact("Media", media.value, { meta: media.meta }),
-        buildFact("IP address", event?.ip, { isMono: true }),
-        buildFact("Overlay code", event?.overlay_code, { isMono: true }),
-        buildFact("Request", [event?.method, event?.path].filter(Boolean).join(" "), {
-          isWide: true,
-          isMono: true,
-        }),
-        buildFact("Fingerprint", event?.fingerprint_id, { isWide: true, isMono: true }),
-        buildFact("Request ID", event?.request_id, { isWide: true, isMono: true }),
-        buildFact("Message", event?.message, { isWide: true }),
-      ].filter((fact) => fact.value !== "—");
+    return this.decoratedEventRows;
+  }
 
-      return {
-        id: event?.id,
-        createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
-        eventLabel: titleize(event?.event_type || "event"),
-        severityLabel: titleize(event?.severity || "info"),
-        severityBadgeClass: badgeClass("mg-logs__badge", severityTone(event?.severity)),
-        categoryLabel: titleize(event?.category || "general"),
-        categoryBadgeClass: badgeClass("mg-logs__badge", categoryTone(event?.category), true),
-        facts,
-        detailsPreview: String(event?.details_pretty || "").trim(),
-      };
-    });
+  get decoratedTopEventTypes() {
+    return this.decoratedTopEventRows;
   }
 
   get filteredCount() {
@@ -317,6 +349,10 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
   get uniqueMediaItems() {
     return Number(this.summary?.unique_media_items || 0);
+  }
+
+  get uniqueIps() {
+    return Number(this.summary?.unique_ips || 0);
   }
 
   get shownRows() {
@@ -356,6 +392,22 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   applyFilterOptions(filterOptions = {}) {
     this.categoryOptions = uniqueStrings(filterOptions?.categories);
     this.eventTypeOptions = uniqueStrings(filterOptions?.event_types);
+    this.renderedCategoryOptions = normalizedOptionList(
+      this.categoryOptions,
+      this.categoryFilter
+    );
+    this.renderedEventTypeOptions = normalizedOptionList(
+      this.eventTypeOptions,
+      this.eventTypeFilter
+    );
+  }
+
+  applyData(data = {}) {
+    this.events = coerceArray(data?.events);
+    this.summary = data?.summary || {};
+    this.topEventTypes = coerceArray(data?.summary?.top_event_types);
+    this.decoratedEventRows = decorateEvents(this.events);
+    this.decoratedTopEventRows = decorateTopEventTypes(this.topEventTypes);
   }
 
   @action
@@ -403,13 +455,16 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.error = "";
 
     try {
-      const data = await ajax(`/admin/plugins/media-gallery/logs.json?${this.buildQuery()}`);
-      this.events = coerceArray(data?.events);
-      this.summary = data?.summary || {};
-      this.topEventTypes = coerceArray(data?.summary?.top_event_types);
-      this.error = String(data?.error || "").trim();
+      const queryString = this.buildQuery();
+      const url = queryString
+        ? `/admin/plugins/media-gallery/logs.json?${queryString}`
+        : "/admin/plugins/media-gallery/logs.json";
+      const data = await ajax(url);
+
       this.applyResponseFilters(data?.filters);
       this.applyFilterOptions(data?.filter_options);
+      this.applyData(data);
+      this.error = String(data?.error || "").trim();
       this.lastLoadedAt = new Date();
       this.hasLoadedOnce = true;
     } catch (error) {
@@ -430,6 +485,9 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
       this.events = [];
       this.summary = {};
       this.topEventTypes = [];
+      this.decoratedEventRows = [];
+      this.decoratedTopEventRows = [];
+      this.hasLoadedOnce = true;
     } finally {
       this.isLoading = false;
     }
