@@ -1,4 +1,5 @@
 import DiscourseRoute from "discourse/routes/discourse";
+import { next } from "@ember/runloop";
 
 export default class AdminPluginsMediaGalleryLogsRoute extends DiscourseRoute {
   setupController(controller) {
@@ -9,7 +10,7 @@ export default class AdminPluginsMediaGalleryLogsRoute extends DiscourseRoute {
     }
 
     if (typeof controller?.loadLogs === "function") {
-      controller.loadLogs();
+      next(() => controller.loadLogs());
     }
   }
 }

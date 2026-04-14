@@ -81,11 +81,14 @@ export default RouteTemplate(
         border-radius: 12px;
         background: var(--primary-very-low);
         min-height: 42px;
-        padding: 0 0.85rem;
       }
 
       .mg-logs__search-box {
         padding: 0 0.95rem;
+      }
+
+      .mg-logs__field select {
+        padding: 0 0.85rem;
       }
 
       .mg-logs__filters-row {
@@ -103,9 +106,7 @@ export default RouteTemplate(
 
       .mg-logs__field label {
         font-weight: 600;
-        font-size: var(--font-up-1);
-        line-height: 1.2;
-        color: var(--primary-high);
+        font-size: var(--font-down-1);
       }
 
       .mg-logs__stats {
@@ -152,18 +153,18 @@ export default RouteTemplate(
 
       .mg-logs__event {
         border: 1px solid var(--mg-border);
-        border-radius: 18px;
+        border-radius: 16px;
         background: var(--mg-surface-alt);
         padding: 1rem;
         display: grid;
-        gap: 0.95rem;
+        gap: 0.85rem;
       }
 
       .mg-logs__event-header {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
         gap: 0.85rem;
-        align-items: start;
       }
 
       .mg-logs__event-heading {
@@ -174,18 +175,15 @@ export default RouteTemplate(
       }
 
       .mg-logs__event-name {
-        font-size: var(--font-up-2);
-        font-weight: 700;
-        line-height: 1.2;
-        overflow-wrap: anywhere;
+        font-size: 1.6rem;
+        line-height: 1.1;
       }
 
       .mg-logs__event-time {
         color: var(--mg-muted);
-        font-size: var(--font-up-1);
-        font-weight: 500;
-        text-align: right;
+        font-size: var(--font-down-1);
         white-space: nowrap;
+        text-align: right;
       }
 
       .mg-logs__badge {
@@ -193,7 +191,7 @@ export default RouteTemplate(
         align-items: center;
         justify-content: center;
         border-radius: 999px;
-        padding: 0.25rem 0.65rem;
+        padding: 0.28rem 0.68rem;
         font-size: var(--font-down-1);
         line-height: 1.2;
         white-space: nowrap;
@@ -386,9 +384,9 @@ export default RouteTemplate(
               <label>Category</label>
               <select value={{@controller.categoryFilter}} {{on "change" @controller.updateCategoryFilter}}>
                 <option value="all">All categories</option>
-                {{#each @controller.availableCategoryOptions as |option|}}
-                  <option value={{option.value}}>{{option.label}}</option>
-                {{/each}}
+                <option value="general">General</option>
+                <option value="playback">Playback</option>
+                <option value="request_security">Request security</option>
               </select>
             </div>
 
@@ -396,9 +394,18 @@ export default RouteTemplate(
               <label>Event type</label>
               <select value={{@controller.eventTypeFilter}} {{on "change" @controller.updateEventTypeFilter}}>
                 <option value="all">All event types</option>
-                {{#each @controller.availableEventTypeOptions as |option|}}
-                  <option value={{option.value}}>{{option.label}}</option>
-                {{/each}}
+                <option value="concurrent_session_limit_reached">Concurrent session limit reached</option>
+                <option value="heartbeat_denied">Heartbeat denied</option>
+                <option value="heartbeat_session_limit_reached">Heartbeat session limit reached</option>
+                <option value="hls_denied">HLS denied</option>
+                <option value="new_session_limit_reached">New session limit reached</option>
+                <option value="play_rate_limited">Play rate limited</option>
+                <option value="play_request_blocked">Play request blocked</option>
+                <option value="play_token_issued">Play token issued</option>
+                <option value="play_token_limit_reached">Play token limit reached</option>
+                <option value="request_blocked">Request blocked</option>
+                <option value="revoke_denied">Revoke denied</option>
+                <option value="stream_denied">Stream denied</option>
               </select>
             </div>
           </div>
@@ -483,7 +490,7 @@ export default RouteTemplate(
 
         {{#if @controller.decoratedTopEventTypes.length}}
           <div class="mg-logs__top-list">
-            {{#each @controller.decoratedTopEventTypes as |entry|}}
+            {{#each @controller.decoratedTopEventTypes key="key" as |entry|}}
               <div class="mg-logs__top-item">
                 <span>{{entry.eventLabel}}</span>
                 <span class="mg-logs__badge">{{entry.count}}</span>
@@ -503,7 +510,7 @@ export default RouteTemplate(
 
         {{#if @controller.decoratedEvents.length}}
           <div class="mg-logs__event-list">
-            {{#each @controller.decoratedEvents as |event|}}
+            {{#each @controller.decoratedEvents key="id" as |event|}}
               <article class="mg-logs__event">
                 <div class="mg-logs__event-header">
                   <div class="mg-logs__event-heading">
@@ -517,7 +524,7 @@ export default RouteTemplate(
                 </div>
 
                 <div class="mg-logs__facts">
-                  {{#each event.facts as |fact|}}
+                  {{#each event.facts key="key" as |fact|}}
                     <div class={{fact.itemClass}}>
                       <div class="mg-logs__fact-label">{{fact.label}}</div>
                       <div class={{fact.valueClass}}>{{fact.value}}</div>

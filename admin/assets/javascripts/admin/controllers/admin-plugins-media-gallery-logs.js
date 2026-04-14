@@ -49,18 +49,6 @@ function coerceArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function uniqueStrings(values) {
-  return [
-    ...new Set(
-      coerceArray(values)
-        .map((value) => String(value || "").trim())
-        .filter(Boolean)
-    ),
-  ].sort((left, right) =>
-    left.localeCompare(right, undefined, { sensitivity: "base" })
-  );
-}
-
 function severityTone(value) {
   switch (String(value || "").toLowerCase()) {
     case "success":
@@ -88,6 +76,7 @@ function categoryTone(value) {
     case "playback":
     case "audit":
       return "info";
+    case "request_security":
     case "security":
     case "forensics":
       return "warning";
@@ -103,11 +92,7 @@ function categoryTone(value) {
 }
 
 function buildBadgeClass(tone, soft = false) {
-  return [
-    "mg-logs__badge",
-    `is-${tone}`,
-    soft ? "is-soft" : null,
-  ]
+  return ["mg-logs__badge", `is-${tone}`, soft ? "is-soft" : null]
     .filter(Boolean)
     .join(" ");
 }
@@ -148,16 +133,14 @@ function buildMediaLabel(event) {
   };
 }
 
-function buildFact(label, value, options = {}) {
+function buildFact(key, label, value, options = {}) {
   const text = normalizeText(value);
   return {
+    key,
     label,
     value: text,
     meta: normalizeText(options.meta, ""),
-    itemClass: [
-      "mg-logs__fact",
-      options.isWide ? "is-wide" : null,
-    ]
+    itemClass: ["mg-logs__fact", options.isWide ? "is-wide" : null]
       .filter(Boolean)
       .join(" "),
     valueClass: [
@@ -173,27 +156,27 @@ function decorateEvent(event) {
   const user = buildUserLabel(event);
   const media = buildMediaLabel(event);
   const facts = [
-    buildFact("User", user.value, { meta: user.meta }),
-    buildFact("Media", media.value, { meta: media.meta }),
-    buildFact("IP address", event?.ip, { isMono: true }),
-    buildFact("Overlay code", event?.overlay_code, { isMono: true }),
-    buildFact("Request", [event?.method, event?.path].filter(Boolean).join(" "), {
+    buildFact("user", "User", user.value, { meta: user.meta }),
+    buildFact("media", "Media", media.value, { meta: media.meta }),
+    buildFact("ip", "IP address", event?.ip, { isMono: true }),
+    buildFact("overlay", "Overlay code", event?.overlay_code, { isMono: true }),
+    buildFact("request", "Request", [event?.method, event?.path].filter(Boolean).join(" "), {
       isWide: true,
       isMono: true,
     }),
-    buildFact("Fingerprint", event?.fingerprint_id, {
+    buildFact("fingerprint", "Fingerprint", event?.fingerprint_id, {
       isWide: true,
       isMono: true,
     }),
-    buildFact("Request ID", event?.request_id, {
+    buildFact("request-id", "Request ID", event?.request_id, {
       isWide: true,
       isMono: true,
     }),
-    buildFact("Message", event?.message, { isWide: true }),
+    buildFact("message", "Message", event?.message, { isWide: true }),
   ].filter((fact) => fact.value !== "—");
 
   return {
-    id: event?.id,
+    id: String(event?.id ?? `${event?.created_at || "row"}-${event?.event_type || "event"}`),
     createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
     eventLabel: titleize(event?.event_type || "event"),
     severityLabel: titleize(event?.severity || "info"),
@@ -206,8 +189,10 @@ function decorateEvent(event) {
 }
 
 function decorateTopEvent(entry) {
+  const eventType = String(entry?.event_type || "event");
   return {
-    eventLabel: titleize(entry?.event_type || "event"),
+    key: eventType,
+    eventLabel: titleize(eventType),
     count: Number(entry?.count || 0),
   };
 }
@@ -222,13 +207,13 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked sortBy = "created_at_desc";
   @tracked isLoading = false;
   @tracked error = "";
-  @tracked events = [];
   @tracked summary = {};
-  @tracked topEventTypes = [];
-  @tracked categoryOptions = [];
-  @tracked eventTypeOptions = [];
+  @tracked decoratedEvents = [];
+  @tracked decoratedTopEventTypes = [];
   @tracked lastLoadedAt = null;
   @tracked hasLoadedOnce = false;
+
+  _requestSequence = 0;
 
   resetState() {
     this.query = "";
@@ -240,11 +225,9 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.sortBy = "created_at_desc";
     this.isLoading = false;
     this.error = "";
-    this.events = [];
     this.summary = {};
-    this.topEventTypes = [];
-    this.categoryOptions = [];
-    this.eventTypeOptions = [];
+    this.decoratedEvents = [];
+    this.decoratedTopEventTypes = [];
     this.lastLoadedAt = null;
     this.hasLoadedOnce = false;
   }
@@ -276,28 +259,6 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return params.toString();
   }
 
-  get decoratedEvents() {
-    return coerceArray(this.events).map((event) => decorateEvent(event));
-  }
-
-  get decoratedTopEventTypes() {
-    return coerceArray(this.topEventTypes).map((entry) => decorateTopEvent(entry));
-  }
-
-  get availableCategoryOptions() {
-    return uniqueStrings(this.categoryOptions).map((value) => ({
-      value,
-      label: titleize(value),
-    }));
-  }
-
-  get availableEventTypeOptions() {
-    return uniqueStrings(this.eventTypeOptions).map((value) => ({
-      value,
-      label: titleize(value),
-    }));
-  }
-
   get filteredCount() {
     return Number(this.summary?.filtered_count || 0);
   }
@@ -315,7 +276,7 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   }
 
   get shownRows() {
-    return Number(this.summary?.shown_rows || this.events.length || 0);
+    return Number(this.summary?.shown_rows || this.decoratedEvents.length || 0);
   }
 
   get lastLoadedLabel() {
@@ -340,19 +301,20 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
   applyResponse(data = {}) {
     const filters = data?.filters || {};
-    this.query = String(filters?.q || "");
-    this.severityFilter = String(filters?.severity || "all");
-    this.categoryFilter = String(filters?.category || "all");
-    this.eventTypeFilter = String(filters?.event_type || "all");
-    this.hoursFilter = String(filters?.hours || "168");
-    this.limit = String(filters?.limit || "25");
-    this.sortBy = String(filters?.sort || "created_at_desc");
+    const rows = coerceArray(data?.events);
+    const topEventTypes = coerceArray(data?.summary?.top_event_types);
 
-    this.categoryOptions = uniqueStrings(data?.filter_options?.categories);
-    this.eventTypeOptions = uniqueStrings(data?.filter_options?.event_types);
-    this.events = coerceArray(data?.events);
+    this.query = String(filters?.q || this.query || "");
+    this.severityFilter = String(filters?.severity || this.severityFilter || "all");
+    this.categoryFilter = String(filters?.category || this.categoryFilter || "all");
+    this.eventTypeFilter = String(filters?.event_type || this.eventTypeFilter || "all");
+    this.hoursFilter = String(filters?.hours || this.hoursFilter || "168");
+    this.limit = String(filters?.limit || this.limit || "25");
+    this.sortBy = String(filters?.sort || this.sortBy || "created_at_desc");
+
+    this.decoratedEvents = rows.map((event) => decorateEvent(event));
+    this.decoratedTopEventTypes = topEventTypes.map((entry) => decorateTopEvent(entry));
     this.summary = data?.summary || {};
-    this.topEventTypes = coerceArray(data?.summary?.top_event_types);
     this.error = String(data?.error || "").trim();
     this.lastLoadedAt = new Date();
     this.hasLoadedOnce = true;
@@ -399,6 +361,7 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
       return;
     }
 
+    const requestSequence = ++this._requestSequence;
     this.isLoading = true;
     this.error = "";
 
@@ -407,8 +370,17 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
       const data = await ajax(
         `/admin/plugins/media-gallery/logs.json${queryString ? `?${queryString}` : ""}`
       );
+
+      if (requestSequence !== this._requestSequence) {
+        return;
+      }
+
       this.applyResponse(data);
     } catch (error) {
+      if (requestSequence !== this._requestSequence) {
+        return;
+      }
+
       let message = "Unable to load logs.";
 
       try {
@@ -423,12 +395,14 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
       }
 
       this.error = message;
-      this.events = [];
       this.summary = {};
-      this.topEventTypes = [];
+      this.decoratedEvents = [];
+      this.decoratedTopEventTypes = [];
       this.hasLoadedOnce = true;
     } finally {
-      this.isLoading = false;
+      if (requestSequence === this._requestSequence) {
+        this.isLoading = false;
+      }
     }
   }
 
