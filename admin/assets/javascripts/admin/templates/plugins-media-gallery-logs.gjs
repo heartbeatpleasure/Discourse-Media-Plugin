@@ -49,8 +49,7 @@ export default RouteTemplate(
       }
 
       .mg-logs__actions,
-      .mg-logs__filters-actions,
-      .mg-logs__filters-meta,
+      .mg-logs__filters-footer,
       .mg-logs__badge-row {
         display: flex;
         flex-wrap: wrap;
@@ -58,8 +57,9 @@ export default RouteTemplate(
         align-items: center;
       }
 
-      .mg-logs__filters-meta {
+      .mg-logs__filters-footer {
         justify-content: space-between;
+        margin-top: 1rem;
       }
 
       .mg-logs__muted {
@@ -69,7 +69,7 @@ export default RouteTemplate(
 
       .mg-logs__filters {
         display: grid;
-        grid-template-columns: minmax(260px, 2.2fr) repeat(5, minmax(140px, 1fr));
+        grid-template-columns: minmax(280px, 2.2fr) repeat(5, minmax(140px, 1fr));
         gap: 0.9rem;
         align-items: end;
       }
@@ -100,14 +100,6 @@ export default RouteTemplate(
         background: var(--primary-very-low);
         min-height: 42px;
         padding: 0.55rem 0.8rem;
-      }
-
-      .mg-logs__filters-footer {
-        display: flex;
-        justify-content: space-between;
-        gap: 0.9rem;
-        align-items: center;
-        margin-top: 1rem;
       }
 
       .mg-logs__stats {
@@ -385,17 +377,20 @@ export default RouteTemplate(
           <div class="mg-logs__field">
             <label>Severity</label>
             <select value={{@controller.severityFilter}} {{on "change" @controller.onSeverityFilterChange}}>
-              {{#each @controller.severityOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
-              {{/each}}
+              <option value="all">All severities</option>
+              <option value="info">Info</option>
+              <option value="success">Success</option>
+              <option value="warning">Warning</option>
+              <option value="danger">Error / danger</option>
             </select>
           </div>
 
           <div class="mg-logs__field">
             <label>Category</label>
             <select value={{@controller.categoryFilter}} {{on "change" @controller.onCategoryFilterChange}}>
+              <option value="all">All categories</option>
               {{#each @controller.categoryOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+                <option value={{option.value}}>{{option.label}}</option>
               {{/each}}
             </select>
           </div>
@@ -403,8 +398,9 @@ export default RouteTemplate(
           <div class="mg-logs__field">
             <label>Event type</label>
             <select value={{@controller.eventTypeFilter}} {{on "change" @controller.onEventTypeFilterChange}}>
+              <option value="all">All event types</option>
               {{#each @controller.eventTypeOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+                <option value={{option.value}}>{{option.label}}</option>
               {{/each}}
             </select>
           </div>
@@ -413,7 +409,7 @@ export default RouteTemplate(
             <label>Time window</label>
             <select value={{@controller.hoursFilter}} {{on "change" @controller.onHoursFilterChange}}>
               {{#each @controller.hoursOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+                <option value={{option.value}}>{{option.label}}</option>
               {{/each}}
             </select>
           </div>
@@ -422,7 +418,7 @@ export default RouteTemplate(
             <label>Limit</label>
             <select value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
               {{#each @controller.limitOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+                <option value={{option}}>{{option}}</option>
               {{/each}}
             </select>
           </div>
@@ -431,24 +427,24 @@ export default RouteTemplate(
             <label>Sort</label>
             <select value={{@controller.sortBy}} {{on "change" @controller.onSortChange}}>
               {{#each @controller.sortOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
+                <option value={{option.value}}>{{option.label}}</option>
               {{/each}}
             </select>
           </div>
         </div>
 
         <div class="mg-logs__filters-footer">
-          <div class="mg-logs__filters-actions">
+          <div class="mg-logs__actions">
             <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>
               {{if @controller.isLoading "Searching…" "Search"}}
             </button>
             <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.resetFilters}}>Reset</button>
           </div>
 
-          <div class="mg-logs__filters-meta">
-            <span class="mg-logs__muted">{{@controller.searchInfo}}</span>
+          <div class="mg-logs__muted">
+            {{@controller.searchInfo}}
             {{#if @controller.lastLoadedAt}}
-              <span class="mg-logs__muted">{{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}</span>
+              · {{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}
             {{/if}}
           </div>
         </div>
@@ -539,10 +535,12 @@ export default RouteTemplate(
               </article>
             {{/each}}
           </div>
-        {{else if @controller.hasLoadedOnce}}
-          <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_results"}}</div>
         {{else}}
-          <div class="mg-logs__muted">No data loaded yet.</div>
+          {{#if @controller.hasLoadedOnce}}
+            <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_results"}}</div>
+          {{else}}
+            <div class="mg-logs__muted">No data loaded yet.</div>
+          {{/if}}
         {{/if}}
       </div>
     </div>

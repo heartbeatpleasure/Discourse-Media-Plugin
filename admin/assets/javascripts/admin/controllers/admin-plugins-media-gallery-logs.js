@@ -3,9 +3,6 @@ import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
 import { ajax } from "discourse/lib/ajax";
 
-const DEFAULT_SEVERITIES = ["all", "info", "success", "warning", "danger"];
-const DEFAULT_CATEGORIES = ["all"];
-const DEFAULT_EVENT_TYPES = ["all"];
 const HOURS_OPTIONS = [
   { value: "24", label: "Last 24 hours" },
   { value: "72", label: "Last 3 days" },
@@ -13,7 +10,9 @@ const HOURS_OPTIONS = [
   { value: "720", label: "Last 30 days" },
   { value: "2160", label: "Last 90 days" },
 ];
+
 const LIMIT_OPTIONS = ["25", "50", "100", "250"];
+
 const SORT_OPTIONS = [
   { value: "created_at_desc", label: "Newest first" },
   { value: "created_at_asc", label: "Oldest first" },
@@ -58,6 +57,10 @@ function titleize(value) {
 
 function coerceArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function uniqueValues(values) {
+  return Array.from(new Set(coerceArray(values).map((value) => String(value || "").trim()).filter(Boolean)));
 }
 
 function severityTone(value) {
@@ -172,16 +175,13 @@ function buildFact(label, value, options = {}) {
   };
 }
 
-function makeOption(value, currentValue, labelBuilder) {
-  return {
-    value,
-    label: labelBuilder(value),
-    selected: String(currentValue) === String(value),
-  };
-}
-
-function allOptionLabel(value, noun) {
-  return value === "all" ? `All ${noun}` : titleize(value);
+function buildDynamicOptions(values) {
+  return uniqueValues(values)
+    .filter((value) => value !== "all")
+    .map((value) => ({
+      value,
+      label: titleize(value),
+    }));
 }
 
 export default class AdminPluginsMediaGalleryLogsController extends Controller {
@@ -222,57 +222,48 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   buildQuery() {
     const params = new URLSearchParams();
     const query = String(this.query || "").trim();
+
     if (query) {
       params.set("q", query);
     }
 
-    params.set("severity", this.severityFilter || "all");
-    params.set("category", this.categoryFilter || "all");
-    params.set("event_type", this.eventTypeFilter || "all");
+    if (this.severityFilter && this.severityFilter !== "all") {
+      params.set("severity", this.severityFilter);
+    }
+
+    if (this.categoryFilter && this.categoryFilter !== "all") {
+      params.set("category", this.categoryFilter);
+    }
+
+    if (this.eventTypeFilter && this.eventTypeFilter !== "all") {
+      params.set("event_type", this.eventTypeFilter);
+    }
+
     params.set("hours", this.hoursFilter || "168");
     params.set("limit", this.limit || "100");
     params.set("sort", this.sortBy || "created_at_desc");
+
     return params.toString();
   }
 
-  get severityOptions() {
-    const values = coerceArray(this.filterOptions?.severities);
-    const source = values.length ? values : DEFAULT_SEVERITIES;
-    return source.map((value) => makeOption(value, this.severityFilter, (entry) => allOptionLabel(entry, "severities")));
-  }
-
   get categoryOptions() {
-    const values = coerceArray(this.filterOptions?.categories);
-    const source = values.length ? values : DEFAULT_CATEGORIES;
-    return source.map((value) => makeOption(value, this.categoryFilter, (entry) => allOptionLabel(entry, "categories")));
+    return buildDynamicOptions(this.filterOptions?.categories);
   }
 
   get eventTypeOptions() {
-    const values = coerceArray(this.filterOptions?.event_types);
-    const source = values.length ? values : DEFAULT_EVENT_TYPES;
-    return source.map((value) => makeOption(value, this.eventTypeFilter, (entry) => allOptionLabel(entry, "event types")));
+    return buildDynamicOptions(this.filterOptions?.event_types);
   }
 
   get hoursOptions() {
-    return HOURS_OPTIONS.map((entry) => ({
-      ...entry,
-      selected: this.hoursFilter === entry.value,
-    }));
+    return HOURS_OPTIONS;
   }
 
   get limitOptions() {
-    return LIMIT_OPTIONS.map((value) => ({
-      value,
-      label: value,
-      selected: this.limit === value,
-    }));
+    return LIMIT_OPTIONS;
   }
 
   get sortOptions() {
-    return SORT_OPTIONS.map((entry) => ({
-      ...entry,
-      selected: this.sortBy === entry.value,
-    }));
+    return SORT_OPTIONS;
   }
 
   get decoratedTopEventTypes() {
@@ -340,14 +331,16 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
 
   get searchInfo() {
     if (!this.hasLoadedOnce) {
-      return "Choose filters and run a search to inspect matching log events.";
+      return "Use the filters below and click search to load matching log events.";
     }
 
-    const parts = [`${this.filteredCount} match${this.filteredCount === 1 ? "" : "es"}`];
     const timeOption = HOURS_OPTIONS.find((entry) => entry.value === this.hoursFilter);
+    const parts = [`${this.filteredCount} match${this.filteredCount === 1 ? "" : "es"}`];
+
     if (timeOption) {
       parts.push(timeOption.label);
     }
+
     parts.push(`showing ${this.shownRows}`);
     return parts.join(" · ");
   }
