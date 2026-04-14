@@ -29,6 +29,18 @@ function coerceArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function severityBadgeClass(value) {
+  switch (String(value || "").toLowerCase()) {
+    case "warning":
+      return "mg-logs__badge is-warning";
+    case "danger":
+    case "error":
+      return "mg-logs__badge is-danger";
+    default:
+      return "mg-logs__badge is-info";
+  }
+}
+
 export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked query = "";
   @tracked isLoading = false;
@@ -62,26 +74,40 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   }
 
   get decoratedEvents() {
-    return coerceArray(this.events).map((event) => ({
-      id: event?.id,
-      createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
-      eventLabel: titleize(event?.event_type || "event"),
-      severityLabel: titleize(event?.severity || "info"),
-      category: event?.category || "general",
-      message: event?.message || "",
-      userLabel:
-        event?.name ||
-        event?.username ||
-        (event?.user_id ? `User #${event.user_id}` : "—"),
-      mediaLabel:
-        event?.media_title ||
-        event?.media_public_id ||
-        (event?.media_item_id ? `Item #${event.media_item_id}` : "—"),
-      requestLabel: [event?.method, event?.path].filter(Boolean).join(" ") || "—",
-      overlayCode: event?.overlay_code || "",
-      fingerprintId: event?.fingerprint_id || "",
-      ip: event?.ip || "",
-      detailsPreview: String(event?.details_pretty || "").trim(),
+    return coerceArray(this.events).map((event) => {
+      const severity = String(event?.severity || "info").toLowerCase();
+      const method = String(event?.method || "").trim();
+      const path = String(event?.path || "").trim();
+
+      return {
+        id: event?.id,
+        createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
+        eventLabel: titleize(event?.event_type || "event"),
+        severityLabel: titleize(severity || "info"),
+        severityBadgeClass: severityBadgeClass(severity),
+        categoryLabel: titleize(event?.category || "general"),
+        message: String(event?.message || "").trim(),
+        userLabel:
+          event?.name ||
+          event?.username ||
+          (event?.user_id ? `User #${event.user_id}` : "—"),
+        mediaLabel:
+          event?.media_title ||
+          event?.media_public_id ||
+          (event?.media_item_id ? `Item #${event.media_item_id}` : "—"),
+        requestLabel: [method, path].filter(Boolean).join(" ") || "—",
+        overlayCode: String(event?.overlay_code || "").trim(),
+        fingerprintId: String(event?.fingerprint_id || "").trim(),
+        ip: String(event?.ip || "").trim(),
+        detailsPreview: String(event?.details_pretty || "").trim(),
+      };
+    });
+  }
+
+  get decoratedTopEventTypes() {
+    return coerceArray(this.topEventTypes).map((entry) => ({
+      label: titleize(entry?.event_type || "event"),
+      count: Number(entry?.count || 0),
     }));
   }
 

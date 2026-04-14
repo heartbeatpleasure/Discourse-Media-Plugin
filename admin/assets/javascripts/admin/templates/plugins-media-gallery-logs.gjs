@@ -18,7 +18,8 @@ export default RouteTemplate(
 
       .media-gallery-admin-logs p,
       .media-gallery-admin-logs h1,
-      .media-gallery-admin-logs h2 {
+      .media-gallery-admin-logs h2,
+      .media-gallery-admin-logs h3 {
         margin: 0;
       }
 
@@ -32,23 +33,47 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
-      .mg-logs__header,
+      .mg-logs__panel-header,
       .mg-logs__actions,
-      .mg-logs__search-row,
-      .mg-logs__stats,
-      .mg-logs__event-meta {
+      .mg-logs__toolbar,
+      .mg-logs__event-header,
+      .mg-logs__event-header-main,
+      .mg-logs__event-header-side,
+      .mg-logs__event-chip-row,
+      .mg-logs__event-topline,
+      .mg-logs__summary-row,
+      .mg-logs__search-help {
         display: flex;
-        gap: 0.75rem;
         flex-wrap: wrap;
-        align-items: center;
+        gap: 0.75rem;
       }
 
-      .mg-logs__header {
+      .mg-logs__panel-header,
+      .mg-logs__summary-row {
+        align-items: flex-start;
         justify-content: space-between;
+      }
+
+      .mg-logs__panel-copy,
+      .mg-logs__field,
+      .mg-logs__event-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        min-width: 0;
       }
 
       .mg-logs__muted {
         color: var(--mg-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-logs__field {
+        gap: 0.35rem;
+      }
+
+      .mg-logs__field label {
+        font-weight: 600;
         font-size: var(--font-down-1);
       }
 
@@ -62,16 +87,33 @@ export default RouteTemplate(
         padding: 0.55rem 0.8rem;
       }
 
+      .mg-logs__toolbar {
+        align-items: end;
+        margin-top: 1rem;
+      }
+
+      .mg-logs__search-grow {
+        flex: 1 1 520px;
+        min-width: 280px;
+      }
+
+      .mg-logs__search-help {
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 1rem;
+      }
+
       .mg-logs__stats {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1rem;
       }
 
       .mg-logs__stat {
         border: 1px solid var(--mg-border);
         border-radius: 14px;
         background: var(--mg-surface-alt);
-        padding: 0.85rem 0.9rem;
+        padding: 0.85rem 0.95rem;
       }
 
       .mg-logs__stat-label {
@@ -80,31 +122,35 @@ export default RouteTemplate(
       }
 
       .mg-logs__stat-value {
+        margin-top: 0.3rem;
         font-size: 1.45rem;
         font-weight: 700;
         line-height: 1.1;
-        margin-top: 0.25rem;
       }
 
+      .mg-logs__top-list,
       .mg-logs__event-list {
         display: grid;
         gap: 0.85rem;
       }
 
+      .mg-logs__top-item,
       .mg-logs__event {
         border: 1px solid var(--mg-border);
-        border-radius: 14px;
+        border-radius: 16px;
         background: var(--mg-surface-alt);
-        padding: 0.9rem;
-        display: grid;
-        gap: 0.55rem;
       }
 
-      .mg-logs__event-title {
+      .mg-logs__top-item {
         display: flex;
-        gap: 0.5rem;
         align-items: center;
-        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.8rem 0.95rem;
+      }
+
+      .mg-logs__top-item-title {
+        font-weight: 600;
       }
 
       .mg-logs__badge {
@@ -112,7 +158,7 @@ export default RouteTemplate(
         align-items: center;
         justify-content: center;
         border-radius: 999px;
-        padding: 0.22rem 0.58rem;
+        padding: 0.25rem 0.65rem;
         font-size: var(--font-down-1);
         line-height: 1.2;
         white-space: nowrap;
@@ -121,33 +167,144 @@ export default RouteTemplate(
         border: 1px solid var(--primary-low);
       }
 
-      .mg-logs__top-list {
+      .mg-logs__badge.is-info {
+        background: var(--primary-very-low);
+        color: var(--primary-high);
+        border-color: var(--primary-low);
+      }
+
+      .mg-logs__badge.is-warning {
+        background: var(--tertiary-very-low);
+        color: var(--tertiary);
+        border-color: var(--tertiary-low);
+      }
+
+      .mg-logs__badge.is-danger {
+        background: var(--danger-low);
+        color: var(--danger);
+        border-color: var(--danger-low-mid);
+      }
+
+      .mg-logs__event {
+        padding: 1rem;
+      }
+
+      .mg-logs__event-header {
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+      }
+
+      .mg-logs__event-header-main,
+      .mg-logs__event-header-side,
+      .mg-logs__event-copy {
+        min-width: 0;
+      }
+
+      .mg-logs__event-header-side {
+        justify-content: flex-start;
+      }
+
+      .mg-logs__event-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        line-height: 1.3;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-logs__event-chip-row,
+      .mg-logs__event-topline {
+        align-items: center;
+      }
+
+      .mg-logs__event-body {
+        margin-top: 0.9rem;
+        display: grid;
+        gap: 0.85rem;
+      }
+
+      .mg-logs__summary-grid {
         display: grid;
         gap: 0.65rem;
       }
 
-      .mg-logs__top-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.75rem;
+      .mg-logs__summary-row {
+        padding: 0.35rem 0;
+        border-top: 1px solid var(--primary-low);
+      }
+
+      .mg-logs__summary-grid .mg-logs__summary-row:first-child {
+        padding-top: 0;
+        border-top: 0;
+      }
+
+      .mg-logs__summary-label {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        min-width: 0;
+      }
+
+      .mg-logs__summary-value {
+        text-align: right;
+        font-weight: 600;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-logs__message {
         border: 1px solid var(--mg-border);
-        border-radius: 12px;
-        background: var(--mg-surface-alt);
-        padding: 0.7rem 0.8rem;
+        border-radius: 14px;
+        background: var(--secondary);
+        padding: 0.8rem 0.9rem;
+      }
+
+      .mg-logs__message-label {
+        display: block;
+        margin-bottom: 0.25rem;
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        font-weight: 600;
       }
 
       .mg-logs__details {
-        margin: 0;
-        padding: 0.7rem;
-        background: var(--primary-very-low);
-        border-radius: 12px;
         border: 1px solid var(--mg-border);
-        white-space: pre-wrap;
-        word-break: break-word;
-        font-size: var(--font-down-1);
-        max-height: 16rem;
+        border-radius: 14px;
+        background: var(--primary-very-low);
+        overflow: hidden;
+      }
+
+      .mg-logs__details summary {
+        cursor: pointer;
+        padding: 0.85rem 1rem;
+        font-weight: 700;
+        list-style: none;
+      }
+
+      .mg-logs__details summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .mg-logs__details[open] summary {
+        border-bottom: 1px solid var(--mg-border);
+      }
+
+      .mg-logs__json {
+        margin: 0;
+        padding: 1rem;
+        max-height: 360px;
         overflow: auto;
+        white-space: pre-wrap;
+        background: transparent;
+        font-size: 0.9em;
+      }
+
+      .mg-logs__empty {
+        border: 1px dashed var(--mg-border);
+        border-radius: 14px;
+        padding: 1rem;
+        text-align: center;
+        color: var(--mg-muted);
+        background: var(--mg-surface-alt);
       }
 
       .mg-logs__flash {
@@ -158,54 +315,79 @@ export default RouteTemplate(
         color: var(--danger);
       }
 
-      @media (max-width: 800px) {
-        .mg-logs__stats {
-          grid-template-columns: 1fr 1fr;
+      @media (max-width: 900px) {
+        .mg-logs__panel-header,
+        .mg-logs__event-header,
+        .mg-logs__summary-row,
+        .mg-logs__search-help {
+          flex-direction: column;
+          align-items: stretch;
         }
-      }
 
-      @media (max-width: 600px) {
-        .mg-logs__stats {
-          grid-template-columns: 1fr;
+        .mg-logs__summary-value {
+          text-align: left;
         }
       }
     </style>
 
     <div class="media-gallery-admin-logs">
-      <div class="mg-logs__panel">
-        <div class="mg-logs__header">
-          <div>
+      <section class="mg-logs__panel">
+        <div class="mg-logs__panel-header">
+          <div class="mg-logs__panel-copy">
             <h1>{{i18n "admin.media_gallery.logs.title"}}</h1>
             <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.description"}}</p>
           </div>
+
           <div class="mg-logs__actions">
             <a class="btn" href="/admin/plugins/media-gallery">{{i18n "admin.media_gallery.logs.back_to_overview"}}</a>
-            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.loadLogs}}>
+            <button
+              class="btn btn-primary"
+              type="button"
+              disabled={{@controller.isLoading}}
+              {{on "click" @controller.loadLogs}}
+            >
               {{if @controller.isLoading (i18n "admin.media_gallery.logs.refreshing") (i18n "admin.media_gallery.logs.refresh")}}
             </button>
           </div>
         </div>
 
-        <div class="mg-logs__search-row" style="margin-top: 1rem;">
-          <input class="mg-logs__search-box" type="text" value={{@controller.query}} placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}} {{on "input" @controller.updateQuery}} />
+        <div class="mg-logs__toolbar">
+          <div class="mg-logs__field mg-logs__search-grow">
+            <label for="media-gallery-admin-logs-search">{{i18n "admin.media_gallery.logs.search_label"}}</label>
+            <input
+              id="media-gallery-admin-logs-search"
+              class="mg-logs__search-box"
+              type="text"
+              value={{@controller.query}}
+              placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}}
+              {{on "input" @controller.updateQuery}}
+            />
+          </div>
         </div>
 
-        <div class="mg-logs__actions" style="margin-top: 0.9rem;">
-          <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>Search</button>
-          <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.clearSearch}}>Clear</button>
+        <div class="mg-logs__search-help">
+          <div class="mg-logs__actions">
+            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>
+              Search
+            </button>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.clearSearch}}>
+              Clear
+            </button>
+          </div>
+
           {{#if @controller.lastLoadedAt}}
             <span class="mg-logs__muted">{{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}</span>
           {{else}}
             <span class="mg-logs__muted">Click refresh to load the latest log events.</span>
           {{/if}}
         </div>
-      </div>
+      </section>
 
       {{#if @controller.error}}
         <div class="mg-logs__flash">{{@controller.error}}</div>
       {{/if}}
 
-      <div class="mg-logs__stats">
+      <section class="mg-logs__stats">
         <div class="mg-logs__stat">
           <div class="mg-logs__stat-label">Shown rows</div>
           <div class="mg-logs__stat-value">{{@controller.shownRows}}</div>
@@ -222,59 +404,113 @@ export default RouteTemplate(
           <div class="mg-logs__stat-label">Unique users</div>
           <div class="mg-logs__stat-value">{{@controller.uniqueUsers}}</div>
         </div>
-      </div>
+      </section>
 
-      <div class="mg-logs__panel">
-        <h2>{{i18n "admin.media_gallery.logs.top_events_title"}}</h2>
-        <p class="mg-logs__muted" style="margin-top: 0.25rem; margin-bottom: 0.9rem;">{{i18n "admin.media_gallery.logs.top_events_description"}}</p>
+      <section class="mg-logs__panel">
+        <div class="mg-logs__panel-header">
+          <div class="mg-logs__panel-copy">
+            <h2>{{i18n "admin.media_gallery.logs.top_events_title"}}</h2>
+            <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.top_events_description"}}</p>
+          </div>
+        </div>
 
-        {{#if @controller.topEventTypes.length}}
+        {{#if @controller.decoratedTopEventTypes.length}}
           <div class="mg-logs__top-list">
-            {{#each @controller.topEventTypes as |entry|}}
+            {{#each @controller.decoratedTopEventTypes as |entry|}}
               <div class="mg-logs__top-item">
-                <span>{{entry.event_type}}</span>
+                <span class="mg-logs__top-item-title">{{entry.label}}</span>
                 <span class="mg-logs__badge">{{entry.count}}</span>
               </div>
             {{/each}}
           </div>
         {{else}}
-          <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_top_events"}}</div>
+          <div class="mg-logs__empty">{{i18n "admin.media_gallery.logs.no_top_events"}}</div>
         {{/if}}
-      </div>
+      </section>
 
-      <div class="mg-logs__panel">
-        <h2>{{i18n "admin.media_gallery.logs.recent_events_title"}}</h2>
-        <p class="mg-logs__muted" style="margin-top: 0.25rem; margin-bottom: 0.9rem;">{{i18n "admin.media_gallery.logs.recent_events_description"}}</p>
+      <section class="mg-logs__panel">
+        <div class="mg-logs__panel-header">
+          <div class="mg-logs__panel-copy">
+            <h2>{{i18n "admin.media_gallery.logs.recent_events_title"}}</h2>
+            <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.recent_events_description"}}</p>
+          </div>
+        </div>
 
         {{#if @controller.decoratedEvents.length}}
           <div class="mg-logs__event-list">
             {{#each @controller.decoratedEvents as |event|}}
               <article class="mg-logs__event">
-                <div class="mg-logs__event-title">
-                  <span class="mg-logs__badge">{{event.severityLabel}}</span>
-                  <strong>{{event.eventLabel}}</strong>
-                  <span class="mg-logs__muted">{{event.createdLabel}}</span>
+                <div class="mg-logs__event-header">
+                  <div class="mg-logs__event-copy">
+                    <div class="mg-logs__event-topline">
+                      <span class={{event.severityBadgeClass}}>{{event.severityLabel}}</span>
+                      <span class="mg-logs__badge">{{event.categoryLabel}}</span>
+                    </div>
+                    <div class="mg-logs__event-title">{{event.eventLabel}}</div>
+                  </div>
+
+                  <div class="mg-logs__event-header-side">
+                    <span class="mg-logs__muted">{{event.createdLabel}}</span>
+                  </div>
                 </div>
-                <div class="mg-logs__event-meta">
-                  <span class="mg-logs__muted">{{event.category}}</span>
-                  <span class="mg-logs__muted">User: {{event.userLabel}}</span>
-                  <span class="mg-logs__muted">Media: {{event.mediaLabel}}</span>
+
+                <div class="mg-logs__event-body">
+                  <div class="mg-logs__summary-grid">
+                    <div class="mg-logs__summary-row">
+                      <span class="mg-logs__summary-label">User</span>
+                      <span class="mg-logs__summary-value">{{event.userLabel}}</span>
+                    </div>
+                    <div class="mg-logs__summary-row">
+                      <span class="mg-logs__summary-label">Media</span>
+                      <span class="mg-logs__summary-value">{{event.mediaLabel}}</span>
+                    </div>
+                    <div class="mg-logs__summary-row">
+                      <span class="mg-logs__summary-label">Request</span>
+                      <span class="mg-logs__summary-value">{{event.requestLabel}}</span>
+                    </div>
+                    {{#if event.ip}}
+                      <div class="mg-logs__summary-row">
+                        <span class="mg-logs__summary-label">IP</span>
+                        <span class="mg-logs__summary-value">{{event.ip}}</span>
+                      </div>
+                    {{/if}}
+                    {{#if event.overlayCode}}
+                      <div class="mg-logs__summary-row">
+                        <span class="mg-logs__summary-label">Overlay</span>
+                        <span class="mg-logs__summary-value">{{event.overlayCode}}</span>
+                      </div>
+                    {{/if}}
+                    {{#if event.fingerprintId}}
+                      <div class="mg-logs__summary-row">
+                        <span class="mg-logs__summary-label">Fingerprint</span>
+                        <span class="mg-logs__summary-value">{{event.fingerprintId}}</span>
+                      </div>
+                    {{/if}}
+                  </div>
+
+                  {{#if event.message}}
+                    <div class="mg-logs__message">
+                      <span class="mg-logs__message-label">Message</span>
+                      <div>{{event.message}}</div>
+                    </div>
+                  {{/if}}
+
+                  {{#if event.detailsPreview}}
+                    <details class="mg-logs__details">
+                      <summary>Diagnostics JSON</summary>
+                      <pre class="mg-logs__json">{{event.detailsPreview}}</pre>
+                    </details>
+                  {{/if}}
                 </div>
-                {{#if event.message}}<div>{{event.message}}</div>{{/if}}
-                <div class="mg-logs__muted">{{event.requestLabel}}</div>
-                {{#if event.ip}}<div class="mg-logs__muted">IP: {{event.ip}}</div>{{/if}}
-                {{#if event.overlayCode}}<div class="mg-logs__muted">Overlay: {{event.overlayCode}}</div>{{/if}}
-                {{#if event.fingerprintId}}<div class="mg-logs__muted">Fingerprint: {{event.fingerprintId}}</div>{{/if}}
-                {{#if event.detailsPreview}}<pre class="mg-logs__details">{{event.detailsPreview}}</pre>{{/if}}
               </article>
             {{/each}}
           </div>
         {{else if @controller.hasLoadedOnce}}
-          <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_results"}}</div>
+          <div class="mg-logs__empty">{{i18n "admin.media_gallery.logs.no_results"}}</div>
         {{else}}
-          <div class="mg-logs__muted">No data loaded yet.</div>
+          <div class="mg-logs__empty">No data loaded yet.</div>
         {{/if}}
-      </div>
+      </section>
     </div>
   </template>
 );
