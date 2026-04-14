@@ -34,22 +34,37 @@ function titleizeStorageLocation(value) {
   }
 }
 
+function formatNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return "—";
+  }
+
+  const number = Number(value);
+  if (Number.isNaN(number)) {
+    return String(value);
+  }
+
+  return new Intl.NumberFormat().format(number);
+}
+
 function decorateExport(exp) {
   const rowsCount = Number(exp?.rows_count || 0);
   const isReady = Boolean(exp?.download_ready);
-  const gzipBytes = exp?.gzip_bytes;
 
   return {
     ...exp,
     displayName: trimCsvExtension(exp?.filename),
-    rowsLabel: `${rowsCount} rows`,
+    rowsLabel: formatNumber(rowsCount),
     availabilityLabel: isReady ? "Ready" : "Missing file",
     availabilityClass: isReady ? "is-success" : "is-warning",
+    showAvailability: !isReady,
     createdLabel: formatAdminDateTime(exp?.created_at),
     cutoffLabel: formatAdminDateTime(exp?.cutoff_at),
     storageLocationLabel: titleizeStorageLocation(exp?.storage_location),
-    gzipSizeLabel: gzipBytes === null || gzipBytes === undefined || gzipBytes === "" ? "—" : String(gzipBytes),
+    csvSizeLabel: formatNumber(exp?.csv_bytes),
+    gzipSizeLabel: formatNumber(exp?.gzip_bytes),
     csvShaLabel: exp?.csv_sha256 || "—",
+    gzipShaLabel: exp?.gzip_sha256 || "—",
   };
 }
 

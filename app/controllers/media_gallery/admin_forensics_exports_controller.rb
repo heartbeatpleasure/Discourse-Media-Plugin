@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+
 module ::MediaGallery
   class AdminForensicsExportsController < ::ApplicationController
     requires_plugin "Discourse-Media-Plugin"
@@ -16,24 +18,7 @@ module ::MediaGallery
         MediaGallery::MediaForensicsExport
           .order(created_at: :desc)
           .limit(limit)
-          .map do |e|
-            stored_in_db = e.csv_gzip.present?
-            gzip_bytes = e.file_bytes.presence || e.csv_gzip&.bytesize
-
-            {
-              id: e.id,
-              filename: e.download_filename,
-              cutoff_at: e.cutoff_at,
-              rows_count: e.rows_count,
-              csv_sha256: e.sha256,
-              storage_mode: stored_in_db ? "db" : "file",
-              storage_location: stored_in_db ? "database" : "local",
-              gzip_bytes: gzip_bytes,
-              file_exists: e.file_exists?,
-              download_ready: stored_in_db || e.file_exists?,
-              created_at: e.created_at
-            }
-          end
+          .map { |export| serialize_export(export) }
 
       render_json_dump(exports: exports)
     end
@@ -82,6 +67,56 @@ module ::MediaGallery
     end
 
     private
+
+    def serialize_export(export)
+      stored_in_db = export.csv_gzip.present?
+      gzip_bytes = gzip_size_for(export)
+      csv_sha256 = export.sha256.presence
+      csv_bytes = safe_csv_bytes(export)
+
+      {
+        id: export.id,
+        filename: export.download_filename,
+        cutoff_at: export.cutoff_at,
+        created_at: export.created_at,
+        rows_count: export.rows_count,
+        storage_mode: stored_in_db ? "db" : "file",
+        storage_location: stored_in_db ? "database" : "local",
+        file_exists: export.file_exists?,
+        download_ready: stored_in_db || export.file_exists?,
+        csv_sha256: csv_sha256,
+        csv_bytes: csv_bytes&.bytesize,
+        gzip_sha256: safe_gzip_sha256_for(export),
+        gzip_bytes: gzip_bytes,
+      }
+    end
+
+    def safe_csv_bytes(export)
+      export.csv_bytes
+    rescue => _e
+      nil
+    end
+
+    def gzip_size_for(export)
+      return export.csv_gzip.bytesize if export.csv_gzip.present?
+      return export.file_bytes if export.file_bytes.present?
+      return (::File.size(export.file_path) rescue nil) if export.file_path.present?
+
+      nil
+    end
+
+    def safe_gzip_sha256_for(export)
+      if export.csv_gzip.present?
+        return Digest::SHA256.hexdigest(export.csv_gzip)
+      end
+
+      return nil if export.file_path.blank? || !::File.exist?(export.file_path)
+
+      ensure_export_path_allowed!(export.file_path)
+      Digest::SHA256.file(export.file_path).hexdigest
+    rescue => _e
+      nil
+    end
 
     def ensure_admin
       raise Discourse::InvalidAccess.new unless guardian.is_admin?

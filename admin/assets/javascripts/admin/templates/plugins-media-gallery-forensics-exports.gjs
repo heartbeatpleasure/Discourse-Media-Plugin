@@ -99,9 +99,9 @@ export default RouteTemplate(
       }
 
       .mg-exports__badge.is-warning {
-        background: var(--tertiary-very-low);
-        color: var(--tertiary);
-        border-color: var(--tertiary-low);
+        background: var(--danger-low);
+        color: var(--danger);
+        border-color: var(--danger-low-mid);
       }
 
       .mg-exports__badge.is-info {
@@ -126,15 +126,16 @@ export default RouteTemplate(
       .mg-exports__card-header {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
-        align-items: start;
+        align-items: center;
         gap: 1rem;
       }
 
       .mg-exports__card-copy {
         display: flex;
         flex-direction: column;
-        gap: 0.7rem;
+        gap: 0.55rem;
         min-width: 0;
+        justify-content: center;
       }
 
       .mg-exports__filename {
@@ -147,6 +148,7 @@ export default RouteTemplate(
       .mg-exports__actions {
         flex-wrap: nowrap;
         justify-content: flex-end;
+        align-self: center;
         white-space: nowrap;
         flex-shrink: 0;
       }
@@ -204,6 +206,7 @@ export default RouteTemplate(
       @media (max-width: 860px) {
         .mg-exports__card-header {
           grid-template-columns: 1fr;
+          align-items: start;
         }
 
         .mg-exports__actions {
@@ -260,10 +263,11 @@ export default RouteTemplate(
                   <div class="mg-exports__card-copy">
                     <h3 class="mg-exports__filename">{{exp.displayName}}</h3>
 
-                    <div class="mg-exports__badge-row">
-                      <span class="mg-exports__badge is-info">{{exp.rowsLabel}}</span>
-                      <span class="mg-exports__badge {{exp.availabilityClass}}">{{exp.availabilityLabel}}</span>
-                    </div>
+                    {{#if exp.showAvailability}}
+                      <div class="mg-exports__badge-row">
+                        <span class="mg-exports__badge {{exp.availabilityClass}}">{{exp.availabilityLabel}}</span>
+                      </div>
+                    {{/if}}
                   </div>
 
                   <div class="mg-exports__actions">
@@ -287,6 +291,16 @@ export default RouteTemplate(
 
                 <div class="mg-exports__meta-grid">
                   <div class="mg-exports__meta-card">
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.rows_count"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.rowsLabel}}</div>
+                  </div>
+
+                  <div class="mg-exports__meta-card">
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.storage_location"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.storageLocationLabel}}</div>
+                  </div>
+
+                  <div class="mg-exports__meta-card">
                     <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.created_at"}}</div>
                     <div class="mg-exports__meta-value">{{exp.createdLabel}}</div>
                   </div>
@@ -297,8 +311,8 @@ export default RouteTemplate(
                   </div>
 
                   <div class="mg-exports__meta-card">
-                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.storage_location"}}</div>
-                    <div class="mg-exports__meta-value">{{exp.storageLocationLabel}}</div>
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.csv_size"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.csvSizeLabel}}</div>
                   </div>
 
                   <div class="mg-exports__meta-card">
@@ -309,6 +323,11 @@ export default RouteTemplate(
                   <div class="mg-exports__meta-card is-wide">
                     <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.csv_checksum"}}</div>
                     <div class="mg-exports__meta-value is-code">{{exp.csvShaLabel}}</div>
+                  </div>
+
+                  <div class="mg-exports__meta-card is-wide">
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.gzip_checksum"}}</div>
+                    <div class="mg-exports__meta-value is-code">{{exp.gzipShaLabel}}</div>
                   </div>
                 </div>
               </article>
