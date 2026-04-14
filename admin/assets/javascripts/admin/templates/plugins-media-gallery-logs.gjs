@@ -33,47 +33,36 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
-      .mg-logs__panel-header,
-      .mg-logs__actions,
-      .mg-logs__toolbar,
-      .mg-logs__event-header,
-      .mg-logs__event-header-main,
-      .mg-logs__event-header-side,
-      .mg-logs__event-chip-row,
-      .mg-logs__event-topline,
-      .mg-logs__summary-row,
-      .mg-logs__search-help {
+      .mg-logs__panel-header {
         display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
-      }
-
-      .mg-logs__panel-header,
-      .mg-logs__summary-row {
         align-items: flex-start;
         justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.9rem;
       }
 
-      .mg-logs__panel-copy,
-      .mg-logs__field,
-      .mg-logs__event-copy {
+      .mg-logs__panel-copy {
         display: flex;
         flex-direction: column;
         gap: 0.25rem;
-        min-width: 0;
+      }
+
+      .mg-logs__actions,
+      .mg-logs__filters-footer,
+      .mg-logs__badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+      }
+
+      .mg-logs__filters-footer {
+        justify-content: space-between;
+        margin-top: 1rem;
       }
 
       .mg-logs__muted {
         color: var(--mg-muted);
-        font-size: var(--font-down-1);
-      }
-
-      .mg-logs__field {
-        gap: 0.35rem;
-      }
-
-      .mg-logs__field label {
-        font-weight: 600;
         font-size: var(--font-down-1);
       }
 
@@ -87,33 +76,17 @@ export default RouteTemplate(
         padding: 0.55rem 0.8rem;
       }
 
-      .mg-logs__toolbar {
-        align-items: end;
-        margin-top: 1rem;
-      }
-
-      .mg-logs__search-grow {
-        flex: 1 1 520px;
-        min-width: 280px;
-      }
-
-      .mg-logs__search-help {
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 1rem;
-      }
-
       .mg-logs__stats {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 1rem;
       }
 
       .mg-logs__stat {
         border: 1px solid var(--mg-border);
-        border-radius: 14px;
-        background: var(--mg-surface-alt);
-        padding: 0.85rem 0.95rem;
+        border-radius: 16px;
+        background: var(--mg-surface);
+        padding: 0.95rem 1rem;
       }
 
       .mg-logs__stat-label {
@@ -122,10 +95,10 @@ export default RouteTemplate(
       }
 
       .mg-logs__stat-value {
-        margin-top: 0.3rem;
         font-size: 1.45rem;
         font-weight: 700;
         line-height: 1.1;
+        margin-top: 0.35rem;
       }
 
       .mg-logs__top-list,
@@ -134,23 +107,53 @@ export default RouteTemplate(
         gap: 0.85rem;
       }
 
-      .mg-logs__top-item,
-      .mg-logs__event {
-        border: 1px solid var(--mg-border);
-        border-radius: 16px;
-        background: var(--mg-surface-alt);
-      }
-
       .mg-logs__top-item {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 0.75rem;
-        padding: 0.8rem 0.95rem;
+        border: 1px solid var(--mg-border);
+        border-radius: 14px;
+        background: var(--mg-surface-alt);
+        padding: 0.8rem 0.9rem;
       }
 
-      .mg-logs__top-item-title {
-        font-weight: 600;
+      .mg-logs__event {
+        border: 1px solid var(--mg-border);
+        border-radius: 18px;
+        background: var(--mg-surface-alt);
+        padding: 1rem;
+        display: grid;
+        gap: 0.95rem;
+      }
+
+      .mg-logs__event-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.85rem;
+        align-items: start;
+      }
+
+      .mg-logs__event-heading {
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+        min-width: 0;
+      }
+
+      .mg-logs__event-name {
+        font-size: var(--font-up-2);
+        font-weight: 700;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-logs__event-time {
+        color: var(--mg-muted);
+        font-size: var(--font-up-1);
+        font-weight: 500;
+        text-align: right;
+        white-space: nowrap;
       }
 
       .mg-logs__badge {
@@ -165,12 +168,19 @@ export default RouteTemplate(
         background: var(--primary-very-low);
         color: var(--primary-high);
         border: 1px solid var(--primary-low);
+        font-weight: 600;
       }
 
       .mg-logs__badge.is-info {
-        background: var(--primary-very-low);
-        color: var(--primary-high);
-        border-color: var(--primary-low);
+        background: var(--tertiary-very-low);
+        color: var(--tertiary);
+        border-color: var(--tertiary-low);
+      }
+
+      .mg-logs__badge.is-success {
+        background: var(--success-low);
+        color: var(--success);
+        border-color: var(--success-low-mid);
       }
 
       .mg-logs__badge.is-warning {
@@ -185,126 +195,86 @@ export default RouteTemplate(
         border-color: var(--danger-low-mid);
       }
 
-      .mg-logs__event {
-        padding: 1rem;
+      .mg-logs__badge.is-neutral.is-soft {
+        background: var(--secondary);
       }
 
-      .mg-logs__event-header {
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 1rem;
+      .mg-logs__badge.is-soft {
+        opacity: 0.92;
       }
 
-      .mg-logs__event-header-main,
-      .mg-logs__event-header-side,
-      .mg-logs__event-copy {
-        min-width: 0;
-      }
-
-      .mg-logs__event-header-side {
-        justify-content: flex-start;
-      }
-
-      .mg-logs__event-title {
-        font-size: 1.05rem;
-        font-weight: 700;
-        line-height: 1.3;
-        overflow-wrap: anywhere;
-      }
-
-      .mg-logs__event-chip-row,
-      .mg-logs__event-topline {
-        align-items: center;
-      }
-
-      .mg-logs__event-body {
-        margin-top: 0.9rem;
+      .mg-logs__facts {
         display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 0.85rem;
       }
 
-      .mg-logs__summary-grid {
-        display: grid;
-        gap: 0.65rem;
-      }
-
-      .mg-logs__summary-row {
-        padding: 0.35rem 0;
-        border-top: 1px solid var(--primary-low);
-      }
-
-      .mg-logs__summary-grid .mg-logs__summary-row:first-child {
-        padding-top: 0;
-        border-top: 0;
-      }
-
-      .mg-logs__summary-label {
-        color: var(--mg-muted);
-        font-size: var(--font-down-1);
-        min-width: 0;
-      }
-
-      .mg-logs__summary-value {
-        text-align: right;
-        font-weight: 600;
-        min-width: 0;
-        overflow-wrap: anywhere;
-      }
-
-      .mg-logs__message {
+      .mg-logs__fact {
         border: 1px solid var(--mg-border);
         border-radius: 14px;
         background: var(--secondary);
-        padding: 0.8rem 0.9rem;
+        padding: 0.9rem 1rem;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
       }
 
-      .mg-logs__message-label {
-        display: block;
-        margin-bottom: 0.25rem;
+      .mg-logs__fact.is-wide {
+        grid-column: 1 / -1;
+      }
+
+      .mg-logs__fact-label {
         color: var(--mg-muted);
         font-size: var(--font-down-1);
         font-weight: 600;
       }
 
-      .mg-logs__details {
+      .mg-logs__fact-value {
+        color: var(--primary-high);
+        font-size: var(--font-up-1);
+        font-weight: 700;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .mg-logs__fact-value--mono {
+        font-family: var(--font-family-monospace);
+        font-size: var(--font-0);
+        font-weight: 600;
+      }
+
+      .mg-logs__fact-meta {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .mg-logs__accordion {
         border: 1px solid var(--mg-border);
         border-radius: 14px;
-        background: var(--primary-very-low);
+        background: var(--secondary);
         overflow: hidden;
       }
 
-      .mg-logs__details summary {
+      .mg-logs__accordion-summary {
         cursor: pointer;
-        padding: 0.85rem 1rem;
+        padding: 0.95rem 1rem;
+        font-size: var(--font-up-1);
         font-weight: 700;
-        list-style: none;
+        list-style: revert;
       }
 
-      .mg-logs__details summary::-webkit-details-marker {
-        display: none;
-      }
-
-      .mg-logs__details[open] summary {
-        border-bottom: 1px solid var(--mg-border);
-      }
-
-      .mg-logs__json {
+      .mg-logs__details {
         margin: 0;
-        padding: 1rem;
-        max-height: 360px;
-        overflow: auto;
+        padding: 0 1rem 1rem;
         white-space: pre-wrap;
-        background: transparent;
-        font-size: 0.9em;
-      }
-
-      .mg-logs__empty {
-        border: 1px dashed var(--mg-border);
-        border-radius: 14px;
-        padding: 1rem;
-        text-align: center;
-        color: var(--mg-muted);
-        background: var(--mg-surface-alt);
+        word-break: break-word;
+        font-size: var(--font-down-1);
+        max-height: 20rem;
+        overflow: auto;
       }
 
       .mg-logs__flash {
@@ -316,63 +286,49 @@ export default RouteTemplate(
       }
 
       @media (max-width: 900px) {
-        .mg-logs__panel-header,
-        .mg-logs__event-header,
-        .mg-logs__summary-row,
-        .mg-logs__search-help {
-          flex-direction: column;
-          align-items: stretch;
+        .mg-logs__stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
-        .mg-logs__summary-value {
+        .mg-logs__event-header {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-logs__event-time {
           text-align: left;
+          white-space: normal;
+        }
+      }
+
+      @media (max-width: 700px) {
+        .mg-logs__facts,
+        .mg-logs__stats {
+          grid-template-columns: 1fr;
         }
       }
     </style>
 
     <div class="media-gallery-admin-logs">
-      <section class="mg-logs__panel">
+      <div class="mg-logs__panel">
         <div class="mg-logs__panel-header">
           <div class="mg-logs__panel-copy">
             <h1>{{i18n "admin.media_gallery.logs.title"}}</h1>
             <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.description"}}</p>
           </div>
-
           <div class="mg-logs__actions">
             <a class="btn" href="/admin/plugins/media-gallery">{{i18n "admin.media_gallery.logs.back_to_overview"}}</a>
-            <button
-              class="btn btn-primary"
-              type="button"
-              disabled={{@controller.isLoading}}
-              {{on "click" @controller.loadLogs}}
-            >
+            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.loadLogs}}>
               {{if @controller.isLoading (i18n "admin.media_gallery.logs.refreshing") (i18n "admin.media_gallery.logs.refresh")}}
             </button>
           </div>
         </div>
 
-        <div class="mg-logs__toolbar">
-          <div class="mg-logs__field mg-logs__search-grow">
-            <label for="media-gallery-admin-logs-search">{{i18n "admin.media_gallery.logs.search_label"}}</label>
-            <input
-              id="media-gallery-admin-logs-search"
-              class="mg-logs__search-box"
-              type="text"
-              value={{@controller.query}}
-              placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}}
-              {{on "input" @controller.updateQuery}}
-            />
-          </div>
-        </div>
+        <input class="mg-logs__search-box" type="text" value={{@controller.query}} placeholder={{i18n "admin.media_gallery.logs.search_placeholder"}} {{on "input" @controller.updateQuery}} />
 
-        <div class="mg-logs__search-help">
+        <div class="mg-logs__filters-footer">
           <div class="mg-logs__actions">
-            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>
-              Search
-            </button>
-            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.clearSearch}}>
-              Clear
-            </button>
+            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.search}}>Search</button>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.clearSearch}}>Clear</button>
           </div>
 
           {{#if @controller.lastLoadedAt}}
@@ -381,59 +337,55 @@ export default RouteTemplate(
             <span class="mg-logs__muted">Click refresh to load the latest log events.</span>
           {{/if}}
         </div>
-      </section>
+      </div>
 
       {{#if @controller.error}}
         <div class="mg-logs__flash">{{@controller.error}}</div>
       {{/if}}
 
-      <section class="mg-logs__stats">
+      <div class="mg-logs__stats">
         <div class="mg-logs__stat">
-          <div class="mg-logs__stat-label">Shown rows</div>
+          <div class="mg-logs__stat-label">Visible rows</div>
           <div class="mg-logs__stat-value">{{@controller.shownRows}}</div>
         </div>
         <div class="mg-logs__stat">
-          <div class="mg-logs__stat-label">Filtered total</div>
+          <div class="mg-logs__stat-label">All matches</div>
           <div class="mg-logs__stat-value">{{@controller.filteredCount}}</div>
         </div>
         <div class="mg-logs__stat">
-          <div class="mg-logs__stat-label">Last 24h</div>
+          <div class="mg-logs__stat-label">Last 24 hours</div>
           <div class="mg-logs__stat-value">{{@controller.last24hCount}}</div>
         </div>
         <div class="mg-logs__stat">
           <div class="mg-logs__stat-label">Unique users</div>
           <div class="mg-logs__stat-value">{{@controller.uniqueUsers}}</div>
         </div>
-      </section>
+      </div>
 
-      <section class="mg-logs__panel">
-        <div class="mg-logs__panel-header">
-          <div class="mg-logs__panel-copy">
-            <h2>{{i18n "admin.media_gallery.logs.top_events_title"}}</h2>
-            <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.top_events_description"}}</p>
-          </div>
+      <div class="mg-logs__panel">
+        <div class="mg-logs__panel-copy" style="margin-bottom: 0.9rem;">
+          <h2>{{i18n "admin.media_gallery.logs.top_events_title"}}</h2>
+          <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.top_events_description"}}</p>
         </div>
 
         {{#if @controller.decoratedTopEventTypes.length}}
           <div class="mg-logs__top-list">
             {{#each @controller.decoratedTopEventTypes as |entry|}}
               <div class="mg-logs__top-item">
-                <span class="mg-logs__top-item-title">{{entry.label}}</span>
+                <span>{{entry.eventLabel}}</span>
                 <span class="mg-logs__badge">{{entry.count}}</span>
               </div>
             {{/each}}
           </div>
         {{else}}
-          <div class="mg-logs__empty">{{i18n "admin.media_gallery.logs.no_top_events"}}</div>
+          <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_top_events"}}</div>
         {{/if}}
-      </section>
+      </div>
 
-      <section class="mg-logs__panel">
-        <div class="mg-logs__panel-header">
-          <div class="mg-logs__panel-copy">
-            <h2>{{i18n "admin.media_gallery.logs.recent_events_title"}}</h2>
-            <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.recent_events_description"}}</p>
-          </div>
+      <div class="mg-logs__panel">
+        <div class="mg-logs__panel-copy" style="margin-bottom: 0.9rem;">
+          <h2>{{i18n "admin.media_gallery.logs.recent_events_title"}}</h2>
+          <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.recent_events_description"}}</p>
         </div>
 
         {{#if @controller.decoratedEvents.length}}
@@ -441,76 +393,43 @@ export default RouteTemplate(
             {{#each @controller.decoratedEvents as |event|}}
               <article class="mg-logs__event">
                 <div class="mg-logs__event-header">
-                  <div class="mg-logs__event-copy">
-                    <div class="mg-logs__event-topline">
+                  <div class="mg-logs__event-heading">
+                    <h3 class="mg-logs__event-name">{{event.eventLabel}}</h3>
+                    <div class="mg-logs__badge-row">
                       <span class={{event.severityBadgeClass}}>{{event.severityLabel}}</span>
-                      <span class="mg-logs__badge">{{event.categoryLabel}}</span>
+                      <span class={{event.categoryBadgeClass}}>{{event.categoryLabel}}</span>
                     </div>
-                    <div class="mg-logs__event-title">{{event.eventLabel}}</div>
                   </div>
-
-                  <div class="mg-logs__event-header-side">
-                    <span class="mg-logs__muted">{{event.createdLabel}}</span>
-                  </div>
+                  <div class="mg-logs__event-time">{{event.createdLabel}}</div>
                 </div>
 
-                <div class="mg-logs__event-body">
-                  <div class="mg-logs__summary-grid">
-                    <div class="mg-logs__summary-row">
-                      <span class="mg-logs__summary-label">User</span>
-                      <span class="mg-logs__summary-value">{{event.userLabel}}</span>
+                <div class="mg-logs__facts">
+                  {{#each event.facts as |fact|}}
+                    <div class="mg-logs__fact {{if fact.isWide 'is-wide'}}">
+                      <div class="mg-logs__fact-label">{{fact.label}}</div>
+                      <div class={{fact.valueClass}}>{{fact.value}}</div>
+                      {{#if fact.meta}}
+                        <div class="mg-logs__fact-meta">{{fact.meta}}</div>
+                      {{/if}}
                     </div>
-                    <div class="mg-logs__summary-row">
-                      <span class="mg-logs__summary-label">Media</span>
-                      <span class="mg-logs__summary-value">{{event.mediaLabel}}</span>
-                    </div>
-                    <div class="mg-logs__summary-row">
-                      <span class="mg-logs__summary-label">Request</span>
-                      <span class="mg-logs__summary-value">{{event.requestLabel}}</span>
-                    </div>
-                    {{#if event.ip}}
-                      <div class="mg-logs__summary-row">
-                        <span class="mg-logs__summary-label">IP</span>
-                        <span class="mg-logs__summary-value">{{event.ip}}</span>
-                      </div>
-                    {{/if}}
-                    {{#if event.overlayCode}}
-                      <div class="mg-logs__summary-row">
-                        <span class="mg-logs__summary-label">Overlay</span>
-                        <span class="mg-logs__summary-value">{{event.overlayCode}}</span>
-                      </div>
-                    {{/if}}
-                    {{#if event.fingerprintId}}
-                      <div class="mg-logs__summary-row">
-                        <span class="mg-logs__summary-label">Fingerprint</span>
-                        <span class="mg-logs__summary-value">{{event.fingerprintId}}</span>
-                      </div>
-                    {{/if}}
-                  </div>
-
-                  {{#if event.message}}
-                    <div class="mg-logs__message">
-                      <span class="mg-logs__message-label">Message</span>
-                      <div>{{event.message}}</div>
-                    </div>
-                  {{/if}}
-
-                  {{#if event.detailsPreview}}
-                    <details class="mg-logs__details">
-                      <summary>Diagnostics JSON</summary>
-                      <pre class="mg-logs__json">{{event.detailsPreview}}</pre>
-                    </details>
-                  {{/if}}
+                  {{/each}}
                 </div>
+
+                {{#if event.detailsPreview}}
+                  <details class="mg-logs__accordion">
+                    <summary class="mg-logs__accordion-summary">Diagnostics JSON</summary>
+                    <pre class="mg-logs__details">{{event.detailsPreview}}</pre>
+                  </details>
+                {{/if}}
               </article>
             {{/each}}
           </div>
         {{else if @controller.hasLoadedOnce}}
-          <div class="mg-logs__empty">{{i18n "admin.media_gallery.logs.no_results"}}</div>
+          <div class="mg-logs__muted">{{i18n "admin.media_gallery.logs.no_results"}}</div>
         {{else}}
-          <div class="mg-logs__empty">No data loaded yet.</div>
+          <div class="mg-logs__muted">No data loaded yet.</div>
         {{/if}}
-      </section>
+      </div>
     </div>
   </template>
 );

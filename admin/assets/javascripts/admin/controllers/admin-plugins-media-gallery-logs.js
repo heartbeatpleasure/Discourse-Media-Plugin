@@ -19,26 +19,141 @@ function formatDateTime(value) {
   }).format(date);
 }
 
-function titleize(value) {
-  return String(value || "")
+function normalizeText(value, fallback = "—") {
+  if (value == null) {
+    return fallback;
+  }
+
+  const text = String(value).trim();
+  return text ? text : fallback;
+}
+
+function prettyLabel(value) {
+  return normalizeText(value, "")
     .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function titleize(value) {
+  const text = prettyLabel(value);
+  return text ? text.replace(/\b\w/g, (char) => char.toUpperCase()) : "—";
 }
 
 function coerceArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function severityBadgeClass(value) {
+function severityTone(value) {
   switch (String(value || "").toLowerCase()) {
+    case "success":
+    case "ok":
+      return "success";
     case "warning":
-      return "mg-logs__badge is-warning";
+    case "warn":
+      return "warning";
     case "danger":
     case "error":
-      return "mg-logs__badge is-danger";
+    case "failed":
+      return "danger";
+    case "info":
+    case "notice":
+    case "debug":
+      return "info";
     default:
-      return "mg-logs__badge is-info";
+      return "neutral";
   }
+}
+
+function categoryTone(value) {
+  switch (String(value || "").toLowerCase()) {
+    case "playback":
+    case "audit":
+      return "info";
+    case "security":
+    case "forensics":
+      return "warning";
+    case "delivery":
+      return "success";
+    case "error":
+    case "failure":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+function badgeClass(baseClass, tone, isSoft = false) {
+  const classes = [baseClass, `is-${tone}`];
+  if (isSoft) {
+    classes.push("is-soft");
+  }
+  return classes.join(" ");
+}
+
+function buildUserLabel(event) {
+  const name = normalizeText(event?.name, "");
+  const username = normalizeText(event?.username, "");
+
+  if (name && username && name.toLowerCase() !== username.toLowerCase()) {
+    return {
+      value: name,
+      meta: `@${username}`,
+    };
+  }
+
+  if (name || username) {
+    return {
+      value: name || username,
+      meta: "",
+    };
+  }
+
+  return {
+    value: event?.user_id ? `User #${event.user_id}` : "—",
+    meta: "",
+  };
+}
+
+function buildMediaLabel(event) {
+  const title = normalizeText(event?.media_title, "");
+  const publicId = normalizeText(event?.media_public_id, "");
+
+  if (title && publicId && title !== publicId) {
+    return {
+      value: title,
+      meta: publicId,
+    };
+  }
+
+  if (title || publicId) {
+    return {
+      value: title || publicId,
+      meta: "",
+    };
+  }
+
+  return {
+    value: event?.media_item_id ? `Item #${event.media_item_id}` : "—",
+    meta: "",
+  };
+}
+
+function buildFact(label, value, options = {}) {
+  const text = normalizeText(value);
+  return {
+    label,
+    value: text,
+    meta: normalizeText(options.meta, ""),
+    isWide: Boolean(options.isWide),
+    isMono: Boolean(options.isMono),
+    valueClass: [
+      "mg-logs__fact-value",
+      options.isMono ? "mg-logs__fact-value--mono" : null,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
 }
 
 export default class AdminPluginsMediaGalleryLogsController extends Controller {
@@ -73,42 +188,47 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return params.toString();
   }
 
+  get decoratedTopEventTypes() {
+    return coerceArray(this.topEventTypes).map((entry) => ({
+      eventLabel: titleize(entry?.event_type || "event"),
+      count: Number(entry?.count || 0),
+    }));
+  }
+
   get decoratedEvents() {
     return coerceArray(this.events).map((event) => {
-      const severity = String(event?.severity || "info").toLowerCase();
-      const method = String(event?.method || "").trim();
-      const path = String(event?.path || "").trim();
+      const user = buildUserLabel(event);
+      const media = buildMediaLabel(event);
+      const facts = [
+        buildFact("User", user.value, { meta: user.meta }),
+        buildFact("Media", media.value, { meta: media.meta }),
+        buildFact("IP address", event?.ip, { isMono: true }),
+        buildFact("Overlay code", event?.overlay_code, { isMono: true }),
+        buildFact("Request", [event?.method, event?.path].filter(Boolean).join(" "), {
+          isWide: true,
+          isMono: true,
+        }),
+        buildFact("Fingerprint", event?.fingerprint_id, { isWide: true, isMono: true }),
+        buildFact("Request ID", event?.request_id, { isWide: true, isMono: true }),
+        buildFact("Message", event?.message, { isWide: true }),
+      ].filter((fact) => fact.value !== "—");
 
       return {
         id: event?.id,
         createdLabel: formatDateTime(event?.created_at || event?.created_at_label),
         eventLabel: titleize(event?.event_type || "event"),
-        severityLabel: titleize(severity || "info"),
-        severityBadgeClass: severityBadgeClass(severity),
+        severityLabel: titleize(event?.severity || "info"),
+        severityBadgeClass: badgeClass("mg-logs__badge", severityTone(event?.severity)),
         categoryLabel: titleize(event?.category || "general"),
-        message: String(event?.message || "").trim(),
-        userLabel:
-          event?.name ||
-          event?.username ||
-          (event?.user_id ? `User #${event.user_id}` : "—"),
-        mediaLabel:
-          event?.media_title ||
-          event?.media_public_id ||
-          (event?.media_item_id ? `Item #${event.media_item_id}` : "—"),
-        requestLabel: [method, path].filter(Boolean).join(" ") || "—",
-        overlayCode: String(event?.overlay_code || "").trim(),
-        fingerprintId: String(event?.fingerprint_id || "").trim(),
-        ip: String(event?.ip || "").trim(),
+        categoryBadgeClass: badgeClass(
+          "mg-logs__badge",
+          categoryTone(event?.category),
+          true,
+        ),
+        facts,
         detailsPreview: String(event?.details_pretty || "").trim(),
       };
     });
-  }
-
-  get decoratedTopEventTypes() {
-    return coerceArray(this.topEventTypes).map((entry) => ({
-      label: titleize(entry?.event_type || "event"),
-      count: Number(entry?.count || 0),
-    }));
   }
 
   get shownRows() {
