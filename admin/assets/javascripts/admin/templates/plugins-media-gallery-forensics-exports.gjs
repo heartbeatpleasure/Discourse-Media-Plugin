@@ -42,6 +42,10 @@ export default RouteTemplate(
         margin-bottom: 0.9rem;
       }
 
+      .mg-exports__panel-header:last-child {
+        margin-bottom: 0;
+      }
+
       .mg-exports__panel-copy {
         display: flex;
         flex-direction: column;
@@ -65,9 +69,12 @@ export default RouteTemplate(
       .mg-exports__badge-row,
       .mg-exports__actions {
         display: flex;
-        flex-wrap: wrap;
-        gap: 0.65rem;
         align-items: center;
+        gap: 0.65rem;
+      }
+
+      .mg-exports__badge-row {
+        flex-wrap: wrap;
       }
 
       .mg-exports__badge {
@@ -101,34 +108,10 @@ export default RouteTemplate(
         background: var(--secondary);
       }
 
-      .mg-exports__summary-grid,
       .mg-exports__list,
       .mg-exports__meta-grid {
         display: grid;
         gap: 1rem;
-      }
-
-      .mg-exports__summary-grid {
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      }
-
-      .mg-exports__stat {
-        border: 1px solid var(--mg-border);
-        border-radius: 16px;
-        background: var(--mg-surface);
-        padding: 0.95rem 1rem;
-      }
-
-      .mg-exports__stat-label {
-        color: var(--mg-muted);
-        font-size: var(--font-down-1);
-      }
-
-      .mg-exports__stat-value {
-        font-size: 1.45rem;
-        font-weight: 700;
-        line-height: 1.1;
-        margin-top: 0.35rem;
       }
 
       .mg-exports__card {
@@ -141,16 +124,16 @@ export default RouteTemplate(
       }
 
       .mg-exports__card-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: start;
         gap: 1rem;
       }
 
       .mg-exports__card-copy {
         display: flex;
         flex-direction: column;
-        gap: 0.6rem;
+        gap: 0.7rem;
         min-width: 0;
       }
 
@@ -159,6 +142,18 @@ export default RouteTemplate(
         font-weight: 700;
         line-height: 1.25;
         overflow-wrap: anywhere;
+      }
+
+      .mg-exports__actions {
+        flex-wrap: nowrap;
+        justify-content: flex-end;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      .mg-exports__actions .btn {
+        min-width: 148px;
+        justify-content: center;
       }
 
       .mg-exports__meta-grid {
@@ -206,18 +201,15 @@ export default RouteTemplate(
         gap: 0.35rem;
       }
 
-      .mg-exports__actions .btn {
-        min-width: 148px;
-        justify-content: center;
-      }
-
-      @media (max-width: 900px) {
+      @media (max-width: 860px) {
         .mg-exports__card-header {
-          flex-direction: column;
+          grid-template-columns: 1fr;
         }
 
         .mg-exports__actions {
-          width: 100%;
+          justify-content: flex-start;
+          flex-wrap: wrap;
+          white-space: normal;
         }
       }
 
@@ -262,22 +254,15 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-exports__list">
-            {{#each @controller.exports as |exp|}}
+            {{#each @controller.exports key="id" as |exp|}}
               <article class="mg-exports__card">
                 <div class="mg-exports__card-header">
                   <div class="mg-exports__card-copy">
-                    <h3 class="mg-exports__filename">{{exp.filename}}</h3>
+                    <h3 class="mg-exports__filename">{{exp.displayName}}</h3>
 
                     <div class="mg-exports__badge-row">
-                      <span class="mg-exports__badge is-info">
-                        {{exp.rowsLabel}}
-                      </span>
-                      <span class="mg-exports__badge {{exp.availabilityClass}}">
-                        {{exp.availabilityLabel}}
-                      </span>
-                      <span class="mg-exports__badge {{exp.storageClass}}">
-                        {{exp.storageLabel}}
-                      </span>
+                      <span class="mg-exports__badge is-info">{{exp.rowsLabel}}</span>
+                      <span class="mg-exports__badge {{exp.availabilityClass}}">{{exp.availabilityLabel}}</span>
                     </div>
                   </div>
 
@@ -303,29 +288,27 @@ export default RouteTemplate(
                 <div class="mg-exports__meta-grid">
                   <div class="mg-exports__meta-card">
                     <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.created_at"}}</div>
-                    <div class="mg-exports__meta-value">{{if exp.created_at exp.created_at "—"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.createdLabel}}</div>
                   </div>
 
                   <div class="mg-exports__meta-card">
                     <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.cutoff_at"}}</div>
-                    <div class="mg-exports__meta-value">{{if exp.cutoff_at exp.cutoff_at "—"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.cutoffLabel}}</div>
                   </div>
 
                   <div class="mg-exports__meta-card">
-                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.storage"}}</div>
-                    <div class="mg-exports__meta-value">
-                      {{exp.storageLabel}}
-                    </div>
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.storage_location"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.storageLocationLabel}}</div>
                   </div>
 
                   <div class="mg-exports__meta-card">
-                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.size"}}</div>
-                    <div class="mg-exports__meta-value">{{if exp.file_bytes exp.file_bytes "—"}}</div>
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.gzip_size"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.gzipSizeLabel}}</div>
                   </div>
 
                   <div class="mg-exports__meta-card is-wide">
-                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.checksum"}}</div>
-                    <div class="mg-exports__meta-value is-code">{{if exp.sha256 exp.sha256 "—"}}</div>
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.csv_checksum"}}</div>
+                    <div class="mg-exports__meta-value is-code">{{exp.csvShaLabel}}</div>
                   </div>
                 </div>
               </article>

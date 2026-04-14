@@ -17,16 +17,20 @@ module ::MediaGallery
           .order(created_at: :desc)
           .limit(limit)
           .map do |e|
-            storage = e.csv_gzip.present? ? "db" : "file"
+            stored_in_db = e.csv_gzip.present?
+            gzip_bytes = e.file_bytes.presence || e.csv_gzip&.bytesize
+
             {
               id: e.id,
               filename: e.download_filename,
               cutoff_at: e.cutoff_at,
               rows_count: e.rows_count,
-              sha256: e.sha256,
-              storage: storage,
-              file_bytes: e.file_bytes,
+              csv_sha256: e.sha256,
+              storage_mode: stored_in_db ? "db" : "file",
+              storage_location: stored_in_db ? "database" : "local",
+              gzip_bytes: gzip_bytes,
               file_exists: e.file_exists?,
+              download_ready: stored_in_db || e.file_exists?,
               created_at: e.created_at
             }
           end
@@ -40,7 +44,6 @@ module ::MediaGallery
 
       wants_gz = params[:gz].to_s == "1"
 
-      # If file-based export is configured, ensure the stored file path stays within an allowed root.
       if export.csv_gzip.blank? && export.file_path.present?
         ensure_export_path_allowed!(export.file_path)
       end
@@ -48,7 +51,6 @@ module ::MediaGallery
       response.headers["Cache-Control"] = "no-store"
 
       if wants_gz
-        # Prefer streaming from disk when possible to avoid loading large files into memory.
         if export.csv_gzip.blank? && export.file_path.present? && ::File.exist?(export.file_path)
           ensure_export_path_allowed!(export.file_path)
 
@@ -89,15 +91,12 @@ module ::MediaGallery
       rp = ::File.realpath(path) rescue nil
       raise Discourse::NotFound if rp.blank?
 
-      # Always include the effective export root (mirrors the scheduled job).
       roots = [computed_export_root_path]
 
-      # Also allow the private root itself (exports commonly live under <private_root>/forensics_exports)
       if SiteSetting.respond_to?(:media_gallery_private_root_path) && SiteSetting.media_gallery_private_root_path.present?
         roots << SiteSetting.media_gallery_private_root_path
       end
 
-      # Keep these for backward compatibility (older installs).
       if SiteSetting.respond_to?(:media_gallery_original_export_root_path) && SiteSetting.media_gallery_original_export_root_path.present?
         roots << SiteSetting.media_gallery_original_export_root_path
       end
@@ -111,7 +110,6 @@ module ::MediaGallery
     end
 
     def computed_export_root_path
-      # Must mirror the logic in Jobs::MediaGalleryForensicsRetention.
       if SiteSetting.respond_to?(:media_gallery_forensics_export_root_path)
         v = SiteSetting.media_gallery_forensics_export_root_path.to_s.presence
         return v if v
