@@ -84,10 +84,17 @@ export default RouteTemplate(
         padding: 0.55rem 0.8rem;
       }
 
-      .mg-logs__filters {
+      .mg-logs__filters-row {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 0.9rem;
+      }
+
+      .mg-logs__filters-row--primary {
+        grid-template-columns: 1.05fr 1fr 1fr;
+      }
+
+      .mg-logs__filters-row--secondary {
+        grid-template-columns: 1fr 1fr 1fr;
       }
 
       .mg-logs__field {
@@ -95,6 +102,10 @@ export default RouteTemplate(
         flex-direction: column;
         gap: 0.4rem;
         min-width: 0;
+      }
+
+      .mg-logs__field--compact {
+        max-width: 16rem;
       }
 
       .mg-logs__field label {
@@ -318,8 +329,9 @@ export default RouteTemplate(
       }
 
       @media (max-width: 1100px) {
-        .mg-logs__filters {
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+        .mg-logs__filters-row--primary,
+        .mg-logs__filters-row--secondary {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
@@ -341,10 +353,15 @@ export default RouteTemplate(
       }
 
       @media (max-width: 700px) {
-        .mg-logs__filters,
+        .mg-logs__filters-row--primary,
+        .mg-logs__filters-row--secondary,
         .mg-logs__facts,
         .mg-logs__stats {
           grid-template-columns: 1fr;
+        }
+
+        .mg-logs__field--compact {
+          max-width: none;
         }
       }
     </style>
@@ -373,7 +390,7 @@ export default RouteTemplate(
             {{on "input" @controller.updateQuery}}
           />
 
-          <div class="mg-logs__filters">
+          <div class="mg-logs__filters-row mg-logs__filters-row--primary">
             <div class="mg-logs__field">
               <label>Severity</label>
               <select value={{@controller.severityFilter}} {{on "change" @controller.updateSeverityFilter}}>
@@ -387,26 +404,26 @@ export default RouteTemplate(
 
             <div class="mg-logs__field">
               <label>Category</label>
-              <input
-                type="text"
-                value={{@controller.categoryFilter}}
-                placeholder="playback, security, forensics…"
-                {{on "input" @controller.updateCategoryFilter}}
-              />
-              <div class="mg-logs__field-hint">Partial match</div>
+              <select value={{@controller.categoryFilter}} {{on "change" @controller.updateCategoryFilter}}>
+                <option value="">All categories</option>
+                {{#each @controller.availableCategoryOptions as |option|}}
+                  <option value={{option.value}}>{{option.label}}</option>
+                {{/each}}
+              </select>
             </div>
 
             <div class="mg-logs__field">
               <label>Event type</label>
-              <input
-                type="text"
-                value={{@controller.eventTypeFilter}}
-                placeholder="play_token_issued…"
-                {{on "input" @controller.updateEventTypeFilter}}
-              />
-              <div class="mg-logs__field-hint">Partial match</div>
+              <select value={{@controller.eventTypeFilter}} {{on "change" @controller.updateEventTypeFilter}}>
+                <option value="">All event types</option>
+                {{#each @controller.availableEventTypeOptions as |option|}}
+                  <option value={{option.value}}>{{option.label}}</option>
+                {{/each}}
+              </select>
             </div>
+          </div>
 
+          <div class="mg-logs__filters-row mg-logs__filters-row--secondary">
             <div class="mg-logs__field">
               <label>Time window</label>
               <select value={{@controller.hoursFilter}} {{on "change" @controller.updateHoursFilter}}>
@@ -418,7 +435,7 @@ export default RouteTemplate(
               </select>
             </div>
 
-            <div class="mg-logs__field">
+            <div class="mg-logs__field mg-logs__field--compact">
               <label>Limit</label>
               <select value={{@controller.limit}} {{on "change" @controller.updateLimit}}>
                 <option value="25">25</option>
@@ -427,10 +444,8 @@ export default RouteTemplate(
                 <option value="250">250</option>
               </select>
             </div>
-          </div>
 
-          <div class="mg-logs__filters">
-            <div class="mg-logs__field">
+            <div class="mg-logs__field mg-logs__field--compact">
               <label>Sort</label>
               <select value={{@controller.sortBy}} {{on "change" @controller.updateSort}}>
                 <option value="created_at_desc">Newest first</option>
@@ -463,10 +478,6 @@ export default RouteTemplate(
 
       <div class="mg-logs__stats">
         <div class="mg-logs__stat">
-          <div class="mg-logs__stat-label">Visible rows</div>
-          <div class="mg-logs__stat-value">{{@controller.shownRows}}</div>
-        </div>
-        <div class="mg-logs__stat">
           <div class="mg-logs__stat-label">All matches</div>
           <div class="mg-logs__stat-value">{{@controller.filteredCount}}</div>
         </div>
@@ -477,6 +488,10 @@ export default RouteTemplate(
         <div class="mg-logs__stat">
           <div class="mg-logs__stat-label">Unique users</div>
           <div class="mg-logs__stat-value">{{@controller.uniqueUsers}}</div>
+        </div>
+        <div class="mg-logs__stat">
+          <div class="mg-logs__stat-label">Unique media items</div>
+          <div class="mg-logs__stat-value">{{@controller.uniqueMediaItems}}</div>
         </div>
       </div>
 

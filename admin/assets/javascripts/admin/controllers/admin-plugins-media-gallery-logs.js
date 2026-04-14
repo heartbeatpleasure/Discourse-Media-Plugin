@@ -52,6 +52,21 @@ function coerceArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function uniqueStrings(values) {
+  return [...new Set(coerceArray(values).map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function normalizedOptionList(values, selectedValue = "") {
+  const items = uniqueStrings(values);
+  const selected = String(selectedValue || "").trim();
+
+  if (selected && !items.includes(selected)) {
+    items.push(selected);
+  }
+
+  return items.sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+}
+
 function severityTone(value) {
   switch (String(value || "").toLowerCase()) {
     case "success":
@@ -173,6 +188,8 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked hoursFilter = "168";
   @tracked limit = "100";
   @tracked sortBy = "created_at_desc";
+  @tracked categoryOptions = [];
+  @tracked eventTypeOptions = [];
   @tracked isLoading = false;
   @tracked error = "";
   @tracked events = [];
@@ -189,6 +206,8 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.hoursFilter = "168";
     this.limit = "100";
     this.sortBy = "created_at_desc";
+    this.categoryOptions = [];
+    this.eventTypeOptions = [];
     this.isLoading = false;
     this.error = "";
     this.events = [];
@@ -196,6 +215,10 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.topEventTypes = [];
     this.lastLoadedAt = null;
     this.hasLoadedOnce = false;
+  }
+
+  async loadInitial() {
+    await this.loadLogs();
   }
 
   buildQuery() {
@@ -234,6 +257,20 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     }));
   }
 
+  get availableCategoryOptions() {
+    return normalizedOptionList(this.categoryOptions, this.categoryFilter).map((value) => ({
+      value,
+      label: titleize(value),
+    }));
+  }
+
+  get availableEventTypeOptions() {
+    return normalizedOptionList(this.eventTypeOptions, this.eventTypeFilter).map((value) => ({
+      value,
+      label: titleize(value),
+    }));
+  }
+
   get decoratedEvents() {
     return coerceArray(this.events).map((event) => {
       const user = buildUserLabel(event);
@@ -266,10 +303,6 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     });
   }
 
-  get shownRows() {
-    return Number(this.summary?.shown_rows || this.events.length || 0);
-  }
-
   get filteredCount() {
     return Number(this.summary?.filtered_count || 0);
   }
@@ -282,13 +315,21 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return Number(this.summary?.unique_users || 0);
   }
 
+  get uniqueMediaItems() {
+    return Number(this.summary?.unique_media_items || 0);
+  }
+
+  get shownRows() {
+    return Number(this.summary?.shown_rows || this.events.length || 0);
+  }
+
   get lastLoadedLabel() {
     return this.lastLoadedAt ? formatDateTime(this.lastLoadedAt) : "";
   }
 
   get searchInfo() {
     if (!this.hasLoadedOnce) {
-      return "Use the search and filters below to load matching log events.";
+      return "Loading recent log events…";
     }
 
     const parts = [`${this.filteredCount} match${this.filteredCount === 1 ? "" : "es"}`];
@@ -310,6 +351,11 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.hoursFilter = String(filters?.hours || this.hoursFilter || "168");
     this.limit = String(filters?.limit || this.limit || "100");
     this.sortBy = String(filters?.sort || this.sortBy || "created_at_desc");
+  }
+
+  applyFilterOptions(filterOptions = {}) {
+    this.categoryOptions = uniqueStrings(filterOptions?.categories);
+    this.eventTypeOptions = uniqueStrings(filterOptions?.event_types);
   }
 
   @action
@@ -363,6 +409,7 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
       this.topEventTypes = coerceArray(data?.summary?.top_event_types);
       this.error = String(data?.error || "").trim();
       this.applyResponseFilters(data?.filters);
+      this.applyFilterOptions(data?.filter_options);
       this.lastLoadedAt = new Date();
       this.hasLoadedOnce = true;
     } catch (error) {

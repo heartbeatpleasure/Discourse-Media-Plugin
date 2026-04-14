@@ -5,6 +5,9 @@ export default class AdminPluginsMediaGalleryLogsRoute extends DiscourseRoute {
     super.setupController(...arguments);
     if (typeof controller?.resetState === "function") {
       controller.resetState();
+      if (typeof controller?.loadInitial === "function") {
+        controller.loadInitial();
+      }
     }
   }
 }
