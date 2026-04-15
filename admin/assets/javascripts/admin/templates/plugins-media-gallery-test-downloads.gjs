@@ -133,9 +133,9 @@ export default RouteTemplate(
       .mg-test-downloads__result-card {
         display: grid;
         grid-template-columns: 152px minmax(0, 1fr) auto;
-        gap: 0.9rem 1rem;
+        gap: 0.85rem 1rem;
         align-items: start;
-        padding: 0.9rem;
+        padding: 1rem;
         border: 1px solid var(--mg-td-border);
         border-radius: 16px;
         background: var(--mg-td-surface-alt);
@@ -175,8 +175,12 @@ export default RouteTemplate(
       .mg-test-downloads__selected-copy {
         display: flex;
         flex-direction: column;
-        gap: 0.35rem;
+        gap: 0.3rem;
         min-width: 0;
+      }
+
+      .mg-test-downloads__result-main {
+        display: contents;
       }
 
       .mg-test-downloads__result-title,
@@ -189,6 +193,15 @@ export default RouteTemplate(
 
       .mg-test-downloads__result-title {
         font-size: 1.08rem;
+      }
+
+      .mg-test-downloads__result-id {
+        font-family: var(--font-family-monospace);
+        font-size: var(--font-down-1);
+        color: var(--mg-td-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .mg-test-downloads__selected-title {
@@ -232,6 +245,20 @@ export default RouteTemplate(
         background: var(--danger-low);
         border-color: var(--danger-low-mid);
         color: var(--danger);
+      }
+
+      .mg-test-downloads__result-meta {
+        color: var(--mg-td-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-test-downloads__result-tags {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        padding-top: 0.15rem;
       }
 
       .mg-test-downloads__selected-card {
@@ -342,6 +369,10 @@ export default RouteTemplate(
 
         .mg-test-downloads__result-card {
           grid-template-columns: 128px minmax(0, 1fr);
+        }
+
+        .mg-test-downloads__result-tags {
+          grid-column: 1 / -1;
         }
 
         .mg-test-downloads__selected-hero {
@@ -487,20 +518,21 @@ export default RouteTemplate(
 
                   <div class="mg-test-downloads__result-copy">
                     <div class="mg-test-downloads__result-title">{{item.displayTitle}}</div>
-                    <div class="mg-test-downloads__result-subtitle">{{item.displayOwner}} · {{item.displayCreatedAt}}</div>
-                    <div class="mg-test-downloads__result-subtitle"><code>{{item.displayPublicId}}</code></div>
-                    <div class="mg-test-downloads__badge-row">
-                      <span class="mg-test-downloads__badge {{item.statusClassName}}">{{item.displayStatus}}</span>
-                      <span class="mg-test-downloads__badge">{{item.displayBackend}}</span>
-                      <span class="mg-test-downloads__badge">{{item.hasHlsLabel}}</span>
-                      <span class="mg-test-downloads__badge">{{item.hiddenLabel}}</span>
-                    </div>
+                    <div class="mg-test-downloads__result-id">{{item.displayPublicId}}</div>
+                    <div class="mg-test-downloads__result-meta">by {{item.displayOwner}} · {{item.displayCreatedAt}}</div>
                   </div>
 
                   <div>
                     <button class="btn {{if item.isSelected 'btn-primary'}}" type="button" {{on "click" (fn @controller.pickItem item)}}>
-                      {{if item.isSelected "Selected" "Select"}}
+                      {{if item.isSelected "Selected" "Use"}}
                     </button>
+                  </div>
+
+                  <div class="mg-test-downloads__result-tags">
+                    <span class="mg-test-downloads__badge {{item.statusClassName}}">{{item.displayStatus}}</span>
+                    <span class="mg-test-downloads__badge">{{item.displayMediaType}}</span>
+                    <span class="mg-test-downloads__badge">{{item.displayBackend}}</span>
+                    <span class="mg-test-downloads__badge">{{item.hasHlsLabel}}</span>
                   </div>
                 </div>
               {{/each}}
