@@ -2,8 +2,19 @@ import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
 
+const DEFAULT_BACKEND_FILTER = "";
+const DEFAULT_STATUS_FILTER = "ready";
+const DEFAULT_SORT = "newest";
+const DEFAULT_LIMIT = "24";
+const DEFAULT_HAS_HLS_FILTER = "true";
+
 export default class AdminPluginsMediaGalleryTestDownloadsController extends Controller {
   @tracked searchQuery = "";
+  @tracked backendFilter = DEFAULT_BACKEND_FILTER;
+  @tracked statusFilter = DEFAULT_STATUS_FILTER;
+  @tracked sort = DEFAULT_SORT;
+  @tracked limit = DEFAULT_LIMIT;
+  @tracked hasHlsFilter = DEFAULT_HAS_HLS_FILTER;
   @tracked searchResults = [];
   @tracked isSearching = false;
   @tracked searchError = "";
@@ -24,8 +35,15 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked generateError = "";
   @tracked artifacts = [];
 
+  _didInitialLoad = false;
+
   resetState() {
     this.searchQuery = "";
+    this.backendFilter = DEFAULT_BACKEND_FILTER;
+    this.statusFilter = DEFAULT_STATUS_FILTER;
+    this.sort = DEFAULT_SORT;
+    this.limit = DEFAULT_LIMIT;
+    this.hasHlsFilter = DEFAULT_HAS_HLS_FILTER;
     this.searchResults = [];
     this.isSearching = false;
     this.searchError = "";
@@ -45,6 +63,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.isGenerating = false;
     this.generateError = "";
     this.artifacts = [];
+    this._didInitialLoad = false;
   }
 
   get hasSelectedItem() {
@@ -52,7 +71,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get hasSearchQuery() {
-    return (this.searchQuery || "").trim().length >= 3;
+    return (this.searchQuery || "").trim().length > 0;
   }
 
   get showNoResults() {
@@ -64,7 +83,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get searchButtonDisabled() {
-    return !this.hasSearchQuery || this.isSearching;
+    return this.isSearching;
   }
 
   get useTypedPublicIdDisabled() {
@@ -96,11 +115,128 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     return !this.canGenerate;
   }
 
+  _humanize(value) {
+    const text = (value || "").toString().trim();
+    if (!text) {
+      return "";
+    }
+
+    return text
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (match) => match.toUpperCase());
+  }
+
+  _formatDate(value) {
+    if (!value) {
+      return "—";
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    const pad = (part) => String(part).padStart(2, "0");
+    return `${pad(date.getUTCDate())}-${pad(date.getUTCMonth() + 1)}-${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`;
+  }
+
+  _backendLabel(value) {
+    switch ((value || "").toString()) {
+      case "local":
+        return "Local";
+      case "s3":
+        return "S3";
+      default:
+        return value ? this._humanize(value) : "Unknown";
+    }
+  }
+
+  _statusTone(value) {
+    switch ((value || "").toString()) {
+      case "ready":
+        return "success";
+      case "failed":
+        return "danger";
+      case "processing":
+      case "queued":
+        return "warning";
+      default:
+        return "neutral";
+    }
+  }
+
+  _normalizeItem(item) {
+    const publicId = (item?.public_id || "").toString();
+    const title = (item?.title || "").toString().trim() || "Untitled video";
+    const username = (item?.username || "").toString().trim();
+    const userId = item?.user_id;
+    const owner = username ? `${username}${userId ? ` (#${userId})` : ""}` : (userId ? `User #${userId}` : "Unknown owner");
+    const status = (item?.status || "").toString();
+    const mediaType = (item?.media_type || "video").toString();
+
+    return {
+      ...item,
+      public_id: publicId,
+      displayTitle: title,
+      displayOwner: owner,
+      displayPublicId: publicId,
+      displayCreatedAt: this._formatDate(item?.created_at),
+      displayUpdatedAt: this._formatDate(item?.updated_at),
+      displayStatus: this._humanize(status || "unknown"),
+      displayMediaType: this._humanize(mediaType || "video"),
+      displayBackend: this._backendLabel(item?.managed_storage_backend),
+      statusTone: this._statusTone(status),
+      statusClassName: `is-${this._statusTone(status)}`,
+      hasHlsLabel: item?.has_hls ? "HLS ready" : "No HLS",
+      hiddenLabel: item?.hidden ? "Hidden" : "Visible",
+      isSelected: publicId && publicId === this.publicId,
+    };
+  }
+
+  _normalizeArtifact(artifact) {
+    if (!artifact) {
+      return null;
+    }
+
+    const region = artifact?.random_clip_region
+      ? `${this._humanize(artifact.random_clip_region)}${artifact?.clip_percent_of_video ? ` (${artifact.clip_percent_of_video}%)` : ""}`
+      : "";
+
+    return {
+      ...artifact,
+      displayCreatedAt: this._formatDate(artifact?.created_at),
+      displayMode: this._humanize(artifact?.mode || "full"),
+      displayUser: artifact?.username ? `${artifact.username} (#${artifact.user_id})` : `User #${artifact?.user_id}`,
+      displaySegments:
+        artifact?.start_segment != null && artifact?.segment_count != null
+          ? `Start ${artifact.start_segment} · Count ${artifact.segment_count}${artifact?.total_segments != null ? ` of ${artifact.total_segments}` : ""}`
+          : "—",
+      displayRegion: region,
+    };
+  }
+
+  _markSelectedResults() {
+    const selectedPublicId = (this.publicId || "").trim();
+    this.searchResults = (this.searchResults || []).map((item) => ({
+      ...item,
+      isSelected: !!selectedPublicId && item.public_id === selectedPublicId,
+    }));
+  }
+
+  async loadInitialResults() {
+    if (this._didInitialLoad) {
+      return;
+    }
+
+    this._didInitialLoad = true;
+    await this.search();
+  }
+
   @action
   onSearchInput(event) {
-    this.searchQuery = (event?.target?.value || "").trim();
-    this.hasSearched = false;
-    this.searchInfo = "";
+    this.searchQuery = event?.target?.value || "";
     this.searchError = "";
   }
 
@@ -110,6 +246,42 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       event.preventDefault();
       this.search();
     }
+  }
+
+  @action
+  onBackendChange(event) {
+    this.backendFilter = event?.target?.value || "";
+  }
+
+  @action
+  onStatusChange(event) {
+    this.statusFilter = event?.target?.value || "";
+  }
+
+  @action
+  onSortChange(event) {
+    this.sort = event?.target?.value || DEFAULT_SORT;
+  }
+
+  @action
+  onLimitChange(event) {
+    this.limit = event?.target?.value || DEFAULT_LIMIT;
+  }
+
+  @action
+  onHasHlsChange(event) {
+    this.hasHlsFilter = event?.target?.value || DEFAULT_HAS_HLS_FILTER;
+  }
+
+  @action
+  async clearSearch() {
+    this.searchQuery = "";
+    this.backendFilter = DEFAULT_BACKEND_FILTER;
+    this.statusFilter = DEFAULT_STATUS_FILTER;
+    this.sort = DEFAULT_SORT;
+    this.limit = DEFAULT_LIMIT;
+    this.hasHlsFilter = DEFAULT_HAS_HLS_FILTER;
+    await this.search();
   }
 
   async _extractError(response) {
@@ -140,6 +312,36 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     return `HTTP ${response.status}`;
   }
 
+  _buildSearchParams() {
+    const params = new URLSearchParams();
+    const q = (this.searchQuery || "").trim();
+
+    if (q) {
+      params.set("q", q);
+    }
+
+    params.set("media_type", "video");
+    params.set("limit", this.limit || DEFAULT_LIMIT);
+
+    if (this.backendFilter) {
+      params.set("backend", this.backendFilter);
+    }
+
+    if (this.statusFilter) {
+      params.set("status", this.statusFilter);
+    }
+
+    if (this.hasHlsFilter) {
+      params.set("has_hls", this.hasHlsFilter);
+    }
+
+    if (this.sort && this.sort !== "newest") {
+      params.set("sort", this.sort);
+    }
+
+    return params;
+  }
+
   @action
   async search() {
     this.searchError = "";
@@ -148,13 +350,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.hasSearched = true;
 
     try {
-      const q = (this.searchQuery || "").trim();
-      if (q.length < 3) {
-        this.searchResults = [];
-        return;
-      }
-
-      const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(q)}`;
+      const url = `/admin/plugins/media-gallery/media-items/search.json?${this._buildSearchParams().toString()}`;
       const response = await fetch(url, {
         method: "GET",
         headers: { Accept: "application/json" },
@@ -169,8 +365,18 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       }
 
       const json = await response.json();
-      this.searchResults = Array.isArray(json?.items) ? json.items : [];
-      this.searchInfo = `${this.searchResults.length} result(s) found.`;
+      const items = Array.isArray(json?.items) ? json.items : [];
+      this.searchResults = items.map((item) => this._normalizeItem(item));
+      this._markSelectedResults();
+
+      const noun = this.searchResults.length === 1 ? "video" : "videos";
+      this.searchInfo = `${this.searchResults.length} ${noun} shown`;
+      if ((this.searchQuery || "").trim()) {
+        this.searchInfo += ` for “${(this.searchQuery || "").trim()}”`;
+      }
+      if (this.hasHlsFilter === "true") {
+        this.searchInfo += " · HLS ready only";
+      }
     } catch (e) {
       this.searchError = e?.message || String(e);
       this.searchResults = [];
@@ -185,14 +391,31 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       return;
     }
 
-    this.selectedItem = item || { public_id: trimmed, title: null, username: null };
+    this.selectedItem = item ? this._normalizeItem(item) : {
+      public_id: trimmed,
+      displayTitle: "Selected video",
+      displayOwner: "Unknown owner",
+      displayPublicId: trimmed,
+      displayCreatedAt: "—",
+      displayUpdatedAt: "—",
+      displayStatus: "Unknown",
+      displayMediaType: "Video",
+      displayBackend: "Unknown",
+      statusTone: "neutral",
+      statusClassName: "is-neutral",
+      hasHlsLabel: "Unknown",
+      hiddenLabel: "Unknown",
+      thumbnail_url: null,
+      isSelected: true,
+    };
     this.publicId = trimmed;
     this.users = [];
     this.selectedUserId = "";
     this.manualUserId = "";
     this.usersError = "";
     this.generateError = "";
-    this.selectionMessage = `Selected media ${trimmed}. Loading users…`;
+    this.selectionMessage = `Selected video ${trimmed}. Loading user options…`;
+    this._markSelectedResults();
     await this.loadUsers();
   }
 
@@ -204,8 +427,8 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @action
   async useTypedPublicId() {
     const q = (this.searchQuery || "").trim();
-    if (q.length < 3) {
-      this.selectionMessage = "Enter at least 3 characters or paste the full public_id.";
+    if (!q) {
+      this.selectionMessage = "Enter a public_id in the search field first.";
       return;
     }
 
@@ -223,7 +446,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.selectedUserId = event?.target?.value || "";
   }
 
-  @action
   async loadUsers() {
     if (!this.publicId) {
       this.usersError = "No public_id selected yet.";
@@ -246,7 +468,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
         const err = await this._extractError(response);
         this.usersError = `Load users failed (${response.status}): ${err}`;
         this.users = [];
-        this.selectionMessage = `Selected media ${this.publicId}, but loading users failed.`;
+        this.selectionMessage = `Selected video ${this.publicId}, but loading users failed.`;
         return;
       }
 
@@ -268,12 +490,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       if (!this.selectedUserId && this.users.length === 1) {
         this.selectedUserId = String(this.users[0].id);
       }
-      this.searchInfo = `Loaded ${this.users.length} user option(s) for ${this.publicId}.`;
-      this.selectionMessage = `Selected media ${this.publicId}. ${this.users.length} user option(s) loaded.`;
+      this.selectionMessage = `Selected video ${this.publicId}. ${this.users.length} user option(s) loaded.`;
     } catch (e) {
       this.usersError = e?.message || String(e);
       this.users = [];
-      this.selectionMessage = `Selected media ${this.publicId}, but loading users failed.`;
+      this.selectionMessage = `Selected video ${this.publicId}, but loading users failed.`;
     } finally {
       this.isLoadingUsers = false;
     }
@@ -284,10 +505,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   _pushArtifact(artifact) {
-    if (!artifact) {
+    const normalized = this._normalizeArtifact(artifact);
+    if (!normalized) {
       return;
     }
-    this.artifacts = [artifact, ...(this.artifacts || [])];
+    this.artifacts = [normalized, ...(this.artifacts || [])];
   }
 
   async _pollTask(taskId, statusUrl) {
@@ -315,7 +537,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       if (status === "complete" && json?.artifact) {
         this._pushArtifact(json.artifact);
-        this.selectionMessage = `Artifact generated for ${this.publicId}. Use the Download button below.`;
+        this.selectionMessage = `Artifact generated for ${this.publicId}. Use Download below.`;
         return;
       }
 
@@ -333,7 +555,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
   async _generate(payload) {
     if (!this.publicId || !this.resolvedUserId) {
-      this.generateError = "Select a public_id and user first.";
+      this.generateError = "Select a video and user first.";
       return;
     }
 
@@ -373,7 +595,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       if (json?.ok && json?.artifact) {
         this._pushArtifact(json.artifact);
-        this.selectionMessage = `Artifact generated for ${this.publicId}. Use the Download button below.`;
+        this.selectionMessage = `Artifact generated for ${this.publicId}. Use Download below.`;
         return;
       }
 
@@ -385,8 +607,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       this.isGenerating = false;
     }
   }
-
-
 
   _downloadFilenameFromHeaders(headers, fallbackName = "download.mp4") {
     const cd = headers?.get?.("Content-Disposition") || headers?.get?.("content-disposition") || "";

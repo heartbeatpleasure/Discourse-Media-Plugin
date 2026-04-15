@@ -6,5 +6,8 @@ export default class AdminPluginsMediaGalleryTestDownloadsRoute extends Discours
     if (typeof controller?.resetState === "function") {
       controller.resetState();
     }
+    if (typeof controller?.loadInitialResults === "function") {
+      controller.loadInitialResults();
+    }
   }
 }
