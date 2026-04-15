@@ -2,42 +2,6 @@ import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
 
-const MEDIA_TYPE_OPTIONS = Object.freeze([
-  { value: "", label: "All types" },
-  { value: "video", label: "Video" },
-  { value: "audio", label: "Audio" },
-  { value: "image", label: "Image" },
-]);
-
-const STATUS_OPTIONS = Object.freeze([
-  { value: "", label: "All statuses" },
-  { value: "ready", label: "Ready" },
-  { value: "processing", label: "Processing" },
-  { value: "queued", label: "Queued" },
-  { value: "failed", label: "Failed" },
-]);
-
-const BACKEND_OPTIONS = Object.freeze([
-  { value: "", label: "All backends" },
-  { value: "local", label: "Local" },
-  { value: "s3", label: "S3" },
-]);
-
-const SORT_OPTIONS = Object.freeze([
-  { value: "", label: "Newest" },
-  { value: "oldest", label: "Oldest" },
-  { value: "updated_desc", label: "Recently updated" },
-  { value: "title_asc", label: "Title A–Z" },
-  { value: "title_desc", label: "Title Z–A" },
-]);
-
-const LIMIT_OPTIONS = Object.freeze([
-  { value: "12", label: "12" },
-  { value: "24", label: "24" },
-  { value: "48", label: "48" },
-  { value: "100", label: "100" },
-]);
-
 export default class AdminPluginsMediaGalleryTestDownloadsController extends Controller {
   @tracked searchQuery = "";
   @tracked searchResults = [];
@@ -45,12 +9,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked searchError = "";
   @tracked hasSearched = false;
   @tracked searchInfo = "";
-
-  @tracked mediaTypeFilter = "video";
-  @tracked statusFilter = "";
-  @tracked backendFilter = "";
-  @tracked sort = "";
-  @tracked limit = "12";
 
   @tracked publicId = "";
   @tracked selectedItem = null;
@@ -66,26 +24,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked generateError = "";
   @tracked artifacts = [];
 
-  get mediaTypeOptions() {
-    return MEDIA_TYPE_OPTIONS;
-  }
-
-  get statusOptions() {
-    return STATUS_OPTIONS;
-  }
-
-  get backendOptions() {
-    return BACKEND_OPTIONS;
-  }
-
-  get sortOptions() {
-    return SORT_OPTIONS;
-  }
-
-  get limitOptions() {
-    return LIMIT_OPTIONS;
-  }
-
   resetState() {
     this.searchQuery = "";
     this.searchResults = [];
@@ -93,12 +31,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.searchError = "";
     this.hasSearched = false;
     this.searchInfo = "";
-
-    this.mediaTypeFilter = "video";
-    this.statusFilter = "";
-    this.backendFilter = "";
-    this.sort = "";
-    this.limit = "12";
 
     this.publicId = "";
     this.selectedItem = null;
@@ -124,12 +56,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get showNoResults() {
-    return (
-      this.hasSearched &&
-      !this.isSearching &&
-      !this.searchError &&
-      (this.searchResults?.length || 0) === 0
-    );
+    return this.hasSearched && !this.isSearching && !this.searchError && (this.searchResults?.length || 0) === 0;
   }
 
   get canUseTypedPublicId() {
@@ -137,7 +64,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get searchButtonDisabled() {
-    return this.isSearching;
+    return !this.hasSearchQuery || this.isSearching;
   }
 
   get useTypedPublicIdDisabled() {
@@ -162,118 +89,16 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   get showNoUsersWarning() {
-    return (
-      this.hasSelectedItem &&
-      !this.isLoadingUsers &&
-      !this.usersError &&
-      (this.users?.length || 0) === 0
-    );
+    return this.hasSelectedItem && !this.isLoadingUsers && !this.usersError && (this.users?.length || 0) === 0;
   }
 
   get generateDisabled() {
     return !this.canGenerate;
   }
 
-  _humanize(value) {
-    return String(value || "")
-      .replace(/[_-]+/g, " ")
-      .replace(/\b\w/g, (char) => char.toUpperCase())
-      .trim();
-  }
-
-  _statusBadgeClass(status) {
-    if (status === "ready") {
-      return "mg-td__badge is-success";
-    }
-    if (status === "failed") {
-      return "mg-td__badge is-danger";
-    }
-    return "mg-td__badge";
-  }
-
-  _storageLabel(item) {
-    if (item?.managed_storage_profile_label) {
-      return item.managed_storage_profile_label;
-    }
-
-    if (item?.managed_storage_backend === "local") {
-      return "Local";
-    }
-    if (item?.managed_storage_backend === "s3") {
-      return "S3";
-    }
-
-    return this._humanize(item?.managed_storage_backend) || "Unknown";
-  }
-
-  _formatDateTime(value) {
-    if (!value) {
-      return "—";
-    }
-
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return String(value);
-    }
-
-    const pad = (number) => String(number).padStart(2, "0");
-    return `${pad(date.getUTCDate())}-${pad(date.getUTCMonth() + 1)}-${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`;
-  }
-
-  _formatBytes(value) {
-    const bytes = Number(value);
-    if (!Number.isFinite(bytes) || bytes <= 0) {
-      return "—";
-    }
-
-    if (bytes < 1024) {
-      return `${bytes} B`;
-    }
-
-    const units = ["KB", "MB", "GB", "TB"];
-    let size = bytes;
-    let unitIndex = -1;
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024;
-      unitIndex += 1;
-    }
-
-    return `${size.toFixed(size >= 10 ? 1 : 2)} ${units[unitIndex]}`;
-  }
-
-  _decorateItem(item) {
-    return {
-      ...item,
-      displayTitle: item?.title?.trim() || item?.public_id || "Untitled media",
-      displayType: this._humanize(item?.media_type) || "—",
-      displayStatus: this._humanize(item?.status) || "—",
-      displayStorage: this._storageLabel(item),
-      statusBadgeClass: this._statusBadgeClass(item?.status),
-      createdLabel: this._formatDateTime(item?.created_at),
-      updatedLabel: this._formatDateTime(item?.updated_at),
-      sizeLabel: this._formatBytes(item?.filesize_processed_bytes),
-      ownerLabel: item?.username || "—",
-    };
-  }
-
-  _decorateArtifact(artifact) {
-    return {
-      ...artifact,
-      createdLabel: this._formatDateTime(artifact?.created_at),
-      fileSizeLabel: this._formatBytes(artifact?.file_size_bytes),
-      modeLabel: this._humanize(artifact?.mode) || "Artifact",
-      segmentSummary: `Start ${artifact?.start_segment ?? 0}, ${artifact?.segment_count ?? 0} / ${artifact?.total_segments ?? 0} segments`,
-      userLabel: artifact?.username ? `${artifact.username} (#${artifact.user_id})` : `#${artifact?.user_id}`,
-      regionLabel:
-        artifact?.random_clip_region && artifact?.clip_percent_of_video != null
-          ? `${artifact.random_clip_region} (${artifact.clip_percent_of_video}%)`
-          : artifact?.random_clip_region || null,
-    };
-  }
-
   @action
   onSearchInput(event) {
-    this.searchQuery = event?.target?.value || "";
+    this.searchQuery = (event?.target?.value || "").trim();
     this.hasSearched = false;
     this.searchInfo = "";
     this.searchError = "";
@@ -285,31 +110,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       event.preventDefault();
       this.search();
     }
-  }
-
-  @action
-  onMediaTypeChange(event) {
-    this.mediaTypeFilter = event?.target?.value || "";
-  }
-
-  @action
-  onStatusChange(event) {
-    this.statusFilter = event?.target?.value || "";
-  }
-
-  @action
-  onBackendChange(event) {
-    this.backendFilter = event?.target?.value || "";
-  }
-
-  @action
-  onSortChange(event) {
-    this.sort = event?.target?.value || "";
-  }
-
-  @action
-  onLimitChange(event) {
-    this.limit = event?.target?.value || "12";
   }
 
   async _extractError(response) {
@@ -349,41 +149,17 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
     try {
       const q = (this.searchQuery || "").trim();
-      if (q.length > 0 && q.length < 3) {
-        this.searchError =
-          "Enter at least 3 characters, or clear the search field to browse recent items.";
+      if (q.length < 3) {
         this.searchResults = [];
         return;
       }
 
-      const params = new URLSearchParams();
-      if (q.length >= 3) {
-        params.set("q", q);
-      }
-      if (this.mediaTypeFilter) {
-        params.set("media_type", this.mediaTypeFilter);
-      }
-      if (this.statusFilter) {
-        params.set("status", this.statusFilter);
-      }
-      if (this.backendFilter) {
-        params.set("backend", this.backendFilter);
-      }
-      if (this.sort) {
-        params.set("sort", this.sort);
-      }
-      if (this.limit) {
-        params.set("limit", this.limit);
-      }
-
-      const response = await fetch(
-        `/admin/plugins/media-gallery/media-items/search.json?${params.toString()}`,
-        {
-          method: "GET",
-          headers: { Accept: "application/json" },
-          credentials: "same-origin",
-        }
-      );
+      const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(q)}`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
 
       if (!response.ok) {
         const err = await this._extractError(response);
@@ -393,9 +169,8 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       }
 
       const json = await response.json();
-      const items = Array.isArray(json?.items) ? json.items : [];
-      this.searchResults = items.map((item) => this._decorateItem(item));
-      this.searchInfo = `${this.searchResults.length} result(s) loaded.`;
+      this.searchResults = Array.isArray(json?.items) ? json.items : [];
+      this.searchInfo = `${this.searchResults.length} result(s) found.`;
     } catch (e) {
       this.searchError = e?.message || String(e);
       this.searchResults = [];
@@ -410,7 +185,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       return;
     }
 
-    this.selectedItem = item ? this._decorateItem(item) : { public_id: trimmed, displayTitle: trimmed, ownerLabel: "—", createdLabel: "—", updatedLabel: "—", sizeLabel: "—", displayType: "—", displayStatus: "—", displayStorage: "—", statusBadgeClass: "mg-td__badge", thumbnail_url: null };
+    this.selectedItem = item || { public_id: trimmed, title: null, username: null };
     this.publicId = trimmed;
     this.users = [];
     this.selectedUserId = "";
@@ -482,15 +257,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
           byId.set(fp.user_id, { id: fp.user_id, username: fp.username || `user_${fp.user_id}` });
         }
       }
-      for (const session of json?.playback_sessions || []) {
-        if (session?.user_id && !byId.has(session.user_id)) {
-          byId.set(session.user_id, {
-            id: session.user_id,
-            username: session.username || `user_${session.user_id}`,
-          });
+      for (const s of json?.playback_sessions || []) {
+        if (s?.user_id && !byId.has(s.user_id)) {
+          byId.set(s.user_id, { id: s.user_id, username: s.username || `user_${s.user_id}` });
         }
       }
-
       this.users = Array.from(byId.values()).sort((a, b) =>
         (a.username || "").localeCompare(b.username || "")
       );
@@ -498,8 +269,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
         this.selectedUserId = String(this.users[0].id);
       }
       this.searchInfo = `Loaded ${this.users.length} user option(s) for ${this.publicId}.`;
-      this.selectionMessage =
-        `Selected media ${this.publicId}. ${this.users.length} user option(s) loaded.`;
+      this.selectionMessage = `Selected media ${this.publicId}. ${this.users.length} user option(s) loaded.`;
     } catch (e) {
       this.usersError = e?.message || String(e);
       this.users = [];
@@ -517,7 +287,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     if (!artifact) {
       return;
     }
-    this.artifacts = [this._decorateArtifact(artifact), ...(this.artifacts || [])];
+    this.artifacts = [artifact, ...(this.artifacts || [])];
   }
 
   async _pollTask(taskId, statusUrl) {
@@ -545,8 +315,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       if (status === "complete" && json?.artifact) {
         this._pushArtifact(json.artifact);
-        this.selectionMessage =
-          `Artifact generated for ${this.publicId}. Use the Download button below.`;
+        this.selectionMessage = `Artifact generated for ${this.publicId}. Use the Download button below.`;
         return;
       }
 
@@ -604,8 +373,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       if (json?.ok && json?.artifact) {
         this._pushArtifact(json.artifact);
-        this.selectionMessage =
-          `Artifact generated for ${this.publicId}. Use the Download button below.`;
+        this.selectionMessage = `Artifact generated for ${this.publicId}. Use the Download button below.`;
         return;
       }
 
@@ -617,6 +385,8 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       this.isGenerating = false;
     }
   }
+
+
 
   _downloadFilenameFromHeaders(headers, fallbackName = "download.mp4") {
     const cd = headers?.get?.("Content-Disposition") || headers?.get?.("content-disposition") || "";
