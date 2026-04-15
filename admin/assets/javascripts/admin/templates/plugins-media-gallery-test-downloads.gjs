@@ -35,7 +35,7 @@ export default RouteTemplate(
       }
 
       .mg-test-downloads__grid {
-        grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.92fr);
+        grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.95fr);
         align-items: start;
       }
 
@@ -54,7 +54,7 @@ export default RouteTemplate(
         align-items: flex-start;
         justify-content: space-between;
         gap: 0.75rem;
-        margin-bottom: 1rem;
+        margin-bottom: 0.9rem;
       }
 
       .mg-test-downloads__panel-copy {
@@ -126,16 +126,20 @@ export default RouteTemplate(
         margin-top: 1rem;
       }
 
+      .mg-test-downloads__results-wrap,
       .mg-test-downloads__results {
-        margin-top: 1rem;
+        margin-top: 0.5rem;
       }
 
       .mg-test-downloads__result-card {
         display: grid;
-        grid-template-columns: 152px minmax(0, 1fr) auto;
+        grid-template-columns: 128px minmax(0, 1fr) auto;
+        grid-template-areas:
+          "thumb main action"
+          "badges badges badges";
         gap: 0.85rem 1rem;
         align-items: start;
-        padding: 1rem;
+        padding: 0.9rem;
         border: 1px solid var(--mg-td-border);
         border-radius: 16px;
         background: var(--mg-td-surface-alt);
@@ -149,18 +153,21 @@ export default RouteTemplate(
 
       .mg-test-downloads__thumb,
       .mg-test-downloads__thumb-placeholder {
-        width: 152px;
+        width: 128px;
         aspect-ratio: 16 / 9;
         border-radius: 14px;
         border: 1px solid var(--mg-td-border);
         background: var(--secondary);
+        grid-area: thumb;
+        align-self: start;
       }
 
       .mg-test-downloads__thumb {
         object-fit: cover;
       }
 
-      .mg-test-downloads__thumb-placeholder {
+      .mg-test-downloads__thumb-placeholder,
+      .mg-test-downloads__selected-thumb-placeholder {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -175,12 +182,13 @@ export default RouteTemplate(
       .mg-test-downloads__selected-copy {
         display: flex;
         flex-direction: column;
-        gap: 0.3rem;
+        gap: 0.35rem;
         min-width: 0;
       }
 
-      .mg-test-downloads__result-main {
-        display: contents;
+      .mg-test-downloads__result-copy {
+        grid-area: main;
+        align-self: start;
       }
 
       .mg-test-downloads__result-title,
@@ -192,27 +200,23 @@ export default RouteTemplate(
       }
 
       .mg-test-downloads__result-title {
-        font-size: 1.08rem;
+        font-size: 1.1rem;
+      }
+
+      .mg-test-downloads__result-id,
+      .mg-test-downloads__result-meta,
+      .mg-test-downloads__selected-subtitle {
+        color: var(--mg-td-muted);
+        font-size: var(--font-down-1);
       }
 
       .mg-test-downloads__result-id {
-        font-family: var(--font-family-monospace);
-        font-size: var(--font-down-1);
-        color: var(--mg-td-muted);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      .mg-test-downloads__selected-title {
-        font-size: 1.35rem;
-      }
-
-      .mg-test-downloads__result-subtitle,
-      .mg-test-downloads__selected-subtitle {
-        font-size: var(--font-down-1);
-        color: var(--mg-td-muted);
-        overflow-wrap: anywhere;
+        font-family: inherit;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+        word-break: normal;
+        overflow-wrap: normal;
       }
 
       .mg-test-downloads__badge {
@@ -247,18 +251,17 @@ export default RouteTemplate(
         color: var(--danger);
       }
 
-      .mg-test-downloads__result-meta {
-        color: var(--mg-td-muted);
-        font-size: var(--font-down-1);
-      }
-
       .mg-test-downloads__result-tags {
-        grid-column: 1 / -1;
+        grid-area: badges;
         display: flex;
         align-items: center;
         gap: 0.75rem;
         flex-wrap: wrap;
-        padding-top: 0.15rem;
+      }
+
+      .mg-test-downloads__result-action {
+        grid-area: action;
+        align-self: start;
       }
 
       .mg-test-downloads__selected-card {
@@ -285,16 +288,6 @@ export default RouteTemplate(
 
       .mg-test-downloads__selected-thumb {
         object-fit: cover;
-      }
-
-      .mg-test-downloads__selected-thumb-placeholder {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 0.5rem;
-        text-align: center;
-        color: var(--mg-td-muted);
-        box-sizing: border-box;
       }
 
       .mg-test-downloads__selected-meta {
@@ -369,10 +362,10 @@ export default RouteTemplate(
 
         .mg-test-downloads__result-card {
           grid-template-columns: 128px minmax(0, 1fr);
-        }
-
-        .mg-test-downloads__result-tags {
-          grid-column: 1 / -1;
+          grid-template-areas:
+            "thumb main"
+            "action action"
+            "badges badges";
         }
 
         .mg-test-downloads__selected-hero {
@@ -387,160 +380,167 @@ export default RouteTemplate(
         .mg-test-downloads__result-card {
           grid-template-columns: 1fr;
         }
+
+        .mg-test-downloads__result-card {
+          grid-template-areas:
+            "thumb"
+            "main"
+            "action"
+            "badges";
+        }
       }
     </style>
 
     <div class="media-gallery-admin-test-downloads">
-      <div class="mg-test-downloads__panel">
+      <section class="mg-test-downloads__panel">
         <div class="mg-test-downloads__panel-header">
           <div class="mg-test-downloads__panel-copy">
             <h1>{{i18n "admin.media_gallery.test_downloads.title"}}</h1>
-            <p class="mg-test-downloads__muted">{{i18n "admin.media_gallery.test_downloads.description"}}</p>
+            <p class="mg-test-downloads__muted">Browse videos visually, pick one from the list, then generate a forensic test download for a detected or manual user.</p>
           </div>
         </div>
+
         <div class="mg-test-downloads__notice is-info">
-          This page is admin-only. Choose a video, select a user found in fingerprints or playback sessions, then generate a forensic test download.
+          This page is admin-only. Start from the video list instead of entering IDs manually whenever possible.
         </div>
-      </div>
+
+        <div class="mg-test-downloads__filters" style="margin-top: 1rem;">
+          <div class="mg-test-downloads__field is-search">
+            <label>Search</label>
+            <input
+              class="admin-input"
+              type="text"
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+              data-lpignore="true"
+              value={{@controller.searchQuery}}
+              placeholder="Search by public_id / title / id..."
+              {{on "input" @controller.onSearchInput}}
+              {{on "keydown" @controller.onSearchKeydown}}
+            />
+          </div>
+
+          <div class="mg-test-downloads__field">
+            <label>Backend</label>
+            <select class="combobox" value={{@controller.backendFilter}} {{on "change" @controller.onBackendChange}}>
+              <option value="">All</option>
+              <option value="local">Local</option>
+              <option value="s3">S3</option>
+            </select>
+          </div>
+
+          <div class="mg-test-downloads__field">
+            <label>Status</label>
+            <select class="combobox" value={{@controller.statusFilter}} {{on "change" @controller.onStatusChange}}>
+              <option value="">All</option>
+              <option value="ready">Ready</option>
+              <option value="queued">Queued</option>
+              <option value="processing">Processing</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+
+          <div class="mg-test-downloads__field">
+            <label>HLS</label>
+            <select class="combobox" value={{@controller.hasHlsFilter}} {{on "change" @controller.onHasHlsChange}}>
+              <option value="true">Ready only</option>
+              <option value="false">Without HLS</option>
+              <option value="">All</option>
+            </select>
+          </div>
+
+          <div class="mg-test-downloads__field">
+            <label>Sort</label>
+            <select class="combobox" value={{@controller.sort}} {{on "change" @controller.onSortChange}}>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="updated_desc">Recently updated</option>
+              <option value="title_asc">Title A–Z</option>
+              <option value="title_desc">Title Z–A</option>
+            </select>
+          </div>
+
+          <div class="mg-test-downloads__field">
+            <label>Limit</label>
+            <select class="combobox" value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
+              <option value="12">12</option>
+              <option value="24">24</option>
+              <option value="48">48</option>
+              <option value="96">96</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="mg-test-downloads__filters-footer">
+          <div class="mg-test-downloads__button-row">
+            <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.searchButtonDisabled}}>
+              {{if @controller.isSearching "Searching…" "Search"}}
+            </button>
+            <button class="btn" type="button" {{on "click" @controller.clearSearch}} disabled={{@controller.isSearching}}>
+              Reset
+            </button>
+            <button class="btn" type="button" {{on "click" @controller.useTypedPublicId}} disabled={{@controller.useTypedPublicIdDisabled}}>
+              Use entered public_id
+            </button>
+          </div>
+          <div class="mg-test-downloads__results-footer">{{@controller.searchInfo}}</div>
+        </div>
+
+        {{#if @controller.searchError}}
+          <div class="mg-test-downloads__notice is-danger" style="margin-top: 1rem;">{{@controller.searchError}}</div>
+        {{/if}}
+      </section>
 
       <div class="mg-test-downloads__grid">
-        <div class="mg-test-downloads__panel">
+        <section class="mg-test-downloads__panel">
           <div class="mg-test-downloads__panel-header">
             <div class="mg-test-downloads__panel-copy">
-              <h2>Browse videos</h2>
-              <p class="mg-test-downloads__muted">Search by title or public_id and work from a visual list instead of entering IDs manually.</p>
+              <h2>Results</h2>
+              <p class="mg-test-downloads__muted">Choose a video from the current result set to prepare a forensic test download.</p>
             </div>
           </div>
 
-          <div class="mg-test-downloads__filters">
-            <div class="mg-test-downloads__field is-search">
-              <label>Search</label>
-              <input
-                class="admin-input"
-                type="text"
-                autocomplete="off"
-                autocapitalize="off"
-                autocorrect="off"
-                spellcheck="false"
-                data-lpignore="true"
-                value={{@controller.searchQuery}}
-                placeholder="Search by title or public_id"
-                {{on "input" @controller.onSearchInput}}
-                {{on "keydown" @controller.onSearchKeydown}}
-              />
-            </div>
+          <div class="mg-test-downloads__results-wrap">
+            {{#if @controller.searchResults.length}}
+              <div class="mg-test-downloads__results">
+                {{#each @controller.searchResults key="public_id" as |item|}}
+                  <article class="mg-test-downloads__result-card {{if item.isSelected 'is-selected'}}">
+                    {{#if item.thumbnail_url}}
+                      <img class="mg-test-downloads__thumb" loading="lazy" src={{item.thumbnail_url}} alt={{item.displayTitle}} />
+                    {{else}}
+                      <div class="mg-test-downloads__thumb-placeholder">No thumbnail</div>
+                    {{/if}}
 
-            <div class="mg-test-downloads__field">
-              <label>Backend</label>
-              <select class="combobox" value={{@controller.backendFilter}} {{on "change" @controller.onBackendChange}}>
-                <option value="">All backends</option>
-                <option value="local">Local</option>
-                <option value="s3">S3</option>
-              </select>
-            </div>
+                    <div class="mg-test-downloads__result-copy">
+                      <div class="mg-test-downloads__result-title">{{item.displayTitle}}</div>
+                      <div class="mg-test-downloads__result-id">{{item.displayPublicId}}</div>
+                      <div class="mg-test-downloads__result-meta">by {{item.displayOwner}} · {{item.displayCreatedAt}}</div>
+                    </div>
 
-            <div class="mg-test-downloads__field">
-              <label>Status</label>
-              <select class="combobox" value={{@controller.statusFilter}} {{on "change" @controller.onStatusChange}}>
-                <option value="">All statuses</option>
-                <option value="ready">Ready</option>
-                <option value="queued">Queued</option>
-                <option value="processing">Processing</option>
-                <option value="failed">Failed</option>
-              </select>
-            </div>
-
-            <div class="mg-test-downloads__field">
-              <label>HLS</label>
-              <select class="combobox" value={{@controller.hasHlsFilter}} {{on "change" @controller.onHasHlsChange}}>
-                <option value="true">Ready only</option>
-                <option value="false">Without HLS</option>
-                <option value="">All videos</option>
-              </select>
-            </div>
-
-            <div class="mg-test-downloads__field">
-              <label>Sort</label>
-              <select class="combobox" value={{@controller.sort}} {{on "change" @controller.onSortChange}}>
-                <option value="newest">Newest first</option>
-                <option value="oldest">Oldest first</option>
-                <option value="updated_desc">Recently updated</option>
-                <option value="title_asc">Title A–Z</option>
-                <option value="title_desc">Title Z–A</option>
-              </select>
-            </div>
-
-            <div class="mg-test-downloads__field">
-              <label>Limit</label>
-              <select class="combobox" value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
-                <option value="12">12</option>
-                <option value="24">24</option>
-                <option value="48">48</option>
-                <option value="96">96</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="mg-test-downloads__filters-footer">
-            <div class="mg-test-downloads__button-row">
-              <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.searchButtonDisabled}}>
-                {{if @controller.isSearching "Searching…" "Search"}}
-              </button>
-              <button class="btn" type="button" {{on "click" @controller.clearSearch}} disabled={{@controller.isSearching}}>
-                Reset filters
-              </button>
-              <button class="btn" type="button" {{on "click" @controller.useTypedPublicId}} disabled={{@controller.useTypedPublicIdDisabled}}>
-                Use entered public_id
-              </button>
-            </div>
-            <div class="mg-test-downloads__results-footer">{{@controller.searchInfo}}</div>
-          </div>
-
-          {{#if @controller.searchError}}
-            <div class="mg-test-downloads__notice is-danger" style="margin-top: 1rem;">{{@controller.searchError}}</div>
-          {{/if}}
-
-          {{#if @controller.showNoResults}}
-            <div class="mg-test-downloads__empty" style="margin-top: 1rem;">
-              No videos found for the current filters. Try broadening the search or use an exact public_id.
-            </div>
-          {{/if}}
-
-          {{#if @controller.searchResults.length}}
-            <div class="mg-test-downloads__results">
-              {{#each @controller.searchResults key="public_id" as |item|}}
-                <div class="mg-test-downloads__result-card {{if item.isSelected 'is-selected'}}">
-                  {{#if item.thumbnail_url}}
-                    <img class="mg-test-downloads__thumb" src={{item.thumbnail_url}} alt={{item.displayTitle}} loading="lazy" />
-                  {{else}}
-                    <div class="mg-test-downloads__thumb-placeholder">No thumbnail</div>
-                  {{/if}}
-
-                  <div class="mg-test-downloads__result-copy">
-                    <div class="mg-test-downloads__result-title">{{item.displayTitle}}</div>
-                    <div class="mg-test-downloads__result-id">{{item.displayPublicId}}</div>
-                    <div class="mg-test-downloads__result-meta">by {{item.displayOwner}} · {{item.displayCreatedAt}}</div>
-                  </div>
-
-                  <div>
-                    <button class="btn {{if item.isSelected 'btn-primary'}}" type="button" {{on "click" (fn @controller.pickItem item)}}>
+                    <button class="btn mg-test-downloads__result-action {{if item.isSelected 'btn-primary'}}" type="button" {{on "click" (fn @controller.pickItem item)}}>
                       {{if item.isSelected "Selected" "Use"}}
                     </button>
-                  </div>
 
-                  <div class="mg-test-downloads__result-tags">
-                    <span class="mg-test-downloads__badge {{item.statusClassName}}">{{item.displayStatus}}</span>
-                    <span class="mg-test-downloads__badge">{{item.displayMediaType}}</span>
-                    <span class="mg-test-downloads__badge">{{item.displayBackend}}</span>
-                    <span class="mg-test-downloads__badge">{{item.hasHlsLabel}}</span>
-                  </div>
-                </div>
-              {{/each}}
-            </div>
-          {{/if}}
-        </div>
+                    <div class="mg-test-downloads__result-tags">
+                      <span class="mg-test-downloads__badge {{item.statusClassName}}">{{item.displayStatus}}</span>
+                      <span class="mg-test-downloads__badge">{{item.displayMediaType}}</span>
+                      <span class="mg-test-downloads__badge">{{item.displayBackend}}</span>
+                      <span class="mg-test-downloads__badge">{{item.hasHlsLabel}}</span>
+                    </div>
+                  </article>
+                {{/each}}
+              </div>
+            {{else if @controller.hasSearched}}
+              <div class="mg-test-downloads__empty">
+                No videos found. Try a broader search or reset the filters.
+              </div>
+            {{/if}}
+          </div>
+        </section>
 
-        <div class="mg-test-downloads__panel">
+        <section class="mg-test-downloads__panel">
           <div class="mg-test-downloads__panel-header">
             <div class="mg-test-downloads__panel-copy">
               <h2>Selected video</h2>
@@ -563,8 +563,8 @@ export default RouteTemplate(
 
                 <div class="mg-test-downloads__selected-copy">
                   <div class="mg-test-downloads__selected-title">{{@controller.selectedItem.displayTitle}}</div>
+                  <div class="mg-test-downloads__selected-subtitle">{{@controller.publicId}}</div>
                   <div class="mg-test-downloads__selected-subtitle">{{@controller.selectedItem.displayOwner}}</div>
-                  <div class="mg-test-downloads__selected-subtitle"><code>{{@controller.publicId}}</code></div>
                   <div class="mg-test-downloads__badge-row">
                     <span class="mg-test-downloads__badge {{@controller.selectedItem.statusClassName}}">{{@controller.selectedItem.displayStatus}}</span>
                     <span class="mg-test-downloads__badge">{{@controller.selectedItem.displayBackend}}</span>
@@ -644,13 +644,13 @@ export default RouteTemplate(
             </div>
           {{else}}
             <div class="mg-test-downloads__empty">
-              Select a video from the list on the left to load user options and generate a forensic test download.
+              Select a video from the results list to load user options and generate a forensic test download.
             </div>
           {{/if}}
-        </div>
+        </section>
       </div>
 
-      <div class="mg-test-downloads__panel">
+      <section class="mg-test-downloads__panel">
         <div class="mg-test-downloads__panel-header">
           <div class="mg-test-downloads__panel-copy">
             <h2>{{i18n "admin.media_gallery.test_downloads.generated"}}</h2>
@@ -682,7 +682,7 @@ export default RouteTemplate(
         {{else}}
           <div class="mg-test-downloads__empty">{{i18n "admin.media_gallery.test_downloads.none_generated"}}</div>
         {{/if}}
-      </div>
+      </section>
     </div>
   </template>
 );
