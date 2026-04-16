@@ -24,6 +24,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked publicId = "";
   @tracked selectedItem = null;
   @tracked selectionMessage = "";
+  @tracked selectionMessageTone = "info";
 
   @tracked users = [];
   @tracked isLoadingUsers = false;
@@ -53,6 +54,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.publicId = "";
     this.selectedItem = null;
     this.selectionMessage = "";
+    this.selectionMessageTone = "info";
 
     this.users = [];
     this.isLoadingUsers = false;
@@ -115,6 +117,10 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     return !this.canGenerate;
   }
 
+  get selectionMessageClass() {
+    return `mg-test-downloads__notice is-${this.selectionMessageTone || "info"}`;
+  }
+
   _humanize(value) {
     const text = (value || "").toString().trim();
     if (!text) {
@@ -133,13 +139,15 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       return "—";
     }
 
-    const date = new Date(value);
+    const date = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(date.getTime())) {
       return String(value);
     }
 
-    const pad = (part) => String(part).padStart(2, "0");
-    return `${pad(date.getUTCDate())}-${pad(date.getUTCMonth() + 1)}-${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`;
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(date);
   }
 
   _backendLabel(value) {
@@ -165,6 +173,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       default:
         return "neutral";
     }
+  }
+
+  _setSelectionMessage(message, tone = "info") {
+    this.selectionMessage = message || "";
+    this.selectionMessageTone = tone || "info";
   }
 
   _normalizeItem(item) {
@@ -206,6 +219,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
     return {
       ...artifact,
+      displayTitle: (artifact?.title || artifact?.displayTitle || "").toString().trim() || null,
       displayCreatedAt: this._formatDate(artifact?.created_at),
       displayMode: this._humanize(artifact?.mode || "full"),
       displayUser: artifact?.username ? `${artifact.username} (#${artifact.user_id})` : `User #${artifact?.user_id}`,
@@ -414,7 +428,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.manualUserId = "";
     this.usersError = "";
     this.generateError = "";
-    this.selectionMessage = `Selected video ${trimmed}. Loading user options…`;
+    this._setSelectionMessage(`Selected video ${trimmed}. Loading user options…`, "info");
     this._markSelectedResults();
     await this.loadUsers();
   }
@@ -428,7 +442,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   async useTypedPublicId() {
     const q = (this.searchQuery || "").trim();
     if (!q) {
-      this.selectionMessage = "Enter a public_id in the search field first.";
+      this._setSelectionMessage("Enter a public_id in the search field first.", "warning");
       return;
     }
 
@@ -468,7 +482,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
         const err = await this._extractError(response);
         this.usersError = `Load users failed (${response.status}): ${err}`;
         this.users = [];
-        this.selectionMessage = `Selected video ${this.publicId}, but loading users failed.`;
+        this._setSelectionMessage(`Selected video ${this.publicId}, but loading users failed.`, "danger");
         return;
       }
 
@@ -490,11 +504,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       if (!this.selectedUserId && this.users.length === 1) {
         this.selectedUserId = String(this.users[0].id);
       }
-      this.selectionMessage = `Selected video ${this.publicId}. ${this.users.length} user option(s) loaded.`;
+      this._setSelectionMessage(`Selected video ${this.publicId}. ${this.users.length} user option(s) loaded.`, "success");
     } catch (e) {
       this.usersError = e?.message || String(e);
       this.users = [];
-      this.selectionMessage = `Selected video ${this.publicId}, but loading users failed.`;
+      this._setSelectionMessage(`Selected video ${this.publicId}, but loading users failed.`, "danger");
     } finally {
       this.isLoadingUsers = false;
     }
@@ -505,7 +519,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   }
 
   _pushArtifact(artifact) {
-    const normalized = this._normalizeArtifact(artifact);
+    const matchedItem = (this.searchResults || []).find((item) => item?.public_id === artifact?.public_id) || (this.selectedItem?.public_id === artifact?.public_id ? this.selectedItem : null);
+    const normalized = this._normalizeArtifact({
+      ...(artifact || {}),
+      title: artifact?.title || matchedItem?.displayTitle || matchedItem?.title || null,
+    });
     if (!normalized) {
       return;
     }
@@ -526,41 +544,47 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       if (!response.ok) {
         const err = json?.error || json?.message || (await this._extractError(response));
         this.generateError = String(err);
+        this._setSelectionMessage(this.generateError, "danger");
         return;
       }
 
       const status = json?.status || "queued";
       if (status === "queued" || status === "working") {
-        this.selectionMessage = `Generating artifact for ${this.publicId}… (${status})`;
+        this._setSelectionMessage(`Generating artifact for ${this.publicId}… (${status})`, "info");
         continue;
       }
 
       if (status === "complete" && json?.artifact) {
         this._pushArtifact(json.artifact);
-        this.selectionMessage = `Artifact generated for ${this.publicId}. Use Download below.`;
+        this._setSelectionMessage(`Artifact generated for ${this.publicId}. Use Download below.`, "success");
         return;
       }
 
       if (status === "failed") {
         this.generateError = String(json?.error || "Generation failed.");
+        this._setSelectionMessage(this.generateError, "danger");
         return;
       }
 
       this.generateError = `Unexpected task state for ${taskId}: ${status}`;
+      this._setSelectionMessage(this.generateError, "danger");
       return;
     }
 
     this.generateError = "Timed out while waiting for artifact generation.";
+    this._setSelectionMessage(this.generateError, "danger");
   }
 
   async _generate(payload) {
     if (!this.publicId || !this.resolvedUserId) {
       this.generateError = "Select a video and user first.";
+      this._setSelectionMessage(this.generateError, "danger");
       return;
     }
 
     this.isGenerating = true;
     this.generateError = "";
+    this._setSelectionMessage("", "info");
 
     try {
       const response = await fetch(
@@ -588,21 +612,23 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       }
 
       if (json?.ok && json?.queued && json?.task_id && json?.status_url) {
-        this.selectionMessage = `Queued generation for ${this.publicId}.`;
+        this._setSelectionMessage(`Queued generation for ${this.publicId}.`, "info");
         await this._pollTask(json.task_id, json.status_url);
         return;
       }
 
       if (json?.ok && json?.artifact) {
         this._pushArtifact(json.artifact);
-        this.selectionMessage = `Artifact generated for ${this.publicId}. Use Download below.`;
+        this._setSelectionMessage(`Artifact generated for ${this.publicId}. Use Download below.`, "success");
         return;
       }
 
       const err = json?.error || json?.message || "Generation failed.";
       this.generateError = String(err);
+      this._setSelectionMessage(this.generateError, "danger");
     } catch (e) {
       this.generateError = e?.message || String(e);
+      this._setSelectionMessage(this.generateError, "danger");
     } finally {
       this.isGenerating = false;
     }
@@ -685,6 +711,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
       this.generateError = e?.message || String(e);
+      this._setSelectionMessage(this.generateError, "danger");
     }
   }
 

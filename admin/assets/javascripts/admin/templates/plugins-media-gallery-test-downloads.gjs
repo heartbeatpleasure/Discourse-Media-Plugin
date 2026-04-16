@@ -277,6 +277,13 @@ export default RouteTemplate(
         align-items: start;
       }
 
+      .mg-test-downloads__selected-tags {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+
       .mg-test-downloads__selected-thumb,
       .mg-test-downloads__selected-thumb-placeholder {
         width: 180px;
@@ -318,6 +325,12 @@ export default RouteTemplate(
         background: var(--primary-very-low);
       }
 
+      .mg-test-downloads__notice.is-success {
+        background: var(--success-low);
+        border-color: var(--success-low-mid);
+        color: var(--success);
+      }
+
       .mg-test-downloads__notice.is-danger {
         background: var(--danger-low);
         border-color: var(--danger-low-mid);
@@ -337,7 +350,7 @@ export default RouteTemplate(
       }
 
       .mg-test-downloads__artifact-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
         margin-top: 1rem;
       }
 
@@ -345,6 +358,12 @@ export default RouteTemplate(
         display: flex;
         flex-direction: column;
         gap: 0.6rem;
+      }
+
+      .mg-test-downloads__artifact-id {
+        color: var(--mg-td-muted);
+        font-size: var(--font-down-1);
+        overflow-wrap: anywhere;
       }
 
       @media (max-width: 1120px) {
@@ -549,7 +568,7 @@ export default RouteTemplate(
           </div>
 
           {{#if @controller.selectionMessage}}
-            <div class="mg-test-downloads__notice is-info" style="margin-bottom: 1rem;">{{@controller.selectionMessage}}</div>
+            <div class={{@controller.selectionMessageClass}} style="margin-bottom: 1rem;">{{@controller.selectionMessage}}</div>
           {{/if}}
 
           {{#if @controller.hasSelectedItem}}
@@ -564,13 +583,14 @@ export default RouteTemplate(
                 <div class="mg-test-downloads__selected-copy">
                   <div class="mg-test-downloads__selected-title">{{@controller.selectedItem.displayTitle}}</div>
                   <div class="mg-test-downloads__selected-subtitle">{{@controller.publicId}}</div>
-                  <div class="mg-test-downloads__selected-subtitle">{{@controller.selectedItem.displayOwner}}</div>
-                  <div class="mg-test-downloads__badge-row">
-                    <span class="mg-test-downloads__badge {{@controller.selectedItem.statusClassName}}">{{@controller.selectedItem.displayStatus}}</span>
-                    <span class="mg-test-downloads__badge">{{@controller.selectedItem.displayBackend}}</span>
-                    <span class="mg-test-downloads__badge">{{@controller.selectedItem.hasHlsLabel}}</span>
-                  </div>
                 </div>
+              </div>
+
+              <div class="mg-test-downloads__selected-tags">
+                <span class="mg-test-downloads__badge {{@controller.selectedItem.statusClassName}}">{{@controller.selectedItem.displayStatus}}</span>
+                <span class="mg-test-downloads__badge">{{@controller.selectedItem.displayMediaType}}</span>
+                <span class="mg-test-downloads__badge">{{@controller.selectedItem.displayBackend}}</span>
+                <span class="mg-test-downloads__badge">{{@controller.selectedItem.hasHlsLabel}}</span>
               </div>
 
               <div class="mg-test-downloads__selected-meta">
@@ -662,7 +682,10 @@ export default RouteTemplate(
           <div class="mg-test-downloads__artifact-grid">
             {{#each @controller.artifacts key="download_url" as |artifact|}}
               <div class="mg-test-downloads__artifact-card">
-                <div class="mg-test-downloads__artifact-title">{{artifact.public_id}}</div>
+                <div class="mg-test-downloads__artifact-title">{{if artifact.displayTitle artifact.displayTitle artifact.public_id}}</div>
+                {{#if artifact.displayTitle}}
+                  <div class="mg-test-downloads__artifact-id">{{artifact.public_id}}</div>
+                {{/if}}
                 <div class="mg-test-downloads__artifact-meta">{{artifact.displayCreatedAt}} · {{artifact.displayUser}}</div>
                 <div class="mg-test-downloads__badge-row">
                   <span class="mg-test-downloads__badge">{{artifact.displayMode}}</span>
