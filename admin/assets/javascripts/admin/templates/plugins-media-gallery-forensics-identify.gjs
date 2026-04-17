@@ -27,20 +27,6 @@ export default RouteTemplate(
         margin: 0;
       }
 
-      .mg-fi__grid,
-      .mg-fi__fields,
-      .mg-fi__search-results,
-      .mg-fi__summary-grid,
-      .mg-fi__meta-list {
-        display: grid;
-        gap: 1rem;
-      }
-
-      .mg-fi__grid {
-        grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
-        align-items: start;
-      }
-
       .mg-fi__panel {
         background: var(--mg-fi-surface);
         border: 1px solid var(--mg-fi-border);
@@ -61,7 +47,7 @@ export default RouteTemplate(
       .mg-fi__muted,
       .mg-fi__helper,
       .mg-fi__meta-label,
-      .mg-fi__result-id,
+      .mg-fi__result-subtitle,
       .mg-fi__result-meta,
       .mg-fi__search-footer,
       .mg-fi__empty {
@@ -69,9 +55,36 @@ export default RouteTemplate(
         font-size: var(--font-down-1);
       }
 
-      .mg-fi__fields {
+      .mg-fi__filters-grid,
+      .mg-fi__summary-grid,
+      .mg-fi__meta-list,
+      .mg-fi__form-grid {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .mg-fi__filters-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 1rem;
+        align-items: end;
+      }
+
+      .mg-fi__form-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         align-items: end;
+      }
+
+      .mg-fi__grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr);
+        gap: 1rem;
+        align-items: start;
+      }
+
+      .mg-fi__sidebar-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
       }
 
       .mg-fi__field {
@@ -105,17 +118,121 @@ export default RouteTemplate(
         min-height: auto;
       }
 
-      .mg-fi__checkbox-row,
+      .mg-fi__filters-footer,
       .mg-fi__actions,
       .mg-fi__lookup-actions,
-      .mg-fi__result-tags {
+      .mg-fi__result-badges,
+      .mg-fi__toggle-row {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
         gap: 0.75rem;
       }
 
-      .mg-fi__checkbox-row {
+      .mg-fi__filters-footer {
+        justify-content: space-between;
+        margin-top: 1rem;
+      }
+
+      .mg-fi__search-status {
+        margin-top: 0.75rem;
+      }
+
+      .mg-fi__results-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .mg-fi__result-card {
+        display: grid;
+        grid-template-columns: 112px minmax(0, 1fr) auto;
+        gap: 0.9rem 1rem;
+        align-items: start;
+        border: 1px solid var(--mg-fi-border);
+        border-radius: 18px;
+        background: var(--mg-fi-surface-alt);
+        padding: 0.95rem;
+      }
+
+      .mg-fi__thumb,
+      .mg-fi__thumb-placeholder {
+        width: 112px;
+        height: 112px;
+        border-radius: 18px;
+        object-fit: cover;
+        background: var(--primary-very-low);
+        border: 1px solid var(--mg-fi-border);
+      }
+
+      .mg-fi__thumb-placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 0.75rem;
+        color: var(--mg-fi-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-fi__result-copy {
+        min-width: 0;
+      }
+
+      .mg-fi__result-title {
+        font-size: 1.15rem;
+        font-weight: 700;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-fi__result-subtitle {
+        margin-top: 0.2rem;
+        font-family: var(--font-family);
+        overflow-wrap: anywhere;
+      }
+
+      .mg-fi__result-meta {
+        margin-top: 0.3rem;
+      }
+
+      .mg-fi__result-action {
+        align-self: start;
+      }
+
+      .mg-fi__result-badges {
+        grid-column: 1 / -1;
+      }
+
+      .mg-fi__badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 30px;
+        padding: 0 0.85rem;
+        border-radius: 999px;
+        border: 1px solid var(--mg-fi-border);
+        background: var(--secondary);
+        color: var(--primary-high);
+      }
+
+      .mg-fi__badge.is-success {
+        background: var(--success-low);
+        border-color: var(--success-low-mid);
+        color: var(--success);
+      }
+
+      .mg-fi__badge.is-warning {
+        background: var(--highlight-low);
+        border-color: var(--highlight-medium);
+      }
+
+      .mg-fi__badge.is-danger {
+        background: var(--danger-low);
+        border-color: var(--danger-low-mid);
+        color: var(--danger);
+      }
+
+      .mg-fi__toggle-card {
         min-height: 42px;
         border: 1px solid var(--mg-fi-border);
         border-radius: 12px;
@@ -123,8 +240,11 @@ export default RouteTemplate(
         padding: 0.65rem 0.85rem;
       }
 
-      .mg-fi__checkbox-row input {
+      .mg-fi__toggle-row input {
         margin: 0;
+        width: 18px;
+        height: 18px;
+        accent-color: var(--tertiary);
       }
 
       .mg-fi__notice {
@@ -174,34 +294,6 @@ export default RouteTemplate(
 
       .mg-fi__table-wrap table {
         margin: 0;
-      }
-
-      .mg-fi__search-results {
-        margin-top: 1rem;
-      }
-
-      .mg-fi__search-card {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 0.75rem 1rem;
-        align-items: start;
-        border: 1px solid var(--mg-fi-border);
-        border-radius: 16px;
-        background: var(--mg-fi-surface-alt);
-        padding: 0.9rem;
-      }
-
-      .mg-fi__search-title {
-        font-weight: 700;
-        line-height: 1.2;
-        overflow-wrap: anywhere;
-      }
-
-      .mg-fi__result-id code,
-      .mg-fi__table-wrap code,
-      .mg-fi__code-block code {
-        white-space: pre-wrap;
-        word-break: break-word;
       }
 
       .mg-fi__summary-grid {
@@ -279,291 +371,343 @@ export default RouteTemplate(
       }
 
       @media (max-width: 900px) {
-        .mg-fi__fields,
+        .mg-fi__filters-grid,
         .mg-fi__summary-grid,
-        .mg-fi__meta-list {
+        .mg-fi__meta-list,
+        .mg-fi__form-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
       @media (max-width: 640px) {
-        .mg-fi__fields,
+        .mg-fi__filters-grid,
         .mg-fi__summary-grid,
         .mg-fi__meta-list,
-        .mg-fi__search-card {
+        .mg-fi__form-grid,
+        .mg-fi__result-card {
           grid-template-columns: 1fr;
+        }
+
+        .mg-fi__thumb,
+        .mg-fi__thumb-placeholder {
+          width: 100%;
+          max-width: 180px;
+          height: 120px;
         }
       }
     </style>
 
     <div class="media-gallery-forensics-identify">
+      <section class="mg-fi__panel">
+        <div class="mg-fi__panel-header">
+          <h1>{{i18n "admin.media_gallery.forensics_identify.title"}}</h1>
+          <p class="mg-fi__muted">Find a media item first, then run identify against an HLS playlist URL or an uploaded leak file.</p>
+        </div>
+
+        <div class="mg-fi__field is-full">
+          <label>Search</label>
+          <input
+            class="admin-input"
+            type="text"
+            value={{@controller.searchQuery}}
+            placeholder={{i18n "admin.media_gallery.forensics_identify.find_media_placeholder"}}
+            {{on "input" @controller.onSearchInput}}
+            {{on "keydown" @controller.onSearchKeydown}}
+          />
+          <div class="mg-fi__helper">Enter at least 3 characters to search, or leave it empty and use “Recent items”.</div>
+        </div>
+
+        <div class="mg-fi__filters-grid">
+          <div class="mg-fi__field">
+            <label>Type</label>
+            <select value={{@controller.searchTypeFilter}} {{on "change" @controller.onSearchTypeFilterChange}}>
+              <option value="all">All types</option>
+              <option value="video">Video</option>
+              <option value="audio">Audio</option>
+              <option value="image">Image</option>
+            </select>
+          </div>
+
+          <div class="mg-fi__field">
+            <label>HLS</label>
+            <select value={{@controller.searchHlsFilter}} {{on "change" @controller.onSearchHlsFilterChange}}>
+              <option value="all">All</option>
+              <option value="yes">HLS ready</option>
+              <option value="no">No HLS</option>
+            </select>
+          </div>
+
+          <div class="mg-fi__field">
+            <label>Sort</label>
+            <select value={{@controller.searchSort}} {{on "change" @controller.onSearchSortChange}}>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="title_asc">Title A–Z</option>
+              <option value="title_desc">Title Z–A</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="mg-fi__filters-footer">
+          <div class="mg-fi__actions">
+            <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
+              {{if @controller.isSearching "Searching…" "Search"}}
+            </button>
+            <button class="btn" type="button" {{on "click" @controller.resetSearchFilters}} disabled={{@controller.isSearching}}>
+              Recent items
+            </button>
+          </div>
+          <span class="mg-fi__muted">{{@controller.searchResultsCount}} result(s)</span>
+        </div>
+
+        {{#if @controller.searchError}}
+          <div class="mg-fi__notice is-danger mg-fi__search-status">{{@controller.searchError}}</div>
+        {{/if}}
+      </section>
+
       <div class="mg-fi__grid">
         <section class="mg-fi__panel">
           <div class="mg-fi__panel-header">
-            <h1>{{i18n "admin.media_gallery.forensics_identify.title"}}</h1>
-            <p class="mg-fi__muted">{{i18n "admin.media_gallery.forensics_identify.description"}}</p>
+            <h2>Results</h2>
+            <p class="mg-fi__muted">Click ‘Use’ to fill the public_id in the identify form.</p>
           </div>
-
-          {{#if @controller.error}}
-            <div class="mg-fi__notice is-danger" style="margin-bottom: 1rem;">{{@controller.error}}</div>
-          {{/if}}
-
-          <div class="mg-fi__fields">
-            <div class="mg-fi__field is-full">
-              <label>{{i18n "admin.media_gallery.forensics_identify.public_id_label"}}</label>
-              <input
-                class="admin-input"
-                type="text"
-                value={{@controller.publicId}}
-                placeholder={{i18n "admin.media_gallery.forensics_identify.public_id_placeholder"}}
-                {{on "input" @controller.onPublicIdInput}}
-              />
-            </div>
-
-            <div class="mg-fi__field is-full">
-              <label>{{i18n "admin.media_gallery.forensics_identify.source_url_label"}}</label>
-              <input
-                class="admin-input"
-                type="text"
-                value={{@controller.sourceUrl}}
-                placeholder={{i18n "admin.media_gallery.forensics_identify.source_url_placeholder"}}
-                {{on "input" @controller.onSourceUrlInput}}
-              />
-              <div class="mg-fi__helper">{{i18n "admin.media_gallery.forensics_identify.source_url_help"}}</div>
-            </div>
-
-            <div class="mg-fi__field is-full">
-              <label>{{i18n "admin.media_gallery.forensics_identify.file_label"}}</label>
-              <input type="file" {{on "change" @controller.onFileChange}} />
-              <div class="mg-fi__helper">{{i18n "admin.media_gallery.forensics_identify.file_help"}}</div>
-            </div>
-
-            <div class="mg-fi__field">
-              <label>{{i18n "admin.media_gallery.forensics_identify.max_samples_label"}}</label>
-              <input
-                class="admin-input"
-                type="number"
-                min="5"
-                max="200"
-                value={{@controller.maxSamples}}
-                {{on "input" @controller.onMaxSamplesInput}}
-              />
-            </div>
-
-            <div class="mg-fi__field">
-              <label>{{i18n "admin.media_gallery.forensics_identify.max_offset_label"}}</label>
-              <input
-                class="admin-input"
-                type="number"
-                min="0"
-                max="300"
-                value={{@controller.maxOffsetSegments}}
-                {{on "input" @controller.onMaxOffsetInput}}
-              />
-            </div>
-
-            <div class="mg-fi__field">
-              <label>{{i18n "admin.media_gallery.forensics_identify.layout_label"}}</label>
-              <select class="combobox" value={{@controller.layout}} {{on "change" @controller.onLayoutChange}}>
-                <option value="">{{i18n "admin.media_gallery.forensics_identify.layout_auto"}}</option>
-                <option value="v1_tiles">{{i18n "admin.media_gallery.forensics_identify.layout_v1_tiles"}}</option>
-                <option value="v2_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v2_pairs"}}</option>
-                <option value="v3_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v3_pairs"}}</option>
-                <option value="v4_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v4_pairs"}}</option>
-                <option value="v5_screen_safe">{{i18n "admin.media_gallery.forensics_identify.layout_v5_screen_safe"}}</option>
-                <option value="v6_local_sync">{{i18n "admin.media_gallery.forensics_identify.layout_v6_local_sync"}}</option>
-                <option value="v7_high_separation">{{i18n "admin.media_gallery.forensics_identify.layout_v7_high_separation"}}</option>
-              </select>
-            </div>
-
-            <div class="mg-fi__field is-full">
-              <label>{{i18n "admin.media_gallery.forensics_identify.auto_extend_label"}}</label>
-              <label class="mg-fi__checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={{@controller.autoExtend}}
-                  {{on "change" @controller.onAutoExtendChange}}
-                />
-                <span>{{i18n "admin.media_gallery.forensics_identify.auto_extend_help"}}</span>
-              </label>
-            </div>
-          </div>
-
-          <h3 class="mg-fi__section-title">Overlay/session code lookup</h3>
-          <div class="mg-fi__lookup-actions">
-            <input
-              class="admin-input"
-              type="text"
-              value={{@controller.lookupCode}}
-              placeholder="e.g. 7KQ2AB"
-              maxlength="12"
-              {{on "input" @controller.onLookupCodeInput}}
-              style="max-width: 220px;"
-            />
-            <button
-              type="button"
-              class="btn"
-              disabled={{@controller.lookupBusy}}
-              {{on "click" @controller.lookupOverlayCode}}
-            >
-              {{if @controller.lookupBusy "Searching…" "Lookup code"}}
-            </button>
-            <button
-              type="button"
-              class="btn"
-              disabled={{@controller.lookupBusy}}
-              {{on "click" @controller.clearLookup}}
-            >
-              Clear lookup
-            </button>
-          </div>
-          <div class="mg-fi__helper" style="margin-top: 0.45rem;">
-            Searches the frontend playback overlay/session code. If a public_id is filled in above, the lookup is narrowed to that media item.
-          </div>
-
-          {{#if @controller.lookupError}}
-            <div class="mg-fi__notice is-warning" style="margin-top: 0.75rem;">{{@controller.lookupError}}</div>
-          {{/if}}
-
-          {{#if @controller.hasLookupMatches}}
-            <div class="mg-fi__table-wrap" style="margin-top: 0.9rem;">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>Code</th>
-                    <th>User</th>
-                    <th>Media</th>
-                    <th>Type</th>
-                    <th>Fingerprint</th>
-                    <th>Seen</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{#each @controller.lookupMatches as |match|}}
-                    <tr>
-                      <td><code>{{match.overlay_code}}</code></td>
-                      <td>
-                        {{#if match.name}}
-                          {{match.name}} ·
-                        {{/if}}
-                        {{match.username}}
-                        {{#if match.user_id}}
-                          <div class="mg-fi__muted">ID {{match.user_id}}</div>
-                        {{/if}}
-                      </td>
-                      <td>
-                        {{match.media_public_id}}
-                        {{#if match.media_title}}
-                          <div class="mg-fi__muted">{{match.media_title}}</div>
-                        {{/if}}
-                      </td>
-                      <td>{{match.media_type}}</td>
-                      <td>{{if match.fingerprint_id match.fingerprint_id "—"}}</td>
-                      <td>
-                        {{if match.updated_at match.updated_at match.created_at}}
-                        {{#if match.rendered_text}}
-                          <div class="mg-fi__muted">{{match.rendered_text}}</div>
-                        {{/if}}
-                      </td>
-                    </tr>
-                  {{/each}}
-                </tbody>
-              </table>
-            </div>
-          {{/if}}
-
-          <div class="mg-fi__actions" style="margin-top: 1rem;">
-            <button
-              type="button"
-              class="btn btn-primary"
-              disabled={{@controller.isRunning}}
-              {{on "click" @controller.identify}}
-            >
-              {{if @controller.isRunning (i18n "admin.media_gallery.forensics_identify.running") (i18n "admin.media_gallery.forensics_identify.identify_button")}}
-            </button>
-
-            <button
-              type="button"
-              class="btn"
-              disabled={{@controller.isRunning}}
-              {{on "click" @controller.clear}}
-            >
-              Clear
-            </button>
-          </div>
-
-          {{#if @controller.statusMessage}}
-            <div class="mg-fi__notice is-info" style="margin-top: 1rem;">{{@controller.statusMessage}}</div>
-          {{/if}}
-        </section>
-
-        <aside class="mg-fi__panel">
-          <div class="mg-fi__panel-header">
-            <h2>{{i18n "admin.media_gallery.forensics_identify.find_media_title"}}</h2>
-            <p class="mg-fi__muted">{{i18n "admin.media_gallery.forensics_identify.find_media_help"}}</p>
-          </div>
-
-          <div class="mg-fi__field is-full">
-            <label>Search</label>
-            <input
-              class="admin-input"
-              type="text"
-              value={{@controller.searchQuery}}
-              placeholder={{i18n "admin.media_gallery.forensics_identify.find_media_placeholder"}}
-              {{on "input" @controller.onSearchInput}}
-            />
-          </div>
-
-          {{#if @controller.searchError}}
-            <div class="mg-fi__notice is-danger" style="margin-top: 0.75rem;">{{@controller.searchError}}</div>
-          {{/if}}
 
           {{#if @controller.isSearching}}
-            <div class="mg-fi__notice is-info" style="margin-top: 0.75rem;">Searching…</div>
-          {{/if}}
+            <div class="mg-fi__notice is-info">Searching…</div>
+          {{else if @controller.hasSearchResults}}
+            <div class="mg-fi__results-list">
+              {{#each @controller.decoratedSearchResults key="public_id" as |it|}}
+                <article class="mg-fi__result-card">
+                  {{#if it.thumbnail_url}}
+                    <img class="mg-fi__thumb" loading="lazy" src={{it.thumbnail_url}} alt="thumbnail" />
+                  {{else}}
+                    <div class="mg-fi__thumb-placeholder">No thumbnail</div>
+                  {{/if}}
 
-          {{#if @controller.searchResults.length}}
-            <div class="mg-fi__search-results">
-              {{#each @controller.searchResults key="public_id" as |it|}}
-                <article class="mg-fi__search-card">
-                  <div>
-                    <div class="mg-fi__search-title">{{it.title}}</div>
-                    <div class="mg-fi__result-id"><code>{{it.public_id}}</code></div>
-                    <div class="mg-fi__result-meta">
-                      #{{it.id}}
-                      {{#if it.username}}
-                        · by {{it.username}}
-                      {{/if}}
-                    </div>
+                  <div class="mg-fi__result-copy">
+                    <div class="mg-fi__result-title">{{it.displayTitle}}</div>
+                    <div class="mg-fi__result-subtitle">{{it.public_id}}</div>
+                    {{#if it.displayMeta}}
+                      <div class="mg-fi__result-meta">{{it.displayMeta}}</div>
+                    {{/if}}
                   </div>
-                  <button
-                    type="button"
-                    class="btn"
-                    {{on "click" (fn @controller.pickPublicId it)}}
-                  >
+
+                  <button type="button" class="btn mg-fi__result-action" {{on "click" (fn @controller.pickPublicId it)}}>
                     Use
                   </button>
+
+                  <div class="mg-fi__result-badges">
+                    <span class="mg-fi__badge {{it.statusBadgeClass}}">{{it.displayStatus}}</span>
+                    <span class="mg-fi__badge">{{it.displayMediaType}}</span>
+                    <span class="mg-fi__badge">{{it.displayStorage}}</span>
+                    <span class="mg-fi__badge {{it.hlsBadgeClass}}">{{it.displayHls}}</span>
+                  </div>
                 </article>
               {{/each}}
             </div>
-          {{else if @controller.showNoSearchMatches}}
-            <div class="mg-fi__empty" style="margin-top: 0.75rem;">No matches.</div>
+          {{else}}
+            <div class="mg-fi__empty">No matches yet. Search by title or public_id, or use “Recent items”.</div>
           {{/if}}
+        </section>
 
-          <div class="mg-fi__prose-card" style="margin-top: 1rem;">
-            <h3>Best test method</h3>
-            <ol style="margin-top: 0.75rem; padding-left: 1.2rem;">
+        <aside class="mg-fi__sidebar-stack">
+          <section class="mg-fi__panel">
+            <div class="mg-fi__panel-header">
+              <h2>Forensics identify</h2>
+              <p class="mg-fi__muted">Use the selected public_id, then provide either a variant playlist URL or an uploaded leak file.</p>
+            </div>
+
+            {{#if @controller.error}}
+              <div class="mg-fi__notice is-danger" style="margin-bottom: 1rem;">{{@controller.error}}</div>
+            {{/if}}
+
+            <div class="mg-fi__form-grid">
+              <div class="mg-fi__field is-full">
+                <label>{{i18n "admin.media_gallery.forensics_identify.public_id_label"}}</label>
+                <input
+                  class="admin-input"
+                  type="text"
+                  value={{@controller.publicId}}
+                  placeholder={{i18n "admin.media_gallery.forensics_identify.public_id_placeholder"}}
+                  {{on "input" @controller.onPublicIdInput}}
+                />
+              </div>
+
+              <div class="mg-fi__field is-full">
+                <label>HLS / video URL (optional)</label>
+                <input
+                  class="admin-input"
+                  type="text"
+                  value={{@controller.sourceUrl}}
+                  placeholder="Paste a variant playlist (.m3u8) or direct mp4/ts URL"
+                  {{on "input" @controller.onSourceUrlInput}}
+                />
+                <div class="mg-fi__helper">Best option: paste the variant playlist URL from DevTools → Network. If you fill this field, uploading a file is optional. Only URLs from this site are allowed.</div>
+              </div>
+
+              <div class="mg-fi__field is-full">
+                <label>{{i18n "admin.media_gallery.forensics_identify.file_label"}}</label>
+                <input type="file" {{on "change" @controller.onFileChange}} />
+                <div class="mg-fi__helper">Upload a leaked mp4/ts/sample file when you do not have the original HLS playlist URL.</div>
+              </div>
+
+              <div class="mg-fi__field">
+                <label>{{i18n "admin.media_gallery.forensics_identify.max_samples_label"}}</label>
+                <input
+                  class="admin-input"
+                  type="number"
+                  min="5"
+                  max="200"
+                  value={{@controller.maxSamples}}
+                  {{on "input" @controller.onMaxSamplesInput}}
+                />
+              </div>
+
+              <div class="mg-fi__field">
+                <label>{{i18n "admin.media_gallery.forensics_identify.max_offset_label"}}</label>
+                <input
+                  class="admin-input"
+                  type="number"
+                  min="0"
+                  max="300"
+                  value={{@controller.maxOffsetSegments}}
+                  {{on "input" @controller.onMaxOffsetInput}}
+                />
+              </div>
+
+              <div class="mg-fi__field">
+                <label>{{i18n "admin.media_gallery.forensics_identify.layout_label"}}</label>
+                <select class="combobox" value={{@controller.layout}} {{on "change" @controller.onLayoutChange}}>
+                  <option value="">{{i18n "admin.media_gallery.forensics_identify.layout_auto"}}</option>
+                  <option value="v1_tiles">{{i18n "admin.media_gallery.forensics_identify.layout_v1_tiles"}}</option>
+                  <option value="v2_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v2_pairs"}}</option>
+                  <option value="v3_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v3_pairs"}}</option>
+                  <option value="v4_pairs">{{i18n "admin.media_gallery.forensics_identify.layout_v4_pairs"}}</option>
+                  <option value="v5_screen_safe">{{i18n "admin.media_gallery.forensics_identify.layout_v5_screen_safe"}}</option>
+                  <option value="v6_local_sync">{{i18n "admin.media_gallery.forensics_identify.layout_v6_local_sync"}}</option>
+                  <option value="v7_high_separation">{{i18n "admin.media_gallery.forensics_identify.layout_v7_high_separation"}}</option>
+                </select>
+              </div>
+
+              <div class="mg-fi__field is-full">
+                <label>Auto-extend</label>
+                <div class="mg-fi__toggle-card">
+                  <label class="mg-fi__toggle-row">
+                    <input type="checkbox" checked={{@controller.autoExtend}} {{on "change" @controller.onAutoExtendChange}} />
+                    <span>Auto-extend</span>
+                  </label>
+                </div>
+                <div class="mg-fi__helper">If the first result is weak or ambiguous, retry automatically with a longer sample. URL mode only.</div>
+              </div>
+            </div>
+
+            <div class="mg-fi__actions" style="margin-top: 1rem;">
+              <button type="button" class="btn btn-primary" disabled={{@controller.isRunning}} {{on "click" @controller.identify}}>
+                {{if @controller.isRunning (i18n "admin.media_gallery.forensics_identify.running") (i18n "admin.media_gallery.forensics_identify.identify_button")}}
+              </button>
+
+              <button type="button" class="btn" disabled={{@controller.isRunning}} {{on "click" @controller.clear}}>
+                Clear
+              </button>
+            </div>
+
+            {{#if @controller.statusMessage}}
+              <div class="mg-fi__notice is-info" style="margin-top: 1rem;">{{@controller.statusMessage}}</div>
+            {{/if}}
+          </section>
+
+          <section class="mg-fi__panel">
+            <div class="mg-fi__panel-header">
+              <h2>Overlay/session code lookup</h2>
+              <p class="mg-fi__muted">Search a playback overlay/session code. If a public_id is already filled in above, the lookup is narrowed to that item.</p>
+            </div>
+
+            <div class="mg-fi__lookup-actions">
+              <input
+                class="admin-input"
+                type="text"
+                value={{@controller.lookupCode}}
+                placeholder="e.g. 7KQ2AB"
+                maxlength="12"
+                {{on "input" @controller.onLookupCodeInput}}
+                style="max-width: 220px;"
+              />
+              <button type="button" class="btn" disabled={{@controller.lookupBusy}} {{on "click" @controller.lookupOverlayCode}}>
+                {{if @controller.lookupBusy "Searching…" "Lookup code"}}
+              </button>
+              <button type="button" class="btn" disabled={{@controller.lookupBusy}} {{on "click" @controller.clearLookup}}>
+                Clear lookup
+              </button>
+            </div>
+
+            {{#if @controller.lookupError}}
+              <div class="mg-fi__notice is-warning" style="margin-top: 0.75rem;">{{@controller.lookupError}}</div>
+            {{/if}}
+
+            {{#if @controller.hasLookupMatches}}
+              <div class="mg-fi__table-wrap" style="margin-top: 0.9rem;">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Code</th>
+                      <th>User</th>
+                      <th>Media</th>
+                      <th>Type</th>
+                      <th>Fingerprint</th>
+                      <th>Seen</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {{#each @controller.lookupMatches as |match|}}
+                      <tr>
+                        <td><code>{{match.overlay_code}}</code></td>
+                        <td>
+                          {{#if match.name}}
+                            {{match.name}} ·
+                          {{/if}}
+                          {{match.username}}
+                          {{#if match.user_id}}
+                            <div class="mg-fi__muted">ID {{match.user_id}}</div>
+                          {{/if}}
+                        </td>
+                        <td>
+                          {{match.media_public_id}}
+                          {{#if match.media_title}}
+                            <div class="mg-fi__muted">{{match.media_title}}</div>
+                          {{/if}}
+                        </td>
+                        <td>{{match.media_type}}</td>
+                        <td>{{if match.fingerprint_id match.fingerprint_id "—"}}</td>
+                        <td>
+                          {{if match.updated_at match.updated_at match.created_at}}
+                          {{#if match.rendered_text}}
+                            <div class="mg-fi__muted">{{match.rendered_text}}</div>
+                          {{/if}}
+                        </td>
+                      </tr>
+                    {{/each}}
+                  </tbody>
+                </table>
+              </div>
+            {{/if}}
+          </section>
+
+          <section class="mg-fi__panel">
+            <div class="mg-fi__panel-header">
+              <h2>Best test method</h2>
+              <p class="mg-fi__muted">The most reliable route is to identify from the original variant playlist instead of a re-encoded leak.</p>
+            </div>
+            <ol style="padding-left: 1.2rem; line-height: 1.5;">
               <li>Log in as a normal test user and play the video so you definitely get a personalized stream.</li>
               <li>Open DevTools → Network and find the <strong>variant playlist</strong> URL (.m3u8).</li>
-              <li>Paste that URL into the field on the left. No manual download is needed.</li>
+              <li>Paste that URL into the identify form above. No manual download is needed.</li>
             </ol>
             <p class="mg-fi__muted" style="margin-top: 0.75rem;">
-              URL mode is restricted to your own site for safety. For external leaks such as mp4 re-uploads, upload the file instead.
+              For external leaks such as mp4 re-uploads, upload the leak file instead.
             </p>
-          </div>
+          </section>
         </aside>
       </div>
-
       {{#if @controller.hasResult}}
         <section class="mg-fi__panel">
           <div class="mg-fi__panel-header">

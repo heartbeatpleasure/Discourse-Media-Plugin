@@ -3,6 +3,38 @@ import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
 import { i18n } from "discourse-i18n";
 
+function formatDateTime(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function titleize(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function hlsReady(item) {
+  return !!(
+    item?.hls_ready ||
+    item?.has_hls ||
+    item?.playback_hls_ready ||
+    item?.hls_playlist_url ||
+    item?.playlist_url
+  );
+}
+
 export default class AdminPluginsMediaGalleryForensicsIdentifyController extends Controller {
   @tracked publicId = "";
   @tracked file = null;
@@ -18,6 +50,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked searchResults = [];
   @tracked isSearching = false;
   @tracked searchError = "";
+  @tracked searchTypeFilter = "all";
+  @tracked searchHlsFilter = "all";
+  @tracked searchSort = "newest";
   _searchTimer = null;
 
   // Raw + parsed result
@@ -32,6 +67,75 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked lookupMatches = [];
   @tracked lookupBusy = false;
   @tracked lookupError = "";
+
+  get decoratedSearchResults() {
+    const items = Array.isArray(this.searchResults) ? [...this.searchResults] : [];
+
+    const filtered = items.filter((item) => {
+      if (this.searchTypeFilter !== "all" && item?.media_type !== this.searchTypeFilter) {
+        return false;
+      }
+
+      if (this.searchHlsFilter === "yes" && !hlsReady(item)) {
+        return false;
+      }
+
+      if (this.searchHlsFilter === "no" && hlsReady(item)) {
+        return false;
+      }
+
+      return true;
+    });
+
+    filtered.sort((left, right) => {
+      const leftDate = new Date(left?.created_at || 0).getTime() || 0;
+      const rightDate = new Date(right?.created_at || 0).getTime() || 0;
+
+      switch (this.searchSort) {
+        case "oldest":
+          return leftDate - rightDate;
+        case "title_asc":
+          return String(left?.title || left?.public_id || "").localeCompare(String(right?.title || right?.public_id || ""));
+        case "title_desc":
+          return String(right?.title || right?.public_id || "").localeCompare(String(left?.title || left?.public_id || ""));
+        case "newest":
+        default:
+          return rightDate - leftDate;
+      }
+    });
+
+    return filtered.map((item) => ({
+      ...item,
+      displayTitle: item?.title || item?.public_id || `#${item?.id || ""}`,
+      displayStatus: titleize(item?.status || "unknown"),
+      displayMediaType: titleize(item?.media_type || "media"),
+      displayStorage:
+        item?.managed_storage_profile_label ||
+        item?.managed_storage_profile ||
+        titleize(item?.managed_storage_backend || item?.storage_backend || "local storage"),
+      displayHls: hlsReady(item) ? "HLS ready" : "No HLS",
+      displayMeta: [item?.username ? `by ${item.username}` : "", formatDateTime(item?.created_at)]
+        .filter(Boolean)
+        .join(" • "),
+      statusBadgeClass:
+        item?.status === "ready"
+          ? "is-success"
+          : item?.status === "failed"
+            ? "is-danger"
+            : item?.status === "processing" || item?.status === "queued"
+              ? "is-warning"
+              : "",
+      hlsBadgeClass: hlsReady(item) ? "is-success" : "",
+    }));
+  }
+
+  get hasSearchResults() {
+    return this.decoratedSearchResults.length > 0;
+  }
+
+  get searchResultsCount() {
+    return this.decoratedSearchResults.length;
+  }
 
   get hasResult() {
     return !!this.result;
@@ -458,6 +562,39 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       (this.searchResults?.length || 0) === 0 &&
       !this.searchError
     );
+  }
+
+  @action
+  onSearchKeydown(event) {
+    if (event?.key === "Enter") {
+      event.preventDefault();
+      this.search();
+    }
+  }
+
+  @action
+  onSearchTypeFilterChange(event) {
+    this.searchTypeFilter = event?.target?.value || "all";
+  }
+
+  @action
+  onSearchHlsFilterChange(event) {
+    this.searchHlsFilter = event?.target?.value || "all";
+  }
+
+  @action
+  onSearchSortChange(event) {
+    this.searchSort = event?.target?.value || "newest";
+  }
+
+  @action
+  resetSearchFilters() {
+    this.searchQuery = "";
+    this.searchTypeFilter = "all";
+    this.searchHlsFilter = "all";
+    this.searchSort = "newest";
+    this.searchError = "";
+    this.search();
   }
 
   @action
