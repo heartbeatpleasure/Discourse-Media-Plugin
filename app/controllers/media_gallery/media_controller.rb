@@ -1302,8 +1302,17 @@ module ::MediaGallery
       end
     end
 
+    def normalized_upload_extension(upload)
+      ext = upload&.extension.to_s.downcase.sub(/\A\./, "")
+      return ext if ext.present?
+
+      filename = upload&.original_filename.to_s
+      fallback = File.extname(filename).to_s.downcase.sub(/\A\./, "")
+      fallback.presence.to_s
+    end
+
     def infer_media_type(upload)
-      ext = upload.extension.to_s.downcase
+      ext = normalized_upload_extension(upload)
       mime = upload_mime(upload)
 
       return "image" if (mime.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)) ||
@@ -1319,7 +1328,7 @@ module ::MediaGallery
     end
 
     def allowed_extension_for_type?(upload, media_type)
-      ext = upload.extension.to_s.downcase.sub(/\A\./, "")
+      ext = normalized_upload_extension(upload)
 
       allowed =
         case media_type

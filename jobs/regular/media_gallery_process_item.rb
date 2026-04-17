@@ -645,8 +645,17 @@ module Jobs
 
     # --- Helpers ---
 
+    def normalized_upload_extension(upload)
+      ext = upload&.extension.to_s.downcase.sub(/\A\./, "")
+      return ext if ext.present?
+
+      filename = upload&.original_filename.to_s
+      fallback = File.extname(filename).to_s.downcase.sub(/\A\./, "")
+      fallback.presence.to_s
+    end
+
     def infer_media_type_from_upload(upload)
-      ext = upload.extension.to_s.downcase
+      ext = normalized_upload_extension(upload)
       ctype = upload_mime(upload)
 
       return "image" if ctype.start_with?("image/") && MediaGallery::MediaItem::IMAGE_EXTS.include?(ext)
