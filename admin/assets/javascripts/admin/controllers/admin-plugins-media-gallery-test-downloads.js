@@ -428,7 +428,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.manualUserId = "";
     this.usersError = "";
     this.generateError = "";
-    this._setSelectionMessage(`Selected video ${trimmed}. Loading user options…`, "info");
+    this._setSelectionMessage("", "info");
     this._markSelectedResults();
     await this.loadUsers();
   }
@@ -482,7 +482,6 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
         const err = await this._extractError(response);
         this.usersError = `Load users failed (${response.status}): ${err}`;
         this.users = [];
-        this._setSelectionMessage(`Selected video ${this.publicId}, but loading users failed.`, "danger");
         return;
       }
 
@@ -504,11 +503,9 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       if (!this.selectedUserId && this.users.length === 1) {
         this.selectedUserId = String(this.users[0].id);
       }
-      this._setSelectionMessage(`Selected video ${this.publicId}. ${this.users.length} user option(s) loaded.`, "success");
     } catch (e) {
       this.usersError = e?.message || String(e);
       this.users = [];
-      this._setSelectionMessage(`Selected video ${this.publicId}, but loading users failed.`, "danger");
     } finally {
       this.isLoadingUsers = false;
     }
