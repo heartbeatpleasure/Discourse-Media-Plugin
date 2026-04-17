@@ -33,7 +33,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends Disc
     controller.isSearching = false;
     controller.searchError = "";
     controller.searchTypeFilter = "all";
+    controller.searchStatusFilter = "all";
+    controller.searchBackendFilter = "all";
     controller.searchHlsFilter = "all";
+    controller.searchLimit = 20;
     controller.searchSort = "newest";
 
     controller.lookupCode = "";

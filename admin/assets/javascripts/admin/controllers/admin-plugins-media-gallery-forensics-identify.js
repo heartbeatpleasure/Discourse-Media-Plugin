@@ -35,6 +35,11 @@ function hlsReady(item) {
   );
 }
 
+function isOverlayLikeQuery(value) {
+  const query = String(value || "").trim();
+  return /^[A-Za-z0-9]{4,12}$/.test(query);
+}
+
 export default class AdminPluginsMediaGalleryForensicsIdentifyController extends Controller {
   @tracked publicId = "";
   @tracked file = null;
@@ -51,7 +56,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked isSearching = false;
   @tracked searchError = "";
   @tracked searchTypeFilter = "all";
+  @tracked searchStatusFilter = "all";
+  @tracked searchBackendFilter = "all";
   @tracked searchHlsFilter = "all";
+  @tracked searchLimit = 20;
   @tracked searchSort = "newest";
   _searchTimer = null;
 
@@ -62,11 +70,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked statusMessage = "";
   @tracked activeTaskId = null;
 
-  // Overlay/session code lookup
-  @tracked lookupCode = "";
+  // Overlay/session code lookup (fed from the main search bar)
   @tracked lookupMatches = [];
   @tracked lookupBusy = false;
   @tracked lookupError = "";
+  @tracked lookupCode = "";
 
   get decoratedSearchResults() {
     const items = Array.isArray(this.searchResults) ? [...this.searchResults] : [];
@@ -135,6 +143,29 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get searchResultsCount() {
     return this.decoratedSearchResults.length;
+  }
+
+  get decoratedOverlayMatches() {
+    return Array.isArray(this.lookupMatches)
+      ? this.lookupMatches.map((match) => ({
+          ...match,
+          displayTitle: match?.media_title || match?.media_public_id || "Unknown media",
+          displayMeta: [
+            match?.name || match?.username || "Unknown user",
+            formatDateTime(match?.updated_at || match?.created_at),
+          ]
+            .filter(Boolean)
+            .join(" • "),
+          displayType: titleize(match?.media_type || "media"),
+          displayFingerprint: match?.fingerprint_id || "—",
+          displayCode: match?.overlay_code || this.lookupCode,
+          displaySeen: match?.rendered_text || formatDateTime(match?.updated_at || match?.created_at),
+        }))
+      : [];
+  }
+
+  get hasOverlaySearchMatches() {
+    return this.decoratedOverlayMatches.length > 0;
   }
 
   get hasResult() {
@@ -551,7 +582,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get hasLookupMatches() {
-    return (this.lookupMatches?.length || 0) > 0;
+    return this.hasOverlaySearchMatches;
   }
 
   get showNoSearchMatches() {
@@ -578,8 +609,24 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   @action
+  onSearchStatusFilterChange(event) {
+    this.searchStatusFilter = event?.target?.value || "all";
+  }
+
+  @action
+  onSearchBackendFilterChange(event) {
+    this.searchBackendFilter = event?.target?.value || "all";
+  }
+
+  @action
   onSearchHlsFilterChange(event) {
     this.searchHlsFilter = event?.target?.value || "all";
+  }
+
+  @action
+  onSearchLimitChange(event) {
+    const value = parseInt(event?.target?.value, 10);
+    this.searchLimit = Number.isFinite(value) && value > 0 ? value : 20;
   }
 
   @action
@@ -591,9 +638,15 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   resetSearchFilters() {
     this.searchQuery = "";
     this.searchTypeFilter = "all";
+    this.searchStatusFilter = "all";
+    this.searchBackendFilter = "all";
     this.searchHlsFilter = "all";
+    this.searchLimit = 20;
     this.searchSort = "newest";
     this.searchError = "";
+    this.lookupCode = "";
+    this.lookupError = "";
+    this.lookupMatches = [];
     this.search();
   }
 
@@ -621,38 +674,95 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   async search() {
     this.searchError = "";
+    this.lookupError = "";
+    this.lookupMatches = [];
+    this.lookupCode = "";
     this.isSearching = true;
+    this.lookupBusy = false;
+
     try {
-      const q = this.searchQuery;
-      // If user typed something very short, don't spam the server.
-      // Empty query is allowed: it returns recent items.
+      const q = (this.searchQuery || "").trim();
       if (q && q.length < 3) {
         this.searchResults = [];
         return;
       }
 
-      const url = `/admin/plugins/media-gallery/media-items/search.json?q=${encodeURIComponent(
-        q || ""
-      )}`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        credentials: "same-origin",
-      });
+      const params = new URLSearchParams();
+      params.set("q", q || "");
+      params.set("limit", String(this.searchLimit || 20));
+      params.set("sort", this.searchSort || "newest");
 
-      if (!response.ok) {
-        const err = await this._extractError(response);
-        this.searchError = `HTTP ${response.status}: ${err}`;
-        this.searchResults = [];
-        return;
+      if (this.searchTypeFilter !== "all") {
+        params.set("media_type", this.searchTypeFilter);
       }
 
-      const json = await response.json();
-      this.searchResults = Array.isArray(json?.items) ? json.items : [];
+      if (this.searchStatusFilter !== "all") {
+        params.set("status", this.searchStatusFilter);
+      }
+
+      if (this.searchBackendFilter !== "all") {
+        params.set("backend", this.searchBackendFilter);
+      }
+
+      if (this.searchHlsFilter === "yes") {
+        params.set("has_hls", "true");
+      } else if (this.searchHlsFilter === "no") {
+        params.set("has_hls", "false");
+      }
+
+      const requests = [
+        fetch(`/admin/plugins/media-gallery/media-items/search.json?${params.toString()}`, {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
+        }),
+      ];
+
+      const shouldLookupOverlay = isOverlayLikeQuery(q);
+      if (shouldLookupOverlay) {
+        this.lookupBusy = true;
+        this.lookupCode = q.toUpperCase();
+        requests.push(
+          fetch(
+            `/admin/plugins/media-gallery/forensics-identify/overlay-lookup.json?${new URLSearchParams({ code: this.lookupCode }).toString()}`,
+            {
+              method: "GET",
+              headers: { Accept: "application/json" },
+              credentials: "same-origin",
+            }
+          )
+        );
+      }
+
+      const [searchResponse, overlayResponse] = await Promise.all(requests);
+
+      if (!searchResponse.ok) {
+        const err = await this._extractError(searchResponse);
+        this.searchError = `HTTP ${searchResponse.status}: ${err}`;
+        this.searchResults = [];
+      } else {
+        const json = await searchResponse.json();
+        this.searchResults = Array.isArray(json?.items) ? json.items : [];
+      }
+
+      if (overlayResponse) {
+        if (!overlayResponse.ok) {
+          const err = await this._extractError(overlayResponse);
+          this.lookupError = `HTTP ${overlayResponse.status}: ${err}`;
+        } else {
+          const json = await overlayResponse.json();
+          this.lookupMatches = Array.isArray(json?.matches) ? json.matches : [];
+          if (!this.lookupMatches.length) {
+            this.lookupError = "No overlay/session code matches found.";
+          }
+        }
+      }
     } catch (e) {
       this.searchError = e?.message || String(e);
       this.searchResults = [];
+      this.lookupMatches = [];
     } finally {
+      this.lookupBusy = false;
       this.isSearching = false;
     }
   }
@@ -660,6 +770,14 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @action
   pickPublicId(item) {
     const pid = item?.public_id;
+    if (pid) {
+      this.publicId = pid;
+    }
+  }
+
+  @action
+  pickPublicIdFromLookup(match) {
+    const pid = match?.media_public_id;
     if (pid) {
       this.publicId = pid;
     }
@@ -708,6 +826,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   @action
   clearLookup() {
+    this.lookupCode = "";
     this.lookupError = "";
     this.lookupMatches = [];
   }
@@ -730,7 +849,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     this.lookupError = "";
     this.lookupMatches = [];
 
-    const code = String(this.lookupCode || "")
+    const code = String(this.lookupCode || this.searchQuery || "")
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, "")
       .trim();

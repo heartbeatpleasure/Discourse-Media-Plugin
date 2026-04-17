@@ -64,7 +64,7 @@ export default RouteTemplate(
       }
 
       .mg-fi__filters-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         margin-top: 1rem;
         align-items: end;
       }
@@ -233,11 +233,20 @@ export default RouteTemplate(
       }
 
       .mg-fi__toggle-card {
-        min-height: 42px;
+        min-height: 48px;
         border: 1px solid var(--mg-fi-border);
         border-radius: 12px;
         background: var(--primary-very-low);
-        padding: 0.65rem 0.85rem;
+        padding: 0.45rem 0.85rem;
+        display: flex;
+        align-items: center;
+      }
+
+      .mg-fi__toggle-row {
+        width: 100%;
+        align-items: center;
+        min-height: 30px;
+        gap: 0.65rem;
       }
 
       .mg-fi__toggle-row input {
@@ -317,6 +326,52 @@ export default RouteTemplate(
         font-size: 1.1rem;
         font-weight: 700;
         overflow-wrap: anywhere;
+      }
+
+      .mg-fi__overlay-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+      }
+
+      .mg-fi__overlay-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.85rem 1rem;
+        align-items: start;
+        border: 1px solid var(--mg-fi-border);
+        border-radius: 16px;
+        background: var(--mg-fi-surface-alt);
+        padding: 0.95rem 1rem;
+      }
+
+      .mg-fi__overlay-copy {
+        min-width: 0;
+      }
+
+      .mg-fi__overlay-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        line-height: 1.25;
+      }
+
+      .mg-fi__overlay-subtitle {
+        margin-top: 0.2rem;
+        color: var(--mg-fi-muted);
+        overflow-wrap: anywhere;
+      }
+
+      .mg-fi__overlay-meta {
+        margin-top: 0.3rem;
+        color: var(--mg-fi-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-fi__overlay-badges {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
       }
 
       .mg-fi__prose-card,
@@ -414,14 +469,34 @@ export default RouteTemplate(
             {{on "input" @controller.onSearchInput}}
             {{on "keydown" @controller.onSearchKeydown}}
           />
-          <div class="mg-fi__helper">Enter at least 3 characters to search, or leave it empty and use “Recent items”.</div>
+          <div class="mg-fi__helper">Search by title, public_id, uploader name, internal numeric id, or an overlay/session code. <strong>public_id</strong> is the stable media identifier used in URLs; <strong>id</strong> is the internal database row id.</div>
         </div>
 
         <div class="mg-fi__filters-grid">
           <div class="mg-fi__field">
+            <label>Backend</label>
+            <select value={{@controller.searchBackendFilter}} {{on "change" @controller.onSearchBackendFilterChange}}>
+              <option value="all">All</option>
+              <option value="local">Local</option>
+              <option value="s3">S3</option>
+            </select>
+          </div>
+
+          <div class="mg-fi__field">
+            <label>Status</label>
+            <select value={{@controller.searchStatusFilter}} {{on "change" @controller.onSearchStatusFilterChange}}>
+              <option value="all">All</option>
+              <option value="ready">Ready</option>
+              <option value="processing">Processing</option>
+              <option value="queued">Queued</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+
+          <div class="mg-fi__field">
             <label>Type</label>
             <select value={{@controller.searchTypeFilter}} {{on "change" @controller.onSearchTypeFilterChange}}>
-              <option value="all">All types</option>
+              <option value="all">All</option>
               <option value="video">Video</option>
               <option value="audio">Audio</option>
               <option value="image">Image</option>
@@ -434,6 +509,15 @@ export default RouteTemplate(
               <option value="all">All</option>
               <option value="yes">HLS ready</option>
               <option value="no">No HLS</option>
+            </select>
+          </div>
+
+          <div class="mg-fi__field">
+            <label>Limit</label>
+            <select value={{@controller.searchLimit}} {{on "change" @controller.onSearchLimitChange}}>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
             </select>
           </div>
 
@@ -464,6 +548,44 @@ export default RouteTemplate(
           <div class="mg-fi__notice is-danger mg-fi__search-status">{{@controller.searchError}}</div>
         {{/if}}
       </section>
+
+      {{#if @controller.lookupCode}}
+        <section class="mg-fi__panel">
+          <div class="mg-fi__panel-header">
+            <h2>Overlay / session code results</h2>
+            <p class="mg-fi__muted">Search query <code>{{@controller.lookupCode}}</code> was also checked as an overlay/session code.</p>
+          </div>
+
+          {{#if @controller.lookupBusy}}
+            <div class="mg-fi__notice is-info">Searching overlay/session codes…</div>
+          {{else if @controller.hasOverlaySearchMatches}}
+            <div class="mg-fi__overlay-list">
+              {{#each @controller.decoratedOverlayMatches key="media_public_id" as |match|}}
+                <article class="mg-fi__overlay-card">
+                  <div class="mg-fi__overlay-copy">
+                    <div class="mg-fi__overlay-title">{{match.displayTitle}}</div>
+                    <div class="mg-fi__overlay-subtitle">{{match.media_public_id}}</div>
+                    <div class="mg-fi__overlay-meta">{{match.displayMeta}}</div>
+                  </div>
+
+                  <button type="button" class="btn" {{on "click" (fn @controller.pickPublicIdFromLookup match)}}>
+                    Use media
+                  </button>
+
+                  <div class="mg-fi__overlay-badges">
+                    <span class="mg-fi__badge is-success">Code {{match.displayCode}}</span>
+                    <span class="mg-fi__badge">{{match.displayType}}</span>
+                    <span class="mg-fi__badge">Fingerprint {{match.displayFingerprint}}</span>
+                    <span class="mg-fi__badge">Seen {{match.displaySeen}}</span>
+                  </div>
+                </article>
+              {{/each}}
+            </div>
+          {{else if @controller.lookupError}}
+            <div class="mg-fi__notice is-warning">{{@controller.lookupError}}</div>
+          {{/if}}
+        </section>
+      {{/if}}
 
       <div class="mg-fi__grid">
         <section class="mg-fi__panel">
@@ -506,7 +628,7 @@ export default RouteTemplate(
               {{/each}}
             </div>
           {{else}}
-            <div class="mg-fi__empty">No matches yet. Search by title or public_id, or use “Recent items”.</div>
+            <div class="mg-fi__empty">No media matches yet. Search by title, public_id, uploader, internal id, or use “Recent items”.</div>
           {{/if}}
         </section>
 
@@ -539,10 +661,10 @@ export default RouteTemplate(
                   class="admin-input"
                   type="text"
                   value={{@controller.sourceUrl}}
-                  placeholder="Paste a variant playlist (.m3u8) or direct mp4/ts URL"
+                  placeholder="Paste a .m3u8 variant playlist or direct mp4/ts URL"
                   {{on "input" @controller.onSourceUrlInput}}
                 />
-                <div class="mg-fi__helper">Best option: paste the variant playlist URL from DevTools → Network. If you fill this field, uploading a file is optional. Only URLs from this site are allowed.</div>
+                <div class="mg-fi__helper">Recommended: paste the variant playlist URL from DevTools → Network. If you fill this field, uploading a file is optional. For safety, only URLs from this site are allowed.</div>
               </div>
 
               <div class="mg-fi__field is-full">
@@ -590,7 +712,6 @@ export default RouteTemplate(
               </div>
 
               <div class="mg-fi__field is-full">
-                <label>Auto-extend</label>
                 <div class="mg-fi__toggle-card">
                   <label class="mg-fi__toggle-row">
                     <input type="checkbox" checked={{@controller.autoExtend}} {{on "change" @controller.onAutoExtendChange}} />
@@ -618,94 +739,16 @@ export default RouteTemplate(
 
           <section class="mg-fi__panel">
             <div class="mg-fi__panel-header">
-              <h2>Overlay/session code lookup</h2>
-              <p class="mg-fi__muted">Search a playback overlay/session code. If a public_id is already filled in above, the lookup is narrowed to that item.</p>
-            </div>
-
-            <div class="mg-fi__lookup-actions">
-              <input
-                class="admin-input"
-                type="text"
-                value={{@controller.lookupCode}}
-                placeholder="e.g. 7KQ2AB"
-                maxlength="12"
-                {{on "input" @controller.onLookupCodeInput}}
-                style="max-width: 220px;"
-              />
-              <button type="button" class="btn" disabled={{@controller.lookupBusy}} {{on "click" @controller.lookupOverlayCode}}>
-                {{if @controller.lookupBusy "Searching…" "Lookup code"}}
-              </button>
-              <button type="button" class="btn" disabled={{@controller.lookupBusy}} {{on "click" @controller.clearLookup}}>
-                Clear lookup
-              </button>
-            </div>
-
-            {{#if @controller.lookupError}}
-              <div class="mg-fi__notice is-warning" style="margin-top: 0.75rem;">{{@controller.lookupError}}</div>
-            {{/if}}
-
-            {{#if @controller.hasLookupMatches}}
-              <div class="mg-fi__table-wrap" style="margin-top: 0.9rem;">
-                <table class="table">
-                  <thead>
-                    <tr>
-                      <th>Code</th>
-                      <th>User</th>
-                      <th>Media</th>
-                      <th>Type</th>
-                      <th>Fingerprint</th>
-                      <th>Seen</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {{#each @controller.lookupMatches as |match|}}
-                      <tr>
-                        <td><code>{{match.overlay_code}}</code></td>
-                        <td>
-                          {{#if match.name}}
-                            {{match.name}} ·
-                          {{/if}}
-                          {{match.username}}
-                          {{#if match.user_id}}
-                            <div class="mg-fi__muted">ID {{match.user_id}}</div>
-                          {{/if}}
-                        </td>
-                        <td>
-                          {{match.media_public_id}}
-                          {{#if match.media_title}}
-                            <div class="mg-fi__muted">{{match.media_title}}</div>
-                          {{/if}}
-                        </td>
-                        <td>{{match.media_type}}</td>
-                        <td>{{if match.fingerprint_id match.fingerprint_id "—"}}</td>
-                        <td>
-                          {{if match.updated_at match.updated_at match.created_at}}
-                          {{#if match.rendered_text}}
-                            <div class="mg-fi__muted">{{match.rendered_text}}</div>
-                          {{/if}}
-                        </td>
-                      </tr>
-                    {{/each}}
-                  </tbody>
-                </table>
-              </div>
-            {{/if}}
-          </section>
-
-          <section class="mg-fi__panel">
-            <div class="mg-fi__panel-header">
               <h2>Best test method</h2>
-              <p class="mg-fi__muted">The most reliable route is to identify from the original variant playlist instead of a re-encoded leak.</p>
+              <p class="mg-fi__muted">Use the top search for title, uploader, media ids, or overlay/session codes. Then run identify with either the original variant playlist or a leak file.</p>
             </div>
             <ol style="padding-left: 1.2rem; line-height: 1.5;">
-              <li>Log in as a normal test user and play the video so you definitely get a personalized stream.</li>
-              <li>Open DevTools → Network and find the <strong>variant playlist</strong> URL (.m3u8).</li>
-              <li>Paste that URL into the identify form above. No manual download is needed.</li>
+              <li>Find the media item above and click <strong>Use</strong> to fill the public_id.</li>
+              <li>For the strongest result, copy the personalized <strong>variant playlist</strong> URL (.m3u8) from DevTools → Network.</li>
+              <li>For external leaks such as mp4 re-uploads, upload the leak file instead.</li>
             </ol>
-            <p class="mg-fi__muted" style="margin-top: 0.75rem;">
-              For external leaks such as mp4 re-uploads, upload the leak file instead.
-            </p>
           </section>
+
         </aside>
       </div>
       {{#if @controller.hasResult}}

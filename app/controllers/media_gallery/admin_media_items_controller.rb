@@ -421,7 +421,7 @@ module ::MediaGallery
     end
 
     def filtered_search_scope
-      scope = ::MediaGallery::MediaItem.includes(:user).order(created_at: :desc)
+      scope = ::MediaGallery::MediaItem.includes(:user).order(Arel.sql("media_gallery_media_items.created_at DESC"))
       q = ::MediaGallery::TextSanitizer.search_query(params[:q], max_length: 200)
 
       if q.present?
@@ -429,8 +429,8 @@ module ::MediaGallery
           scope = scope.where(id: q.to_i)
         else
           like = "%#{q}%"
-          scope = scope.where(
-            "public_id ILIKE :q OR title ILIKE :q OR media_type ILIKE :q",
+          scope = scope.left_outer_joins(:user).where(
+            "media_gallery_media_items.public_id ILIKE :q OR media_gallery_media_items.title ILIKE :q OR media_gallery_media_items.media_type ILIKE :q OR users.username ILIKE :q OR users.name ILIKE :q",
             q: like
           )
         end
@@ -464,15 +464,15 @@ module ::MediaGallery
       sort = params[:sort].to_s.strip
       scope = case sort
       when "oldest"
-        scope.reorder(created_at: :asc)
+        scope.reorder(Arel.sql("media_gallery_media_items.created_at ASC"))
       when "title_asc"
-        scope.reorder(Arel.sql("LOWER(title) ASC"), created_at: :desc)
+        scope.reorder(Arel.sql("LOWER(media_gallery_media_items.title) ASC"), Arel.sql("media_gallery_media_items.created_at DESC"))
       when "title_desc"
-        scope.reorder(Arel.sql("LOWER(title) DESC"), created_at: :desc)
+        scope.reorder(Arel.sql("LOWER(media_gallery_media_items.title) DESC"), Arel.sql("media_gallery_media_items.created_at DESC"))
       when "updated_desc"
-        scope.reorder(updated_at: :desc)
+        scope.reorder(Arel.sql("media_gallery_media_items.updated_at DESC"))
       else
-        scope.reorder(created_at: :desc)
+        scope.reorder(Arel.sql("media_gallery_media_items.created_at DESC"))
       end
 
       scope
