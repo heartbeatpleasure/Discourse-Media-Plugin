@@ -147,20 +147,25 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get decoratedOverlayMatches() {
     return Array.isArray(this.lookupMatches)
-      ? this.lookupMatches.map((match) => ({
-          ...match,
-          displayTitle: match?.media_title || match?.media_public_id || "Unknown media",
-          displayMeta: [
-            match?.name || match?.username || "Unknown user",
-            formatDateTime(match?.updated_at || match?.created_at),
-          ]
-            .filter(Boolean)
-            .join(" • "),
-          displayType: titleize(match?.media_type || "media"),
-          displayFingerprint: match?.fingerprint_id || "—",
-          displayCode: match?.overlay_code || this.lookupCode,
-          displaySeen: match?.rendered_text || formatDateTime(match?.updated_at || match?.created_at),
-        }))
+      ? this.lookupMatches.map((match) => {
+          const uploader = match?.name || match?.username || "Unknown user";
+          const seenAt = formatDateTime(match?.updated_at || match?.created_at);
+          const mediaPublicId = match?.media_public_id || "";
+
+          return {
+            ...match,
+            displayTitle: match?.media_title || mediaPublicId || "Unknown media",
+            displayMeta: [`by ${uploader}`, seenAt].filter(Boolean).join(" • "),
+            displayType: titleize(match?.media_type || "media"),
+            displayFingerprint: match?.fingerprint_id || "—",
+            displayCode: match?.overlay_code || this.lookupCode,
+            displaySeenAt: seenAt || "—",
+            displayUploader: uploader,
+            thumbnailUrl:
+              match?.thumbnail_url ||
+              (mediaPublicId ? `/media/${mediaPublicId}/thumbnail?admin_preview=1` : ""),
+          };
+        })
       : [];
   }
 

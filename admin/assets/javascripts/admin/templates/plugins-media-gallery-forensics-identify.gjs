@@ -111,6 +111,7 @@ export default RouteTemplate(
         border-radius: 12px;
         border: 1px solid var(--mg-fi-border);
         background: var(--primary-very-low);
+        padding: 0.625rem 0.85rem;
       }
 
       .mg-fi__field input[type="file"] {
@@ -232,24 +233,22 @@ export default RouteTemplate(
         color: var(--danger);
       }
 
-      .mg-fi__toggle-card {
-        min-height: 48px;
-        border: 1px solid var(--mg-fi-border);
-        border-radius: 12px;
-        background: var(--primary-very-low);
-        padding: 0.45rem 0.85rem;
+      .mg-fi__checkbox-row {
         display: flex;
         align-items: center;
-      }
-
-      .mg-fi__toggle-row {
-        width: 100%;
-        align-items: center;
-        min-height: 30px;
         gap: 0.65rem;
+        min-height: 42px;
       }
 
-      .mg-fi__toggle-row input {
+      .mg-fi__checkbox-row label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.65rem;
+        margin: 0;
+        font-weight: 600;
+      }
+
+      .mg-fi__checkbox-row input {
         margin: 0;
         width: 18px;
         height: 18px;
@@ -336,8 +335,8 @@ export default RouteTemplate(
 
       .mg-fi__overlay-card {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 0.85rem 1rem;
+        grid-template-columns: 112px minmax(0, 1fr) auto;
+        gap: 0.9rem 1rem;
         align-items: start;
         border: 1px solid var(--mg-fi-border);
         border-radius: 16px;
@@ -367,11 +366,42 @@ export default RouteTemplate(
         font-size: var(--font-down-1);
       }
 
+      .mg-fi__overlay-action {
+        align-self: start;
+      }
+
       .mg-fi__overlay-badges {
         grid-column: 1 / -1;
         display: flex;
         flex-wrap: wrap;
         gap: 0.65rem;
+      }
+
+      .mg-fi__overlay-info-grid {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+
+      .mg-fi__overlay-info-card {
+        border: 1px solid var(--mg-fi-border);
+        border-radius: 14px;
+        background: var(--secondary);
+        padding: 0.8rem 0.9rem;
+        min-width: 0;
+      }
+
+      .mg-fi__overlay-label {
+        color: var(--mg-fi-muted);
+        font-size: var(--font-down-1);
+        font-weight: 600;
+        margin-bottom: 0.2rem;
+      }
+
+      .mg-fi__overlay-value {
+        font-weight: 700;
+        overflow-wrap: anywhere;
       }
 
       .mg-fi__prose-card,
@@ -429,7 +459,8 @@ export default RouteTemplate(
         .mg-fi__filters-grid,
         .mg-fi__summary-grid,
         .mg-fi__meta-list,
-        .mg-fi__form-grid {
+        .mg-fi__form-grid,
+        .mg-fi__overlay-info-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
@@ -439,7 +470,9 @@ export default RouteTemplate(
         .mg-fi__summary-grid,
         .mg-fi__meta-list,
         .mg-fi__form-grid,
-        .mg-fi__result-card {
+        .mg-fi__result-card,
+        .mg-fi__overlay-card,
+        .mg-fi__overlay-info-grid {
           grid-template-columns: 1fr;
         }
 
@@ -456,7 +489,7 @@ export default RouteTemplate(
       <section class="mg-fi__panel">
         <div class="mg-fi__panel-header">
           <h1>{{i18n "admin.media_gallery.forensics_identify.title"}}</h1>
-          <p class="mg-fi__muted">Find a media item first, then run identify against an HLS playlist URL or an uploaded leak file.</p>
+          <p class="mg-fi__muted">Find a media item first, then run identify against an HLS playlist URL, an uploaded leak file, or use an overlay/session code match to fill the public_id.</p>
         </div>
 
         <div class="mg-fi__field is-full">
@@ -465,11 +498,11 @@ export default RouteTemplate(
             class="admin-input"
             type="text"
             value={{@controller.searchQuery}}
-            placeholder={{i18n "admin.media_gallery.forensics_identify.find_media_placeholder"}}
+            placeholder="Search by public_id / title / database row id / username / overlay or session code…"
             {{on "input" @controller.onSearchInput}}
             {{on "keydown" @controller.onSearchKeydown}}
           />
-          <div class="mg-fi__helper">Search by title, public_id, uploader name, internal numeric id, or an overlay/session code. <strong>public_id</strong> is the stable media identifier used in URLs; <strong>id</strong> is the internal database row id.</div>
+          <div class="mg-fi__helper">Search by title, public_id, uploader name, database row id, or an overlay/session code. Click <strong>Use</strong> to replace the selected public_id on the right.</div>
         </div>
 
         <div class="mg-fi__filters-grid">
@@ -553,7 +586,7 @@ export default RouteTemplate(
         <section class="mg-fi__panel">
           <div class="mg-fi__panel-header">
             <h2>Overlay / session code results</h2>
-            <p class="mg-fi__muted">Search query <code>{{@controller.lookupCode}}</code> was also checked as an overlay/session code.</p>
+            <p class="mg-fi__muted">Search query <code>{{@controller.lookupCode}}</code> was also checked as an overlay/session code and any matching media is shown here.</p>
           </div>
 
           {{#if @controller.lookupBusy}}
@@ -562,21 +595,44 @@ export default RouteTemplate(
             <div class="mg-fi__overlay-list">
               {{#each @controller.decoratedOverlayMatches key="media_public_id" as |match|}}
                 <article class="mg-fi__overlay-card">
+                  {{#if match.thumbnailUrl}}
+                    <img class="mg-fi__thumb" loading="lazy" src={{match.thumbnailUrl}} alt="thumbnail" />
+                  {{else}}
+                    <div class="mg-fi__thumb-placeholder">No thumbnail</div>
+                  {{/if}}
+
                   <div class="mg-fi__overlay-copy">
                     <div class="mg-fi__overlay-title">{{match.displayTitle}}</div>
                     <div class="mg-fi__overlay-subtitle">{{match.media_public_id}}</div>
                     <div class="mg-fi__overlay-meta">{{match.displayMeta}}</div>
                   </div>
 
-                  <button type="button" class="btn" {{on "click" (fn @controller.pickPublicIdFromLookup match)}}>
+                  <button type="button" class="btn mg-fi__overlay-action" {{on "click" (fn @controller.pickPublicIdFromLookup match)}}>
                     Use media
                   </button>
 
                   <div class="mg-fi__overlay-badges">
                     <span class="mg-fi__badge is-success">Code {{match.displayCode}}</span>
                     <span class="mg-fi__badge">{{match.displayType}}</span>
-                    <span class="mg-fi__badge">Fingerprint {{match.displayFingerprint}}</span>
-                    <span class="mg-fi__badge">Seen {{match.displaySeen}}</span>
+                  </div>
+
+                  <div class="mg-fi__overlay-info-grid">
+                    <div class="mg-fi__overlay-info-card">
+                      <div class="mg-fi__overlay-label">Uploader</div>
+                      <div class="mg-fi__overlay-value">{{match.displayUploader}}</div>
+                    </div>
+                    <div class="mg-fi__overlay-info-card">
+                      <div class="mg-fi__overlay-label">Fingerprint</div>
+                      <div class="mg-fi__overlay-value">{{match.displayFingerprint}}</div>
+                    </div>
+                    <div class="mg-fi__overlay-info-card">
+                      <div class="mg-fi__overlay-label">Seen at</div>
+                      <div class="mg-fi__overlay-value">{{match.displaySeenAt}}</div>
+                    </div>
+                    <div class="mg-fi__overlay-info-card">
+                      <div class="mg-fi__overlay-label">Matched code</div>
+                      <div class="mg-fi__overlay-value">{{match.displayCode}}</div>
+                    </div>
                   </div>
                 </article>
               {{/each}}
@@ -628,7 +684,7 @@ export default RouteTemplate(
               {{/each}}
             </div>
           {{else}}
-            <div class="mg-fi__empty">No media matches yet. Search by title, public_id, uploader, internal id, or use “Recent items”.</div>
+            <div class="mg-fi__empty">No media matches yet. Search by title, public_id, uploader, database row id, or overlay/session code, or use “Recent items”.</div>
           {{/if}}
         </section>
 
@@ -653,6 +709,7 @@ export default RouteTemplate(
                   placeholder={{i18n "admin.media_gallery.forensics_identify.public_id_placeholder"}}
                   {{on "input" @controller.onPublicIdInput}}
                 />
+                <div class="mg-fi__helper">Searching above does not replace this field until you click <strong>Use</strong> again.</div>
               </div>
 
               <div class="mg-fi__field is-full">
@@ -661,10 +718,10 @@ export default RouteTemplate(
                   class="admin-input"
                   type="text"
                   value={{@controller.sourceUrl}}
-                  placeholder="Paste a .m3u8 variant playlist or direct mp4/ts URL"
+                  placeholder="Paste variant .m3u8 or direct mp4/ts URL"
                   {{on "input" @controller.onSourceUrlInput}}
                 />
-                <div class="mg-fi__helper">Recommended: paste the variant playlist URL from DevTools → Network. If you fill this field, uploading a file is optional. For safety, only URLs from this site are allowed.</div>
+                <div class="mg-fi__helper">Recommended: paste the personalized variant playlist URL (.m3u8) from DevTools → Network. Direct mp4/ts URLs can also work. If you fill this field, uploading a file is optional. For safety, only URLs from this site are allowed.</div>
               </div>
 
               <div class="mg-fi__field is-full">
@@ -697,7 +754,7 @@ export default RouteTemplate(
                 />
               </div>
 
-              <div class="mg-fi__field">
+              <div class="mg-fi__field is-full">
                 <label>{{i18n "admin.media_gallery.forensics_identify.layout_label"}}</label>
                 <select class="combobox" value={{@controller.layout}} {{on "change" @controller.onLayoutChange}}>
                   <option value="">{{i18n "admin.media_gallery.forensics_identify.layout_auto"}}</option>
@@ -712,8 +769,8 @@ export default RouteTemplate(
               </div>
 
               <div class="mg-fi__field is-full">
-                <div class="mg-fi__toggle-card">
-                  <label class="mg-fi__toggle-row">
+                <div class="mg-fi__checkbox-row">
+                  <label>
                     <input type="checkbox" checked={{@controller.autoExtend}} {{on "change" @controller.onAutoExtendChange}} />
                     <span>Auto-extend</span>
                   </label>
@@ -740,7 +797,7 @@ export default RouteTemplate(
           <section class="mg-fi__panel">
             <div class="mg-fi__panel-header">
               <h2>Best test method</h2>
-              <p class="mg-fi__muted">Use the top search for title, uploader, media ids, or overlay/session codes. Then run identify with either the original variant playlist or a leak file.</p>
+              <p class="mg-fi__muted">Use the top search for title, uploader, public_id, database row id, or overlay/session codes. Then run identify with either the original variant playlist or a leak file.</p>
             </div>
             <ol style="padding-left: 1.2rem; line-height: 1.5;">
               <li>Find the media item above and click <strong>Use</strong> to fill the public_id.</li>
