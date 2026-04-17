@@ -49,7 +49,8 @@ module ::MediaGallery
           size_percent: MediaGallery::Watermark.global_size_percent,
           margin_px: MediaGallery::Watermark.global_margin_px
         },
-        playback_overlay: MediaGallery::PlaybackOverlay.client_enabled_config
+        playback_overlay: MediaGallery::PlaybackOverlay.client_enabled_config,
+        upload_policy: upload_policy_payload
       )
     end
     
@@ -148,12 +149,50 @@ module ::MediaGallery
       max_mb = SiteSetting.media_gallery_max_upload_size_mb.to_i
       if max_mb.positive?
         max_bytes = max_mb * 1024 * 1024
-        return render_json_error("upload_too_large") if upload.filesize.to_i > max_bytes
+        if upload.filesize.to_i > max_bytes
+          return render_json_error(
+            "upload_too_large",
+            message: upload_too_large_message(max_mb: max_mb, actual_bytes: upload.filesize.to_i),
+            extra: {
+              details: {
+                scope: "plugin",
+                actual_bytes: upload.filesize.to_i,
+                actual_mb: rounded_mb(upload.filesize.to_i),
+                max_mb: max_mb
+              }
+            }
+          )
+        end
       end
 
       media_type = infer_media_type(upload)
-      return render_json_error("unsupported_file_type") unless MediaGallery::MediaItem::TYPES.include?(media_type)
-      return render_json_error("unsupported_file_extension") unless allowed_extension_for_type?(upload, media_type)
+      unless MediaGallery::MediaItem::TYPES.include?(media_type)
+        return render_json_error(
+          "unsupported_file_type",
+          message: unsupported_file_type_message(upload),
+          extra: {
+            details: unsupported_file_type_details(upload)
+          }
+        )
+      end
+
+      unless allowed_extension_for_type?(upload, media_type)
+        return render_json_error(
+          "unsupported_file_extension",
+          message: unsupported_file_extension_message(upload, media_type),
+          extra: {
+            details: unsupported_file_extension_details(upload, media_type)
+          }
+        )
+      end
+
+      if (duration_limit_error = preflight_duration_limit_error(upload, media_type))
+        return render_json_error(
+          duration_limit_error[:error_code],
+          message: duration_limit_error[:message],
+          extra: { details: duration_limit_error[:details] }
+        )
+      end
 
             # Watermark (burned into processed video/image outputs) - configured server-side via presets.
       watermark_enabled = false
@@ -182,7 +221,7 @@ module ::MediaGallery
 
       # Per-type caps (plugin-level)
       if (err = enforce_type_size_limit(upload, media_type))
-        return render_json_error(err)
+        return render_json_error(err[:error_code], message: err[:message], extra: { details: err[:details] })
       end
 
       # Ensure private storage roots exist early, so we fail fast with a clear error.
@@ -1262,32 +1301,212 @@ module ::MediaGallery
     end
 
     # Plugin-level per-type size enforcement (MB).
-    # Returns an error key string when too large, or nil when OK.
+    # Returns a structured error hash when too large, or nil when OK.
     def enforce_type_size_limit(upload, media_type)
       size_bytes = upload.filesize.to_i
-
-      max_mb =
-        case media_type
-        when "video"
-          SiteSetting.respond_to?(:media_gallery_max_video_size_mb) ? SiteSetting.media_gallery_max_video_size_mb.to_i : 0
-        when "audio"
-          SiteSetting.respond_to?(:media_gallery_max_audio_size_mb) ? SiteSetting.media_gallery_max_audio_size_mb.to_i : 0
-        when "image"
-          SiteSetting.respond_to?(:media_gallery_max_image_size_mb) ? SiteSetting.media_gallery_max_image_size_mb.to_i : 0
-        else
-          0
-        end
-
+      max_mb = type_size_limit_mb_for(media_type)
       return nil unless max_mb.positive?
 
       max_bytes = max_mb * 1024 * 1024
       return nil if size_bytes <= max_bytes
 
-      case media_type
+      {
+        error_code: size_error_code_for(media_type),
+        message: type_size_limit_message(media_type: media_type, actual_bytes: size_bytes, max_mb: max_mb),
+        details: {
+          media_type: media_type.to_s,
+          actual_bytes: size_bytes,
+          actual_mb: rounded_mb(size_bytes),
+          max_mb: max_mb
+        }
+      }
+    end
+
+    def upload_policy_payload
+      {
+        site_max_upload_mb: site_max_upload_mb,
+        plugin_max_upload_mb: positive_or_nil(SiteSetting.media_gallery_max_upload_size_mb.to_i),
+        type_max_upload_mb: {
+          "video" => positive_or_nil(type_size_limit_mb_for("video")),
+          "audio" => positive_or_nil(type_size_limit_mb_for("audio")),
+          "image" => positive_or_nil(type_size_limit_mb_for("image"))
+        },
+        duration_limits_seconds: {
+          "video" => positive_or_nil(SiteSetting.media_gallery_video_max_duration_seconds.to_i),
+          "audio" => positive_or_nil(SiteSetting.media_gallery_audio_max_duration_seconds.to_i)
+        },
+        allowed_extensions: {
+          "image" => allowed_extension_list_for_type("image"),
+          "audio" => allowed_extension_list_for_type("audio"),
+          "video" => allowed_extension_list_for_type("video")
+        }
+      }
+    end
+
+    def site_max_upload_mb
+      kb = SiteSetting.respond_to?(:max_attachment_size_kb) ? SiteSetting.max_attachment_size_kb.to_i : 0
+      return nil unless kb.positive?
+
+      (kb.to_f / 1024.0).round(1)
+    end
+
+    def positive_or_nil(value)
+      v = value.to_i
+      v.positive? ? v : nil
+    end
+
+    def rounded_mb(bytes)
+      return 0 if bytes.to_i <= 0
+
+      (bytes.to_f / (1024.0 * 1024.0)).round(1)
+    end
+
+    def media_type_label(media_type)
+      case media_type.to_s
+      when "video" then "video"
+      when "audio" then "audio file"
+      when "image" then "image"
+      else "file"
+      end
+    end
+
+    def pluralize_seconds(seconds)
+      v = seconds.to_i
+      v == 1 ? "1 second" : "#{v} seconds"
+    end
+
+    def human_duration(seconds)
+      total = seconds.to_f.round
+      return pluralize_seconds(total) if total < 60
+
+      mins = (total / 60).floor
+      secs = (total % 60).round
+      if secs <= 0
+        mins == 1 ? "1 minute" : "#{mins} minutes"
+      elsif mins <= 0
+        pluralize_seconds(secs)
+      else
+        "#{mins} minute#{"s" unless mins == 1} #{secs} second#{"s" unless secs == 1}"
+      end
+    end
+
+    def type_size_limit_mb_for(media_type)
+      case media_type.to_s
+      when "video"
+        SiteSetting.respond_to?(:media_gallery_max_video_size_mb) ? SiteSetting.media_gallery_max_video_size_mb.to_i : 0
+      when "audio"
+        SiteSetting.respond_to?(:media_gallery_max_audio_size_mb) ? SiteSetting.media_gallery_max_audio_size_mb.to_i : 0
+      when "image"
+        SiteSetting.respond_to?(:media_gallery_max_image_size_mb) ? SiteSetting.media_gallery_max_image_size_mb.to_i : 0
+      else
+        0
+      end
+    end
+
+    def size_error_code_for(media_type)
+      case media_type.to_s
       when "video" then "video_too_large"
       when "audio" then "audio_too_large"
       when "image" then "image_too_large"
       else "upload_too_large"
+      end
+    end
+
+    def upload_too_large_message(max_mb:, actual_bytes:)
+      "This file is too large (#{rounded_mb(actual_bytes)} MB). The maximum allowed size is #{max_mb} MB."
+    end
+
+    def type_size_limit_message(media_type:, actual_bytes:, max_mb:)
+      "This #{media_type_label(media_type)} is too large (#{rounded_mb(actual_bytes)} MB). The maximum allowed #{media_type.to_s} size is #{max_mb} MB."
+    end
+
+    def allowed_extension_list_for_type(media_type)
+      allowed =
+        case media_type.to_s
+        when "image" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_image_extensions)
+        when "audio" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_audio_extensions)
+        when "video" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_video_extensions)
+        else []
+        end
+
+      allowed =
+        case media_type.to_s
+        when "image" then MediaGallery::MediaItem::IMAGE_EXTS
+        when "audio" then MediaGallery::MediaItem::AUDIO_EXTS
+        when "video" then MediaGallery::MediaItem::VIDEO_EXTS
+        else []
+        end if allowed.blank?
+
+      allowed.map { |e| e.to_s.downcase.sub(/\A\./, "") }.uniq
+    end
+
+    def unsupported_file_type_details(upload)
+      {
+        filename: upload&.original_filename.to_s,
+        extension: normalized_upload_extension(upload).presence,
+        mime_type: upload_mime(upload),
+        allowed_extensions: {
+          image: allowed_extension_list_for_type("image"),
+          audio: allowed_extension_list_for_type("audio"),
+          video: allowed_extension_list_for_type("video")
+        }
+      }
+    end
+
+    def unsupported_file_type_message(upload)
+      details = unsupported_file_type_details(upload)
+      ext = details[:extension].present? ? " (.#{details[:extension]})" : ""
+      "This file type#{ext} is not supported. Allowed extensions: images (#{details[:allowed_extensions][:image].join(', ')}), audio (#{details[:allowed_extensions][:audio].join(', ')}), video (#{details[:allowed_extensions][:video].join(', ')})."
+    end
+
+    def unsupported_file_extension_details(upload, media_type)
+      {
+        media_type: media_type.to_s,
+        filename: upload&.original_filename.to_s,
+        extension: normalized_upload_extension(upload).presence,
+        allowed_extensions: allowed_extension_list_for_type(media_type)
+      }
+    end
+
+    def unsupported_file_extension_message(upload, media_type)
+      details = unsupported_file_extension_details(upload, media_type)
+      ext = details[:extension].presence || "unknown"
+      "Files with the .#{ext} extension are not allowed for #{media_type.to_s} uploads. Allowed extensions: #{details[:allowed_extensions].join(', ')}."
+    end
+
+    def preflight_duration_limit_error(upload, media_type)
+      return nil unless %w[video audio].include?(media_type.to_s)
+
+      max_seconds =
+        case media_type.to_s
+        when "video" then SiteSetting.media_gallery_video_max_duration_seconds.to_i
+        when "audio" then SiteSetting.media_gallery_audio_max_duration_seconds.to_i
+        else 0
+        end
+      return nil unless max_seconds.positive?
+
+      local_path = ::MediaGallery::UploadPath.local_path_for(upload)
+      return nil if local_path.blank? || !File.exist?(local_path)
+
+      begin
+        probe = ::MediaGallery::Ffmpeg.probe(local_path)
+        actual_seconds = probe.dig("format", "duration").to_f
+        return nil unless actual_seconds.positive? && actual_seconds > max_seconds
+
+        {
+          error_code: media_type.to_s == "video" ? "video_too_long" : "audio_too_long",
+          message: "This #{media_type_label(media_type)} is too long (#{human_duration(actual_seconds)}). The maximum allowed #{media_type.to_s} duration is #{human_duration(max_seconds)}.",
+          details: {
+            media_type: media_type.to_s,
+            actual_seconds: actual_seconds.round,
+            max_seconds: max_seconds
+          }
+        }
+      rescue => e
+        Rails.logger.warn(
+          "[media_gallery] duration preflight skipped request_id=#{request.request_id} upload_id=#{upload&.id} error=#{e.class}: #{e.message}"
+        )
+        nil
       end
     end
 
@@ -1329,27 +1548,7 @@ module ::MediaGallery
 
     def allowed_extension_for_type?(upload, media_type)
       ext = normalized_upload_extension(upload)
-
-      allowed =
-        case media_type
-        when "image" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_image_extensions)
-        when "audio" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_audio_extensions)
-        when "video" then MediaGallery::Permissions.list_setting(SiteSetting.media_gallery_allowed_video_extensions)
-        else []
-        end
-
-      # Empty setting means "use built-in defaults".
-      if allowed.blank?
-        allowed =
-          case media_type
-          when "image" then MediaGallery::MediaItem::IMAGE_EXTS
-          when "audio" then MediaGallery::MediaItem::AUDIO_EXTS
-          when "video" then MediaGallery::MediaItem::VIDEO_EXTS
-          else []
-          end
-      end
-
-      allowed.map { |e| e.to_s.downcase.sub(/\A\./, "") }.include?(ext)
+      allowed_extension_list_for_type(media_type).include?(ext)
     end
   end
 end
