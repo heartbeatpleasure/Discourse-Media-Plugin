@@ -117,12 +117,12 @@ const METRIC_HELP = {
   mis_comp: "Mismatches over compared positions for this candidate. Lower is better; 0 / N means perfect agreement on all compared positions.",
   best_offset: "Best segment offset that aligned this candidate with the observed sample during matching.",
   z_score: "Supportive significance based on compared vs mismatches under a random 50/50 agreement baseline. Higher is stronger: around 0 is weak/no separation, above 3 is strong, above 5 is very strong. There is no hard maximum.",
-  p_value: "One-sided binomial tail probability under a random 50/50 agreement baseline. Lower is stronger: below 0.05 is notable, below 0.01 is strong, below 0.001 is very strong. Minimum approaches 0.",
-  efp_pool: "Expected false positives in the current candidate pool, calculated as p-value × current pool size. Lower is better: below 1 is good, below 0.1 is strong, values above 1 mean chance matches become more plausible in this pool.",
-  efp_2000: "Expected false positives normalized to a reference pool of 2000 candidates. Lower is better and easier to compare across runs: below 1 is good, below 0.1 is strong.",
+  p_value: "One-sided binomial tail probability under a random 50/50 agreement baseline. Lower is stronger: below 0.05 is notable, below 0.01 is strong, below 0.001 is very strong. Very small values can appear in scientific notation, for example 3.55e-15. Minimum approaches 0.",
+  efp_pool: "Expected false positives in the current candidate pool, calculated as p-value × current pool size. Lower is better: below 1 is good, below 0.1 is strong, and values shown in scientific notation such as 7.11e-15 are extremely small (therefore extremely strong). Values above 1 mean chance matches become more plausible in this pool.",
+  efp_2000: "Expected false positives normalized to a reference pool of 2000 candidates. Lower is better and easier to compare across runs: below 1 is good, below 0.1 is strong, and scientific-notation values such as 7.11e-12 are extremely strong.",
   shortlist_gap: "Difference between the winning shortlist evidence score and the runner-up shortlist evidence score. Shown only when a runner-up exists.",
-  evidence_score: "Primary evidence score produced by the current engine for this candidate. There is no fixed universal scale; compare it against other candidates in the same run. Higher is better.",
-  rank_score: "Ranking score used to order shortlist candidates. There is no fixed universal scale; compare it against other candidates in the same run. In very small pools it can equal the evidence score.",
+  evidence_score: "Primary evidence score produced by the current engine for this candidate. There is no fixed universal scale; compare it against other candidates in the same run. Higher is better. A large positive lead over the runner-up is strong; negative values are poor.",
+  rank_score: "Ranking score used to order shortlist candidates. There is no fixed universal scale; compare it against other candidates in the same run. Higher is better. In very small pools it can equal the evidence score.",
   weighted_mis_comp: "Weighted mismatches over weighted compared samples. Lower is better; 0 / N means perfect weighted agreement on all weighted comparisons.",
   chunk_llr: "Chunk-level log-likelihood style score accumulated across stable chunks. There is no fixed universal scale; compare it against other candidates in the same run. Higher is better.",
   why: "Compact explanation of why this candidate ranked where it did. These are engine signals, not end-user facing policy text. The cards below break this summary into separate metrics.",
@@ -382,7 +382,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   get topCandidateRationaleMetrics() {
     const parsed = parseWhyMetrics(this.topCandidateWhy);
     return parsed
-      .filter((item) => !["score", "rank"].includes(item.key))
+      .filter((item) => !["score", "rank", "llr"].includes(item.key))
       .map((item) => ({
         label: RATIONALE_LABELS[item.key] || titleize(item.key),
         value: item.rawValue,
@@ -832,11 +832,13 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     const weightedCompared = candidate?.compared_weighted;
     const parsedWhy = parseWhyMetrics(candidate?.why);
 
-    const rationaleMetrics = parsedWhy.map((item) => ({
-      label: RATIONALE_LABELS[item.key] || titleize(item.key),
-      value: item.rawValue,
-      help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key),
-    }));
+    const rationaleMetrics = parsedWhy
+      .filter((item) => !["score", "rank", "llr"].includes(item.key))
+      .map((item) => ({
+        label: RATIONALE_LABELS[item.key] || titleize(item.key),
+        value: item.rawValue,
+        help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key),
+      }));
 
     const statsMetrics = [
       { label: "Evidence score", value: candidate?.evidence_score === null || candidate?.evidence_score === undefined ? "—" : formatCompactStat(candidate.evidence_score), help: metricHelp("evidence_score") },
@@ -861,7 +863,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
           ? "—"
           : String(candidate.best_offset_segments),
       displayDeltaFromTop: formatRatio(deltaFromTop),
-      displayWhy: candidate?.why || "—",
+      displayWhy: "",
       rationaleMetrics,
       statsMetrics,
       hasRationaleMetrics: rationaleMetrics.length > 0,

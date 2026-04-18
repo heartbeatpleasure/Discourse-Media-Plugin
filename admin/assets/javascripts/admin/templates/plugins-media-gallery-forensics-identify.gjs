@@ -33,7 +33,7 @@ export default RouteTemplate(
         border-radius: var(--mg-fi-radius);
         padding: 1rem 1.125rem;
         min-width: 0;
-        overflow: hidden;
+        overflow: visible;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
@@ -338,12 +338,12 @@ export default RouteTemplate(
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 1.2rem;
-        height: 1.2rem;
+        width: 1.35rem;
+        height: 1.35rem;
         border: 1px solid var(--tertiary);
         border-radius: 999px;
-        background: var(--tertiary-low);
-        color: var(--tertiary);
+        background: var(--tertiary);
+        color: var(--secondary);
         font-size: 0.76rem;
         font-weight: 700;
         line-height: 1;
@@ -356,8 +356,8 @@ export default RouteTemplate(
         content: attr(data-tooltip);
         position: absolute;
         top: calc(100% + 0.45rem);
-        right: 0;
-        width: min(22rem, 75vw);
+        left: 0;
+        width: min(24rem, calc(100vw - 4rem));
         padding: 0.7rem 0.8rem;
         border-radius: 12px;
         border: 1px solid var(--mg-fi-border);
@@ -372,14 +372,14 @@ export default RouteTemplate(
         pointer-events: none;
         transform: translateY(-0.15rem);
         transition: opacity 0.14s ease, transform 0.14s ease;
-        z-index: 20;
+        z-index: 2000;
       }
 
       .mg-fi__metric-help::before {
         content: "";
         position: absolute;
         top: calc(100% + 0.15rem);
-        right: 0.35rem;
+        left: 0.35rem;
         width: 0.6rem;
         height: 0.6rem;
         background: var(--secondary);
@@ -389,7 +389,7 @@ export default RouteTemplate(
         opacity: 0;
         pointer-events: none;
         transition: opacity 0.14s ease;
-        z-index: 21;
+        z-index: 2001;
       }
 
       .mg-fi__metric-help:hover::after,
@@ -490,9 +490,9 @@ export default RouteTemplate(
       }
 
       .mg-fi__candidate-header-row,
-      .mg-fi__candidate-toggle {
+      .mg-fi__candidate-toggle-inner {
         display: grid;
-        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.9fr) minmax(72px, 0.55fr) minmax(90px, 0.7fr) minmax(90px, 0.7fr) minmax(80px, 0.6fr);
+        grid-template-columns: 28px minmax(0, 1.15fr) minmax(0, 1.9fr) minmax(72px, 0.55fr) minmax(90px, 0.7fr) minmax(90px, 0.7fr) minmax(80px, 0.6fr);
         gap: 1rem;
         align-items: center;
       }
@@ -502,6 +502,10 @@ export default RouteTemplate(
         color: var(--mg-fi-muted);
         font-size: var(--font-down-1);
         font-weight: 600;
+      }
+
+      .mg-fi__candidate-header-row > :first-child {
+        visibility: hidden;
       }
 
       .mg-fi__candidate-item {
@@ -525,22 +529,34 @@ export default RouteTemplate(
         display: none;
       }
 
+      .mg-fi__candidate-toggle::marker {
+        content: "";
+        display: none;
+      }
+
+      .mg-fi__candidate-toggle-inner {
+        width: 100%;
+      }
+
+      .mg-fi__candidate-chevron {
+        color: var(--primary-high);
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .mg-fi__candidate-item[open] .mg-fi__candidate-chevron::before {
+        content: "▼";
+      }
+
+      .mg-fi__candidate-item:not([open]) .mg-fi__candidate-chevron::before {
+        content: "▶";
+      }
+
       .mg-fi__candidate-user {
         display: flex;
         align-items: center;
         min-width: 0;
         font-weight: 700;
-      }
-
-      .mg-fi__candidate-user::before {
-        content: "▶";
-        margin-right: 0.6rem;
-        color: var(--primary-high);
-        flex-shrink: 0;
-      }
-
-      .mg-fi__candidate-item[open] .mg-fi__candidate-user::before {
-        content: "▼";
       }
 
       .mg-fi__candidate-fingerprint code {
@@ -565,13 +581,6 @@ export default RouteTemplate(
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 0.75rem;
-      }
-
-      .mg-fi__candidate-raw-why {
-        margin-top: 0.75rem;
-        color: var(--mg-fi-muted);
-        font-size: var(--font-down-1);
-        line-height: 1.45;
       }
 
       .mg-fi__overlay-list {
@@ -717,8 +726,8 @@ export default RouteTemplate(
         }
 
         .mg-fi__candidate-header-row,
-        .mg-fi__candidate-toggle {
-          grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) repeat(4, minmax(70px, 0.7fr));
+        .mg-fi__candidate-toggle-inner {
+          grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1.3fr) repeat(4, minmax(70px, 0.7fr));
         }
       }
 
@@ -1101,7 +1110,7 @@ export default RouteTemplate(
                 <div class="mg-fi__metric-heading">
                   <div class="mg-fi__meta-label">{{card.label}}</div>
                   {{#if card.help}}
-                    <span class="mg-fi__metric-help" data-tooltip={{card.help}} title={{card.help}} aria-label={{card.help}} tabindex="0">i</span>
+                    <span class="mg-fi__metric-help" data-tooltip={{card.help}} aria-label={{card.help}} tabindex="0">i</span>
                   {{/if}}
                 </div>
                 <div class={{if card.code "mg-fi__meta-value is-code" "mg-fi__meta-value"}}>{{card.value}}</div>
@@ -1160,7 +1169,7 @@ export default RouteTemplate(
                     <div class="mg-fi__metric-heading">
                       <div class="mg-fi__meta-label">{{card.label}}</div>
                       {{#if card.help}}
-                        <span class="mg-fi__metric-help" data-tooltip={{card.help}} title={{card.help}} aria-label={{card.help}} tabindex="0">i</span>
+                        <span class="mg-fi__metric-help" data-tooltip={{card.help}} aria-label={{card.help}} tabindex="0">i</span>
                       {{/if}}
                     </div>
                     <div class={{if card.code "mg-fi__meta-value is-code" "mg-fi__meta-value"}}>{{card.value}}</div>
@@ -1171,7 +1180,6 @@ export default RouteTemplate(
               <div class="mg-fi__candidate-note-card">
                 <div class="mg-fi__metric-heading">
                   <strong>Top candidate rationale</strong>
-                  <span class="mg-fi__metric-help" data-tooltip="Compact engine signals used to rank the winner. In a single-candidate or very small pool setup some values can coincide because there is little or no runner-up separation to compute against." title="Compact engine signals used to rank the winner. In a single-candidate or very small pool setup some values can coincide because there is little or no runner-up separation to compute against." aria-label="Top candidate rationale help" tabindex="0">i</span>
                 </div>
                 {{#if @controller.topCandidateRationaleMetrics.length}}
                   <div class="mg-fi__candidate-note-grid">
@@ -1180,7 +1188,7 @@ export default RouteTemplate(
                         <div class="mg-fi__metric-heading">
                           <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                           {{#if metric.help}}
-                            <span class="mg-fi__metric-help" data-tooltip={{metric.help}} title={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                            <span class="mg-fi__metric-help" data-tooltip={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
                           {{/if}}
                         </div>
                         <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
@@ -1194,7 +1202,7 @@ export default RouteTemplate(
                       <div class="mg-fi__metric-heading">
                         <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                         {{#if metric.help}}
-                          <span class="mg-fi__metric-help" data-tooltip={{metric.help}} title={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                          <span class="mg-fi__metric-help" data-tooltip={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
                         {{/if}}
                       </div>
                       <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
@@ -1273,6 +1281,7 @@ export default RouteTemplate(
                 <summary>{{if @controller.conclusive "Top candidates" "Candidates (not conclusive)"}}</summary>
                 <div class="mg-fi__candidate-list">
                   <div class="mg-fi__candidate-header-row">
+                    <div></div>
                     <div>User</div>
                     <div>Fingerprint</div>
                     <div>Match</div>
@@ -1284,12 +1293,15 @@ export default RouteTemplate(
                   {{#each @controller.topCandidates as |c|}}
                     <details class="mg-fi__candidate-item" open={{c.isPrimary}}>
                       <summary class="mg-fi__candidate-toggle">
-                        <div class="mg-fi__candidate-user">{{c.displayUser}}</div>
-                        <div class="mg-fi__candidate-fingerprint"><code>{{c.displayFingerprint}}</code></div>
-                        <div>{{c.displayMatch}}</div>
-                        <div>{{c.displayMisComp}}</div>
-                        <div>{{c.displayBestOffset}}</div>
-                        <div>{{c.displayDeltaFromTop}}</div>
+                        <div class="mg-fi__candidate-toggle-inner">
+                          <div class="mg-fi__candidate-chevron"></div>
+                          <div class="mg-fi__candidate-user">{{c.displayUser}}</div>
+                          <div class="mg-fi__candidate-fingerprint"><code>{{c.displayFingerprint}}</code></div>
+                          <div>{{c.displayMatch}}</div>
+                          <div>{{c.displayMisComp}}</div>
+                          <div>{{c.displayBestOffset}}</div>
+                          <div>{{c.displayDeltaFromTop}}</div>
+                        </div>
                       </summary>
 
                       <div class="mg-fi__candidate-body">
@@ -1301,7 +1313,7 @@ export default RouteTemplate(
                                 <div class="mg-fi__metric-heading">
                                   <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                                   {{#if metric.help}}
-                                    <span class="mg-fi__metric-help" data-tooltip={{metric.help}} title={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                                    <span class="mg-fi__metric-help" data-tooltip={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
                                   {{/if}}
                                 </div>
                                 <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
@@ -1317,17 +1329,13 @@ export default RouteTemplate(
                               <div class="mg-fi__metric-heading">
                                 <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                                 {{#if metric.help}}
-                                  <span class="mg-fi__metric-help" data-tooltip={{metric.help}} title={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                                  <span class="mg-fi__metric-help" data-tooltip={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
                                 {{/if}}
                               </div>
                               <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
                             </div>
                           {{/each}}
                         </div>
-
-                        {{#if c.displayWhy}}
-                          <div class="mg-fi__candidate-raw-why">{{c.displayWhy}}</div>
-                        {{/if}}
                       </div>
                     </details>
                   {{/each}}
