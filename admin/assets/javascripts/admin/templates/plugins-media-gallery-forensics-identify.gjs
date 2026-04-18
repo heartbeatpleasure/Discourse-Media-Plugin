@@ -333,6 +333,19 @@ export default RouteTemplate(
         font-weight: 600;
       }
 
+      .mg-fi__metric-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin-bottom: 0.15rem;
+        position: relative;
+      }
+
+      .mg-fi__meta-label {
+        font-weight: 600;
+      }
+
       .mg-fi__metric-help {
         position: relative;
         display: inline-flex;
@@ -352,12 +365,12 @@ export default RouteTemplate(
         user-select: none;
       }
 
-      .mg-fi__metric-help::after {
-        content: attr(data-tooltip);
+      .mg-fi__metric-tooltip {
         position: absolute;
-        top: calc(100% + 0.45rem);
-        left: 0;
-        width: min(24rem, calc(100vw - 4rem));
+        bottom: calc(100% + 0.5rem);
+        right: 0;
+        width: min(100%, 22rem);
+        min-width: min(14rem, 100%);
         padding: 0.7rem 0.8rem;
         border-radius: 12px;
         border: 1px solid var(--mg-fi-border);
@@ -370,32 +383,18 @@ export default RouteTemplate(
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
         opacity: 0;
         pointer-events: none;
-        transform: translateY(-0.15rem);
+        transform: translateY(0.15rem);
         transition: opacity 0.14s ease, transform 0.14s ease;
-        z-index: 2000;
+        z-index: 3000;
       }
 
-      .mg-fi__metric-help::before {
-        content: "";
-        position: absolute;
-        top: calc(100% + 0.15rem);
-        left: 0.35rem;
-        width: 0.6rem;
-        height: 0.6rem;
-        background: var(--secondary);
-        border-top: 1px solid var(--mg-fi-border);
-        border-left: 1px solid var(--mg-fi-border);
-        transform: rotate(45deg);
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.14s ease;
-        z-index: 2001;
+      .mg-fi__metric-heading.is-tooltip-left .mg-fi__metric-tooltip {
+        left: 0;
+        right: auto;
       }
 
-      .mg-fi__metric-help:hover::after,
-      .mg-fi__metric-help:hover::before,
-      .mg-fi__metric-help:focus-visible::after,
-      .mg-fi__metric-help:focus-visible::before {
+      .mg-fi__metric-help:hover + .mg-fi__metric-tooltip,
+      .mg-fi__metric-help:focus-visible + .mg-fi__metric-tooltip {
         opacity: 1;
         transform: translateY(0);
       }
@@ -519,19 +518,33 @@ export default RouteTemplate(
         background: var(--secondary);
       }
 
+      .mg-fi__candidate-item > summary {
+        list-style: none !important;
+      }
+
+      .mg-fi__candidate-item > summary::-webkit-details-marker {
+        display: none !important;
+      }
+
+      .mg-fi__candidate-item > summary::marker {
+        content: "";
+        display: none !important;
+      }
+
       .mg-fi__candidate-toggle {
-        list-style: none;
+        display: block;
+        list-style: none !important;
         padding: 0.95rem 1rem;
         cursor: pointer;
       }
 
       .mg-fi__candidate-toggle::-webkit-details-marker {
-        display: none;
+        display: none !important;
       }
 
       .mg-fi__candidate-toggle::marker {
         content: "";
-        display: none;
+        display: none !important;
       }
 
       .mg-fi__candidate-toggle-inner {
@@ -1107,10 +1120,10 @@ export default RouteTemplate(
           <div class="mg-fi__summary-grid">
             {{#each @controller.resultSummaryCards as |card|}}
               <div class={{if card.span2 "mg-fi__meta-card is-span-2" "mg-fi__meta-card"}}>
-                <div class="mg-fi__metric-heading">
+                <div class="mg-fi__metric-heading {{if card.tooltipAlignLeft "is-tooltip-left" ""}}">
                   <div class="mg-fi__meta-label">{{card.label}}</div>
                   {{#if card.help}}
-                    <span class="mg-fi__metric-help" data-tooltip={{card.help}} aria-label={{card.help}} tabindex="0">i</span>
+                    <span class="mg-fi__metric-help" aria-label={{card.help}} tabindex="0">i</span><span class="mg-fi__metric-tooltip">{{card.help}}</span>
                   {{/if}}
                 </div>
                 <div class={{if card.code "mg-fi__meta-value is-code" "mg-fi__meta-value"}}>{{card.value}}</div>
@@ -1166,10 +1179,10 @@ export default RouteTemplate(
               <div class="mg-fi__candidate-summary-grid">
                 {{#each @controller.topCandidateSummaryCards as |card|}}
                   <div class={{if card.span2 "mg-fi__meta-card is-span-2" "mg-fi__meta-card"}}>
-                    <div class="mg-fi__metric-heading">
+                    <div class="mg-fi__metric-heading {{if card.tooltipAlignLeft "is-tooltip-left" ""}}">
                       <div class="mg-fi__meta-label">{{card.label}}</div>
                       {{#if card.help}}
-                        <span class="mg-fi__metric-help" data-tooltip={{card.help}} aria-label={{card.help}} tabindex="0">i</span>
+                        <span class="mg-fi__metric-help" aria-label={{card.help}} tabindex="0">i</span><span class="mg-fi__metric-tooltip">{{card.help}}</span>
                       {{/if}}
                     </div>
                     <div class={{if card.code "mg-fi__meta-value is-code" "mg-fi__meta-value"}}>{{card.value}}</div>
@@ -1188,7 +1201,7 @@ export default RouteTemplate(
                         <div class="mg-fi__metric-heading">
                           <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                           {{#if metric.help}}
-                            <span class="mg-fi__metric-help" data-tooltip={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                            <span class="mg-fi__metric-help" aria-label={{metric.help}} tabindex="0">i</span><span class="mg-fi__metric-tooltip">{{metric.help}}</span>
                           {{/if}}
                         </div>
                         <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
@@ -1199,10 +1212,10 @@ export default RouteTemplate(
                 <div class="mg-fi__candidate-score-grid">
                   {{#each @controller.topCandidateScoringMetrics as |metric|}}
                     <div class="mg-fi__candidate-detail-card">
-                      <div class="mg-fi__metric-heading">
+                      <div class="mg-fi__metric-heading {{if metric.tooltipAlignLeft "is-tooltip-left" ""}}">
                         <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                         {{#if metric.help}}
-                          <span class="mg-fi__metric-help" data-tooltip={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                          <span class="mg-fi__metric-help" aria-label={{metric.help}} tabindex="0">i</span><span class="mg-fi__metric-tooltip">{{metric.help}}</span>
                         {{/if}}
                       </div>
                       <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
@@ -1313,7 +1326,7 @@ export default RouteTemplate(
                                 <div class="mg-fi__metric-heading">
                                   <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                                   {{#if metric.help}}
-                                    <span class="mg-fi__metric-help" data-tooltip={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                                    <span class="mg-fi__metric-help" aria-label={{metric.help}} tabindex="0">i</span><span class="mg-fi__metric-tooltip">{{metric.help}}</span>
                                   {{/if}}
                                 </div>
                                 <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
@@ -1329,7 +1342,7 @@ export default RouteTemplate(
                               <div class="mg-fi__metric-heading">
                                 <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                                 {{#if metric.help}}
-                                  <span class="mg-fi__metric-help" data-tooltip={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                                  <span class="mg-fi__metric-help" aria-label={{metric.help}} tabindex="0">i</span><span class="mg-fi__metric-tooltip">{{metric.help}}</span>
                                 {{/if}}
                               </div>
                               <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
