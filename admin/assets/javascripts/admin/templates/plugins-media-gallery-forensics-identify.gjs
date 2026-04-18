@@ -288,7 +288,7 @@ export default RouteTemplate(
       }
 
       .mg-fi__section-title {
-        margin: 1rem 0 0.65rem;
+        margin: 0 0 0.9rem;
         font-size: 1rem;
         font-weight: 700;
       }
@@ -306,7 +306,7 @@ export default RouteTemplate(
 
       .mg-fi__summary-grid {
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        margin-bottom: 1rem;
+        margin-bottom: 1.25rem;
       }
 
       .mg-fi__meta-card {
@@ -314,11 +314,39 @@ export default RouteTemplate(
         border-radius: 16px;
         background: var(--mg-fi-surface-alt);
         padding: 0.9rem 1rem;
+        min-width: 0;
+      }
+
+      .mg-fi__meta-card.is-span-2 {
+        grid-column: span 2;
+      }
+
+      .mg-fi__metric-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin-bottom: 0.15rem;
       }
 
       .mg-fi__meta-label {
         font-weight: 600;
-        margin-bottom: 0.15rem;
+      }
+
+      .mg-fi__metric-help {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.15rem;
+        height: 1.15rem;
+        border: 1px solid var(--mg-fi-border);
+        border-radius: 999px;
+        color: var(--mg-fi-muted);
+        font-size: 0.72rem;
+        line-height: 1;
+        cursor: help;
+        flex-shrink: 0;
+        user-select: none;
       }
 
       .mg-fi__meta-value {
@@ -327,11 +355,23 @@ export default RouteTemplate(
         overflow-wrap: anywhere;
       }
 
+      .mg-fi__meta-value.is-code {
+        font-family: var(--font-family-monospace);
+        font-size: 1rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .mg-fi__result-section {
+        margin-top: 1.5rem;
+      }
+
       .mg-fi__candidate-summary-grid {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 1rem;
-        margin: 1rem 0;
+        margin: 0;
       }
 
       .mg-fi__candidate-note-card {
@@ -344,8 +384,15 @@ export default RouteTemplate(
 
       .mg-fi__candidate-note-grid {
         display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin-top: 0.75rem;
+      }
+
+      .mg-fi__candidate-score-grid {
+        display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 1rem;
+        gap: 0.75rem;
         margin-top: 0.75rem;
       }
 
@@ -372,7 +419,6 @@ export default RouteTemplate(
         color: var(--mg-fi-muted);
         font-size: var(--font-down-1);
         font-weight: 600;
-        margin-bottom: 0.2rem;
       }
 
       .mg-fi__candidate-detail-value {
@@ -521,7 +567,8 @@ export default RouteTemplate(
         .mg-fi__overlay-info-grid,
         .mg-fi__candidate-summary-grid,
         .mg-fi__candidate-detail-grid,
-        .mg-fi__candidate-note-grid {
+        .mg-fi__candidate-note-grid,
+        .mg-fi__candidate-score-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
@@ -536,8 +583,19 @@ export default RouteTemplate(
         .mg-fi__overlay-info-grid,
         .mg-fi__candidate-summary-grid,
         .mg-fi__candidate-detail-grid,
-        .mg-fi__candidate-note-grid {
+        .mg-fi__candidate-note-grid,
+        .mg-fi__candidate-score-grid {
           grid-template-columns: 1fr;
+        }
+
+        .mg-fi__meta-card.is-span-2 {
+          grid-column: span 1;
+        }
+
+        .mg-fi__meta-value.is-code {
+          white-space: normal;
+          overflow: visible;
+          text-overflow: initial;
         }
 
         .mg-fi__thumb,
@@ -880,46 +938,17 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-fi__summary-grid">
-            <div class="mg-fi__meta-card">
-              <div class="mg-fi__meta-label">Decision</div>
-              <div class="mg-fi__meta-value">{{if @controller.decisionText @controller.decisionText "Pending"}}</div>
-            </div>
-            <div class="mg-fi__meta-card">
-              <div class="mg-fi__meta-label">Confidence</div>
-              <div class="mg-fi__meta-value">{{@controller.confidence}}</div>
-            </div>
-            <div class="mg-fi__meta-card">
-              <div class="mg-fi__meta-label">Samples</div>
-              <div class="mg-fi__meta-value">{{@controller.samples}}</div>
-            </div>
-            <div class="mg-fi__meta-card">
-              <div class="mg-fi__meta-label">Usable samples</div>
-              <div class="mg-fi__meta-value">{{@controller.usableSamples}}</div>
-            </div>
-            {{#if @controller.candidates.length}}
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Top match</div>
-                <div class="mg-fi__meta-value">{{@controller.topMatchRatio}}</div>
+            {{#each @controller.resultSummaryCards as |card|}}
+              <div class={{if card.span2 "mg-fi__meta-card is-span-2" "mg-fi__meta-card"}}>
+                <div class="mg-fi__metric-heading">
+                  <div class="mg-fi__meta-label">{{card.label}}</div>
+                  {{#if card.help}}
+                    <span class="mg-fi__metric-help" title={{card.help}} aria-label={{card.help}}>i</span>
+                  {{/if}}
+                </div>
+                <div class={{if card.code "mg-fi__meta-value is-code" "mg-fi__meta-value"}}>{{card.value}}</div>
               </div>
-            {{/if}}
-            {{#if @controller.matchDelta}}
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Δ vs #2</div>
-                <div class="mg-fi__meta-value">{{@controller.matchDelta}}</div>
-              </div>
-            {{/if}}
-            {{#if @controller.meta.layout}}
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Layout</div>
-                <div class="mg-fi__meta-value">{{@controller.meta.layout}}</div>
-              </div>
-            {{/if}}
-            {{#if @controller.meta.duration_seconds}}
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Duration seconds</div>
-                <div class="mg-fi__meta-value">{{@controller.meta.duration_seconds}}</div>
-              </div>
-            {{/if}}
+            {{/each}}
           </div>
 
           <div class="mg-fi__notice {{@controller.confidenceClass}}">
@@ -928,8 +957,8 @@ export default RouteTemplate(
               {{#if @controller.meta.user_message}}
                 <div><strong>Note:</strong> {{@controller.meta.user_message}}</div>
               {{/if}}
-              {{#if @controller.shortlistEvidenceGap}}
-                <div><strong>Shortlist gap:</strong> {{@controller.shortlistEvidenceGap}}</div>
+              {{#if @controller.showShortlistEvidenceGap}}
+                <div><strong>Shortlist gap:</strong> {{@controller.shortlistEvidenceGapDisplay}}</div>
               {{/if}}
               {{#if @controller.poolSize}}
                 <div><strong>Pool size:</strong> {{@controller.poolSize}} <span class="mg-fi__muted">(reference {{@controller.referencePoolSize}})</span></div>
@@ -964,71 +993,67 @@ export default RouteTemplate(
             </div>
           </div>
 
-          {{#if @controller.topCandidate}}
-            <h3 class="mg-fi__section-title">Top candidate</h3>
-            <div class="mg-fi__candidate-summary-grid">
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Winner</div>
-                <div class="mg-fi__meta-value">{{@controller.topCandidateUserLabel}}</div>
+                    {{#if @controller.topCandidate}}
+            <div class="mg-fi__result-section">
+              <h3 class="mg-fi__section-title">Top candidate</h3>
+              <div class="mg-fi__candidate-summary-grid">
+                {{#each @controller.topCandidateSummaryCards as |card|}}
+                  <div class={{if card.span2 "mg-fi__meta-card is-span-2" "mg-fi__meta-card"}}>
+                    <div class="mg-fi__metric-heading">
+                      <div class="mg-fi__meta-label">{{card.label}}</div>
+                      {{#if card.help}}
+                        <span class="mg-fi__metric-help" title={{card.help}} aria-label={{card.help}}>i</span>
+                      {{/if}}
+                    </div>
+                    <div class={{if card.code "mg-fi__meta-value is-code" "mg-fi__meta-value"}}>{{card.value}}</div>
+                  </div>
+                {{/each}}
               </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Fingerprint</div>
-                <div class="mg-fi__meta-value"><code>{{@controller.topCandidateFingerprintLabel}}</code></div>
-              </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Top match</div>
-                <div class="mg-fi__meta-value">{{@controller.topMatchRatioDisplay}}</div>
-              </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Δ vs #2</div>
-                <div class="mg-fi__meta-value">{{@controller.topDeltaVsSecondDisplay}}</div>
-              </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Mis / Comp</div>
-                <div class="mg-fi__meta-value">{{@controller.topCandidateMisComp}}</div>
-              </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Best offset</div>
-                <div class="mg-fi__meta-value">{{@controller.topCandidateBestOffset}}</div>
-              </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">Z-score</div>
-                <div class="mg-fi__meta-value">{{@controller.topSignalZDisplay}}</div>
-              </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">p-value</div>
-                <div class="mg-fi__meta-value">{{@controller.topPValueDisplay}}</div>
-              </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">E[FP] pool</div>
-                <div class="mg-fi__meta-value">{{@controller.topExpectedFalsePositivesPoolDisplay}}</div>
-              </div>
-              <div class="mg-fi__meta-card">
-                <div class="mg-fi__meta-label">E[FP] 2000</div>
-                <div class="mg-fi__meta-value">{{@controller.topExpectedFalsePositives2000Display}}</div>
-              </div>
-            </div>
 
-            <div class="mg-fi__candidate-note-card">
-              <strong>Top candidate rationale</strong>
-              <div style="margin-top: 0.35rem;">{{@controller.topCandidateWhy}}</div>
-              {{#if @controller.statisticalConfidenceNote}}
-                <div class="mg-fi__muted" style="margin-top: 0.5rem;">{{@controller.statisticalConfidenceNote}}</div>
-              {{/if}}
-              <div class="mg-fi__candidate-note-grid">
-                <div>
-                  <div class="mg-fi__candidate-detail-label">Evidence score</div>
-                  <div class="mg-fi__candidate-detail-value">{{@controller.topEvidenceScoreDisplay}}</div>
+              <div class="mg-fi__candidate-note-card">
+                <div class="mg-fi__metric-heading">
+                  <strong>Top candidate rationale</strong>
+                  <span class="mg-fi__metric-help" title="Compact engine signals used to rank the winner. In a single-candidate or very small pool setup some values can coincide because there is little or no runner-up separation to compute against." aria-label="Top candidate rationale help">i</span>
                 </div>
-                <div>
-                  <div class="mg-fi__candidate-detail-label">Rank score</div>
-                  <div class="mg-fi__candidate-detail-value">{{@controller.topRankScoreDisplay}}</div>
+                {{#if @controller.topCandidateRationaleMetrics.length}}
+                  <div class="mg-fi__candidate-note-grid">
+                    {{#each @controller.topCandidateRationaleMetrics as |metric|}}
+                      <div class="mg-fi__candidate-detail-card">
+                        <div class="mg-fi__metric-heading">
+                          <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
+                          {{#if metric.help}}
+                            <span class="mg-fi__metric-help" title={{metric.help}} aria-label={{metric.help}}>i</span>
+                          {{/if}}
+                        </div>
+                        <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
+                      </div>
+                    {{/each}}
+                  </div>
+                {{/if}}
+                <div class="mg-fi__candidate-score-grid">
+                  {{#each @controller.topCandidateScoringMetrics as |metric|}}
+                    <div class="mg-fi__candidate-detail-card">
+                      <div class="mg-fi__metric-heading">
+                        <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
+                        {{#if metric.help}}
+                          <span class="mg-fi__metric-help" title={{metric.help}} aria-label={{metric.help}}>i</span>
+                        {{/if}}
+                      </div>
+                      <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
+                    </div>
+                  {{/each}}
                 </div>
+                {{#if @controller.topCandidateScoringNote}}
+                  <div class="mg-fi__muted" style="margin-top: 0.75rem;">{{@controller.topCandidateScoringNote}}</div>
+                {{/if}}
+                {{#if @controller.statisticalConfidenceNote}}
+                  <div class="mg-fi__muted" style="margin-top: 0.5rem;">{{@controller.statisticalConfidenceNote}}</div>
+                {{/if}}
               </div>
             </div>
           {{/if}}
 
-          {{#if @controller.showWeakTip}}
+{{#if @controller.showWeakTip}}
             <div class="mg-fi__notice is-warning" style="margin-top: 1rem;">
               <strong>Tip:</strong>
               Matching is weakest when the leak is short, heavily re-encoded, cropped, or includes overlays. If possible, use a longer sample that is closer to the original HLS stream. URL mode + auto-extend helps, but confidence still depends on usable samples.
@@ -1079,89 +1104,70 @@ export default RouteTemplate(
           {{/if}}
 
           {{#if @controller.candidates.length}}
-            <h3 class="mg-fi__section-title">{{if @controller.conclusive "Top candidates" "Candidates (not conclusive)"}}</h3>
-            {{#unless @controller.conclusive}}
-              <div class="mg-fi__notice is-warning" style="margin-bottom: 1rem;">
-                Do not treat this as definitive. Gather a longer sample to increase usable_samples and separation from #2.
-              </div>
-            {{/unless}}
+            <div class="mg-fi__result-section">
+              <h3 class="mg-fi__section-title">{{if @controller.conclusive "Top candidates" "Candidates (not conclusive)"}}</h3>
+              {{#unless @controller.conclusive}}
+                <div class="mg-fi__notice is-warning" style="margin-bottom: 1rem;">
+                  Do not treat this as definitive. Gather a longer sample to increase usable_samples and separation from #2.
+                </div>
+              {{/unless}}
 
-            <details class="mg-fi__details" open={{@controller.conclusive}}>
-              <summary>Show candidates</summary>
-              <div class="mg-fi__table-wrap" style="margin-top: 0.75rem;">
-                <table class="table">
-                  <thead>
-                    <tr>
-                      <th>User</th>
-                      <th>Fingerprint</th>
-                      <th>Match</th>
-                      <th>Mis / Comp</th>
-                      <th>Best offset</th>
-                      <th>Δ vs #1</th>
-                      <th>Why</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {{#each @controller.topCandidates as |c|}}
+              <details class="mg-fi__details" open={{@controller.conclusive}}>
+                <summary>Show candidates</summary>
+                <div class="mg-fi__table-wrap" style="margin-top: 0.75rem;">
+                  <table class="table">
+                    <thead>
                       <tr>
-                        <td>{{c.displayUser}}</td>
-                        <td><code>{{c.displayFingerprint}}</code></td>
-                        <td>{{c.displayMatch}}</td>
-                        <td>{{c.displayMisComp}}</td>
-                        <td>{{c.displayBestOffset}}</td>
-                        <td>{{c.displayDeltaFromTop}}</td>
-                        <td><div class="mg-fi__candidate-why">{{c.displayWhy}}</div></td>
+                        <th>User</th>
+                        <th>Fingerprint</th>
+                        <th title="Final match ratio for this candidate.">Match</th>
+                        <th title="Mismatches over compared positions for this candidate.">Mis / Comp</th>
+                        <th title="Best segment offset that aligned this candidate.">Best offset</th>
+                        <th title="Difference from the best candidate's match ratio.">Δ vs #1</th>
+                        <th title="Compact engine rationale for this candidate.">Why</th>
                       </tr>
-                      <tr class="mg-fi__candidate-detail-row">
-                        <td colspan="7">
-                          <div class="mg-fi__candidate-detail-grid">
-                            <div class="mg-fi__candidate-detail-card">
-                              <div class="mg-fi__candidate-detail-label">Evidence score</div>
-                              <div class="mg-fi__candidate-detail-value">{{c.displayEvidenceScore}}</div>
+                    </thead>
+                    <tbody>
+                      {{#each @controller.topCandidates as |c|}}
+                        <tr>
+                          <td>{{c.displayUser}}</td>
+                          <td><code>{{c.displayFingerprint}}</code></td>
+                          <td>{{c.displayMatch}}</td>
+                          <td>{{c.displayMisComp}}</td>
+                          <td>{{c.displayBestOffset}}</td>
+                          <td>{{c.displayDeltaFromTop}}</td>
+                          <td><div class="mg-fi__candidate-why">{{c.displayWhySummary}}</div></td>
+                        </tr>
+                        <tr class="mg-fi__candidate-detail-row">
+                          <td colspan="7">
+                            <div class="mg-fi__candidate-detail-grid">
+                              {{#each c.detailMetrics as |metric|}}
+                                <div class="mg-fi__candidate-detail-card">
+                                  <div class="mg-fi__metric-heading">
+                                    <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
+                                    {{#if metric.help}}
+                                      <span class="mg-fi__metric-help" title={{metric.help}} aria-label={{metric.help}}>i</span>
+                                    {{/if}}
+                                  </div>
+                                  <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
+                                </div>
+                              {{/each}}
                             </div>
-                            <div class="mg-fi__candidate-detail-card">
-                              <div class="mg-fi__candidate-detail-label">Rank score</div>
-                              <div class="mg-fi__candidate-detail-value">{{c.displayRankScore}}</div>
-                            </div>
-                            <div class="mg-fi__candidate-detail-card">
-                              <div class="mg-fi__candidate-detail-label">Weighted mis / comp</div>
-                              <div class="mg-fi__candidate-detail-value">{{c.displayWeightedMisComp}}</div>
-                            </div>
-                            <div class="mg-fi__candidate-detail-card">
-                              <div class="mg-fi__candidate-detail-label">Chunk LLR</div>
-                              <div class="mg-fi__candidate-detail-value">{{c.displayChunkLlr}}</div>
-                            </div>
-                            <div class="mg-fi__candidate-detail-card">
-                              <div class="mg-fi__candidate-detail-label">Z-score</div>
-                              <div class="mg-fi__candidate-detail-value">{{c.displaySignalZ}}</div>
-                            </div>
-                            <div class="mg-fi__candidate-detail-card">
-                              <div class="mg-fi__candidate-detail-label">p-value</div>
-                              <div class="mg-fi__candidate-detail-value">{{c.displayPValue}}</div>
-                            </div>
-                            <div class="mg-fi__candidate-detail-card">
-                              <div class="mg-fi__candidate-detail-label">E[FP] pool</div>
-                              <div class="mg-fi__candidate-detail-value">{{c.displayExpectedFalsePositivesPool}}</div>
-                            </div>
-                            <div class="mg-fi__candidate-detail-card">
-                              <div class="mg-fi__candidate-detail-label">E[FP] 2000</div>
-                              <div class="mg-fi__candidate-detail-value">{{c.displayExpectedFalsePositives2000}}</div>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    {{/each}}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-
-            {{#if @controller.hasMoreCandidates}}
-              <details class="mg-fi__details">
-                <summary>Show all candidates ({{@controller.candidates.length}})</summary>
-                <pre class="mg-fi__code-block">{{@controller.resultJson}}</pre>
+                          </td>
+                        </tr>
+                      {{/each}}
+                    </tbody>
+                  </table>
+                </div>
               </details>
-            {{/if}}
+
+              {{#if @controller.hasMoreCandidates}}
+                <details class="mg-fi__details">
+                  <summary>Show all candidates ({{@controller.candidates.length}})</summary>
+                  <pre class="mg-fi__code-block">{{@controller.resultJson}}</pre>
+                </details>
+              {{/if}}
+            </div>
           {{else}}
             <div class="mg-fi__empty" style="margin-top: 1rem;">
               <em>No candidates matched the observed pattern.</em>

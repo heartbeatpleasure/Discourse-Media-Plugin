@@ -103,6 +103,74 @@ function candidateUserLabel(candidate) {
   return "—";
 }
 
+
+const METRIC_HELP = {
+  decision: "Final decision for this forensic run. This still follows the current policy thresholds and is not yet driven directly by the new statistical values.",
+  confidence: "Human-readable confidence bucket derived from the current decision policy and supporting match signals.",
+  samples: "Total samples considered during this forensic run before unusable samples were filtered out.",
+  usable_samples: "Samples that remained usable after extraction, sync, filtering and other guardrails.",
+  top_match: "The winning candidate's final match ratio. In the current engine this prefers the weighted match ratio when available, otherwise the raw match ratio.",
+  delta_vs_second: "Difference between the best candidate and the runner-up. Larger separation generally means a clearer winner.",
+  layout: "Detected or forced watermark layout used during forensic extraction. Layout affects extraction geometry but not the final candidate table structure.",
+  winner: "Winning user / account for the current forensic run.",
+  fingerprint: "Fingerprint identifier associated with the winning candidate.",
+  mis_comp: "Mismatches over compared positions for this candidate. Lower is better; 0 / N means perfect agreement on all compared positions.",
+  best_offset: "Best segment offset that aligned this candidate with the observed sample during matching.",
+  z_score: "Supportive significance based on compared vs mismatches under a random 50/50 agreement baseline. Higher means less likely to happen by chance.",
+  p_value: "One-sided binomial tail probability under a random 50/50 agreement baseline. Lower means the observed agreement is less likely by chance.",
+  efp_pool: "Expected false positives in the current candidate pool, calculated as p-value × current pool size. Lower is better.",
+  efp_2000: "Expected false positives normalized to a reference pool of 2000 candidates. Lower is better and easier to compare across runs.",
+  shortlist_gap: "Difference between the winning shortlist evidence score and the runner-up shortlist evidence score. Shown only when a runner-up exists.",
+  evidence_score: "Primary evidence score produced by the current engine for this candidate. Higher generally indicates stronger forensic support.",
+  rank_score: "Ranking score used to order shortlist candidates. In very small pools or single-candidate tests this can equal the evidence score.",
+  weighted_mis_comp: "Weighted mismatches over weighted compared samples. This reflects the weighted comparison path used by the current engine when available.",
+  chunk_llr: "Chunk-level log-likelihood style score accumulated across stable chunks. Higher generally indicates stronger chunk-level support.",
+  why: "Compact explanation of why this candidate ranked where it did. These are engine signals, not end-user facing policy text.",
+  llr: "Chunk-level log-likelihood style contribution reported by the engine for this candidate.",
+  median_chunk: "Median per-chunk support value observed for this candidate.",
+  stable_chunks: "Stable chunks compared to total chunks. More stable chunks usually means a more trustworthy comparison.",
+  weighted_match: "Weighted match ratio reported by the engine when weighted comparison is available.",
+};
+
+const RATIONALE_LABELS = {
+  llr: "LLR",
+  median_chunk: "Median chunk",
+  stable_chunks: "Stable chunks",
+  weighted_match: "Weighted match",
+  score: "Evidence score",
+  rank: "Rank score",
+};
+
+const RATIONALE_HELP_KEYS = {
+  llr: "llr",
+  median_chunk: "median_chunk",
+  stable_chunks: "stable_chunks",
+  weighted_match: "weighted_match",
+  score: "evidence_score",
+  rank: "rank_score",
+};
+
+function metricHelp(key) {
+  return METRIC_HELP[key] || "";
+}
+
+function parseWhyMetrics(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const idx = part.indexOf("=");
+      if (idx === -1) {
+        return null;
+      }
+      const key = part.slice(0, idx).trim();
+      const rawValue = part.slice(idx + 1).trim();
+      return key && rawValue ? { key, rawValue } : null;
+    })
+    .filter(Boolean);
+}
+
 export default class AdminPluginsMediaGalleryForensicsIdentifyController extends Controller {
   @tracked publicId = "";
   @tracked file = null;
@@ -264,6 +332,85 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get referencePoolSize() {
     return this.meta?.reference_pool_size ?? 2000;
+  }
+
+  get hasRunnerUp() {
+    return !!this.secondCandidate;
+  }
+
+  get shortlistEvidenceGapDisplay() {
+    return this.showShortlistEvidenceGap ? formatCompactStat(this.shortlistEvidenceGap) : "—";
+  }
+
+  get showShortlistEvidenceGap() {
+    return this.hasRunnerUp && this.shortlistEvidenceGap !== null;
+  }
+
+  get resultSummaryCards() {
+    const cards = [
+      { label: "Decision", value: this.decisionText || "Pending", help: metricHelp("decision") },
+      { label: "Confidence", value: this.confidence, help: metricHelp("confidence") },
+      { label: "Samples", value: String(this.samples), help: metricHelp("samples") },
+      { label: "Usable samples", value: String(this.usableSamples), help: metricHelp("usable_samples") },
+      { label: "Top match", value: this.topMatchRatioDisplay, help: metricHelp("top_match") },
+      { label: "Δ vs #2", value: this.topDeltaVsSecondDisplay, help: metricHelp("delta_vs_second") },
+      { label: "Layout", value: this.meta?.layout || "—", help: metricHelp("layout") },
+    ];
+
+    return cards;
+  }
+
+  get topCandidateSummaryCards() {
+    if (!this.topCandidate) {
+      return [];
+    }
+
+    return [
+      { label: "Winner", value: this.topCandidateUserLabel, help: metricHelp("winner") },
+      { label: "Fingerprint", value: this.topCandidateFingerprintLabel, help: metricHelp("fingerprint"), span2: true, code: true },
+      { label: "Top match", value: this.topMatchRatioDisplay, help: metricHelp("top_match") },
+      { label: "Δ vs #2", value: this.topDeltaVsSecondDisplay, help: metricHelp("delta_vs_second") },
+      { label: "Mis / Comp", value: this.topCandidateMisComp, help: metricHelp("mis_comp") },
+      { label: "Best offset", value: this.topCandidateBestOffset, help: metricHelp("best_offset") },
+      { label: "Z-score", value: this.topSignalZDisplay, help: metricHelp("z_score") },
+      { label: "p-value", value: this.topPValueDisplay, help: metricHelp("p_value") },
+      { label: "E[FP] pool", value: this.topExpectedFalsePositivesPoolDisplay, help: metricHelp("efp_pool") },
+      { label: "E[FP] 2000", value: this.topExpectedFalsePositives2000Display, help: metricHelp("efp_2000") },
+    ];
+  }
+
+  get topCandidateRationaleMetrics() {
+    const parsed = parseWhyMetrics(this.topCandidateWhy);
+    return parsed
+      .filter((item) => !["score", "rank"].includes(item.key))
+      .map((item) => ({
+        label: RATIONALE_LABELS[item.key] || titleize(item.key),
+        value: item.rawValue,
+        help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key),
+      }));
+  }
+
+  get topCandidateScoringMetrics() {
+    return [
+      { label: "Evidence score", value: this.topEvidenceScoreDisplay, help: metricHelp("evidence_score") },
+      { label: "Rank score", value: this.topRankScoreDisplay, help: metricHelp("rank_score") },
+    ];
+  }
+
+  get topCandidateScoringNote() {
+    if (!this.topCandidate) {
+      return "";
+    }
+
+    if (!this.hasRunnerUp && this.topEvidenceScoreDisplay !== "—" && this.topEvidenceScoreDisplay === this.topRankScoreDisplay) {
+      return "In a single-candidate pool, evidence score and rank score can coincide because there is no runner-up candidate to separate against.";
+    }
+
+    if (this.topEvidenceScoreDisplay !== "—" && this.topEvidenceScoreDisplay === this.topRankScoreDisplay) {
+      return "Evidence score and rank score can coincide when ranking is driven almost entirely by the same evidence inputs for the surviving shortlist.";
+    }
+
+    return "";
   }
 
   get topCandidateUserLabel() {
@@ -683,6 +830,23 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     const compared = candidate?.compared ?? 0;
     const weightedMismatches = candidate?.mismatches_weighted;
     const weightedCompared = candidate?.compared_weighted;
+    const parsedWhy = parseWhyMetrics(candidate?.why);
+    const whySummary =
+      parsedWhy
+        .filter((item) => ["stable_chunks", "weighted_match", "llr", "median_chunk"].includes(item.key))
+        .map((item) => `${RATIONALE_LABELS[item.key] || titleize(item.key)} ${item.rawValue}`)
+        .join(" • ") || candidate?.why || "—";
+
+    const detailMetrics = [
+      { label: "Evidence score", value: candidate?.evidence_score === null || candidate?.evidence_score === undefined ? "—" : formatCompactStat(candidate.evidence_score), help: metricHelp("evidence_score") },
+      { label: "Rank score", value: candidate?.rank_score === null || candidate?.rank_score === undefined ? "—" : formatCompactStat(candidate.rank_score), help: metricHelp("rank_score") },
+      { label: "Weighted mis / comp", value: weightedCompared === null || weightedCompared === undefined || Number(weightedCompared) <= 0 ? "—" : `${formatCompactStat(weightedMismatches)} / ${formatCompactStat(weightedCompared)}`, help: metricHelp("weighted_mis_comp") },
+      { label: "Chunk LLR", value: candidate?.chunk_llr_total === null || candidate?.chunk_llr_total === undefined ? "—" : formatCompactStat(candidate.chunk_llr_total), help: metricHelp("chunk_llr") },
+      { label: "Z-score", value: candidate?.signal_z === null || candidate?.signal_z === undefined ? "—" : formatCompactStat(candidate.signal_z), help: metricHelp("z_score") },
+      { label: "p-value", value: candidate?.p_value === null || candidate?.p_value === undefined ? "—" : formatProbability(candidate.p_value), help: metricHelp("p_value") },
+      { label: "E[FP] pool", value: candidate?.expected_false_positives_pool === null || candidate?.expected_false_positives_pool === undefined ? "—" : formatProbability(candidate.expected_false_positives_pool), help: metricHelp("efp_pool") },
+      { label: "E[FP] 2000", value: candidate?.expected_false_positives_2000 === null || candidate?.expected_false_positives_2000 === undefined ? "—" : formatProbability(candidate.expected_false_positives_2000), help: metricHelp("efp_2000") },
+    ];
 
     return {
       ...candidate,
@@ -697,38 +861,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
           : String(candidate.best_offset_segments),
       displayDeltaFromTop: formatRatio(deltaFromTop),
       displayWhy: candidate?.why || "—",
-      displayEvidenceScore:
-        candidate?.evidence_score === null || candidate?.evidence_score === undefined
-          ? "—"
-          : formatCompactStat(candidate.evidence_score),
-      displayRankScore:
-        candidate?.rank_score === null || candidate?.rank_score === undefined
-          ? "—"
-          : formatCompactStat(candidate.rank_score),
-      displaySignalZ:
-        candidate?.signal_z === null || candidate?.signal_z === undefined
-          ? "—"
-          : formatCompactStat(candidate.signal_z),
-      displayPValue:
-        candidate?.p_value === null || candidate?.p_value === undefined
-          ? "—"
-          : formatProbability(candidate.p_value),
-      displayExpectedFalsePositivesPool:
-        candidate?.expected_false_positives_pool === null || candidate?.expected_false_positives_pool === undefined
-          ? "—"
-          : formatProbability(candidate.expected_false_positives_pool),
-      displayExpectedFalsePositives2000:
-        candidate?.expected_false_positives_2000 === null || candidate?.expected_false_positives_2000 === undefined
-          ? "—"
-          : formatProbability(candidate.expected_false_positives_2000),
-      displayWeightedMisComp:
-        weightedCompared === null || weightedCompared === undefined || Number(weightedCompared) <= 0
-          ? "—"
-          : `${formatCompactStat(weightedMismatches)} / ${formatCompactStat(weightedCompared)}`,
-      displayChunkLlr:
-        candidate?.chunk_llr_total === null || candidate?.chunk_llr_total === undefined
-          ? "—"
-          : formatCompactStat(candidate.chunk_llr_total),
+      displayWhySummary: whySummary,
+      detailMetrics,
       delta_from_top: deltaFromTop,
     };
   }
