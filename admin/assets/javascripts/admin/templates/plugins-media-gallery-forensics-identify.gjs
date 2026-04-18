@@ -520,6 +520,8 @@ export default RouteTemplate(
 
       .mg-fi__candidate-item > summary {
         list-style: none !important;
+        appearance: none;
+        -webkit-appearance: none;
       }
 
       .mg-fi__candidate-item > summary::-webkit-details-marker {
