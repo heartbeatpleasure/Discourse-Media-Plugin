@@ -355,14 +355,97 @@ export default RouteTemplate(
       }
 
       .mg-test-downloads__artifact-card {
+        display: grid;
+        grid-template-columns: 200px minmax(0, 1fr) auto;
+        grid-template-areas:
+          "thumb main action"
+          "thumb stats action";
+        gap: 0.9rem 1rem;
+        align-items: start;
+      }
+
+      .mg-test-downloads__artifact-media {
+        grid-area: thumb;
         display: flex;
         flex-direction: column;
         gap: 0.6rem;
       }
 
+      .mg-test-downloads__artifact-thumb,
+      .mg-test-downloads__artifact-thumb-placeholder {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border-radius: 14px;
+        border: 1px solid var(--mg-td-border);
+        background: var(--secondary);
+      }
+
+      .mg-test-downloads__artifact-thumb {
+        object-fit: cover;
+      }
+
+      .mg-test-downloads__artifact-thumb-placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 0.75rem;
+        color: var(--mg-td-muted);
+        font-size: var(--font-down-1);
+        box-sizing: border-box;
+      }
+
+      .mg-test-downloads__artifact-copy {
+        grid-area: main;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        min-width: 0;
+      }
+
+      .mg-test-downloads__artifact-title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+
       .mg-test-downloads__artifact-id {
         color: var(--mg-td-muted);
         font-size: var(--font-down-1);
+        overflow-wrap: anywhere;
+      }
+
+      .mg-test-downloads__artifact-actions {
+        grid-area: action;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 0.75rem;
+        min-width: 132px;
+      }
+
+      .mg-test-downloads__artifact-stats {
+        grid-area: stats;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+
+      .mg-test-downloads__artifact-stat {
+        border: 1px solid var(--mg-td-border);
+        border-radius: 14px;
+        background: var(--secondary);
+        padding: 0.75rem 0.85rem;
+      }
+
+      .mg-test-downloads__artifact-stat .mg-test-downloads__meta-label {
+        display: block;
+        margin-bottom: 0.2rem;
+      }
+
+      .mg-test-downloads__artifact-stat-value {
+        font-weight: 700;
         overflow-wrap: anywhere;
       }
 
@@ -376,6 +459,23 @@ export default RouteTemplate(
         .mg-test-downloads__filters,
         .mg-test-downloads__selected-meta,
         .mg-test-downloads__artifact-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .mg-test-downloads__artifact-card {
+          grid-template-columns: 160px minmax(0, 1fr);
+          grid-template-areas:
+            "thumb main"
+            "stats stats"
+            "action action";
+        }
+
+        .mg-test-downloads__artifact-actions {
+          align-items: flex-start;
+          min-width: 0;
+        }
+
+        .mg-test-downloads__artifact-stats {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
@@ -396,8 +496,22 @@ export default RouteTemplate(
         .mg-test-downloads__filters,
         .mg-test-downloads__selected-meta,
         .mg-test-downloads__artifact-grid,
-        .mg-test-downloads__result-card {
+        .mg-test-downloads__result-card,
+        .mg-test-downloads__artifact-stats {
           grid-template-columns: 1fr;
+        }
+
+        .mg-test-downloads__artifact-card {
+          grid-template-columns: 1fr;
+          grid-template-areas:
+            "thumb"
+            "main"
+            "stats"
+            "action";
+        }
+
+        .mg-test-downloads__artifact-actions {
+          align-items: flex-start;
         }
 
         .mg-test-downloads__result-card {
@@ -682,22 +796,53 @@ export default RouteTemplate(
           <div class="mg-test-downloads__artifact-grid">
             {{#each @controller.artifacts key="download_url" as |artifact|}}
               <div class="mg-test-downloads__artifact-card">
-                <div class="mg-test-downloads__artifact-title">{{if artifact.displayTitle artifact.displayTitle artifact.public_id}}</div>
-                {{#if artifact.displayTitle}}
-                  <div class="mg-test-downloads__artifact-id">{{artifact.public_id}}</div>
-                {{/if}}
-                <div class="mg-test-downloads__artifact-meta">{{artifact.displayCreatedAt}} · {{artifact.displayUser}}</div>
-                <div class="mg-test-downloads__badge-row">
-                  <span class="mg-test-downloads__badge">{{artifact.displayMode}}</span>
-                  {{#if artifact.displayRegion}}
-                    <span class="mg-test-downloads__badge">{{artifact.displayRegion}}</span>
+                <div class="mg-test-downloads__artifact-media">
+                  {{#if artifact.thumbUrl}}
+                    <img class="mg-test-downloads__artifact-thumb" loading="lazy" src={{artifact.thumbUrl}} alt="thumbnail" />
+                  {{else}}
+                    <div class="mg-test-downloads__artifact-thumb-placeholder">No thumbnail available</div>
                   {{/if}}
+                  <div class="mg-test-downloads__badge-row">
+                    <span class="mg-test-downloads__badge {{artifact.modeClassName}}">{{artifact.displayArtifactType}}</span>
+                    {{#if artifact.displayRegion}}
+                      <span class="mg-test-downloads__badge">{{artifact.displayRegion}}</span>
+                    {{/if}}
+                  </div>
                 </div>
-                <div class="mg-test-downloads__artifact-meta">{{artifact.displaySegments}}</div>
-                <div>
+
+                <div class="mg-test-downloads__artifact-copy">
+                  <div class="mg-test-downloads__artifact-title-row">
+                    <div>
+                      <div class="mg-test-downloads__artifact-title">{{if artifact.displayTitle artifact.displayTitle artifact.displayPublicId}}</div>
+                      {{#if artifact.displayTitle}}
+                        <div class="mg-test-downloads__artifact-id">{{artifact.displayPublicId}}</div>
+                      {{/if}}
+                    </div>
+                  </div>
+                  <div class="mg-test-downloads__artifact-meta">{{artifact.displayCreatedAt}} · {{artifact.displayUser}}</div>
+                  <div class="mg-test-downloads__artifact-meta">{{artifact.displayArtifactSummary}}</div>
+                </div>
+
+                <div class="mg-test-downloads__artifact-actions">
                   <button class="btn btn-primary" type="button" {{on "click" (fn @controller.downloadArtifact artifact)}}>
                     Download
                   </button>
+                  <div class="mg-test-downloads__artifact-meta">MP4 artifact</div>
+                </div>
+
+                <div class="mg-test-downloads__artifact-stats">
+                  <div class="mg-test-downloads__artifact-stat">
+                    <span class="mg-test-downloads__meta-label">Segments</span>
+                    <div class="mg-test-downloads__artifact-stat-value">{{artifact.displaySegments}}</div>
+                  </div>
+                  <div class="mg-test-downloads__artifact-stat">
+                    <span class="mg-test-downloads__meta-label">Mode</span>
+                    <div class="mg-test-downloads__artifact-stat-value">{{artifact.displayMode}}</div>
+                  </div>
+                  <div class="mg-test-downloads__artifact-stat">
+                    <span class="mg-test-downloads__meta-label">Coverage</span>
+                    <div class="mg-test-downloads__artifact-stat-value">{{if artifact.displayClipPercent artifact.displayClipPercent "Full video"}}</div>
+                  </div>
                 </div>
               </div>
             {{/each}}

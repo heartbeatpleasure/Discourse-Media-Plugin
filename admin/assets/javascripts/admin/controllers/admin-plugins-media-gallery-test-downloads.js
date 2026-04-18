@@ -208,6 +208,19 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     };
   }
 
+  _artifactTitle(value) {
+    const text = (value || "").toString().trim();
+    if (!text) {
+      return null;
+    }
+
+    if (/^\d+$/.test(text)) {
+      return null;
+    }
+
+    return text;
+  }
+
   _normalizeArtifact(artifact) {
     if (!artifact) {
       return null;
@@ -217,17 +230,33 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       ? `${this._humanize(artifact.random_clip_region)}${artifact?.clip_percent_of_video ? ` (${artifact.clip_percent_of_video}%)` : ""}`
       : "";
 
+    const title = this._artifactTitle(artifact?.displayTitle) || this._artifactTitle(artifact?.title);
+    const mode = (artifact?.mode || "full").toString();
+    const isFull = mode === "full";
+
     return {
       ...artifact,
-      displayTitle: (artifact?.title || artifact?.displayTitle || "").toString().trim() || null,
+      displayTitle: title,
+      displayPublicId: (artifact?.public_id || "").toString(),
       displayCreatedAt: this._formatDate(artifact?.created_at),
-      displayMode: this._humanize(artifact?.mode || "full"),
+      displayMode: this._humanize(mode || "full"),
       displayUser: artifact?.username ? `${artifact.username} (#${artifact.user_id})` : `User #${artifact?.user_id}`,
       displaySegments:
         artifact?.start_segment != null && artifact?.segment_count != null
           ? `Start ${artifact.start_segment} · Count ${artifact.segment_count}${artifact?.total_segments != null ? ` of ${artifact.total_segments}` : ""}`
           : "—",
       displayRegion: region,
+      displayArtifactType: isFull ? "Full download" : "Partial download",
+      displayArtifactSummary: isFull
+        ? `Full copy · ${artifact?.total_segments != null ? `${artifact.total_segments} segments` : "all segments"}`
+        : `${this._humanize(mode)} · ${artifact?.segment_count != null ? `${artifact.segment_count} segments` : "partial range"}`,
+      displayClipPercent:
+        artifact?.clip_percent_of_video != null
+          ? `${artifact.clip_percent_of_video}% of video`
+          : null,
+      modeTone: isFull ? "success" : "warning",
+      modeClassName: `is-${isFull ? "success" : "warning"}`,
+      thumbUrl: artifact?.thumbnail_url || null,
     };
   }
 
@@ -519,7 +548,8 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     const matchedItem = (this.searchResults || []).find((item) => item?.public_id === artifact?.public_id) || (this.selectedItem?.public_id === artifact?.public_id ? this.selectedItem : null);
     const normalized = this._normalizeArtifact({
       ...(artifact || {}),
-      title: artifact?.title || matchedItem?.displayTitle || matchedItem?.title || null,
+      title: matchedItem?.displayTitle || matchedItem?.title || artifact?.title || null,
+      thumbnail_url: artifact?.thumbnail_url || matchedItem?.thumbnail_url || null,
     });
     if (!normalized) {
       return;
