@@ -30,19 +30,30 @@ module ::MediaGallery
         raise Discourse::InvalidParameters.new(:segment_count) if segment_count.to_i <= 0
       end
 
-      meta = ::MediaGallery::TestDownloads.build_artifact!(
-        item: item,
+      task_id = ::MediaGallery::TestDownloads.create_task!(
+        public_id: item.public_id,
         user_id: user_id,
         mode: mode,
         start_segment: start_segment,
         segment_count: segment_count,
       )
 
-      artifact = meta.merge(
-        "download_url" => "/admin/plugins/media-gallery/test-downloads/#{item.public_id}/#{meta['artifact_id']}"
+      ::Jobs.enqueue(
+        :media_gallery_generate_test_download,
+        task_id: task_id,
+        public_id: item.public_id,
+        user_id: user_id,
+        mode: mode,
+        start_segment: start_segment,
+        segment_count: segment_count,
       )
 
-      render_json_dump(ok: true, artifact: artifact)
+      render_json_dump(
+        ok: true,
+        queued: true,
+        task_id: task_id,
+        status_url: "/admin/plugins/media-gallery/test-downloads/status/#{task_id}.json"
+      )
     rescue => e
       render_json_error_payload(e)
     end
