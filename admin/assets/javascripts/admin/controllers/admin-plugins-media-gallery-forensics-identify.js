@@ -116,10 +116,10 @@ const METRIC_HELP = {
   fingerprint: "Fingerprint identifier associated with the winning candidate.",
   mis_comp: "Mismatches over compared positions for this candidate. Lower is better; 0 / N means perfect agreement on all compared positions.",
   best_offset: "Best segment offset that aligned this candidate with the observed sample during matching.",
-  z_score: "Supportive significance based on compared vs mismatches under a random 50/50 agreement baseline. Higher is stronger: around 0 is weak/no separation, above 3 is strong, above 5 is very strong. There is no hard maximum.",
-  p_value: "One-sided binomial tail probability under a random 50/50 agreement baseline. Lower is stronger: below 0.05 is notable, below 0.01 is strong, below 0.001 is very strong. Very small values can appear in scientific notation, for example 3.55e-15. Minimum approaches 0.",
-  efp_pool: "Expected false positives in the current candidate pool, calculated as p-value × current pool size. Lower is better: below 1 is good, below 0.1 is strong, and values shown in scientific notation such as 7.11e-15 are extremely small (therefore extremely strong). Values above 1 mean chance matches become more plausible in this pool.",
-  efp_2000: "Expected false positives normalized to a reference pool of 2000 candidates. Lower is better and easier to compare across runs: below 1 is good, below 0.1 is strong, and scientific-notation values such as 7.11e-12 are extremely strong.",
+  z_score: "Supportive significance based on compared vs mismatches under a random 50/50 agreement baseline. Higher is stronger: around 0 is weak/no separation, above 3 is strong, above 5 is very strong. There is no hard maximum. If this is blank, the candidate usually had no compared positions to score.",
+  p_value: "One-sided binomial tail probability under a random 50/50 agreement baseline. Lower is stronger: below 0.05 is notable, below 0.01 is strong, below 0.001 is very strong. Very small values can appear in scientific notation, for example 3.55e-15. Minimum approaches 0. If this is blank, the candidate usually had no compared positions to score.",
+  efp_pool: "Expected false positives in the current candidate pool, calculated as p-value × current pool size. Lower is better: below 1 is good, below 0.1 is strong, and values shown in scientific notation such as 7.11e-15 are extremely small (therefore extremely strong). Values above 1 mean chance matches become more plausible in this pool. If blank, there was not enough compared data to calculate it.",
+  efp_2000: "Expected false positives normalized to a reference pool of 2000 candidates. Lower is better and easier to compare across runs: below 1 is good, below 0.1 is strong, and scientific-notation values such as 7.11e-12 are extremely strong. If blank, there was not enough compared data to calculate it.",
   shortlist_gap: "Difference between the winning shortlist evidence score and the runner-up shortlist evidence score. Shown only when a runner-up exists.",
   evidence_score: "Primary evidence score produced by the current engine for this candidate. There is no fixed universal scale; compare it against other candidates in the same run. Higher is better. A large positive lead over the runner-up is strong; negative values are poor.",
   rank_score: "Ranking score used to order shortlist candidates. There is no fixed universal scale; compare it against other candidates in the same run. Higher is better. In very small pools it can equal the evidence score.",
@@ -130,6 +130,16 @@ const METRIC_HELP = {
   median_chunk: "Median per-chunk support value observed for this candidate. Higher generally means more consistent chunk-level support across the sample.",
   stable_chunks: "Stable chunks compared to total chunks. More stable chunks usually means a more trustworthy comparison; a value like 24/24 is excellent.",
   weighted_match: "Weighted match ratio reported by the engine when weighted comparison is available. It usually ranges from 0 to 1, and higher is better.",
+  local_offsets: "Local offset selections chosen during shortlist verification across chunks. Matching or tightly clustered offsets usually indicate a more stable local alignment.",
+  local_stable: "Chunks whose local offset stayed stable versus total locally checked chunks. Higher is better; values near the full total mean the candidate stayed locally aligned across the sample.",
+  anchor_dist: "Distance between the candidate's best global offset and the preferred anchor offset. Lower is better; 0 means it stayed exactly on the anchor.",
+  pairwise_margin: "Total pairwise comparison margin collected across chunk rows. Higher positive values mean this candidate won those pairwise chunk comparisons more decisively.",
+  pairwise_wins: "Pairwise chunk rows won versus rows compared. Higher is better; a value like 4/7 means this candidate won 4 of 7 pairwise chunk decisions.",
+  pairwise_losses: "Pairwise chunk rows lost. Lower is better; losses indicate chunk rows where another explanation looked stronger.",
+  disc_margin: "Discriminative margin accumulated when directly separating this candidate from nearby shortlist alternatives. Higher positive values are better; 0 or negative values mean weak separation.",
+  disc_diff: "Number of positions that differed in the discriminative comparison stage. This is context only: more differing positions can give the discriminator more room to separate candidates.",
+  disc_wins: "Discriminative comparisons won versus total. Higher is better; it shows how often this candidate beat the competing candidate in the direct discriminator.",
+  disc_losses: "Discriminative comparisons lost. Lower is better; losses mean the competing candidate won more direct discriminator checks.",
 };
 
 const RATIONALE_LABELS = {
@@ -137,6 +147,16 @@ const RATIONALE_LABELS = {
   median_chunk: "Median chunk",
   stable_chunks: "Stable chunks",
   weighted_match: "Weighted match",
+  local_offsets: "Local offsets",
+  local_stable: "Local stable",
+  anchor_dist: "Anchor distance",
+  pairwise_margin: "Pairwise margin",
+  pairwise_wins: "Pairwise wins",
+  pairwise_losses: "Pairwise losses",
+  disc_margin: "Disc margin",
+  disc_diff: "Disc diff",
+  disc_wins: "Disc wins",
+  disc_losses: "Disc losses",
   score: "Evidence score",
   rank: "Rank score",
 };
@@ -146,12 +166,27 @@ const RATIONALE_HELP_KEYS = {
   median_chunk: "median_chunk",
   stable_chunks: "stable_chunks",
   weighted_match: "weighted_match",
+  local_offsets: "local_offsets",
+  local_stable: "local_stable",
+  anchor_dist: "anchor_dist",
+  pairwise_margin: "pairwise_margin",
+  pairwise_wins: "pairwise_wins",
+  pairwise_losses: "pairwise_losses",
+  disc_margin: "disc_margin",
+  disc_diff: "disc_diff",
+  disc_wins: "disc_wins",
+  disc_losses: "disc_losses",
   score: "evidence_score",
   rank: "rank_score",
 };
 
 function metricHelp(key) {
   return METRIC_HELP[key] || "";
+}
+
+function fallbackRationaleMetricHelp(key) {
+  const label = titleize(key);
+  return `${label} is an engine-specific rationale signal emitted by shortlist verification. Use it comparatively within the same run rather than as an absolute universal scale.`;
 }
 
 function parseWhyMetrics(value) {
@@ -386,7 +421,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       .map((item) => ({
         label: RATIONALE_LABELS[item.key] || titleize(item.key),
         value: item.rawValue,
-        help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key),
+        help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key) || fallbackRationaleMetricHelp(item.key),
       }));
   }
 
@@ -837,7 +872,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       .map((item) => ({
         label: RATIONALE_LABELS[item.key] || titleize(item.key),
         value: item.rawValue,
-        help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key),
+        help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key) || fallbackRationaleMetricHelp(item.key),
       }));
 
     const statsMetrics = [
