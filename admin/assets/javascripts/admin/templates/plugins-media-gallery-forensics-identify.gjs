@@ -518,35 +518,39 @@ export default RouteTemplate(
         background: var(--secondary);
       }
 
-      .mg-fi__candidate-item > summary {
-        list-style: none !important;
-        appearance: none;
-        -webkit-appearance: none;
-      }
-
-      .mg-fi__candidate-item > summary::-webkit-details-marker {
-        display: none !important;
-      }
-
-      .mg-fi__candidate-item > summary::marker {
-        content: "";
-        display: none !important;
-      }
-
+      .mg-fi__candidate-item > summary,
       .mg-fi__candidate-toggle {
-        display: block;
+        display: block !important;
         list-style: none !important;
-        padding: 0.95rem 1rem;
-        cursor: pointer;
+        list-style-type: none !important;
+        list-style-image: none !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        padding-inline-start: 0 !important;
       }
 
+      .mg-fi__candidate-item > summary::-webkit-details-marker,
       .mg-fi__candidate-toggle::-webkit-details-marker {
         display: none !important;
       }
 
+      .mg-fi__candidate-item > summary::marker,
       .mg-fi__candidate-toggle::marker {
-        content: "";
+        content: "" !important;
         display: none !important;
+      }
+
+      .mg-fi__candidate-item > summary::before,
+      .mg-fi__candidate-item > summary::after,
+      .mg-fi__candidate-toggle::before,
+      .mg-fi__candidate-toggle::after {
+        content: none !important;
+        display: none !important;
+      }
+
+      .mg-fi__candidate-toggle {
+        padding: 0.95rem 1rem;
+        cursor: pointer;
       }
 
       .mg-fi__candidate-toggle-inner {
@@ -554,17 +558,17 @@ export default RouteTemplate(
       }
 
       .mg-fi__candidate-chevron {
-        color: var(--primary-high);
-        font-weight: 700;
-        line-height: 1;
+        width: 0;
+        height: 0;
+        border-top: 0.5rem solid transparent;
+        border-bottom: 0.5rem solid transparent;
+        border-left: 0.75rem solid var(--primary-high);
+        transition: transform 0.14s ease;
+        transform-origin: 35% 50%;
       }
 
-      .mg-fi__candidate-item[open] .mg-fi__candidate-chevron::before {
-        content: "▼";
-      }
-
-      .mg-fi__candidate-item:not([open]) .mg-fi__candidate-chevron::before {
-        content: "▶";
+      .mg-fi__candidate-item[open] .mg-fi__candidate-chevron {
+        transform: rotate(90deg);
       }
 
       .mg-fi__candidate-user {
