@@ -327,6 +327,64 @@ export default RouteTemplate(
         overflow-wrap: anywhere;
       }
 
+      .mg-fi__candidate-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+      }
+
+      .mg-fi__candidate-note-card {
+        border: 1px solid var(--mg-fi-border);
+        border-radius: 16px;
+        background: var(--mg-fi-surface-alt);
+        padding: 1rem;
+        margin-top: 1rem;
+      }
+
+      .mg-fi__candidate-note-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+        margin-top: 0.75rem;
+      }
+
+      .mg-fi__candidate-detail-row td {
+        background: var(--secondary);
+      }
+
+      .mg-fi__candidate-detail-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin-top: 0.25rem;
+      }
+
+      .mg-fi__candidate-detail-card {
+        border: 1px solid var(--mg-fi-border);
+        border-radius: 14px;
+        background: var(--mg-fi-surface-alt);
+        padding: 0.8rem 0.9rem;
+        min-width: 0;
+      }
+
+      .mg-fi__candidate-detail-label {
+        color: var(--mg-fi-muted);
+        font-size: var(--font-down-1);
+        font-weight: 600;
+        margin-bottom: 0.2rem;
+      }
+
+      .mg-fi__candidate-detail-value {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-fi__candidate-why {
+        max-width: 24rem;
+        overflow-wrap: anywhere;
+      }
+
       .mg-fi__overlay-list {
         display: flex;
         flex-direction: column;
@@ -460,7 +518,10 @@ export default RouteTemplate(
         .mg-fi__summary-grid,
         .mg-fi__meta-list,
         .mg-fi__form-grid,
-        .mg-fi__overlay-info-grid {
+        .mg-fi__overlay-info-grid,
+        .mg-fi__candidate-summary-grid,
+        .mg-fi__candidate-detail-grid,
+        .mg-fi__candidate-note-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
@@ -472,7 +533,10 @@ export default RouteTemplate(
         .mg-fi__form-grid,
         .mg-fi__result-card,
         .mg-fi__overlay-card,
-        .mg-fi__overlay-info-grid {
+        .mg-fi__overlay-info-grid,
+        .mg-fi__candidate-summary-grid,
+        .mg-fi__candidate-detail-grid,
+        .mg-fi__candidate-note-grid {
           grid-template-columns: 1fr;
         }
 
@@ -867,17 +931,8 @@ export default RouteTemplate(
               {{#if @controller.shortlistEvidenceGap}}
                 <div><strong>Shortlist gap:</strong> {{@controller.shortlistEvidenceGap}}</div>
               {{/if}}
-              {{#if @controller.topCandidateWhy}}
-                <div><strong>Top evidence:</strong> {{@controller.topCandidateWhy}}</div>
-              {{/if}}
               {{#if @controller.poolSize}}
                 <div><strong>Pool size:</strong> {{@controller.poolSize}} <span class="mg-fi__muted">(reference {{@controller.referencePoolSize}})</span></div>
-              {{/if}}
-              {{#if @controller.topSignalZ}}
-                <div><strong>Signal Z:</strong> {{@controller.topSignalZ}} {{#if @controller.topPValue}}<span class="mg-fi__muted">(p≈{{@controller.topPValue}})</span>{{/if}}</div>
-              {{/if}}
-              {{#if @controller.topExpectedFalsePositivesPool}}
-                <div><strong>E[false positives]:</strong> {{@controller.topExpectedFalsePositivesPool}} <span class="mg-fi__muted">(pool / {{@controller.topExpectedFalsePositives2000}} at {{@controller.referencePoolSize}})</span></div>
               {{/if}}
               {{#if @controller.syncPeriod}}
                 <div><strong>Sync layer:</strong> period {{@controller.syncPeriod}} {{#if @controller.syncPairsCount}}<span class="mg-fi__muted">({{@controller.syncPairsCount}} safe-zone pairs)</span>{{/if}}</div>
@@ -908,6 +963,70 @@ export default RouteTemplate(
               {{/if}}
             </div>
           </div>
+
+          {{#if @controller.topCandidate}}
+            <h3 class="mg-fi__section-title">Top candidate</h3>
+            <div class="mg-fi__candidate-summary-grid">
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">Winner</div>
+                <div class="mg-fi__meta-value">{{@controller.topCandidateUserLabel}}</div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">Fingerprint</div>
+                <div class="mg-fi__meta-value"><code>{{@controller.topCandidateFingerprintLabel}}</code></div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">Top match</div>
+                <div class="mg-fi__meta-value">{{@controller.topMatchRatioDisplay}}</div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">Δ vs #2</div>
+                <div class="mg-fi__meta-value">{{@controller.topDeltaVsSecondDisplay}}</div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">Mis / Comp</div>
+                <div class="mg-fi__meta-value">{{@controller.topCandidateMisComp}}</div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">Best offset</div>
+                <div class="mg-fi__meta-value">{{@controller.topCandidateBestOffset}}</div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">Z-score</div>
+                <div class="mg-fi__meta-value">{{@controller.topSignalZDisplay}}</div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">p-value</div>
+                <div class="mg-fi__meta-value">{{@controller.topPValueDisplay}}</div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">E[FP] pool</div>
+                <div class="mg-fi__meta-value">{{@controller.topExpectedFalsePositivesPoolDisplay}}</div>
+              </div>
+              <div class="mg-fi__meta-card">
+                <div class="mg-fi__meta-label">E[FP] 2000</div>
+                <div class="mg-fi__meta-value">{{@controller.topExpectedFalsePositives2000Display}}</div>
+              </div>
+            </div>
+
+            <div class="mg-fi__candidate-note-card">
+              <strong>Top candidate rationale</strong>
+              <div style="margin-top: 0.35rem;">{{@controller.topCandidateWhy}}</div>
+              {{#if @controller.statisticalConfidenceNote}}
+                <div class="mg-fi__muted" style="margin-top: 0.5rem;">{{@controller.statisticalConfidenceNote}}</div>
+              {{/if}}
+              <div class="mg-fi__candidate-note-grid">
+                <div>
+                  <div class="mg-fi__candidate-detail-label">Evidence score</div>
+                  <div class="mg-fi__candidate-detail-value">{{@controller.topEvidenceScoreDisplay}}</div>
+                </div>
+                <div>
+                  <div class="mg-fi__candidate-detail-label">Rank score</div>
+                  <div class="mg-fi__candidate-detail-value">{{@controller.topRankScoreDisplay}}</div>
+                </div>
+              </div>
+            </div>
+          {{/if}}
 
           {{#if @controller.showWeakTip}}
             <div class="mg-fi__notice is-warning" style="margin-top: 1rem;">
@@ -976,35 +1095,60 @@ export default RouteTemplate(
                       <th>User</th>
                       <th>Fingerprint</th>
                       <th>Match</th>
-                      <th>Z</th>
-                      <th>p</th>
-                      <th>E[FP] pool</th>
-                      <th>E[FP] 2000</th>
-                      <th>Δ vs #1</th>
-                      <th>Evidence</th>
-                      <th>Mismatches</th>
+                      <th>Mis / Comp</th>
                       <th>Best offset</th>
+                      <th>Δ vs #1</th>
+                      <th>Why</th>
                     </tr>
                   </thead>
                   <tbody>
                     {{#each @controller.topCandidates as |c|}}
                       <tr>
-                        <td>{{#if c.username}}{{c.username}} (#{{c.user_id}}){{else}}#{{c.user_id}}{{/if}}</td>
-                        <td><code>{{c.fingerprint_id}}</code></td>
-                        <td>{{c.match_ratio}}</td>
-                        <td>{{c.signal_z}}</td>
-                        <td>{{c.p_value}}</td>
-                        <td>{{c.expected_false_positives_pool}}</td>
-                        <td>{{c.expected_false_positives_2000}}</td>
-                        <td>{{c.delta_from_top}}</td>
-                        <td>
-                          {{c.evidence_score}}
-                          {{#if c.why}}
-                            <div class="mg-fi__muted" style="max-width:18rem;">{{c.why}}</div>
-                          {{/if}}
+                        <td>{{c.displayUser}}</td>
+                        <td><code>{{c.displayFingerprint}}</code></td>
+                        <td>{{c.displayMatch}}</td>
+                        <td>{{c.displayMisComp}}</td>
+                        <td>{{c.displayBestOffset}}</td>
+                        <td>{{c.displayDeltaFromTop}}</td>
+                        <td><div class="mg-fi__candidate-why">{{c.displayWhy}}</div></td>
+                      </tr>
+                      <tr class="mg-fi__candidate-detail-row">
+                        <td colspan="7">
+                          <div class="mg-fi__candidate-detail-grid">
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__candidate-detail-label">Evidence score</div>
+                              <div class="mg-fi__candidate-detail-value">{{c.displayEvidenceScore}}</div>
+                            </div>
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__candidate-detail-label">Rank score</div>
+                              <div class="mg-fi__candidate-detail-value">{{c.displayRankScore}}</div>
+                            </div>
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__candidate-detail-label">Weighted mis / comp</div>
+                              <div class="mg-fi__candidate-detail-value">{{c.displayWeightedMisComp}}</div>
+                            </div>
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__candidate-detail-label">Chunk LLR</div>
+                              <div class="mg-fi__candidate-detail-value">{{c.displayChunkLlr}}</div>
+                            </div>
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__candidate-detail-label">Z-score</div>
+                              <div class="mg-fi__candidate-detail-value">{{c.displaySignalZ}}</div>
+                            </div>
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__candidate-detail-label">p-value</div>
+                              <div class="mg-fi__candidate-detail-value">{{c.displayPValue}}</div>
+                            </div>
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__candidate-detail-label">E[FP] pool</div>
+                              <div class="mg-fi__candidate-detail-value">{{c.displayExpectedFalsePositivesPool}}</div>
+                            </div>
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__candidate-detail-label">E[FP] 2000</div>
+                              <div class="mg-fi__candidate-detail-value">{{c.displayExpectedFalsePositives2000}}</div>
+                            </div>
+                          </div>
                         </td>
-                        <td>{{c.mismatches}} / {{c.compared}}</td>
-                        <td>{{c.best_offset_segments}}</td>
                       </tr>
                     {{/each}}
                   </tbody>

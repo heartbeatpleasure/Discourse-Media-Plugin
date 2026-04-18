@@ -40,6 +40,69 @@ function isOverlayLikeQuery(value) {
   return /^[A-Za-z0-9]{4,12}$/.test(query);
 }
 
+function formatRatio(value, digits = 4) {
+  const num = typeof value === "number" ? value : parseFloat(value);
+  if (!Number.isFinite(num)) {
+    return "—";
+  }
+  return num.toFixed(digits).replace(/\.?0+$/, "");
+}
+
+function formatCompactStat(value) {
+  const num = typeof value === "number" ? value : parseFloat(value);
+  if (!Number.isFinite(num)) {
+    return "—";
+  }
+
+  const abs = Math.abs(num);
+  if (abs === 0) {
+    return "0";
+  }
+  if (abs >= 100) {
+    return num.toFixed(0);
+  }
+  if (abs >= 10) {
+    return num.toFixed(2).replace(/\.?0+$/, "");
+  }
+  if (abs >= 1) {
+    return num.toFixed(4).replace(/\.?0+$/, "");
+  }
+  if (abs >= 0.001) {
+    return num.toFixed(6).replace(/\.?0+$/, "");
+  }
+  return num.toExponential(2);
+}
+
+function formatProbability(value) {
+  const num = typeof value === "number" ? value : parseFloat(value);
+  if (!Number.isFinite(num)) {
+    return "—";
+  }
+  if (num <= 0) {
+    return "<1e-308";
+  }
+  if (num >= 0.01) {
+    return num.toFixed(4).replace(/\.?0+$/, "");
+  }
+  if (num >= 0.0001) {
+    return num.toFixed(6).replace(/\.?0+$/, "");
+  }
+  return num.toExponential(2);
+}
+
+function candidateUserLabel(candidate) {
+  if (!candidate) {
+    return "—";
+  }
+  if (candidate?.username) {
+    return `${candidate.username} (#${candidate.user_id})`;
+  }
+  if (candidate?.user_id) {
+    return `#${candidate.user_id}`;
+  }
+  return "—";
+}
+
 export default class AdminPluginsMediaGalleryForensicsIdentifyController extends Controller {
   @tracked publicId = "";
   @tracked file = null;
@@ -188,22 +251,74 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   get topCandidates() {
     const cands = this.candidates || [];
     const top = this.topMatchRatio;
-    return cands.slice(0, 3).map((c, idx) => {
-      const matchRatio = this._candidateRatio(c);
-      return {
-        ...c,
-        _idx: idx,
-        delta_from_top: idx === 0 ? 0 : Math.max(0, top - matchRatio),
-      };
-    });
+    return cands.slice(0, 5).map((candidate, idx) => this._decorateCandidate(candidate, idx, top));
   }
 
   get poolSize() {
     return this.meta?.pool_size ?? null;
   }
 
+  get statisticalConfidenceNote() {
+    return this.meta?.statistical_confidence_note || "";
+  }
+
   get referencePoolSize() {
     return this.meta?.reference_pool_size ?? 2000;
+  }
+
+  get topCandidateUserLabel() {
+    return candidateUserLabel(this.topCandidate);
+  }
+
+  get topCandidateFingerprintLabel() {
+    return this.topCandidate?.fingerprint_id || "—";
+  }
+
+  get topCandidateMisComp() {
+    const mismatches = this.topCandidate?.mismatches ?? 0;
+    const compared = this.topCandidate?.compared ?? 0;
+    return `${mismatches} / ${compared}`;
+  }
+
+  get topCandidateBestOffset() {
+    const value = this.topCandidate?.best_offset_segments;
+    return value === null || value === undefined ? "—" : String(value);
+  }
+
+  get topDeltaVsSecond() {
+    return this.secondCandidate ? this.matchDelta : null;
+  }
+
+  get topMatchRatioDisplay() {
+    return formatRatio(this.topMatchRatio);
+  }
+
+  get topDeltaVsSecondDisplay() {
+    return this.topDeltaVsSecond === null ? "—" : formatRatio(this.topDeltaVsSecond);
+  }
+
+  get topSignalZDisplay() {
+    return this.topSignalZ === null ? "—" : formatCompactStat(this.topSignalZ);
+  }
+
+  get topPValueDisplay() {
+    return this.topPValue === null ? "—" : formatProbability(this.topPValue);
+  }
+
+  get topExpectedFalsePositivesPoolDisplay() {
+    return this.topExpectedFalsePositivesPool === null ? "—" : formatProbability(this.topExpectedFalsePositivesPool);
+  }
+
+  get topExpectedFalsePositives2000Display() {
+    return this.topExpectedFalsePositives2000 === null ? "—" : formatProbability(this.topExpectedFalsePositives2000);
+  }
+
+  get topEvidenceScoreDisplay() {
+    return this.topCandidate?.evidence_score == null ? "—" : formatCompactStat(this.topCandidate.evidence_score);
+  }
+
+  get topRankScoreDisplay() {
+    return this.topCandidate?.rank_score == null ? "—" : formatCompactStat(this.topCandidate.rank_score);
   }
 
   get topPValue() {
@@ -561,6 +676,63 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return !!this.meta?.phase_search_used;
   }
 
+  _decorateCandidate(candidate, idx, topRatio) {
+    const matchRatio = this._candidateRatio(candidate);
+    const deltaFromTop = idx === 0 ? 0 : Math.max(0, topRatio - matchRatio);
+    const mismatches = candidate?.mismatches ?? 0;
+    const compared = candidate?.compared ?? 0;
+    const weightedMismatches = candidate?.mismatches_weighted;
+    const weightedCompared = candidate?.compared_weighted;
+
+    return {
+      ...candidate,
+      _idx: idx,
+      displayUser: candidateUserLabel(candidate),
+      displayFingerprint: candidate?.fingerprint_id || "—",
+      displayMatch: formatRatio(matchRatio),
+      displayMisComp: `${mismatches} / ${compared}`,
+      displayBestOffset:
+        candidate?.best_offset_segments === null || candidate?.best_offset_segments === undefined
+          ? "—"
+          : String(candidate.best_offset_segments),
+      displayDeltaFromTop: formatRatio(deltaFromTop),
+      displayWhy: candidate?.why || "—",
+      displayEvidenceScore:
+        candidate?.evidence_score === null || candidate?.evidence_score === undefined
+          ? "—"
+          : formatCompactStat(candidate.evidence_score),
+      displayRankScore:
+        candidate?.rank_score === null || candidate?.rank_score === undefined
+          ? "—"
+          : formatCompactStat(candidate.rank_score),
+      displaySignalZ:
+        candidate?.signal_z === null || candidate?.signal_z === undefined
+          ? "—"
+          : formatCompactStat(candidate.signal_z),
+      displayPValue:
+        candidate?.p_value === null || candidate?.p_value === undefined
+          ? "—"
+          : formatProbability(candidate.p_value),
+      displayExpectedFalsePositivesPool:
+        candidate?.expected_false_positives_pool === null || candidate?.expected_false_positives_pool === undefined
+          ? "—"
+          : formatProbability(candidate.expected_false_positives_pool),
+      displayExpectedFalsePositives2000:
+        candidate?.expected_false_positives_2000 === null || candidate?.expected_false_positives_2000 === undefined
+          ? "—"
+          : formatProbability(candidate.expected_false_positives_2000),
+      displayWeightedMisComp:
+        weightedCompared === null || weightedCompared === undefined || Number(weightedCompared) <= 0
+          ? "—"
+          : `${formatCompactStat(weightedMismatches)} / ${formatCompactStat(weightedCompared)}`,
+      displayChunkLlr:
+        candidate?.chunk_llr_total === null || candidate?.chunk_llr_total === undefined
+          ? "—"
+          : formatCompactStat(candidate.chunk_llr_total),
+      delta_from_top: deltaFromTop,
+    };
+  }
+
   _candidateRatio(candidate) {
     const weighted = candidate?.match_ratio_weighted;
     const weightedFloat = typeof weighted === "number" ? weighted : parseFloat(weighted);
@@ -583,7 +755,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get hasMoreCandidates() {
-    return (this.candidates?.length || 0) > 3;
+    return (this.candidates?.length || 0) > this.topCandidates.length;
   }
 
   get hasLookupMatches() {

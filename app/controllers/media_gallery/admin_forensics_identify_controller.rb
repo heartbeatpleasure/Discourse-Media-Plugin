@@ -332,6 +332,12 @@ module ::MediaGallery
       apply_no_signal_guard!(result)
 
       begin
+        apply_statistical_confidence!(result)
+      rescue => e
+        Rails.logger.warn("[media_gallery] forensics stats enrichment failed #{e.class}: #{e.message}") rescue nil
+      end
+
+      begin
         apply_decision_policy!(result)
       rescue => e
         debug_id = "mgfi_policy_#{SecureRandom.hex(6)}"
@@ -1047,6 +1053,99 @@ module ::MediaGallery
         top_consistent_chunks: top_consistent_chunks,
         shortlist_evidence_gap: shortlist_evidence_gap,
       }
+    end
+
+    def apply_statistical_confidence!(result)
+      return unless result.is_a?(Hash)
+
+      result["meta"] ||= {}
+      candidates = result["candidates"]
+      return unless candidates.is_a?(Array)
+
+      pool_size = candidates.length
+      reference_pool_size = (result.dig("meta", "reference_pool_size") || 2000).to_i
+      reference_pool_size = 2000 if reference_pool_size <= 0
+
+      result["meta"]["pool_size"] ||= pool_size
+      result["meta"]["reference_pool_size"] ||= reference_pool_size
+      result["meta"]["statistical_confidence_model"] ||= "binomial_tail_p0_0.5"
+      result["meta"]["statistical_confidence_note"] ||= "Supportive significance based on compared/mismatches under a random 50/50 agreement baseline."
+
+      candidates.each do |candidate|
+        next unless candidate.is_a?(Hash)
+        annotate_candidate_statistical_confidence!(candidate, pool_size: pool_size, reference_pool_size: reference_pool_size)
+      end
+    end
+
+    def annotate_candidate_statistical_confidence!(candidate, pool_size:, reference_pool_size:)
+      compared = candidate["compared"].to_i
+      mismatches = candidate["mismatches"].to_i
+      return candidate if compared <= 0
+
+      matches = [compared - mismatches, 0].max
+      z_score = binomial_match_z_score(matches, compared)
+      p_value = binomial_tail_p_value(matches, compared)
+      expected_pool = p_value * pool_size.to_f
+      expected_reference = p_value * reference_pool_size.to_f
+
+      candidate["matches"] = matches
+      candidate["signal_z"] = z_score.round(4)
+      candidate["p_value"] = round_probability(p_value)
+      candidate["expected_false_positives_pool"] = round_probability(expected_pool)
+      candidate["expected_false_positives_2000"] = round_probability(expected_reference)
+      candidate["statistical_confidence_model"] ||= "binomial_tail_p0_0.5"
+      candidate
+    end
+
+    def binomial_match_z_score(matches, compared, p0: 0.5)
+      n = compared.to_i
+      return 0.0 if n <= 0
+
+      mean = n * p0.to_f
+      variance = n * p0.to_f * (1.0 - p0.to_f)
+      return 0.0 if variance <= 0.0
+
+      (matches.to_f - mean) / Math.sqrt(variance)
+    end
+
+    def binomial_tail_p_value(matches, compared, p0: 0.5)
+      n = compared.to_i
+      k = matches.to_i
+      return 1.0 if n <= 0
+      return 1.0 if k <= 0
+      return Float::MIN if k > n
+
+      log_terms = (k..n).map { |i| log_binomial_probability(n, i, p0) }
+      log_sum = logsumexp(log_terms)
+      return Float::MIN if log_sum.nan?
+
+      [Math.exp(log_sum), Float::MIN].max
+    end
+
+    def log_binomial_probability(n, k, p)
+      return -Float::INFINITY if k < 0 || k > n
+      return -Float::INFINITY if p <= 0.0 || p >= 1.0
+
+      log_choose = Math.lgamma(n + 1).first - Math.lgamma(k + 1).first - Math.lgamma(n - k + 1).first
+      log_choose + (k * Math.log(p)) + ((n - k) * Math.log(1.0 - p))
+    end
+
+    def logsumexp(values)
+      finite = Array(values).select { |v| v.finite? }
+      return -Float::INFINITY if finite.blank?
+
+      max = finite.max
+      max + Math.log(finite.sum { |v| Math.exp(v - max) })
+    end
+
+    def round_probability(value)
+      f = value.to_f
+      return 0.0 unless f.finite? && f >= 0.0
+      return 0.0 if f.zero?
+      return f.round(6) if f >= 0.01
+      return f.round(8) if f >= 0.0001
+
+      f
     end
 
     def candidate_match_ratio(candidate)
