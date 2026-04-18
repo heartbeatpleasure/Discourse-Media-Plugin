@@ -334,19 +334,70 @@ export default RouteTemplate(
       }
 
       .mg-fi__metric-help {
+        position: relative;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 1.15rem;
-        height: 1.15rem;
-        border: 1px solid var(--mg-fi-border);
+        width: 1.2rem;
+        height: 1.2rem;
+        border: 1px solid var(--tertiary);
         border-radius: 999px;
-        color: var(--mg-fi-muted);
-        font-size: 0.72rem;
+        background: var(--tertiary-low);
+        color: var(--tertiary);
+        font-size: 0.76rem;
+        font-weight: 700;
         line-height: 1;
         cursor: help;
         flex-shrink: 0;
         user-select: none;
+      }
+
+      .mg-fi__metric-help::after {
+        content: attr(data-tooltip);
+        position: absolute;
+        top: calc(100% + 0.45rem);
+        right: 0;
+        width: min(22rem, 75vw);
+        padding: 0.7rem 0.8rem;
+        border-radius: 12px;
+        border: 1px solid var(--mg-fi-border);
+        background: var(--secondary);
+        color: var(--primary-high);
+        font-size: var(--font-down-1);
+        font-weight: 400;
+        line-height: 1.4;
+        white-space: normal;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-0.15rem);
+        transition: opacity 0.14s ease, transform 0.14s ease;
+        z-index: 20;
+      }
+
+      .mg-fi__metric-help::before {
+        content: "";
+        position: absolute;
+        top: calc(100% + 0.15rem);
+        right: 0.35rem;
+        width: 0.6rem;
+        height: 0.6rem;
+        background: var(--secondary);
+        border-top: 1px solid var(--mg-fi-border);
+        border-left: 1px solid var(--mg-fi-border);
+        transform: rotate(45deg);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.14s ease;
+        z-index: 21;
+      }
+
+      .mg-fi__metric-help:hover::after,
+      .mg-fi__metric-help:hover::before,
+      .mg-fi__metric-help:focus-visible::after,
+      .mg-fi__metric-help:focus-visible::before {
+        opacity: 1;
+        transform: translateY(0);
       }
 
       .mg-fi__meta-value {
@@ -371,7 +422,7 @@ export default RouteTemplate(
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 1rem;
-        margin: 0;
+        margin-top: 0.35rem;
       }
 
       .mg-fi__candidate-note-card {
@@ -429,6 +480,98 @@ export default RouteTemplate(
       .mg-fi__candidate-why {
         max-width: 24rem;
         overflow-wrap: anywhere;
+      }
+
+      .mg-fi__candidate-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.85rem;
+        margin-top: 0.75rem;
+      }
+
+      .mg-fi__candidate-header-row,
+      .mg-fi__candidate-toggle {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.9fr) minmax(72px, 0.55fr) minmax(90px, 0.7fr) minmax(90px, 0.7fr) minmax(80px, 0.6fr);
+        gap: 1rem;
+        align-items: center;
+      }
+
+      .mg-fi__candidate-header-row {
+        padding: 0 1rem;
+        color: var(--mg-fi-muted);
+        font-size: var(--font-down-1);
+        font-weight: 600;
+      }
+
+      .mg-fi__candidate-item {
+        border: 1px solid var(--mg-fi-border);
+        border-radius: 16px;
+        background: var(--mg-fi-surface-alt);
+        overflow: hidden;
+      }
+
+      .mg-fi__candidate-item[open] {
+        background: var(--secondary);
+      }
+
+      .mg-fi__candidate-toggle {
+        list-style: none;
+        padding: 0.95rem 1rem;
+        cursor: pointer;
+      }
+
+      .mg-fi__candidate-toggle::-webkit-details-marker {
+        display: none;
+      }
+
+      .mg-fi__candidate-user {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        font-weight: 700;
+      }
+
+      .mg-fi__candidate-user::before {
+        content: "▶";
+        margin-right: 0.6rem;
+        color: var(--primary-high);
+        flex-shrink: 0;
+      }
+
+      .mg-fi__candidate-item[open] .mg-fi__candidate-user::before {
+        content: "▼";
+      }
+
+      .mg-fi__candidate-fingerprint code {
+        display: block;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .mg-fi__candidate-body {
+        border-top: 1px solid var(--mg-fi-border);
+        padding: 0.95rem 1rem 1rem;
+      }
+
+      .mg-fi__candidate-subsection-title {
+        font-size: var(--font-down-1);
+        font-weight: 700;
+        color: var(--mg-fi-muted);
+        margin-bottom: 0.6rem;
+      }
+
+      .mg-fi__candidate-rationale-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+
+      .mg-fi__candidate-raw-why {
+        margin-top: 0.75rem;
+        color: var(--mg-fi-muted);
+        font-size: var(--font-down-1);
+        line-height: 1.45;
       }
 
       .mg-fi__overlay-list {
@@ -568,8 +711,14 @@ export default RouteTemplate(
         .mg-fi__candidate-summary-grid,
         .mg-fi__candidate-detail-grid,
         .mg-fi__candidate-note-grid,
-        .mg-fi__candidate-score-grid {
+        .mg-fi__candidate-score-grid,
+        .mg-fi__candidate-rationale-grid {
           grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .mg-fi__candidate-header-row,
+        .mg-fi__candidate-toggle {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) repeat(4, minmax(70px, 0.7fr));
         }
       }
 
@@ -584,7 +733,16 @@ export default RouteTemplate(
         .mg-fi__candidate-summary-grid,
         .mg-fi__candidate-detail-grid,
         .mg-fi__candidate-note-grid,
-        .mg-fi__candidate-score-grid {
+        .mg-fi__candidate-score-grid,
+        .mg-fi__candidate-rationale-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-fi__candidate-header-row {
+          display: none;
+        }
+
+        .mg-fi__candidate-toggle {
           grid-template-columns: 1fr;
         }
 
@@ -943,7 +1101,7 @@ export default RouteTemplate(
                 <div class="mg-fi__metric-heading">
                   <div class="mg-fi__meta-label">{{card.label}}</div>
                   {{#if card.help}}
-                    <span class="mg-fi__metric-help" title={{card.help}} aria-label={{card.help}}>i</span>
+                    <span class="mg-fi__metric-help" data-tooltip={{card.help}} title={{card.help}} aria-label={{card.help}} tabindex="0">i</span>
                   {{/if}}
                 </div>
                 <div class={{if card.code "mg-fi__meta-value is-code" "mg-fi__meta-value"}}>{{card.value}}</div>
@@ -1002,7 +1160,7 @@ export default RouteTemplate(
                     <div class="mg-fi__metric-heading">
                       <div class="mg-fi__meta-label">{{card.label}}</div>
                       {{#if card.help}}
-                        <span class="mg-fi__metric-help" title={{card.help}} aria-label={{card.help}}>i</span>
+                        <span class="mg-fi__metric-help" data-tooltip={{card.help}} title={{card.help}} aria-label={{card.help}} tabindex="0">i</span>
                       {{/if}}
                     </div>
                     <div class={{if card.code "mg-fi__meta-value is-code" "mg-fi__meta-value"}}>{{card.value}}</div>
@@ -1013,7 +1171,7 @@ export default RouteTemplate(
               <div class="mg-fi__candidate-note-card">
                 <div class="mg-fi__metric-heading">
                   <strong>Top candidate rationale</strong>
-                  <span class="mg-fi__metric-help" title="Compact engine signals used to rank the winner. In a single-candidate or very small pool setup some values can coincide because there is little or no runner-up separation to compute against." aria-label="Top candidate rationale help">i</span>
+                  <span class="mg-fi__metric-help" data-tooltip="Compact engine signals used to rank the winner. In a single-candidate or very small pool setup some values can coincide because there is little or no runner-up separation to compute against." title="Compact engine signals used to rank the winner. In a single-candidate or very small pool setup some values can coincide because there is little or no runner-up separation to compute against." aria-label="Top candidate rationale help" tabindex="0">i</span>
                 </div>
                 {{#if @controller.topCandidateRationaleMetrics.length}}
                   <div class="mg-fi__candidate-note-grid">
@@ -1022,7 +1180,7 @@ export default RouteTemplate(
                         <div class="mg-fi__metric-heading">
                           <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                           {{#if metric.help}}
-                            <span class="mg-fi__metric-help" title={{metric.help}} aria-label={{metric.help}}>i</span>
+                            <span class="mg-fi__metric-help" data-tooltip={{metric.help}} title={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
                           {{/if}}
                         </div>
                         <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
@@ -1036,7 +1194,7 @@ export default RouteTemplate(
                       <div class="mg-fi__metric-heading">
                         <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
                         {{#if metric.help}}
-                          <span class="mg-fi__metric-help" title={{metric.help}} aria-label={{metric.help}}>i</span>
+                          <span class="mg-fi__metric-help" data-tooltip={{metric.help}} title={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
                         {{/if}}
                       </div>
                       <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
@@ -1105,7 +1263,6 @@ export default RouteTemplate(
 
           {{#if @controller.candidates.length}}
             <div class="mg-fi__result-section">
-              <h3 class="mg-fi__section-title">{{if @controller.conclusive "Top candidates" "Candidates (not conclusive)"}}</h3>
               {{#unless @controller.conclusive}}
                 <div class="mg-fi__notice is-warning" style="margin-bottom: 1rem;">
                   Do not treat this as definitive. Gather a longer sample to increase usable_samples and separation from #2.
@@ -1113,51 +1270,67 @@ export default RouteTemplate(
               {{/unless}}
 
               <details class="mg-fi__details" open={{@controller.conclusive}}>
-                <summary>Show candidates</summary>
-                <div class="mg-fi__table-wrap" style="margin-top: 0.75rem;">
-                  <table class="table">
-                    <thead>
-                      <tr>
-                        <th>User</th>
-                        <th>Fingerprint</th>
-                        <th title="Final match ratio for this candidate.">Match</th>
-                        <th title="Mismatches over compared positions for this candidate.">Mis / Comp</th>
-                        <th title="Best segment offset that aligned this candidate.">Best offset</th>
-                        <th title="Difference from the best candidate's match ratio.">Δ vs #1</th>
-                        <th title="Compact engine rationale for this candidate.">Why</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {{#each @controller.topCandidates as |c|}}
-                        <tr>
-                          <td>{{c.displayUser}}</td>
-                          <td><code>{{c.displayFingerprint}}</code></td>
-                          <td>{{c.displayMatch}}</td>
-                          <td>{{c.displayMisComp}}</td>
-                          <td>{{c.displayBestOffset}}</td>
-                          <td>{{c.displayDeltaFromTop}}</td>
-                          <td><div class="mg-fi__candidate-why">{{c.displayWhySummary}}</div></td>
-                        </tr>
-                        <tr class="mg-fi__candidate-detail-row">
-                          <td colspan="7">
-                            <div class="mg-fi__candidate-detail-grid">
-                              {{#each c.detailMetrics as |metric|}}
-                                <div class="mg-fi__candidate-detail-card">
-                                  <div class="mg-fi__metric-heading">
-                                    <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
-                                    {{#if metric.help}}
-                                      <span class="mg-fi__metric-help" title={{metric.help}} aria-label={{metric.help}}>i</span>
-                                    {{/if}}
-                                  </div>
-                                  <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
+                <summary>{{if @controller.conclusive "Top candidates" "Candidates (not conclusive)"}}</summary>
+                <div class="mg-fi__candidate-list">
+                  <div class="mg-fi__candidate-header-row">
+                    <div>User</div>
+                    <div>Fingerprint</div>
+                    <div>Match</div>
+                    <div>Mis / Comp</div>
+                    <div>Best offset</div>
+                    <div>Δ vs #1</div>
+                  </div>
+
+                  {{#each @controller.topCandidates as |c|}}
+                    <details class="mg-fi__candidate-item" open={{c.isPrimary}}>
+                      <summary class="mg-fi__candidate-toggle">
+                        <div class="mg-fi__candidate-user">{{c.displayUser}}</div>
+                        <div class="mg-fi__candidate-fingerprint"><code>{{c.displayFingerprint}}</code></div>
+                        <div>{{c.displayMatch}}</div>
+                        <div>{{c.displayMisComp}}</div>
+                        <div>{{c.displayBestOffset}}</div>
+                        <div>{{c.displayDeltaFromTop}}</div>
+                      </summary>
+
+                      <div class="mg-fi__candidate-body">
+                        {{#if c.hasRationaleMetrics}}
+                          <div class="mg-fi__candidate-subsection-title">Rationale</div>
+                          <div class="mg-fi__candidate-rationale-grid">
+                            {{#each c.rationaleMetrics as |metric|}}
+                              <div class="mg-fi__candidate-detail-card">
+                                <div class="mg-fi__metric-heading">
+                                  <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
+                                  {{#if metric.help}}
+                                    <span class="mg-fi__metric-help" data-tooltip={{metric.help}} title={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                                  {{/if}}
                                 </div>
-                              {{/each}}
+                                <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
+                              </div>
+                            {{/each}}
+                          </div>
+                        {{/if}}
+
+                        <div class="mg-fi__candidate-subsection-title" style={{if c.hasRationaleMetrics "margin-top: 0.85rem;" ""}}>Supporting statistics</div>
+                        <div class="mg-fi__candidate-detail-grid">
+                          {{#each c.statsMetrics as |metric|}}
+                            <div class="mg-fi__candidate-detail-card">
+                              <div class="mg-fi__metric-heading">
+                                <div class="mg-fi__candidate-detail-label">{{metric.label}}</div>
+                                {{#if metric.help}}
+                                  <span class="mg-fi__metric-help" data-tooltip={{metric.help}} title={{metric.help}} aria-label={{metric.help}} tabindex="0">i</span>
+                                {{/if}}
+                              </div>
+                              <div class="mg-fi__candidate-detail-value">{{metric.value}}</div>
                             </div>
-                          </td>
-                        </tr>
-                      {{/each}}
-                    </tbody>
-                  </table>
+                          {{/each}}
+                        </div>
+
+                        {{#if c.displayWhy}}
+                          <div class="mg-fi__candidate-raw-why">{{c.displayWhy}}</div>
+                        {{/if}}
+                      </div>
+                    </details>
+                  {{/each}}
                 </div>
               </details>
 

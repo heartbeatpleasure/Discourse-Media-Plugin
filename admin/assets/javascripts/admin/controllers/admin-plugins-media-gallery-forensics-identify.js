@@ -116,20 +116,20 @@ const METRIC_HELP = {
   fingerprint: "Fingerprint identifier associated with the winning candidate.",
   mis_comp: "Mismatches over compared positions for this candidate. Lower is better; 0 / N means perfect agreement on all compared positions.",
   best_offset: "Best segment offset that aligned this candidate with the observed sample during matching.",
-  z_score: "Supportive significance based on compared vs mismatches under a random 50/50 agreement baseline. Higher means less likely to happen by chance.",
-  p_value: "One-sided binomial tail probability under a random 50/50 agreement baseline. Lower means the observed agreement is less likely by chance.",
-  efp_pool: "Expected false positives in the current candidate pool, calculated as p-value × current pool size. Lower is better.",
-  efp_2000: "Expected false positives normalized to a reference pool of 2000 candidates. Lower is better and easier to compare across runs.",
+  z_score: "Supportive significance based on compared vs mismatches under a random 50/50 agreement baseline. Higher is stronger: around 0 is weak/no separation, above 3 is strong, above 5 is very strong. There is no hard maximum.",
+  p_value: "One-sided binomial tail probability under a random 50/50 agreement baseline. Lower is stronger: below 0.05 is notable, below 0.01 is strong, below 0.001 is very strong. Minimum approaches 0.",
+  efp_pool: "Expected false positives in the current candidate pool, calculated as p-value × current pool size. Lower is better: below 1 is good, below 0.1 is strong, values above 1 mean chance matches become more plausible in this pool.",
+  efp_2000: "Expected false positives normalized to a reference pool of 2000 candidates. Lower is better and easier to compare across runs: below 1 is good, below 0.1 is strong.",
   shortlist_gap: "Difference between the winning shortlist evidence score and the runner-up shortlist evidence score. Shown only when a runner-up exists.",
-  evidence_score: "Primary evidence score produced by the current engine for this candidate. Higher generally indicates stronger forensic support.",
-  rank_score: "Ranking score used to order shortlist candidates. In very small pools or single-candidate tests this can equal the evidence score.",
-  weighted_mis_comp: "Weighted mismatches over weighted compared samples. This reflects the weighted comparison path used by the current engine when available.",
-  chunk_llr: "Chunk-level log-likelihood style score accumulated across stable chunks. Higher generally indicates stronger chunk-level support.",
-  why: "Compact explanation of why this candidate ranked where it did. These are engine signals, not end-user facing policy text.",
-  llr: "Chunk-level log-likelihood style contribution reported by the engine for this candidate.",
-  median_chunk: "Median per-chunk support value observed for this candidate.",
-  stable_chunks: "Stable chunks compared to total chunks. More stable chunks usually means a more trustworthy comparison.",
-  weighted_match: "Weighted match ratio reported by the engine when weighted comparison is available.",
+  evidence_score: "Primary evidence score produced by the current engine for this candidate. There is no fixed universal scale; compare it against other candidates in the same run. Higher is better.",
+  rank_score: "Ranking score used to order shortlist candidates. There is no fixed universal scale; compare it against other candidates in the same run. In very small pools it can equal the evidence score.",
+  weighted_mis_comp: "Weighted mismatches over weighted compared samples. Lower is better; 0 / N means perfect weighted agreement on all weighted comparisons.",
+  chunk_llr: "Chunk-level log-likelihood style score accumulated across stable chunks. There is no fixed universal scale; compare it against other candidates in the same run. Higher is better.",
+  why: "Compact explanation of why this candidate ranked where it did. These are engine signals, not end-user facing policy text. The cards below break this summary into separate metrics.",
+  llr: "Chunk-level log-likelihood style contribution reported by the engine for this candidate. Higher is better, but use it comparatively within the same run rather than as an absolute scale.",
+  median_chunk: "Median per-chunk support value observed for this candidate. Higher generally means more consistent chunk-level support across the sample.",
+  stable_chunks: "Stable chunks compared to total chunks. More stable chunks usually means a more trustworthy comparison; a value like 24/24 is excellent.",
+  weighted_match: "Weighted match ratio reported by the engine when weighted comparison is available. It usually ranges from 0 to 1, and higher is better.",
 };
 
 const RATIONALE_LABELS = {
@@ -831,13 +831,14 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     const weightedMismatches = candidate?.mismatches_weighted;
     const weightedCompared = candidate?.compared_weighted;
     const parsedWhy = parseWhyMetrics(candidate?.why);
-    const whySummary =
-      parsedWhy
-        .filter((item) => ["stable_chunks", "weighted_match", "llr", "median_chunk"].includes(item.key))
-        .map((item) => `${RATIONALE_LABELS[item.key] || titleize(item.key)} ${item.rawValue}`)
-        .join(" • ") || candidate?.why || "—";
 
-    const detailMetrics = [
+    const rationaleMetrics = parsedWhy.map((item) => ({
+      label: RATIONALE_LABELS[item.key] || titleize(item.key),
+      value: item.rawValue,
+      help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key),
+    }));
+
+    const statsMetrics = [
       { label: "Evidence score", value: candidate?.evidence_score === null || candidate?.evidence_score === undefined ? "—" : formatCompactStat(candidate.evidence_score), help: metricHelp("evidence_score") },
       { label: "Rank score", value: candidate?.rank_score === null || candidate?.rank_score === undefined ? "—" : formatCompactStat(candidate.rank_score), help: metricHelp("rank_score") },
       { label: "Weighted mis / comp", value: weightedCompared === null || weightedCompared === undefined || Number(weightedCompared) <= 0 ? "—" : `${formatCompactStat(weightedMismatches)} / ${formatCompactStat(weightedCompared)}`, help: metricHelp("weighted_mis_comp") },
@@ -861,8 +862,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
           : String(candidate.best_offset_segments),
       displayDeltaFromTop: formatRatio(deltaFromTop),
       displayWhy: candidate?.why || "—",
-      displayWhySummary: whySummary,
-      detailMetrics,
+      rationaleMetrics,
+      statsMetrics,
+      hasRationaleMetrics: rationaleMetrics.length > 0,
+      isPrimary: idx === 0,
       delta_from_top: deltaFromTop,
     };
   }
