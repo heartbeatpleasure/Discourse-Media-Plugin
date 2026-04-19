@@ -1272,9 +1272,16 @@ export default RouteTemplate(
                   </div>
                 {{/if}}
 
+                {{#if @controller.observedSegmentIndicesUsedText}}
+                  <div style="margin-top: 0.75rem;">
+                    <strong>Observed segment indices used</strong>
+                    <code class="mg-fi__code-block">{{@controller.observedSegmentIndicesUsedText}}</code>
+                  </div>
+                {{/if}}
+
                 {{#if @controller.referenceSegmentIndicesText}}
                   <div style="margin-top: 0.75rem;">
-                    <strong>Reference segment indices</strong>
+                    <strong>Reference segment indices after offset</strong>
                     <code class="mg-fi__code-block">{{@controller.referenceSegmentIndicesText}}</code>
                   </div>
                 {{/if}}

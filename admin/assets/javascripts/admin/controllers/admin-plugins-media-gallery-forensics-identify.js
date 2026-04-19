@@ -846,6 +846,14 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return this.mismatchPositions.length ? this.mismatchPositions.join(", ") : "";
   }
 
+  get observedSegmentIndicesUsedText() {
+    const arr = this.meta?.observed_segment_indices_used || [];
+    if (!Array.isArray(arr) || !arr.length) {
+      return "";
+    }
+    return arr.map((v) => (v === null || v === undefined ? "." : String(v))).join(", ");
+  }
+
   get referenceSegmentIndicesText() {
     const arr = this.meta?.reference_segment_indices_used || this.topCandidate?.reference_segment_indices_used || [];
     if (!Array.isArray(arr) || !arr.length) {
@@ -923,6 +931,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return !!(
       this.observedVariants ||
       this.expectedVariantsTopCandidate ||
+      this.observedSegmentIndicesUsedText ||
       this.referenceSegmentIndicesText ||
       this.mismatchPositions.length
     );

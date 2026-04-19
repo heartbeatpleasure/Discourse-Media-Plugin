@@ -168,12 +168,13 @@ module ::MediaGallery
 
       file_size_bytes = (File.size(file_path) rescue nil)
       probed_duration_seconds = probe_duration_seconds(file_path)
-      effective_max_offset_segments = effective_filemode_max_offset_segments(
+      offset_window_profile = filemode_offset_window_profile(
         requested_max_offset_segments: max_offset_segments,
         sample_times: sample_times,
         duration_seconds: probed_duration_seconds,
         segment_seconds: seg
       )
+      effective_max_offset_segments = offset_window_profile[:effective].to_i
 
       obs, match = identify_with_phase_search(
         media_item: media_item,
@@ -251,11 +252,16 @@ module ::MediaGallery
 
       match[:meta] ||= {}
       match[:meta][:offset_expansion_applied] = (effective_max_offset_segments.to_i > max_offset_segments.to_i)
+      match[:meta][:offset_window_autocapped] = (effective_max_offset_segments.to_i < max_offset_segments.to_i)
       match[:meta][:offset_expansion_reason] = if effective_max_offset_segments.to_i > max_offset_segments.to_i
         "auto_expanded_to_cover_partial_or_shifted_clip"
       else
-        "requested_offset_window_kept"
+        offset_window_profile[:reason].to_s
       end
+      match[:meta][:offset_window_reason] = offset_window_profile[:reason].to_s
+      match[:meta][:estimated_clip_segments] = offset_window_profile[:estimated_clip_segments].to_i
+      match[:meta][:sampled_packaged_segments] = offset_window_profile[:total_segments].to_i
+      match[:meta][:clip_segment_coverage_ratio] = offset_window_profile[:coverage_ratio].to_f.round(4)
 
       unless match[:meta].key?(:multisample_refine_used)
         multisample_diag = filemode_multisample_refine_diagnostics(
@@ -1592,28 +1598,89 @@ module ::MediaGallery
     end
     private_class_method :evenly_spaced_subset
 
-    def effective_filemode_max_offset_segments(requested_max_offset_segments:, sample_times:, duration_seconds:, segment_seconds:)
+    def filemode_offset_window_profile(requested_max_offset_segments:, sample_times:, duration_seconds:, segment_seconds:)
       requested = requested_max_offset_segments.to_i
       requested = 0 if requested.negative?
 
       total_segments = Array(sample_times).length
-      return requested if total_segments <= 0
+      return {
+        effective: requested,
+        requested: requested,
+        total_segments: total_segments,
+        estimated_clip_segments: 0,
+        coverage_ratio: 0.0,
+        reason: "requested_offset_window_kept"
+      } if total_segments <= 0
 
       seg = segment_seconds.to_f
       seg = 6.0 if seg <= 0.0
 
-      est_clip_segments = (duration_seconds.to_f / seg).floor
+      raw_clip_segments = duration_seconds.to_f / seg
+      est_clip_segments = raw_clip_segments.round
+      est_clip_segments = raw_clip_segments.ceil if est_clip_segments <= 0 && raw_clip_segments.positive?
       est_clip_segments = 1 if est_clip_segments < 1
+      est_clip_segments = [est_clip_segments, total_segments].min
 
       max_possible = [total_segments - 1, 0].max
-      auto_needed = total_segments - est_clip_segments + FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS
-      auto_needed = 0 if auto_needed < 0
-      auto_needed = [auto_needed, max_possible].min
-
       hard_cap = [FILEMODE_AUTO_MAX_OFFSET_HARD_CAP, max_possible].min
-      effective = [requested, auto_needed].max
+      start_uncertainty = [total_segments - est_clip_segments, 0].max
+      coverage_ratio = total_segments > 0 ? (est_clip_segments.to_f / total_segments.to_f) : 0.0
+
+      cushion =
+        if coverage_ratio >= 0.92
+          0
+        elsif coverage_ratio >= 0.80
+          1
+        elsif coverage_ratio >= 0.65
+          2
+        elsif coverage_ratio >= 0.50
+          3
+        else
+          FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS
+        end
+
+      auto_cap = start_uncertainty + cushion
+      auto_cap = 0 if auto_cap.negative?
+      auto_cap = [auto_cap, hard_cap].min
+
+      effective = if requested > 0
+        [requested, auto_cap].min
+      else
+        auto_cap
+      end
       effective = [effective, hard_cap].min
-      effective
+
+      reason =
+        if effective < requested
+          if coverage_ratio >= 0.92
+            "auto_capped_near_full_clip"
+          elsif coverage_ratio >= 0.80
+            "auto_capped_long_clip"
+          else
+            "auto_capped_by_clip_coverage"
+          end
+        else
+          "requested_offset_window_kept"
+        end
+
+      {
+        effective: effective,
+        requested: requested,
+        total_segments: total_segments,
+        estimated_clip_segments: est_clip_segments,
+        coverage_ratio: coverage_ratio,
+        reason: reason
+      }
+    end
+    private_class_method :filemode_offset_window_profile
+
+    def effective_filemode_max_offset_segments(requested_max_offset_segments:, sample_times:, duration_seconds:, segment_seconds:)
+      filemode_offset_window_profile(
+        requested_max_offset_segments: requested_max_offset_segments,
+        sample_times: sample_times,
+        duration_seconds: duration_seconds,
+        segment_seconds: segment_seconds
+      )[:effective].to_i
     end
     private_class_method :effective_filemode_max_offset_segments
 
@@ -4684,6 +4751,12 @@ end
   top = candidates[0]
   second = candidates[1]
 
+  observed_indices_used = Array.new(scores.length)
+  u[:usable].each do |(obs_idx, base_seg_idx, _ov, _w, _margin, _ratio, _seg_idx, _raw_count)|
+    next if obs_idx.blank?
+    observed_indices_used[obs_idx.to_i] = base_seg_idx.to_i
+  end
+
   meta = {
     offset_strategy: "global_reference",
     chosen_offset_segments: best_offset,
@@ -4714,7 +4787,8 @@ end
     sync_anchor_best_ratio: sync_prior.to_h[:best_ratio].to_f.round(4),
     sync_anchor_second_ratio: sync_prior.to_h[:second_ratio].to_f.round(4),
     sync_anchor_delta: sync_prior.to_h[:delta].to_f.round(4),
-    sync_anchor_trust: sync_prior.to_h[:trust].to_f.round(4)
+    sync_anchor_trust: sync_prior.to_h[:trust].to_f.round(4),
+    observed_segment_indices_used: observed_indices_used
   }
 
   unless use_chunked
