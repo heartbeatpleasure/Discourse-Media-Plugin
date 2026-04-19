@@ -504,6 +504,7 @@ plugins:
       - v5_screen_safe
       - v6_local_sync
       - v7_high_separation
+      - v8_microgrid
     client: false
 
 

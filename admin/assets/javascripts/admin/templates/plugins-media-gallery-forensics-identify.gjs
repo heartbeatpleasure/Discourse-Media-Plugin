@@ -1073,6 +1073,7 @@ export default RouteTemplate(
                   <option value="v5_screen_safe">{{i18n "admin.media_gallery.forensics_identify.layout_v5_screen_safe"}}</option>
                   <option value="v6_local_sync">{{i18n "admin.media_gallery.forensics_identify.layout_v6_local_sync"}}</option>
                   <option value="v7_high_separation">{{i18n "admin.media_gallery.forensics_identify.layout_v7_high_separation"}}</option>
+                  <option value="v8_microgrid">{{i18n "admin.media_gallery.forensics_identify.layout_v8_microgrid"}}</option>
                 </select>
               </div>
 

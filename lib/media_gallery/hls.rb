@@ -205,13 +205,15 @@ module ::MediaGallery
         }
 
         begin
-          File.write(
-            File.join(build_root, "fingerprint_meta.json"),
-            JSON.pretty_generate({
-              "layout" => wm_layout,
-              "codebook_scheme" => codebook_scheme,
-              "segment_seconds" => segment_duration_seconds,
-              "watermark_spec" => {
+          serialized_wm_spec =
+            begin
+              if wm_spec.respond_to?(:deep_stringify_keys)
+                JSON.parse(JSON.dump(wm_spec.deep_stringify_keys))
+              else
+                JSON.parse(JSON.dump(wm_spec))
+              end
+            rescue
+              {
                 "layout" => wm_layout,
                 "kind" => wm_spec[:kind].to_s,
                 "opacity" => wm_spec[:opacity],
@@ -224,7 +226,17 @@ module ::MediaGallery
                 "sync_period" => wm_spec[:sync_period],
                 "sync_opacity" => wm_spec[:sync_opacity],
                 "sync_box_size_frac" => wm_spec[:sync_box_size_frac],
-              },
+                "analysis" => wm_spec[:analysis],
+              }
+            end
+
+          File.write(
+            File.join(build_root, "fingerprint_meta.json"),
+            JSON.pretty_generate({
+              "layout" => wm_layout,
+              "codebook_scheme" => codebook_scheme,
+              "segment_seconds" => segment_duration_seconds,
+              "watermark_spec" => serialized_wm_spec,
               "generated_at" => Time.now.utc.iso8601,
               "media_item_id" => item.id,
               "public_id" => item.public_id

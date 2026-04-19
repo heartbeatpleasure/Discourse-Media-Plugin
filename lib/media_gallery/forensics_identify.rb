@@ -488,23 +488,24 @@ module ::MediaGallery
     private_class_method :packaged_fingerprint_spec_for
 
     def symbolize_spec(h)
-      out = symbolize_hash_keys(h)
-
-      if out[:pairs].is_a?(Array)
-        out[:pairs] = out[:pairs].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
-      end
-
-      if out[:tiles].is_a?(Array)
-        out[:tiles] = out[:tiles].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
-      end
-
-      if out[:sync_pairs].is_a?(Array)
-        out[:sync_pairs] = out[:sync_pairs].map { |p| p.is_a?(Hash) ? symbolize_hash_keys(p) : p }
-      end
-
-      out
+      deep_symbolize(h)
     end
     private_class_method :symbolize_spec
+
+    def deep_symbolize(value)
+      case value
+      when Hash
+        value.each_with_object({}) do |(k, v), acc|
+          kk = k.respond_to?(:to_sym) ? k.to_sym : k
+          acc[kk] = deep_symbolize(v)
+        end
+      when Array
+        value.map { |v| deep_symbolize(v) }
+      else
+        value
+      end
+    end
+    private_class_method :deep_symbolize
 
     def symbolize_hash_keys(h)
       out = {}
@@ -2390,7 +2391,7 @@ end
 
   spec_hash =
     begin
-      base = spec.slice(:layout, :kind, :box_size_frac, :pairs, :tiles, :sync_pairs, :sync_pattern, :sync_period, :sync_opacity, :sync_box_size_frac)
+      base = deep_symbolize(spec)
       base = base.deep_stringify_keys if base.respond_to?(:deep_stringify_keys)
       Digest::SHA256.hexdigest(JSON.dump(base))[0, 16]
     rescue
@@ -3874,19 +3875,130 @@ end
     end
     private_class_method :robust_pair_channel_metrics
 
-    def decode_pair_frame_bytes(bytes:, main_pair_count:, total_pairs:)
-      total = total_pairs.to_i
+    def pair_analysis_config(spec:, box:)
+      analysis = spec.is_a?(Hash) && spec[:analysis].is_a?(Hash) ? spec[:analysis] : {}
+      mode = analysis[:mode].to_s
+      if mode == "templated_pair_grid_v1"
+        {
+          mode: mode,
+          sample_grid_w: [analysis[:sample_grid_w].to_i, 4].max,
+          sample_grid_h: [analysis[:sample_grid_h].to_i, 3].max,
+          template_grid_w: [analysis[:template_grid_w].to_i, 2].max,
+          template_grid_h: [analysis[:template_grid_h].to_i, 2].max,
+          pad_frac: [[analysis[:pad_frac].to_f, 0.0].max, 0.35].min,
+          template_variants: Array(analysis[:template_variants]),
+        }
+      else
+        {
+          mode: "pair_avg_2x1",
+          sample_grid_w: 2,
+          sample_grid_h: 1,
+          template_grid_w: 2,
+          template_grid_h: 1,
+          pad_frac: 0.0,
+          template_variants: [],
+        }
+      end
+    rescue
+      {
+        mode: "pair_avg_2x1",
+        sample_grid_w: 2,
+        sample_grid_h: 1,
+        template_grid_w: 2,
+        template_grid_h: 1,
+        pad_frac: 0.0,
+        template_variants: [],
+      }
+    end
+    private_class_method :pair_analysis_config
+
+    def template_cells_for_pair(pair:, config:)
+      variants = Array(config[:template_variants]).select { |entry| entry.is_a?(Array) }
+      positives = if variants.present?
+        idx = pair.is_a?(Hash) ? pair[:template_variant].to_i : 0
+        Array(variants[idx % variants.length]).map { |cell| [Array(cell)[0].to_i, Array(cell)[1].to_i] }
+      else
+        [[0, 0], [0, config[:template_grid_h].to_i - 1]]
+      end
+      width = [config[:template_grid_w].to_i, 2].max
+      negatives = positives.map { |x, y| [(width - 1) - x.to_i, y.to_i] }
+      { positive: positives, negative: negatives }
+    rescue
+      { positive: [[0, 0]], negative: [[1, 0]] }
+    end
+    private_class_method :template_cells_for_pair
+
+    def pair_score_from_grid(chunk:, config:, pair:)
+      gw = [config[:sample_grid_w].to_i, 1].max
+      gh = [config[:sample_grid_h].to_i, 1].max
+      needed = gw * gh
+      return 0.0 if chunk.nil? || chunk.length < needed
+
+      if config[:mode].to_s != "templated_pair_grid_v1"
+        return chunk[0].to_f - chunk[1].to_f
+      end
+
+      tw = [[config[:template_grid_w].to_i, 1].max, gw].min
+      th = [[config[:template_grid_h].to_i, 1].max, gh].min
+      max_x = [gw - tw, 0].max
+      max_y = [gh - th, 0].max
+      cells = template_cells_for_pair(pair: pair, config: config)
+      candidate_scores = []
+
+      (0..max_y).each do |oy|
+        (0..max_x).each do |ox|
+          sum = 0.0
+          count = 0
+          th.times do |yy|
+            row = ((oy + yy) * gw) + ox
+            tw.times do |xx|
+              sum += chunk[row + xx].to_f
+              count += 1
+            end
+          end
+          next if count <= 0
+
+          local_mean = sum / count.to_f
+          score = 0.0
+          cells[:positive].each do |cx, cy|
+            score += (chunk[((oy + cy.to_i) * gw) + ox + cx.to_i].to_f - local_mean)
+          end
+          cells[:negative].each do |cx, cy|
+            score -= (chunk[((oy + cy.to_i) * gw) + ox + cx.to_i].to_f - local_mean)
+          end
+          candidate_scores << score
+        end
+      end
+
+      return 0.0 if candidate_scores.empty?
+      best = candidate_scores.max_by { |score| score.abs }
+      best_abs = best.to_f.abs
+      alt_abs = candidate_scores.reject { |score| score.equal?(best) }.map { |score| score.to_f.abs }.max.to_f
+      separation = best_abs > 0.0 ? ((best_abs - alt_abs) / best_abs) : 0.0
+      separation = 0.0 if separation.negative?
+      reliability = 0.58 + ([separation, 1.0].min * 0.72)
+      (best.to_f * reliability).round(4)
+    rescue
+      0.0
+    end
+    private_class_method :pair_score_from_grid
+
+    def decode_pair_frame_bytes(bytes:, main_pair_count:, pairs:, spec:, box:)
+      pair_list = Array(pairs)
+      total = pair_list.length
       total = 0 if total.negative?
       main_count = main_pair_count.to_i
       main_count = 0 if main_count.negative?
       main_count = [main_count, total].min
+      config = pair_analysis_config(spec: spec, box: box)
+      bytes_per_pair = [config[:sample_grid_w].to_i, 1].max * [config[:sample_grid_h].to_i, 1].max
 
       main_diffs = []
       sync_diffs = []
       total.times do |i|
-        left = bytes[i * 2].to_i
-        right = bytes[i * 2 + 1].to_i
-        diff = left - right
+        start = i * bytes_per_pair
+        chunk = bytes[start, bytes_per_pair]
+        diff = pair_score_from_grid(chunk: chunk, config: config, pair: pair_list[i])
         if i < main_count
           main_diffs << diff
         else
@@ -3929,7 +4041,6 @@ end
 
     # --------------------- batch sampling ---------------------------------
 
-    
     # Returns an Array of numeric scores (one per time). Does not apply confidence gating.
     def sample_scores_batch_single(file_path:, times:, spec:)
       times = Array(times).map { |t| t.to_f }.select { |t| t >= 0.0 }
@@ -3944,18 +4055,19 @@ end
         pairs = analysis_pairs_for_spec(spec)
         box = spec[:box_size_frac].to_f
         box = 0.12 if box <= 0
-        expected = pairs.length * 2
+        pair_filter = build_pair_filter(in_label: nil, pairs: pairs, box: box, spec: spec)
+        expected = pair_filter[:expected_bytes]
 
         raw = ffmpeg_sample_raw_multi(
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box) }
+          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec) }
         )
 
         out = []
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, total_pairs: pairs.length)
+          decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, pairs: pairs, spec: spec, box: box)
           out << decoded[:payload_score].to_f
           { variant: nil, confidence: decoded[:payload_confidence].to_f, score: decoded[:payload_score].to_f }
         end
@@ -3991,7 +4103,7 @@ end
     end
     private_class_method :sample_scores_batch_single
 
-def sample_variants_batch_single(file_path:, times:, spec:)
+    def sample_variants_batch_single(file_path:, times:, spec:)
       times = Array(times).map { |t| t.to_f }.select { |t| t >= 0.0 }
       return [] if times.empty?
 
@@ -4004,17 +4116,18 @@ def sample_variants_batch_single(file_path:, times:, spec:)
         pairs = analysis_pairs_for_spec(spec)
         box = spec[:box_size_frac].to_f
         box = 0.12 if box <= 0
-        expected = pairs.length * 2
+        pair_filter = build_pair_filter(in_label: nil, pairs: pairs, box: box, spec: spec)
+        expected = pair_filter[:expected_bytes]
 
         raw = ffmpeg_sample_raw_multi(
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box) }
+          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec) }
         )
 
         parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: times) do |bytes|
-          decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, total_pairs: pairs.length)
+          decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, pairs: pairs, spec: spec, box: box)
           variant = decoded[:variant]
           variant = nil if decoded[:payload_confidence].to_f < MIN_CONFIDENCE
           {
@@ -4076,20 +4189,32 @@ def sample_variants_batch_single(file_path:, times:, spec:)
     end
     private_class_method :parse_batch_bytes
 
-    def build_pair_filter(in_label:, pairs:, box:)
+    def build_pair_filter(in_label:, pairs:, box:, spec:)
       pair_count = pairs.length
       return { filter: "null[out]", expected_bytes: 0 } if pair_count == 0
 
+      config = pair_analysis_config(spec: spec, box: box)
+      sample_w = [config[:sample_grid_w].to_i, 1].max
+      sample_h = [config[:sample_grid_h].to_i, 1].max
+      pad_frac = config[:pad_frac].to_f
       pair_w = (box.to_f * 2.0).round(6)
+      pad_x = (box.to_f * pad_frac).round(6)
+      pad_y = (box.to_f * pad_frac).round(6)
+      crop_w = (pair_w + (pad_x * 2.0)).round(6)
+      crop_h = (box.to_f + (pad_y * 2.0)).round(6)
       filters = []
+      label = in_label.presence || "[0:v]"
+
       pairs.each_with_index do |p, idx|
-        x = p[:x]
-        y = p[:y]
-        filters << "#{in_label}crop=w=iw*#{pair_w}:h=ih*#{box}:x=iw*#{x}:y=ih*#{y},scale=2:1:flags=area[p#{idx}]"
+        x = p[:x].to_f
+        y = p[:y].to_f
+        cx = [[x - pad_x, 0.0].max, 1.0 - crop_w].min.round(6)
+        cy = [[y - pad_y, 0.0].max, 1.0 - crop_h].min.round(6)
+        filters << "#{label}crop=w=iw*#{crop_w}:h=ih*#{crop_h}:x=iw*#{cx}:y=ih*#{cy},scale=#{sample_w}:#{sample_h}:flags=area[p#{idx}]"
       end
       stack_inputs = (0...pair_count).map { |i| "[p#{i}]" }.join
       filters << "#{stack_inputs}hstack=inputs=#{pair_count}[out]"
-      { filter: filters.join(";"), expected_bytes: pair_count * 2 }
+      { filter: filters.join(";"), expected_bytes: pair_count * sample_w * sample_h }
     end
     private_class_method :build_pair_filter
 
@@ -4681,8 +4806,10 @@ def clamp_time(t, duration_seconds:)
         sample_pair_score(
           file_path: file_path,
           t: t,
-          pairs: spec[:pairs] || [],
-          box: spec[:box_size_frac].to_f
+          pairs: analysis_pairs_for_spec(spec),
+          main_pair_count: main_pair_count_for_spec(spec),
+          box: spec[:box_size_frac].to_f,
+          spec: spec
         )
       else
         sample_tile_score(
@@ -4697,43 +4824,31 @@ def clamp_time(t, duration_seconds:)
 
     # --------------------- v2 (pairs) --------------------------------------
 
-    def sample_pair_score(file_path:, t:, pairs:, box:)
+    def sample_pair_score(file_path:, t:, pairs:, main_pair_count:, box:, spec:)
       pair_count = pairs.length
       return { variant: nil, confidence: 0.0, score: 0 } if pair_count == 0
 
       box = box.to_f
       box = 0.12 if box <= 0
-      pair_w = (box * 2.0).round(6)
-
-      filters = []
-      pairs.each_with_index do |p, idx|
-        x = p[:x]
-        y = p[:y]
-        filters << "[0:v]crop=w=iw*#{pair_w}:h=ih*#{box}:x=iw*#{x}:y=ih*#{y},scale=2:1:flags=area[p#{idx}]"
-      end
-
-      stack_inputs = (0...pair_count).map { |i| "[p#{i}]" }.join
-      filters << "#{stack_inputs}hstack=inputs=#{pair_count}[out]"
-
-      raw = ffmpeg_sample_raw(file_path: file_path, t: t, filter_complex: filters.join(";"))
+      filter_spec = build_pair_filter(in_label: "[0:v]", pairs: pairs, box: box, spec: spec)
+      raw = ffmpeg_sample_raw(file_path: file_path, t: t, filter_complex: filter_spec[:filter])
       bytes = raw&.bytes || []
 
-      expected = pair_count * 2
+      expected = filter_spec[:expected_bytes].to_i
       return { variant: nil, confidence: 0.0, score: 0 } if bytes.length < expected
 
-      score = 0
-      pair_count.times do |i|
-        left = bytes[i * 2]
-        right = bytes[i * 2 + 1]
-        score += (left - right)
-      end
+      decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pair_count, pairs: pairs, spec: spec, box: box)
+      variant = decoded[:variant]
+      variant = nil if decoded[:payload_confidence].to_f < MIN_CONFIDENCE
 
-      # Positive means left brighter than right (variant A in v2 by construction).
-      variant = score >= 0 ? "a" : "b"
-      conf = (score.abs.to_f / (pair_count * 255.0)).round(4)
-      variant = nil if conf < MIN_CONFIDENCE
-
-      { variant: variant, confidence: conf, score: score }
+      {
+        variant: variant,
+        confidence: decoded[:payload_confidence].to_f,
+        score: decoded[:payload_score].to_f,
+        sync_score: decoded[:sync_score].to_f,
+        sync_confidence: decoded[:sync_confidence].to_f,
+        sync_variant: decoded[:sync_variant]
+      }
     rescue
       { variant: nil, confidence: 0.0, score: 0 }
     end
