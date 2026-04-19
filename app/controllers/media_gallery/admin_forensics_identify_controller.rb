@@ -571,6 +571,79 @@ module ::MediaGallery
       [[pct, 0].max, 100].min / 100.0
     end
 
+    def filemode_observable_capacity(result)
+      meta = result.is_a?(Hash) ? (result["meta"] || {}) : {}
+      observed = result.is_a?(Hash) ? (result["observed"] || {}) : {}
+      counts = []
+      counts << meta["sampled_packaged_segments"].to_i
+      counts << meta["estimated_clip_segments"].to_i
+      counts << meta["effective_max_samples"].to_i
+      counts << meta["samples"].to_i
+      counts << Array(observed["segment_indices"]).length
+      counts << Array(observed["variants_array"]).length
+      counts << result.dig("candidates", 0, "compared").to_i
+      counts.select! { |v| v.to_i > 0 }
+      counts.max.to_i
+    rescue
+      0
+    end
+
+    def decision_policy_thresholds_for(result, mode:)
+      thresholds = {
+        min_usable_any: setting_policy_min_usable_any,
+        min_usable_strong: setting_policy_min_usable_strong,
+        min_match_strong: setting_policy_min_match_strong_ratio,
+        min_delta_strong: setting_policy_min_delta_strong_ratio,
+        max_mismatch_rate_strong: setting_policy_max_mismatch_rate_strong_ratio,
+        min_usable_likely: setting_policy_min_usable_likely,
+        min_match_likely: setting_policy_min_match_likely_ratio,
+        min_delta_likely: setting_policy_min_delta_likely_ratio,
+        min_consistent_chunks_strong: 0,
+        min_consistent_chunks_likely: 0,
+        min_shortlist_gap_strong: 0.0,
+        min_shortlist_gap_likely: 0.0,
+        filemode_hardened: (mode == "file_mode"),
+        short_clip_adapted: false,
+        observable_capacity: 0,
+      }
+      return thresholds unless mode == "file_mode"
+
+      thresholds[:min_usable_strong] = [thresholds[:min_usable_strong], 16].max
+      thresholds[:min_match_strong] = [thresholds[:min_match_strong], 0.90].max
+      thresholds[:min_delta_strong] = [thresholds[:min_delta_strong], 0.18].max
+      thresholds[:max_mismatch_rate_strong] = [thresholds[:max_mismatch_rate_strong], 0.15].min
+      thresholds[:min_usable_likely] = [thresholds[:min_usable_likely], 12].max
+      thresholds[:min_match_likely] = [thresholds[:min_match_likely], 0.82].max
+      thresholds[:min_delta_likely] = [thresholds[:min_delta_likely], 0.14].max
+      thresholds[:min_consistent_chunks_strong] = 2
+      thresholds[:min_consistent_chunks_likely] = 2
+      thresholds[:min_shortlist_gap_strong] = 0.75
+      thresholds[:min_shortlist_gap_likely] = 0.35
+
+      available = filemode_observable_capacity(result)
+      thresholds[:observable_capacity] = available
+      if available > 0
+        adaptive_strong = [[(available * 0.70).ceil, thresholds[:min_usable_any] + 2].max, available].min
+        adaptive_likely = [[(available * 0.50).ceil, thresholds[:min_usable_any]].max, available].min
+        if adaptive_strong < thresholds[:min_usable_strong] || adaptive_likely < thresholds[:min_usable_likely]
+          thresholds[:short_clip_adapted] = true
+        end
+        thresholds[:min_usable_strong] = [thresholds[:min_usable_strong], adaptive_strong].min
+        thresholds[:min_usable_likely] = [thresholds[:min_usable_likely], adaptive_likely].min
+
+        if available <= 12
+          thresholds[:min_consistent_chunks_strong] = 1
+          thresholds[:min_consistent_chunks_likely] = 1
+          thresholds[:min_shortlist_gap_strong] = 0.55
+          thresholds[:min_shortlist_gap_likely] = 0.20
+        end
+      end
+
+      thresholds
+    rescue
+      thresholds
+    end
+
     def identify_from_source_url(source_url, media_item:, max_samples:, max_offset_segments:, layout:, segment_seconds:, auto_extend:)
       max_ext = setting_max_auto_extend_samples
 
@@ -806,15 +879,23 @@ module ::MediaGallery
         result["meta"]["top_compared"] ||= 0
         result["meta"]["top_mismatch_rate"] ||= 1.0
 
+        thresholds = decision_policy_thresholds_for(result, mode: (result.dig("meta", "source_mode").to_s == "hls_playlist" ? "hls_playlist" : "file_mode"))
         result["meta"]["policy"] ||= {
-          "min_usable_any" => setting_policy_min_usable_any,
-          "min_usable_strong" => setting_policy_min_usable_strong,
-          "min_match_strong" => setting_policy_min_match_strong_ratio,
-          "min_delta_strong" => setting_policy_min_delta_strong_ratio,
-          "max_mismatch_rate_strong" => setting_policy_max_mismatch_rate_strong_ratio,
-          "min_usable_likely" => setting_policy_min_usable_likely,
-          "min_match_likely" => setting_policy_min_match_likely_ratio,
-          "min_delta_likely" => setting_policy_min_delta_likely_ratio,
+          "min_usable_any" => thresholds[:min_usable_any],
+          "min_usable_strong" => thresholds[:min_usable_strong],
+          "min_match_strong" => thresholds[:min_match_strong],
+          "min_delta_strong" => thresholds[:min_delta_strong],
+          "max_mismatch_rate_strong" => thresholds[:max_mismatch_rate_strong],
+          "min_usable_likely" => thresholds[:min_usable_likely],
+          "min_match_likely" => thresholds[:min_match_likely],
+          "min_delta_likely" => thresholds[:min_delta_likely],
+          "min_consistent_chunks_strong" => thresholds[:min_consistent_chunks_strong],
+          "min_consistent_chunks_likely" => thresholds[:min_consistent_chunks_likely],
+          "min_shortlist_gap_strong" => thresholds[:min_shortlist_gap_strong],
+          "min_shortlist_gap_likely" => thresholds[:min_shortlist_gap_likely],
+          "filemode_hardened" => thresholds[:filemode_hardened],
+          "short_clip_adapted" => thresholds[:short_clip_adapted],
+          "observable_capacity" => thresholds[:observable_capacity],
         }
 
         result["meta"]["recommendation"] ||= "gather_longer_sample_or_try_url_mode"
@@ -844,16 +925,23 @@ module ::MediaGallery
       result["meta"]["decision_reasons"] = Array(decision_info[:reasons])
       result["meta"]["decision_mode"] = decision_info[:mode]
 
+      thresholds = decision_policy_thresholds_for(result, mode: decision_info[:mode])
       result["meta"]["policy"] = {
-        "min_usable_any" => setting_policy_min_usable_any,
-        "min_usable_strong" => setting_policy_min_usable_strong,
-        "min_match_strong" => setting_policy_min_match_strong_ratio,
-        "min_delta_strong" => setting_policy_min_delta_strong_ratio,
-        "max_mismatch_rate_strong" => setting_policy_max_mismatch_rate_strong_ratio,
-        "min_usable_likely" => setting_policy_min_usable_likely,
-        "min_match_likely" => setting_policy_min_match_likely_ratio,
-        "min_delta_likely" => setting_policy_min_delta_likely_ratio,
-        "filemode_hardened" => true,
+        "min_usable_any" => thresholds[:min_usable_any],
+        "min_usable_strong" => thresholds[:min_usable_strong],
+        "min_match_strong" => thresholds[:min_match_strong],
+        "min_delta_strong" => thresholds[:min_delta_strong],
+        "max_mismatch_rate_strong" => thresholds[:max_mismatch_rate_strong],
+        "min_usable_likely" => thresholds[:min_usable_likely],
+        "min_match_likely" => thresholds[:min_match_likely],
+        "min_delta_likely" => thresholds[:min_delta_likely],
+        "min_consistent_chunks_strong" => thresholds[:min_consistent_chunks_strong],
+        "min_consistent_chunks_likely" => thresholds[:min_consistent_chunks_likely],
+        "min_shortlist_gap_strong" => thresholds[:min_shortlist_gap_strong],
+        "min_shortlist_gap_likely" => thresholds[:min_shortlist_gap_likely],
+        "filemode_hardened" => thresholds[:filemode_hardened],
+        "short_clip_adapted" => thresholds[:short_clip_adapted],
+        "observable_capacity" => thresholds[:observable_capacity],
       }
 
       result["meta"]["recommendation"] =
@@ -938,23 +1026,14 @@ module ::MediaGallery
       top_consistent_chunks = result.dig("meta", "top_consistent_chunks").to_i if top_consistent_chunks <= 0
       shortlist_evidence_gap = result.dig("meta", "shortlist_evidence_gap").to_f
 
-      strong_usable = setting_policy_min_usable_strong
-      strong_match = setting_policy_min_match_strong_ratio
-      strong_delta = setting_policy_min_delta_strong_ratio
-      strong_mismatch = setting_policy_max_mismatch_rate_strong_ratio
-      likely_usable = setting_policy_min_usable_likely
-      likely_match = setting_policy_min_match_likely_ratio
-      likely_delta = setting_policy_min_delta_likely_ratio
-
-      if mode == "file_mode"
-        strong_usable = [strong_usable, 16].max
-        strong_match = [strong_match, 0.90].max
-        strong_delta = [strong_delta, 0.18].max
-        strong_mismatch = [strong_mismatch, 0.15].min
-        likely_usable = [likely_usable, 12].max
-        likely_match = [likely_match, 0.82].max
-        likely_delta = [likely_delta, 0.14].max
-      end
+      thresholds = decision_policy_thresholds_for(result, mode: mode)
+      strong_usable = thresholds[:min_usable_strong]
+      strong_match = thresholds[:min_match_strong]
+      strong_delta = thresholds[:min_delta_strong]
+      strong_mismatch = thresholds[:max_mismatch_rate_strong]
+      likely_usable = thresholds[:min_usable_likely]
+      likely_match = thresholds[:min_match_likely]
+      likely_delta = thresholds[:min_delta_likely]
 
       strong_ok = true
       if usable < strong_usable
@@ -978,13 +1057,13 @@ module ::MediaGallery
           strong_ok = false
           reasons << "evidence_score=#{top_evidence_score.round(4)} < strong=4.0"
         end
-        if top_consistent_chunks < 2
+        if top_consistent_chunks < thresholds[:min_consistent_chunks_strong]
           strong_ok = false
-          reasons << "stable_chunks=#{top_consistent_chunks} < strong=2"
+          reasons << "stable_chunks=#{top_consistent_chunks} < strong=#{thresholds[:min_consistent_chunks_strong]}"
         end
-        if shortlist_evidence_gap < 0.75
+        if shortlist_evidence_gap < thresholds[:min_shortlist_gap_strong]
           strong_ok = false
-          reasons << "shortlist_gap=#{shortlist_evidence_gap.round(4)} < strong=0.75"
+          reasons << "shortlist_gap=#{shortlist_evidence_gap.round(4)} < strong=#{thresholds[:min_shortlist_gap_strong].round(4)}"
         end
       end
 
@@ -1018,8 +1097,8 @@ module ::MediaGallery
       if mode == "file_mode"
         likely_ok &&= (mismatch_rate <= 0.22)
         likely_ok &&= (top_evidence_score >= 2.5)
-        likely_ok &&= (top_consistent_chunks >= 2)
-        likely_ok &&= (shortlist_evidence_gap >= 0.35)
+        likely_ok &&= (top_consistent_chunks >= thresholds[:min_consistent_chunks_likely])
+        likely_ok &&= (shortlist_evidence_gap >= thresholds[:min_shortlist_gap_likely])
       end
 
       if likely_ok

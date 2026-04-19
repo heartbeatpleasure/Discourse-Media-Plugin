@@ -225,6 +225,63 @@ module ::MediaGallery
       [[pct, 0].max, 100].min / 100.0
     end
 
+    def filemode_observable_capacity(result)
+      meta = result.is_a?(Hash) ? (result["meta"] || {}) : {}
+      observed = result.is_a?(Hash) ? (result["observed"] || {}) : {}
+      counts = []
+      counts << meta["sampled_packaged_segments"].to_i
+      counts << meta["estimated_clip_segments"].to_i
+      counts << meta["effective_max_samples"].to_i
+      counts << meta["samples"].to_i
+      counts << Array(observed["segment_indices"]).length
+      counts << Array(observed["variants_array"]).length
+      counts << result.dig("candidates", 0, "compared").to_i
+      counts.select! { |v| v.to_i > 0 }
+      counts.max.to_i
+    rescue
+      0
+    end
+
+    def decision_policy_thresholds_for(result)
+      thresholds = {
+        min_usable_any: setting_policy_min_usable_any,
+        min_usable_strong: setting_policy_min_usable_strong,
+        min_match_strong: setting_policy_min_match_strong_ratio,
+        min_delta_strong: setting_policy_min_delta_strong_ratio,
+        max_mismatch_rate_strong: setting_policy_max_mismatch_rate_strong_ratio,
+        min_usable_likely: setting_policy_min_usable_likely,
+        min_match_likely: setting_policy_min_match_likely_ratio,
+        min_delta_likely: setting_policy_min_delta_likely_ratio,
+        filemode_hardened: true,
+        short_clip_adapted: false,
+        observable_capacity: 0,
+      }
+
+      thresholds[:min_usable_strong] = [thresholds[:min_usable_strong], 16].max
+      thresholds[:min_match_strong] = [thresholds[:min_match_strong], 0.90].max
+      thresholds[:min_delta_strong] = [thresholds[:min_delta_strong], 0.18].max
+      thresholds[:max_mismatch_rate_strong] = [thresholds[:max_mismatch_rate_strong], 0.15].min
+      thresholds[:min_usable_likely] = [thresholds[:min_usable_likely], 12].max
+      thresholds[:min_match_likely] = [thresholds[:min_match_likely], 0.82].max
+      thresholds[:min_delta_likely] = [thresholds[:min_delta_likely], 0.14].max
+
+      available = filemode_observable_capacity(result)
+      thresholds[:observable_capacity] = available
+      if available > 0
+        adaptive_strong = [[(available * 0.70).ceil, thresholds[:min_usable_any] + 2].max, available].min
+        adaptive_likely = [[(available * 0.50).ceil, thresholds[:min_usable_any]].max, available].min
+        if adaptive_strong < thresholds[:min_usable_strong] || adaptive_likely < thresholds[:min_usable_likely]
+          thresholds[:short_clip_adapted] = true
+        end
+        thresholds[:min_usable_strong] = [thresholds[:min_usable_strong], adaptive_strong].min
+        thresholds[:min_usable_likely] = [thresholds[:min_usable_likely], adaptive_likely].min
+      end
+
+      thresholds
+    rescue
+      thresholds
+    end
+
     def apply_no_signal_guard!(result)
       return unless result.is_a?(Hash)
       meta = result["meta"]
@@ -326,15 +383,19 @@ module ::MediaGallery
         result["meta"]["top_compared"] ||= 0
         result["meta"]["top_mismatch_rate"] ||= 1.0
 
+        thresholds = decision_policy_thresholds_for(result)
         result["meta"]["policy"] ||= {
-          "min_usable_any" => setting_policy_min_usable_any,
-          "min_usable_strong" => setting_policy_min_usable_strong,
-          "min_match_strong" => setting_policy_min_match_strong_ratio,
-          "min_delta_strong" => setting_policy_min_delta_strong_ratio,
-          "max_mismatch_rate_strong" => setting_policy_max_mismatch_rate_strong_ratio,
-          "min_usable_likely" => setting_policy_min_usable_likely,
-          "min_match_likely" => setting_policy_min_match_likely_ratio,
-          "min_delta_likely" => setting_policy_min_delta_likely_ratio,
+          "min_usable_any" => thresholds[:min_usable_any],
+          "min_usable_strong" => thresholds[:min_usable_strong],
+          "min_match_strong" => thresholds[:min_match_strong],
+          "min_delta_strong" => thresholds[:min_delta_strong],
+          "max_mismatch_rate_strong" => thresholds[:max_mismatch_rate_strong],
+          "min_usable_likely" => thresholds[:min_usable_likely],
+          "min_match_likely" => thresholds[:min_match_likely],
+          "min_delta_likely" => thresholds[:min_delta_likely],
+          "filemode_hardened" => thresholds[:filemode_hardened],
+          "short_clip_adapted" => thresholds[:short_clip_adapted],
+          "observable_capacity" => thresholds[:observable_capacity],
         }
 
         result["meta"]["recommendation"] ||= "gather_longer_sample_or_try_url_mode"
@@ -358,15 +419,19 @@ module ::MediaGallery
       result["meta"]["top_compared"] = compared
       result["meta"]["top_mismatch_rate"] = mismatch_rate
 
+      thresholds = decision_policy_thresholds_for(result)
       result["meta"]["policy"] = {
-        "min_usable_any" => setting_policy_min_usable_any,
-        "min_usable_strong" => setting_policy_min_usable_strong,
-        "min_match_strong" => setting_policy_min_match_strong_ratio,
-        "min_delta_strong" => setting_policy_min_delta_strong_ratio,
-        "max_mismatch_rate_strong" => setting_policy_max_mismatch_rate_strong_ratio,
-        "min_usable_likely" => setting_policy_min_usable_likely,
-        "min_match_likely" => setting_policy_min_match_likely_ratio,
-        "min_delta_likely" => setting_policy_min_delta_likely_ratio,
+        "min_usable_any" => thresholds[:min_usable_any],
+        "min_usable_strong" => thresholds[:min_usable_strong],
+        "min_match_strong" => thresholds[:min_match_strong],
+        "min_delta_strong" => thresholds[:min_delta_strong],
+        "max_mismatch_rate_strong" => thresholds[:max_mismatch_rate_strong],
+        "min_usable_likely" => thresholds[:min_usable_likely],
+        "min_match_likely" => thresholds[:min_match_likely],
+        "min_delta_likely" => thresholds[:min_delta_likely],
+        "filemode_hardened" => thresholds[:filemode_hardened],
+        "short_clip_adapted" => thresholds[:short_clip_adapted],
+        "observable_capacity" => thresholds[:observable_capacity],
       }
 
       result["meta"]["recommendation"] =
@@ -391,7 +456,8 @@ module ::MediaGallery
       cands = result["candidates"]
       has_cands = cands.is_a?(Array) && cands.present?
 
-      return "insufficient_samples" if usable < setting_policy_min_usable_any
+      thresholds = decision_policy_thresholds_for(result)
+      return "insufficient_samples" if usable < thresholds[:min_usable_any]
       return "no_match" unless has_cands
 
       top = cands[0].is_a?(Hash) ? cands[0]["match_ratio"].to_f : 0.0
@@ -402,16 +468,16 @@ module ::MediaGallery
       compared = cands[0].is_a?(Hash) ? cands[0]["compared"].to_i : 0
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
 
-      if usable >= setting_policy_min_usable_strong &&
-           top >= setting_policy_min_match_strong_ratio &&
-           delta >= setting_policy_min_delta_strong_ratio &&
-           mismatch_rate <= setting_policy_max_mismatch_rate_strong_ratio
+      if usable >= thresholds[:min_usable_strong] &&
+           top >= thresholds[:min_match_strong] &&
+           delta >= thresholds[:min_delta_strong] &&
+           mismatch_rate <= thresholds[:max_mismatch_rate_strong]
         return "conclusive_match"
       end
 
-      if usable >= setting_policy_min_usable_likely &&
-           top >= setting_policy_min_match_likely_ratio &&
-           delta >= setting_policy_min_delta_likely_ratio
+      if usable >= thresholds[:min_usable_likely] &&
+           top >= thresholds[:min_match_likely] &&
+           delta >= thresholds[:min_delta_likely]
         return "likely_match"
       end
 

@@ -1154,19 +1154,37 @@ module ::MediaGallery
       return { run: false, reason: "insufficient_time_budget" } if remaining < TARGETED_FILL_MIN_REMAINING_SECONDS
 
       cands = Array(match[:candidates])
-      return { run: false, reason: "too_few_candidates" } if cands.length < 2
+      return { run: false, reason: "no_candidates" } if cands.blank?
 
       variants = Array(obs[:variants])
       confidences = Array(obs[:confidences])
       nil_or_weak = variants.each_index.count do |i|
         variants[i].blank? || confidences[i].to_f < TARGETED_FILL_LOW_CONFIDENCE
       end
-      return { run: false, reason: "too_few_uncertain_positions" } if nil_or_weak < 4
+      minimum_uncertain = (cands.length < 2 ? 2 : 4)
+      return { run: false, reason: "too_few_uncertain_positions" } if nil_or_weak < minimum_uncertain
 
       meta = match[:meta] || {}
       rank_gap = meta[:shortlist_rank_gap].to_f
       ev_gap = meta[:shortlist_evidence_gap].to_f
-      hard_delta = cands[0][:match_ratio].to_f - cands[1][:match_ratio].to_f
+      hard_delta = if cands.length >= 2
+        cands[0][:match_ratio].to_f - cands[1][:match_ratio].to_f
+      else
+        0.0
+      end
+
+      if cands.length < 2
+        top_compared = cands[0][:compared].to_i
+        top_ratio = cands[0][:match_ratio].to_f
+        usable = variants.count(&:present?)
+        run = usable < [top_compared, Array(obs[:segment_indices]).length].max || top_ratio >= 0.85
+        return {
+          run: run,
+          reason: (run ? "single_candidate_missing_signal" : "single_candidate_already_filled"),
+          remaining_seconds: remaining.round(3),
+          uncertain_positions: nil_or_weak,
+        }
+      end
 
       run = rank_gap < 3.2 || ev_gap < 1.4 || hard_delta.abs < 0.16
       {
@@ -1202,7 +1220,7 @@ module ::MediaGallery
       cands = Array(match[:candidates])
       top = cands[0] || {}
       second = cands[1] || {}
-      return [] if top.blank? || second.blank?
+      return [] if top.blank?
 
       duration = obs[:duration_seconds].to_f
       seg = segment_seconds.to_f
@@ -1210,7 +1228,8 @@ module ::MediaGallery
       total_segments = if sample_times.is_a?(Array) && sample_times.present?
         Array(sample_times).each_with_index.count { |t, _i| t.to_f < duration + 0.05 }
       else
-        (duration / seg).floor
+        observed_max = Array(obs[:segment_indices]).compact.map(&:to_i).max
+        [((duration / seg).ceil), observed_max.to_i + 1].max
       end
       return [] if total_segments <= 0
 
@@ -1222,25 +1241,33 @@ module ::MediaGallery
 
       priorities = []
       total_segments.times do |local_seg|
-        top_v = expected_variant_for_candidate_local_segment(candidate: top, media_item_id: media_item.id, local_segment_index: local_seg)
-        second_v = expected_variant_for_candidate_local_segment(candidate: second, media_item_id: media_item.id, local_segment_index: local_seg)
-        next if top_v.blank? || second_v.blank? || top_v == second_v
-
         conf = conf_by_seg[local_seg].to_f
         next if conf >= 0.75
 
         score = 5.0 - (conf * 4.0)
         score += 1.0 if conf <= 0.0
-        score += 0.5 if (local_seg % [Array(match.dig(:meta, :phase_candidates_seconds)).length, 4].max).zero? rescue false
+
+        if second.present?
+          top_v = expected_variant_for_candidate_local_segment(candidate: top, media_item_id: media_item.id, local_segment_index: local_seg)
+          second_v = expected_variant_for_candidate_local_segment(candidate: second, media_item_id: media_item.id, local_segment_index: local_seg)
+          next if top_v.blank? || second_v.blank? || top_v == second_v
+          score += 0.5 if (local_seg % [Array(match.dig(:meta, :phase_candidates_seconds)).length, 4].max).zero? rescue false
+        else
+          score += 0.8 if conf <= 0.0
+          score += 0.35 if local_seg <= 2 || local_seg >= (total_segments - 3)
+        end
+
         priorities << [score, local_seg]
       end
 
-      return [] if priorities.length < TARGETED_FILL_MIN_DIFF_POSITIONS
+      min_positions = second.present? ? TARGETED_FILL_MIN_DIFF_POSITIONS : 2
+      return [] if priorities.length < min_positions
 
       selected = []
       seen = {}
       priorities.sort_by { |score, seg_idx| [-score, seg_idx] }.each do |_score, seg_idx|
-        ((seg_idx - TARGETED_FILL_NEIGHBORHOOD)..(seg_idx + TARGETED_FILL_NEIGHBORHOOD)).each do |probe|
+        neighborhood = second.present? ? TARGETED_FILL_NEIGHBORHOOD : 0
+        ((seg_idx - neighborhood)..(seg_idx + neighborhood)).each do |probe|
           next if probe < 0 || probe >= total_segments
           next if seen[probe]
           seen[probe] = true
@@ -1283,13 +1310,20 @@ module ::MediaGallery
       delta = [[seg * 0.18, 0.35].max, 0.90].min
       chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
       chunk_size = 15 if chunk_size <= 0
+      use_dense_points = spec.to_h[:layout].to_s == "v8_microgrid" || spec.dig(:analysis, :mode).to_s == "templated_pair_grid_v1"
+      point_offsets = if use_dense_points
+        [-delta, -(delta * 0.5), 0.0, (delta * 0.5), delta].map { |v| v.round(3) }.uniq
+      else
+        [-delta, 0.0, delta].map { |v| v.round(3) }.uniq
+      end
 
       times = []
       mapping = []
       segs.each do |seg_idx|
         mid = ((seg_idx.to_f + 0.5) * seg) + phase_seconds.to_f
         mid = clamp_time(mid, duration_seconds: duration_seconds)
-        [mid, clamp_time(mid - delta, duration_seconds: duration_seconds), clamp_time(mid + delta, duration_seconds: duration_seconds)].each_with_index do |tt, point_idx|
+        point_offsets.each_with_index do |offset_value, point_idx|
+          tt = clamp_time(mid + offset_value.to_f, duration_seconds: duration_seconds)
           times << tt
           mapping << [seg_idx, point_idx, mid]
         end
@@ -1365,7 +1399,7 @@ module ::MediaGallery
         truncated: false,
         effective_max_samples: out_indices.length,
         budget_exhausted: false,
-        targeted_fill_points_per_segment: 3,
+        targeted_fill_points_per_segment: point_offsets.length,
       }
     rescue
       nil
