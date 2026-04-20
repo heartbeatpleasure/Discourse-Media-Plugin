@@ -144,17 +144,38 @@ module ::MediaGallery
       ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
     end
 
-    def parse_template_segments(item, variant: DEFAULT_VARIANT)
+    def parse_template_segment_entries(item, variant: DEFAULT_VARIANT)
       raw = template_playlist_raw(item, variant: variant)
       raise Discourse::NotFound if raw.blank?
 
-      names = []
+      entries = []
+      last_extinf = nil
+
       raw.to_s.each_line do |line|
         l = line.to_s.strip
-        next if l.blank? || l.start_with?("#")
-        names << File.basename(l)
+        next if l.blank?
+
+        if l.start_with?("#EXTINF:")
+          dur_s = l.sub("#EXTINF:", "").split(",").first.to_s
+          dur = dur_s.to_f
+          last_extinf = (dur > 0.0 ? dur : nil)
+          next
+        end
+
+        next if l.start_with?("#")
+
+        entries << {
+          filename: File.basename(l),
+          duration: last_extinf.to_f > 0.0 ? last_extinf.to_f : nil,
+        }
+        last_extinf = nil
       end
-      names
+
+      entries
+    end
+
+    def parse_template_segments(item, variant: DEFAULT_VARIANT)
+      parse_template_segment_entries(item, variant: variant).map { |entry| entry[:filename] }
     end
 
     def choose_random_partial(total_segments)
@@ -215,7 +236,12 @@ module ::MediaGallery
     end
 
     def select_segments(item:, user_id:, mode:, start_segment: 0, segment_count: nil, variant: DEFAULT_VARIANT)
-      seg_names = parse_template_segments(item, variant: variant)
+      template_entries = parse_template_segment_entries(item, variant: variant)
+      seg_names = template_entries.map { |entry| entry[:filename] }
+      duration_by_name = template_entries.each_with_object({}) do |entry, acc|
+        acc[entry[:filename].to_s] = entry[:duration].to_f
+      end
+
       selection = resolve_segment_selection(
         seg_names: seg_names,
         mode: mode,
@@ -237,7 +263,12 @@ module ::MediaGallery
           codebook: codebook_scheme,
         )
 
-        { filename: filename, ab: ab.to_s, segment_index: seg_idx }
+        {
+          filename: filename,
+          ab: ab.to_s,
+          segment_index: seg_idx,
+          duration: duration_by_name[filename.to_s].to_f,
+        }
       end
 
       {
@@ -273,14 +304,29 @@ module ::MediaGallery
       output_path = artifact_file_path(item.public_id, artifact_id, "mp4")
       concat_list = File.join(dir, "concat.txt")
 
-      Dir.mktmpdir("media_gallery_test_download") do |stage_dir|
-        staged_paths = stage_selected_segments!(item: item, selection: selected, stage_dir: stage_dir)
-        File.write(concat_list, staged_paths.map { |p| "file '#{p.gsub("'", %q('\\''))}'" }.join("\n") + "\n")
+      generation_method = "concat_copy_fallback"
+      generation_error = nil
 
-        ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
-          concat_file_path: concat_list,
-          output_path: output_path,
-        )
+      Dir.mktmpdir("media_gallery_test_download") do |stage_dir|
+        staged_entries = stage_selected_segments!(item: item, selection: selected, stage_dir: stage_dir)
+        playlist_path = File.join(stage_dir, "artifact.m3u8")
+        build_local_hls_playlist!(playlist_path: playlist_path, staged_entries: staged_entries)
+
+        begin
+          ::MediaGallery::Ffmpeg.remux_local_hls_to_mp4(
+            playlist_path: playlist_path,
+            output_path: output_path,
+          )
+          generation_method = "hls_playlist_copy"
+        rescue => e
+          generation_error = "#{e.class}: #{e.message}"
+          File.write(concat_list, staged_entries.map { |entry| "file '#{entry[:path].to_s.gsub("'", %q('\''))}'" }.join("\n") + "\n")
+
+          ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
+            concat_file_path: concat_list,
+            output_path: output_path,
+          )
+        end
       end
 
       user = ::User.find_by(id: user_id.to_i)
@@ -300,6 +346,11 @@ module ::MediaGallery
         "random_clip_region" => selected[:random_clip_region],
         "clip_percent_of_video" => selected[:clip_percent_of_video],
         "segment_seconds" => ::MediaGallery::Hls.segment_duration_seconds,
+        "generation_method" => generation_method,
+        "generation_method_fallback_error" => generation_error,
+        "segment_indices" => Array(selected[:segment_entries]).map { |entry| entry[:segment_index].to_i },
+        "segment_filenames" => Array(selected[:segment_entries]).map { |entry| entry[:filename].to_s },
+        "segment_durations" => Array(selected[:segment_entries]).map { |entry| entry[:duration].to_f.round(6) },
         "created_at" => Time.now.utc.iso8601,
         "file_path" => output_path,
         "file_size_bytes" => File.size?(output_path).to_i,
@@ -374,6 +425,33 @@ module ::MediaGallery
     end
     private_class_method :managed_hls_access_for
 
+    def build_local_hls_playlist!(playlist_path:, staged_entries:)
+      entries = Array(staged_entries)
+      raise "no_staged_segments" if entries.blank?
+
+      target_duration = entries.map { |entry| entry[:duration].to_f }.select { |v| v > 0.0 }.max.to_f.ceil
+      target_duration = 1 if target_duration <= 0
+
+      body = []
+      body << "#EXTM3U"
+      body << "#EXT-X-VERSION:3"
+      body << "#EXT-X-PLAYLIST-TYPE:VOD"
+      body << "#EXT-X-TARGETDURATION:#{target_duration}"
+      body << "#EXT-X-MEDIA-SEQUENCE:0"
+
+      entries.each do |entry|
+        dur = entry[:duration].to_f
+        dur = ::MediaGallery::Hls.segment_duration_seconds.to_f if dur <= 0.0
+        body << format("#EXTINF:%.6f,", dur)
+        body << File.basename(entry[:path].to_s)
+      end
+
+      body << "#EXT-X-ENDLIST"
+      File.write(playlist_path, body.join("\n") + "\n")
+      playlist_path
+    end
+    private_class_method :build_local_hls_playlist!
+
     def stage_selected_segments!(item:, selection:, stage_dir:)
       access = managed_hls_access_for(item)
 
@@ -399,7 +477,13 @@ module ::MediaGallery
         end
 
         raise "staged_segment_missing: #{dest}" unless File.exist?(dest)
-        dest
+        {
+          path: dest,
+          filename: filename,
+          segment_index: entry[:segment_index].to_i,
+          duration: entry[:duration].to_f,
+          ab: ab,
+        }
       end
     end
     private_class_method :stage_selected_segments!

@@ -200,6 +200,71 @@ module MediaGallery
       raise "ffmpeg_concat_failed: #{short_err(stderr)}" unless status.success?
     end
 
+    # Remux a local HLS playlist into MP4 using FFmpeg's HLS demuxer.
+    # This mirrors real playlist-based consumption more closely than raw concat
+    # and tends to preserve segment timing/ordering better for forensic tests.
+    def self.remux_local_hls_to_mp4(playlist_path:, output_path:)
+      cmd = [
+        ffmpeg_path,
+        *ffmpeg_common_args,
+        "-y",
+        "-protocol_whitelist",
+        "file,crypto,data,pipe",
+        "-i",
+        playlist_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c",
+        "copy",
+        "-bsf:a",
+        "aac_adtstoasc",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-movflags",
+        "+faststart",
+        output_path,
+      ]
+
+      _stdout, stderr, status = Open3.capture3(*cmd)
+      raise "ffmpeg_hls_remux_failed: #{short_err(stderr)}" unless status.success?
+    end
+
+    def self.probe_keyframe_times(input_path:)
+      cmd = [
+        ffprobe_path,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-skip_frame",
+        "nokey",
+        "-show_entries",
+        "frame=best_effort_timestamp_time,pkt_dts_time,key_frame,pict_type",
+        "-of",
+        "json",
+        input_path,
+      ]
+
+      stdout, stderr, status = Open3.capture3(*cmd)
+      raise "ffprobe_keyframes_failed: #{short_err(stderr)}" unless status.success?
+
+      parsed = JSON.parse(stdout) rescue {}
+      frames = Array(parsed["frames"])
+      times = frames.filter_map do |frame|
+        next unless frame["key_frame"].to_i == 1 || frame["pict_type"].to_s == "I"
+
+        t = frame["best_effort_timestamp_time"].presence || frame["pkt_dts_time"].presence
+        val = t.to_f
+        next if val.nan? || val.infinite? || val.negative?
+
+        val.round(6)
+      end
+
+      times.uniq.sort
+    end
+
     # Milestone 1: package a processed MP4 into a single HLS variant.
     # Produces: output_dir/index.m3u8 + output_dir/seg_XXXXX.ts
     def self.package_hls_single_variant(input_path:, output_dir:, segment_seconds:)
