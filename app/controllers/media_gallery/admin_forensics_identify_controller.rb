@@ -605,6 +605,13 @@ module ::MediaGallery
         filemode_hardened: (mode == "file_mode"),
         short_clip_adapted: false,
         observable_capacity: 0,
+        v8_pairwise_margin_conclusive: 10.0,
+        v8_pairwise_wins_conclusive: 6,
+        v8_rank_gap_conclusive: 12.0,
+        v8_evidence_gap_conclusive: 8.0,
+        v8_sync_anchor_ratio_conclusive: 0.54,
+        v8_min_clip_coverage_conclusive: 0.97,
+        v8_max_mismatch_rate_conclusive: 0.40,
       }
       return thresholds unless mode == "file_mode"
 
@@ -896,6 +903,10 @@ module ::MediaGallery
           "filemode_hardened" => thresholds[:filemode_hardened],
           "short_clip_adapted" => thresholds[:short_clip_adapted],
           "observable_capacity" => thresholds[:observable_capacity],
+          "v8_pairwise_margin_conclusive" => thresholds[:v8_pairwise_margin_conclusive],
+          "v8_pairwise_wins_conclusive" => thresholds[:v8_pairwise_wins_conclusive],
+          "v8_rank_gap_conclusive" => thresholds[:v8_rank_gap_conclusive],
+          "v8_evidence_gap_conclusive" => thresholds[:v8_evidence_gap_conclusive],
         }
 
         result["meta"]["recommendation"] ||= "gather_longer_sample_or_try_url_mode"
@@ -942,6 +953,10 @@ module ::MediaGallery
         "filemode_hardened" => thresholds[:filemode_hardened],
         "short_clip_adapted" => thresholds[:short_clip_adapted],
         "observable_capacity" => thresholds[:observable_capacity],
+        "v8_pairwise_margin_conclusive" => thresholds[:v8_pairwise_margin_conclusive],
+        "v8_pairwise_wins_conclusive" => thresholds[:v8_pairwise_wins_conclusive],
+        "v8_rank_gap_conclusive" => thresholds[:v8_rank_gap_conclusive],
+        "v8_evidence_gap_conclusive" => thresholds[:v8_evidence_gap_conclusive],
       }
 
       result["meta"]["recommendation"] =
@@ -1067,6 +1082,23 @@ module ::MediaGallery
         end
       end
 
+      if mode == "file_mode" && v8_pairwise_conclusive?(result, thresholds: thresholds, top_cand: top_cand, second_cand: second_cand, mismatch_rate: mismatch_rate)
+        return {
+          decision: "conclusive_match",
+          reasons: ["v8_pairwise_artifact_policy_passed"],
+          mode: mode,
+          top_ratio: top,
+          second_ratio: second,
+          delta: delta,
+          mismatches: mismatches,
+          compared: compared,
+          mismatch_rate: mismatch_rate,
+          top_evidence_score: top_evidence_score,
+          top_consistent_chunks: top_consistent_chunks,
+          shortlist_evidence_gap: shortlist_evidence_gap,
+        }
+      end
+
       if strong_ok
         return {
           decision: "conclusive_match",
@@ -1132,6 +1164,64 @@ module ::MediaGallery
         top_consistent_chunks: top_consistent_chunks,
         shortlist_evidence_gap: shortlist_evidence_gap,
       }
+    end
+
+    def v8_layout_result?(result)
+      result.dig("meta", "layout").to_s == "v8_microgrid"
+    rescue
+      false
+    end
+
+    def v8_artifact_like_result?(result, thresholds:)
+      return false unless v8_layout_result?(result)
+      return false if result.dig("meta", "source_mode").to_s == "hls_playlist"
+
+      coverage = result.dig("meta", "clip_segment_coverage_ratio").to_f
+      effective_max_offset = result.dig("meta", "effective_max_offset_segments").to_i
+      chosen_offset = result.dig("meta", "chosen_offset_segments").to_i
+      sync_ratio = result.dig("meta", "sync_anchor_best_ratio").to_f
+      sync_used = result.dig("meta", "sync_anchor_used") == true
+      return false if coverage < thresholds[:v8_min_clip_coverage_conclusive].to_f
+      return false if effective_max_offset > 1
+      return false if chosen_offset.abs > 1
+      return false unless sync_used
+      return false if sync_ratio < thresholds[:v8_sync_anchor_ratio_conclusive].to_f
+
+      true
+    rescue
+      false
+    end
+
+    def v8_pairwise_conclusive?(result, thresholds:, top_cand:, second_cand:, mismatch_rate:)
+      return false unless v8_artifact_like_result?(result, thresholds: thresholds)
+      return false unless Array(result["candidates"]).length >= 2
+      return false unless result.dig("meta", "pairwise_chunk_decoder_used") == true
+
+      top_margin = top_cand["pairwise_chunk_margin_total"].to_f
+      top_wins = top_cand["pairwise_chunks_won"].to_i
+      top_losses = top_cand["pairwise_chunks_lost"].to_i
+      rank_gap = result.dig("meta", "shortlist_rank_gap").to_f
+      evidence_gap = result.dig("meta", "shortlist_evidence_gap").to_f
+      top_rank = top_cand["rank_score"].to_f
+      second_rank = second_cand["rank_score"].to_f
+      second_evidence = second_cand["evidence_score"].to_f
+
+      return false if mismatch_rate > thresholds[:v8_max_mismatch_rate_conclusive].to_f
+      return false if top_margin < thresholds[:v8_pairwise_margin_conclusive].to_f
+      return false if top_wins < thresholds[:v8_pairwise_wins_conclusive].to_i
+      return false if top_wins < (top_losses + 4)
+      return false if rank_gap < thresholds[:v8_rank_gap_conclusive].to_f
+      return false if evidence_gap < thresholds[:v8_evidence_gap_conclusive].to_f
+      return false if top_rank < thresholds[:v8_evidence_gap_conclusive].to_f
+      return false if second_rank > 0.0 && second_evidence > 0.0
+
+      if result.dig("meta", "discriminative_shortlist_decoder_used") == true
+        return false if top_cand["discriminative_margin_total"].to_f < -0.25
+      end
+
+      true
+    rescue
+      false
     end
 
     def apply_statistical_confidence!(result)

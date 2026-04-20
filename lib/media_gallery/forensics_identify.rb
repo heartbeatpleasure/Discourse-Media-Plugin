@@ -2890,10 +2890,11 @@ end
     end
     private_class_method :apply_top_candidate_debug_to_meta!
 
-    def chunk_observation_entries(observed_variants:, observed_confidences:, observed_segment_indices: nil)
+    def chunk_observation_entries(observed_variants:, observed_confidences:, observed_segment_indices: nil, layout: nil)
       obs = Array(observed_variants)
       confs = Array(observed_confidences)
       seg_indices = Array(observed_segment_indices)
+      v8_layout = layout.to_s == "v8_microgrid"
 
       entries = []
       obs.each_with_index do |ov, i|
@@ -2903,7 +2904,16 @@ end
         conf = 0.0 if conf.nan? || conf.infinite? || conf.negative?
         next if conf > 0.0 && conf < MIN_CONFIDENCE
 
-        weight = conf > 0.0 ? (conf * conf) : 1.0
+        weight = if conf > 0.0
+          base_weight = conf * conf
+          if v8_layout
+            base_weight *= conf
+            base_weight *= 0.35 if conf < 0.75
+          end
+          base_weight
+        else
+          1.0
+        end
         next if weight <= 0.0
 
         base_seg_idx = seg_indices[i].present? ? seg_indices[i].to_i : i
@@ -2915,6 +2925,13 @@ end
       []
     end
     private_class_method :chunk_observation_entries
+
+    def v8_layout_name(layout)
+      layout.to_s == "v8_microgrid" ? "v8_microgrid" : layout.to_s
+    rescue
+      layout.to_s
+    end
+    private_class_method :v8_layout_name
 
     def score_candidate_chunk_at_offset(candidate:, chunk:, media_item_id:, offset:, observed_polarity_flip: false)
       comp_w = 0.0
@@ -3141,11 +3158,12 @@ end
     end
     private_class_method :shortlist_should_review_both_polarities?
 
-    def build_candidate_evidence!(candidate:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil, anchor_offset: nil, anchor_trust: 0.0, observed_polarity_flip: false)
+    def build_candidate_evidence!(candidate:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil, anchor_offset: nil, anchor_trust: 0.0, observed_polarity_flip: false, layout: nil)
       entries = chunk_observation_entries(
         observed_variants: observed_variants,
         observed_confidences: observed_confidences,
-        observed_segment_indices: observed_segment_indices
+        observed_segment_indices: observed_segment_indices,
+        layout: layout
       )
       return candidate if entries.empty?
 
@@ -3408,7 +3426,7 @@ end
     end
     private_class_method :pairwise_chunk_decoder_should_run?
 
-    def apply_pairwise_chunk_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, max_off:, anchor_offset:, anchor_trust: 0.0, observed_polarity_flip: false, started_at: nil, budget_seconds: nil)
+    def apply_pairwise_chunk_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, max_off:, anchor_offset:, anchor_trust: 0.0, observed_polarity_flip: false, started_at: nil, budget_seconds: nil, layout: nil)
       return { used: false, reason: "skipped_low_remaining_time" } unless heavy_decoder_time_allows?(started_at: started_at, budget_seconds: budget_seconds, min_remaining_seconds: PAIRWISE_CHUNK_DECODER_MIN_REMAINING_SECONDS)
 
       full_arr = Array(candidates)
@@ -3417,7 +3435,8 @@ end
       entries = chunk_observation_entries(
         observed_variants: observed_variants,
         observed_confidences: observed_confidences,
-        observed_segment_indices: observed_segment_indices
+        observed_segment_indices: observed_segment_indices,
+        layout: layout
       )
       return { used: false, reason: "not_enough_entries_or_candidates" } unless pairwise_chunk_decoder_should_run?(candidates: arr, entries: entries)
 
@@ -3587,7 +3606,7 @@ end
     end
     private_class_method :apply_pairwise_chunk_decoder!
 
-    def apply_discriminative_shortlist_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, observed_polarity_flip: false, started_at: nil, budget_seconds: nil)
+    def apply_discriminative_shortlist_decoder!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, observed_polarity_flip: false, started_at: nil, budget_seconds: nil, layout: nil)
       return { used: false, reason: "skipped_low_remaining_time" } unless heavy_decoder_time_allows?(started_at: started_at, budget_seconds: budget_seconds, min_remaining_seconds: DISCRIMINATIVE_SHORTLIST_MIN_REMAINING_SECONDS)
 
       arr = Array(candidates)
@@ -3604,7 +3623,8 @@ end
       entries = chunk_observation_entries(
         observed_variants: observed_variants,
         observed_confidences: observed_confidences,
-        observed_segment_indices: observed_segment_indices
+        observed_segment_indices: observed_segment_indices,
+        layout: layout
       )
       return { used: false, reason: "not_enough_entries" } if entries.length < DISCRIMINATIVE_SHORTLIST_MIN_ENTRIES.to_i
 
@@ -3750,7 +3770,7 @@ end
     end
     private_class_method :apply_discriminative_shortlist_decoder!
 
-    def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil, anchor_offset: nil, anchor_trust: 0.0, observed_polarity_flip: false)
+    def enrich_candidates_with_evidence!(candidates:, observed_variants:, observed_confidences:, media_item_id:, observed_segment_indices: nil, local_offset_radius: 0, offset_floor: 0, offset_ceil: nil, anchor_offset: nil, anchor_trust: 0.0, observed_polarity_flip: false, layout: nil)
       arr = Array(candidates)
       return arr if arr.empty?
 
@@ -3766,7 +3786,8 @@ end
           offset_ceil: offset_ceil,
           anchor_offset: anchor_offset,
           anchor_trust: anchor_trust,
-          observed_polarity_flip: observed_polarity_flip
+          observed_polarity_flip: observed_polarity_flip,
+          layout: layout
         )
       end
 
@@ -4060,7 +4081,8 @@ end
         observed_variants: chosen_obs,
         observed_confidences: confs,
         observed_segment_indices: seg_indices,
-        media_item_id: media_item.id
+        media_item_id: media_item.id,
+        layout: v8_layout_name(spec&.dig(:layout) || spec&.[](:layout))
       )
       candidates = candidates.first(SHORTLIST_LIMIT)
 
@@ -5034,7 +5056,8 @@ end
     offset_ceil: max_off,
     anchor_offset: best_offset,
     anchor_trust: (use_chunked ? 0.0 : anchor_trust),
-    observed_polarity_flip: best_polarity_flip
+    observed_polarity_flip: best_polarity_flip,
+    layout: v8_layout_name(spec&.dig(:layout) || spec&.[](:layout))
   )
 
   pairwise_chunk_decoder = if use_chunked
@@ -5051,7 +5074,8 @@ end
       anchor_trust: anchor_trust,
       observed_polarity_flip: best_polarity_flip,
       started_at: started_at,
-      budget_seconds: time_budget_seconds
+      budget_seconds: time_budget_seconds,
+      layout: v8_layout_name(spec&.dig(:layout) || spec&.[](:layout))
     )
   end
 
@@ -5066,7 +5090,8 @@ end
       media_item_id: media_item.id,
       observed_polarity_flip: best_polarity_flip,
       started_at: started_at,
-      budget_seconds: time_budget_seconds
+      budget_seconds: time_budget_seconds,
+      layout: v8_layout_name(spec&.dig(:layout) || spec&.[](:layout))
     )
   end
 
