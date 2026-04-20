@@ -304,28 +304,29 @@ module ::MediaGallery
       output_path = artifact_file_path(item.public_id, artifact_id, "mp4")
       concat_list = File.join(dir, "concat.txt")
 
-      generation_method = "concat_copy_fallback"
+      generation_method = "concat_copy_primary"
       generation_error = nil
 
       Dir.mktmpdir("media_gallery_test_download") do |stage_dir|
         staged_entries = stage_selected_segments!(item: item, selection: selected, stage_dir: stage_dir)
         playlist_path = File.join(stage_dir, "artifact.m3u8")
         build_local_hls_playlist!(playlist_path: playlist_path, staged_entries: staged_entries)
-
         begin
-          ::MediaGallery::Ffmpeg.remux_local_hls_to_mp4(
-            playlist_path: playlist_path,
-            output_path: output_path,
-          )
-          generation_method = "hls_playlist_copy"
-        rescue => e
-          generation_error = "#{e.class}: #{e.message}"
-          File.write(concat_list, staged_entries.map { |entry| "file '#{entry[:path].to_s.gsub("'", %q('\''))}'" }.join("\n") + "\n")
+          File.write(concat_list, staged_entries.map { |entry| "file '#{entry[:path].to_s.gsub("'", %q('\''))}'" }.join("
+") + "
+")
 
           ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
             concat_file_path: concat_list,
             output_path: output_path,
           )
+        rescue => e
+          generation_error = "#{e.class}: #{e.message}"
+          ::MediaGallery::Ffmpeg.remux_local_hls_to_mp4(
+            playlist_path: playlist_path,
+            output_path: output_path,
+          )
+          generation_method = "hls_playlist_fallback"
         end
       end
 

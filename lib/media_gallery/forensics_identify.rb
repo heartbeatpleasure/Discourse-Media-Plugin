@@ -163,6 +163,7 @@ module ::MediaGallery
           probed_duration_seconds = probe_duration_seconds(file_path)
 
           packaged_midpoints = sample_times.presence || packaged_segment_midpoints_for(media_item: media_item)
+          packaged_duration_seconds = packaged_total_duration_for(media_item: media_item)
           inferred_sample_plan =
             if sample_times.present?
               nil
@@ -175,12 +176,22 @@ module ::MediaGallery
               )
             end
 
-          sample_times =
-            if inferred_sample_plan&.dig(:usable)
-              inferred_sample_plan[:points]
+          keyframe_plan_rejected_reason = nil
+          use_inferred_sample_plan = false
+          if inferred_sample_plan&.dig(:usable)
+            if packaged_midpoints.present?
+              keyframe_plan_rejected_reason = "packaged_playlist_midpoints_preferred"
+            elsif packaged_duration_seconds.to_f > 0.0 && probed_duration_seconds.to_f > 0.0 &&
+                  probed_duration_seconds.to_f >= (packaged_duration_seconds.to_f * 0.9)
+              keyframe_plan_rejected_reason = "near_full_clip_prefers_packaged_timing"
             else
-              packaged_midpoints
+              use_inferred_sample_plan = true
             end
+          elsif inferred_sample_plan.present?
+            keyframe_plan_rejected_reason = inferred_sample_plan[:reason].to_s.presence || "keyframe_plan_not_usable"
+          end
+
+          sample_times = use_inferred_sample_plan ? inferred_sample_plan[:points] : packaged_midpoints
 
           offset_window_profile = filemode_offset_window_profile(
             requested_max_offset_segments: max_offset_segments,
@@ -190,7 +201,20 @@ module ::MediaGallery
           )
           effective_max_offset_segments = offset_window_profile[:effective].to_i
 
-          if inferred_sample_plan&.dig(:usable)
+          obs, match = identify_with_phase_search(
+            media_item: media_item,
+            file_path: file_path,
+            segment_seconds: seg,
+            spec: spec,
+            max_samples: max_samples,
+            sample_times: sample_times,
+            file_size_bytes: file_size_bytes,
+            started_at: started_at,
+            time_budget_seconds: filemode_budget_seconds,
+            max_offset_segments: effective_max_offset_segments
+          )
+
+          if obs.blank? || match.blank?
             obs = extract_observed_variants(
               file_path: file_path,
               segment_seconds: seg,
@@ -215,59 +239,25 @@ module ::MediaGallery
               started_at: started_at,
               time_budget_seconds: filemode_budget_seconds
             )
-            match[:meta] ||= {}
-            match[:meta][:phase_search_used] = false
-            match[:meta][:phase_search_refined] = false
-            match[:meta][:phase_search_budget_exhausted] = false
-            match[:meta][:file_sample_time_source] = inferred_sample_plan[:source].to_s
-            match[:meta][:file_keyframe_count] = inferred_sample_plan[:keyframe_count].to_i
-            match[:meta][:file_keyframe_interval_median] = inferred_sample_plan[:interval_median].to_f.round(4)
-            match[:meta][:file_keyframe_interval_consistency] = inferred_sample_plan[:interval_consistency].to_f.round(4)
-            match[:meta][:file_keyframe_plan_points] = Array(inferred_sample_plan[:points]).length
-            match[:meta][:file_keyframe_plan_expanded] = (inferred_sample_plan[:expanded] == true)
+          end
+
+          match[:meta] ||= {}
+          match[:meta][:file_sample_time_source] ||= if use_inferred_sample_plan
+            inferred_sample_plan[:source].to_s.presence || "file_keyframe_midpoints"
+          elsif packaged_midpoints.present?
+            "packaged_playlist_midpoints"
           else
-            obs, match = identify_with_phase_search(
-              media_item: media_item,
-              file_path: file_path,
-              segment_seconds: seg,
-              spec: spec,
-              max_samples: max_samples,
-              sample_times: sample_times,
-              file_size_bytes: file_size_bytes,
-              started_at: started_at,
-              time_budget_seconds: filemode_budget_seconds,
-              max_offset_segments: effective_max_offset_segments
-            )
-
-            if obs.blank? || match.blank?
-              obs = extract_observed_variants(
-                file_path: file_path,
-                segment_seconds: seg,
-                spec: spec,
-                max_samples: max_samples,
-                sample_times: sample_times,
-                file_size_bytes: file_size_bytes,
-                started_at: started_at,
-                time_budget_seconds: filemode_budget_seconds
-              )
-
-              match = match_fingerprints(
-                media_item: media_item,
-                observed_variants: obs[:variants],
-                observed_confidences: obs[:confidences],
-                observed_scores: obs[:scores],
-                observed_sync_variants: obs[:sync_variants],
-                observed_sync_confidences: obs[:sync_confidences],
-                observed_segment_indices: obs[:segment_indices],
-                spec: spec,
-                max_offset_segments: effective_max_offset_segments,
-                started_at: started_at,
-                time_budget_seconds: filemode_budget_seconds
-              )
-            end
-
-            match[:meta] ||= {}
-            match[:meta][:file_sample_time_source] ||= packaged_midpoints.present? ? "packaged_playlist_midpoints" : "uniform_segment_midpoints"
+            "uniform_segment_midpoints"
+          end
+          if inferred_sample_plan.present?
+            match[:meta][:file_keyframe_plan_considered] = true
+            match[:meta][:file_keyframe_count] = inferred_sample_plan[:keyframe_count].to_i if inferred_sample_plan[:keyframe_count]
+            match[:meta][:file_keyframe_interval_median] = inferred_sample_plan[:interval_median].to_f.round(4) if inferred_sample_plan[:interval_median]
+            match[:meta][:file_keyframe_interval_consistency] = inferred_sample_plan[:interval_consistency].to_f.round(4) if inferred_sample_plan[:interval_consistency]
+            match[:meta][:file_keyframe_plan_points] = Array(inferred_sample_plan[:points]).length if inferred_sample_plan[:points]
+            match[:meta][:file_keyframe_plan_expanded] = (inferred_sample_plan[:expanded] == true)
+            match[:meta][:file_keyframe_plan_used] = use_inferred_sample_plan
+            match[:meta][:file_keyframe_plan_rejected_reason] = keyframe_plan_rejected_reason if keyframe_plan_rejected_reason.present?
           end
 
           refined = maybe_refine_filemode_observations(
@@ -2651,6 +2641,17 @@ module ::MediaGallery
     end
     # Attempts to derive accurate segment midpoints from the packaged (template) HLS playlist on disk.
     # This avoids assuming fixed `segment_seconds` and reduces drift-related sampling errors.
+    def packaged_total_duration_for(media_item:)
+      segments = packaged_segments_for(media_item: media_item)
+      return nil if segments.blank?
+
+      total = Array(segments).sum { |entry| entry[:duration].to_f }
+      total > 0.0 ? total : nil
+    rescue
+      nil
+    end
+    private_class_method :packaged_total_duration_for
+
     def packaged_segment_midpoints_for(media_item:)
       return nil if media_item.blank?
       return nil unless defined?(::MediaGallery::Hls) && ::MediaGallery::Hls.respond_to?(:variants)
