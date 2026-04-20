@@ -621,6 +621,7 @@ module ::MediaGallery
         v8_second_match_anchorless_max: 0.52,
         v8_min_consistent_chunks_anchorless_conclusive: 3,
         v8_second_evidence_anchorless_max: -4.0,
+        v8_min_top_evidence_anchorless_conclusive: 4.5,
       }
       return thresholds unless mode == "file_mode"
 
@@ -925,6 +926,7 @@ module ::MediaGallery
           "v8_second_match_anchorless_max" => thresholds[:v8_second_match_anchorless_max],
           "v8_min_consistent_chunks_anchorless_conclusive" => thresholds[:v8_min_consistent_chunks_anchorless_conclusive],
           "v8_second_evidence_anchorless_max" => thresholds[:v8_second_evidence_anchorless_max],
+          "v8_min_top_evidence_anchorless_conclusive" => thresholds[:v8_min_top_evidence_anchorless_conclusive],
         }
 
         result["meta"]["recommendation"] ||= "gather_longer_sample_or_try_url_mode"
@@ -976,6 +978,16 @@ module ::MediaGallery
         "v8_pairwise_wins_conclusive" => thresholds[:v8_pairwise_wins_conclusive],
         "v8_rank_gap_conclusive" => thresholds[:v8_rank_gap_conclusive],
         "v8_evidence_gap_conclusive" => thresholds[:v8_evidence_gap_conclusive],
+        "v8_pairwise_margin_anchorless_conclusive" => thresholds[:v8_pairwise_margin_anchorless_conclusive],
+        "v8_pairwise_wins_anchorless_conclusive" => thresholds[:v8_pairwise_wins_anchorless_conclusive],
+        "v8_rank_gap_anchorless_conclusive" => thresholds[:v8_rank_gap_anchorless_conclusive],
+        "v8_evidence_gap_anchorless_conclusive" => thresholds[:v8_evidence_gap_anchorless_conclusive],
+        "v8_match_delta_anchorless_conclusive" => thresholds[:v8_match_delta_anchorless_conclusive],
+        "v8_weighted_delta_anchorless_conclusive" => thresholds[:v8_weighted_delta_anchorless_conclusive],
+        "v8_second_match_anchorless_max" => thresholds[:v8_second_match_anchorless_max],
+        "v8_min_consistent_chunks_anchorless_conclusive" => thresholds[:v8_min_consistent_chunks_anchorless_conclusive],
+        "v8_second_evidence_anchorless_max" => thresholds[:v8_second_evidence_anchorless_max],
+        "v8_min_top_evidence_anchorless_conclusive" => thresholds[:v8_min_top_evidence_anchorless_conclusive],
       }
 
       result["meta"]["recommendation"] =
@@ -1269,7 +1281,7 @@ module ::MediaGallery
       anchorless_ok &&= (top_consistent >= thresholds[:v8_min_consistent_chunks_anchorless_conclusive].to_i)
       anchorless_ok &&= (second_consistent <= 1)
       anchorless_ok &&= (second_evidence <= thresholds[:v8_second_evidence_anchorless_max].to_f)
-      anchorless_ok &&= (top_evidence >= (thresholds[:v8_evidence_gap_anchorless_conclusive].to_f / 2.0))
+      anchorless_ok &&= (top_evidence >= thresholds[:v8_min_top_evidence_anchorless_conclusive].to_f)
 
       if anchorless_ok
         return {
