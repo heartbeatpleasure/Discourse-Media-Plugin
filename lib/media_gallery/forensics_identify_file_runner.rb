@@ -464,7 +464,6 @@ module ::MediaGallery
       discriminative_used = result.dig("meta", "discriminative_shortlist_decoder_used") == true
       discriminative_margin = top_cand["discriminative_margin_total"].to_f
 
-      return { used: false, basis: nil, reason: nil } if mismatch_rate > thresholds[:v8_max_mismatch_rate_conclusive].to_f
       return { used: false, basis: nil, reason: nil } if top_margin < thresholds[:v8_pairwise_margin_conclusive].to_f
       return { used: false, basis: nil, reason: nil } if top_wins < thresholds[:v8_pairwise_wins_conclusive].to_i
       return { used: false, basis: nil, reason: nil } if top_wins < (top_losses + 4)
@@ -474,7 +473,7 @@ module ::MediaGallery
       return { used: false, basis: nil, reason: nil } if second_rank > 0.0 && second_evidence > 0.0
       return { used: false, basis: nil, reason: nil } if discriminative_used && discriminative_margin < -0.25
 
-      if sync_used && sync_ratio >= thresholds[:v8_sync_anchor_ratio_conclusive].to_f
+      if sync_used && mismatch_rate <= thresholds[:v8_max_mismatch_rate_conclusive].to_f && sync_ratio >= thresholds[:v8_sync_anchor_ratio_conclusive].to_f
         return {
           used: true,
           basis: "sync_anchor_pairwise",
@@ -483,6 +482,7 @@ module ::MediaGallery
       end
 
       anchorless_ok = true
+      anchorless_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_conclusive].to_f)
       anchorless_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_anchorless_conclusive].to_f)
       anchorless_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_anchorless_conclusive].to_i)
       anchorless_ok &&= (top_losses <= 1)
@@ -506,6 +506,7 @@ module ::MediaGallery
 
       dominant_ok = true
       dominant_ok &&= !sync_used
+      dominant_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_conclusive].to_f)
       dominant_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_dominant_conclusive].to_f)
       dominant_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_dominant_conclusive].to_i)
       dominant_ok &&= (top_losses <= 2)
@@ -553,6 +554,7 @@ module ::MediaGallery
 
       asymmetric_ok = true
       asymmetric_ok &&= !sync_used
+      asymmetric_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_conclusive].to_f)
       asymmetric_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_asymmetric_conclusive].to_f)
       asymmetric_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_asymmetric_conclusive].to_i)
       asymmetric_ok &&= (top_losses <= 2)
