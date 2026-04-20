@@ -632,6 +632,15 @@ module ::MediaGallery
         v8_min_top_ratio_dominant_conclusive: 0.60,
         v8_max_second_evidence_dominant: 0.5,
         v8_min_top_evidence_dominant_conclusive: -2.0,
+        v8_pairwise_margin_asymmetric_conclusive: 18.0,
+        v8_pairwise_wins_asymmetric_conclusive: 7,
+        v8_rank_gap_asymmetric_conclusive: 35.0,
+        v8_evidence_gap_asymmetric_conclusive: 12.0,
+        v8_match_delta_asymmetric_conclusive: 0.24,
+        v8_weighted_delta_asymmetric_conclusive: 0.24,
+        v8_second_match_asymmetric_max: 0.40,
+        v8_min_top_ratio_asymmetric_conclusive: 0.62,
+        v8_max_second_evidence_asymmetric: 0.25,
       }
       return thresholds unless mode == "file_mode"
 
@@ -947,6 +956,15 @@ module ::MediaGallery
         "v8_min_top_ratio_dominant_conclusive" => thresholds[:v8_min_top_ratio_dominant_conclusive],
         "v8_max_second_evidence_dominant" => thresholds[:v8_max_second_evidence_dominant],
         "v8_min_top_evidence_dominant_conclusive" => thresholds[:v8_min_top_evidence_dominant_conclusive],
+        "v8_pairwise_margin_asymmetric_conclusive" => thresholds[:v8_pairwise_margin_asymmetric_conclusive],
+        "v8_pairwise_wins_asymmetric_conclusive" => thresholds[:v8_pairwise_wins_asymmetric_conclusive],
+        "v8_rank_gap_asymmetric_conclusive" => thresholds[:v8_rank_gap_asymmetric_conclusive],
+        "v8_evidence_gap_asymmetric_conclusive" => thresholds[:v8_evidence_gap_asymmetric_conclusive],
+        "v8_match_delta_asymmetric_conclusive" => thresholds[:v8_match_delta_asymmetric_conclusive],
+        "v8_weighted_delta_asymmetric_conclusive" => thresholds[:v8_weighted_delta_asymmetric_conclusive],
+        "v8_second_match_asymmetric_max" => thresholds[:v8_second_match_asymmetric_max],
+        "v8_min_top_ratio_asymmetric_conclusive" => thresholds[:v8_min_top_ratio_asymmetric_conclusive],
+        "v8_max_second_evidence_asymmetric" => thresholds[:v8_max_second_evidence_asymmetric],
         }
 
         result["meta"]["recommendation"] ||= "gather_longer_sample_or_try_url_mode"
@@ -1332,6 +1350,28 @@ module ::MediaGallery
           used: true,
           basis: "anchorless_pairwise_dominant",
           reason: "v8_pairwise_dominant_policy_passed",
+        }
+      end
+
+      asymmetric_ok = true
+      asymmetric_ok &&= !sync_used
+      asymmetric_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_asymmetric_conclusive].to_f)
+      asymmetric_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_asymmetric_conclusive].to_i)
+      asymmetric_ok &&= (top_losses <= 2)
+      asymmetric_ok &&= (rank_gap >= thresholds[:v8_rank_gap_asymmetric_conclusive].to_f)
+      asymmetric_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_asymmetric_conclusive].to_f)
+      asymmetric_ok &&= (raw_delta >= thresholds[:v8_match_delta_asymmetric_conclusive].to_f)
+      asymmetric_ok &&= (weighted_delta >= thresholds[:v8_weighted_delta_asymmetric_conclusive].to_f)
+      asymmetric_ok &&= (second_ratio <= thresholds[:v8_second_match_asymmetric_max].to_f)
+      asymmetric_ok &&= (top_ratio >= thresholds[:v8_min_top_ratio_asymmetric_conclusive].to_f)
+      asymmetric_ok &&= (top_consistent >= 1)
+      asymmetric_ok &&= (second_evidence <= thresholds[:v8_max_second_evidence_asymmetric].to_f)
+
+      if asymmetric_ok
+        return {
+          used: true,
+          basis: "anchorless_pairwise_asymmetric",
+          reason: "v8_pairwise_asymmetric_policy_passed",
         }
       end
 
