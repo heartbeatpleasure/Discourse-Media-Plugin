@@ -4270,11 +4270,6 @@ end
           pad_frac: [[analysis[:pad_frac].to_f, 0.0].max, 0.35].min,
           template_variants: Array(analysis[:template_variants]),
           score_mode: analysis[:score_mode].to_s,
-          min_local_std: analysis.key?(:min_local_std) ? analysis[:min_local_std].to_f : 8.0,
-          min_local_range: analysis.key?(:min_local_range) ? analysis[:min_local_range].to_f : 18.0,
-          min_candidate_separation: analysis.key?(:min_candidate_separation) ? analysis[:min_candidate_separation].to_f : 0.18,
-          weak_region_reliability_floor: analysis.key?(:weak_region_reliability_floor) ? analysis[:weak_region_reliability_floor].to_f : 0.10,
-          score_abs_floor: analysis.key?(:score_abs_floor) ? analysis[:score_abs_floor].to_f : 0.65,
         }
       else
         {
@@ -4368,10 +4363,9 @@ end
             center_dy = center_oy.positive? ? ((oy - center_oy).abs / center_oy) : 0.0
             center_penalty = 1.0 - ([center_dx, 1.0].min * 0.12) - ([center_dy, 1.0].min * 0.10)
             center_penalty = 0.70 if center_penalty < 0.70
-            contrast_bonus = [[local_std / 18.0, 1.0].min, 0.20].max
-            range_bonus = [[local_range / 34.0, 1.0].min, 0.18].max
-            weighted = score * center_penalty * contrast_bonus * range_bonus
-            candidate_scores << { weighted: weighted.to_f, raw: score.to_f, std: local_std.to_f, range: local_range.to_f }
+            contrast_bonus = [[local_std / 18.0, 1.0].min, 0.35].max
+            weighted = score * center_penalty * contrast_bonus
+            candidate_scores << { weighted: weighted.to_f, raw: score.to_f, std: local_std.to_f }
           else
             cells[:positive].each do |cx, cy|
               score += (chunk[((oy + cy.to_i) * gw) + ox + cx.to_i].to_f - local_mean)
@@ -4379,7 +4373,7 @@ end
             cells[:negative].each do |cx, cy|
               score -= (chunk[((oy + cy.to_i) * gw) + ox + cx.to_i].to_f - local_mean)
             end
-            candidate_scores << { weighted: score.to_f, raw: score.to_f, std: local_std.to_f, range: local_range.to_f }
+            candidate_scores << { weighted: score.to_f, raw: score.to_f, std: local_std.to_f }
           end
         end
       end
@@ -4392,31 +4386,7 @@ end
       separation = 0.0 if separation.negative?
       reliability = 0.58 + ([separation, 1.0].min * 0.72)
       if score_mode == "center_biased_zscore"
-        min_std = [config[:min_local_std].to_f, 1.0].max
-        min_range = [config[:min_local_range].to_f, 1.0].max
-        min_sep = [config[:min_candidate_separation].to_f, 0.0].max
-        weak_floor = [[config[:weak_region_reliability_floor].to_f, 0.02].max, 0.30].min
-        score_floor = [config[:score_abs_floor].to_f, 0.0].max
-        std_factor = [[best[:std].to_f / (min_std * 1.6), 1.0].min, 0.0].max
-        range_factor = [[best[:range].to_f / (min_range * 1.6), 1.0].min, 0.0].max
-        texture_factor = [0.10, (std_factor * 0.55) + (range_factor * 0.45)].max
-        separation_factor = [0.10, [separation / [min_sep, 0.08].max, 1.0].min].max
-        reliability *= texture_factor
-        reliability *= (0.25 + (separation_factor * 0.75))
-
-        if best[:std].to_f < min_std && best[:range].to_f < min_range
-          reliability *= weak_floor
-        elsif best[:std].to_f < (min_std * 0.85) || best[:range].to_f < (min_range * 0.85)
-          reliability *= 0.55
-        end
-
-        if separation < min_sep && best[:range].to_f < (min_range * 1.15)
-          reliability *= weak_floor
-        end
-
-        raw = best[:raw].to_f * reliability
-        return 0.0 if raw.abs < score_floor && (best[:std].to_f < min_std || best[:range].to_f < min_range)
-        return raw.round(4)
+        reliability *= [[best[:std].to_f / 14.0, 1.0].min, 0.55].max
       end
       (best[:raw].to_f * reliability).round(4)
     rescue
