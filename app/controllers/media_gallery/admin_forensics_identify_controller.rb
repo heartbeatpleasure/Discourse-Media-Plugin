@@ -622,6 +622,16 @@ module ::MediaGallery
         v8_min_consistent_chunks_anchorless_conclusive: 3,
         v8_second_evidence_anchorless_max: -4.0,
         v8_min_top_evidence_anchorless_conclusive: 4.5,
+        v8_pairwise_margin_dominant_conclusive: 14.0,
+        v8_pairwise_wins_dominant_conclusive: 7,
+        v8_rank_gap_dominant_conclusive: 30.0,
+        v8_evidence_gap_dominant_conclusive: 9.0,
+        v8_match_delta_dominant_conclusive: 0.22,
+        v8_weighted_delta_dominant_conclusive: 0.20,
+        v8_second_match_dominant_max: 0.42,
+        v8_min_top_ratio_dominant_conclusive: 0.60,
+        v8_max_second_evidence_dominant: 0.5,
+        v8_min_top_evidence_dominant_conclusive: -2.0,
       }
       return thresholds unless mode == "file_mode"
 
@@ -927,6 +937,16 @@ module ::MediaGallery
           "v8_min_consistent_chunks_anchorless_conclusive" => thresholds[:v8_min_consistent_chunks_anchorless_conclusive],
           "v8_second_evidence_anchorless_max" => thresholds[:v8_second_evidence_anchorless_max],
           "v8_min_top_evidence_anchorless_conclusive" => thresholds[:v8_min_top_evidence_anchorless_conclusive],
+        "v8_pairwise_margin_dominant_conclusive" => thresholds[:v8_pairwise_margin_dominant_conclusive],
+        "v8_pairwise_wins_dominant_conclusive" => thresholds[:v8_pairwise_wins_dominant_conclusive],
+        "v8_rank_gap_dominant_conclusive" => thresholds[:v8_rank_gap_dominant_conclusive],
+        "v8_evidence_gap_dominant_conclusive" => thresholds[:v8_evidence_gap_dominant_conclusive],
+        "v8_match_delta_dominant_conclusive" => thresholds[:v8_match_delta_dominant_conclusive],
+        "v8_weighted_delta_dominant_conclusive" => thresholds[:v8_weighted_delta_dominant_conclusive],
+        "v8_second_match_dominant_max" => thresholds[:v8_second_match_dominant_max],
+        "v8_min_top_ratio_dominant_conclusive" => thresholds[:v8_min_top_ratio_dominant_conclusive],
+        "v8_max_second_evidence_dominant" => thresholds[:v8_max_second_evidence_dominant],
+        "v8_min_top_evidence_dominant_conclusive" => thresholds[:v8_min_top_evidence_dominant_conclusive],
         }
 
         result["meta"]["recommendation"] ||= "gather_longer_sample_or_try_url_mode"
@@ -1288,6 +1308,30 @@ module ::MediaGallery
           used: true,
           basis: "anchorless_pairwise_strong",
           reason: "v8_pairwise_anchorless_policy_passed",
+        }
+      end
+
+      dominant_ok = true
+      dominant_ok &&= !sync_used
+      dominant_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_dominant_conclusive].to_f)
+      dominant_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_dominant_conclusive].to_i)
+      dominant_ok &&= (top_losses <= 2)
+      dominant_ok &&= (rank_gap >= thresholds[:v8_rank_gap_dominant_conclusive].to_f)
+      dominant_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_dominant_conclusive].to_f)
+      dominant_ok &&= (raw_delta >= thresholds[:v8_match_delta_dominant_conclusive].to_f)
+      dominant_ok &&= (weighted_delta >= thresholds[:v8_weighted_delta_dominant_conclusive].to_f)
+      dominant_ok &&= (second_ratio <= thresholds[:v8_second_match_dominant_max].to_f)
+      dominant_ok &&= (top_ratio >= thresholds[:v8_min_top_ratio_dominant_conclusive].to_f)
+      dominant_ok &&= (top_consistent >= 1)
+      dominant_ok &&= (second_consistent <= 2)
+      dominant_ok &&= (second_evidence <= thresholds[:v8_max_second_evidence_dominant].to_f)
+      dominant_ok &&= (top_evidence >= thresholds[:v8_min_top_evidence_dominant_conclusive].to_f)
+
+      if dominant_ok
+        return {
+          used: true,
+          basis: "anchorless_pairwise_dominant",
+          reason: "v8_pairwise_dominant_policy_passed",
         }
       end
 
