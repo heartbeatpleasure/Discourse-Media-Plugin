@@ -641,6 +641,17 @@ module ::MediaGallery
         v8_second_match_asymmetric_max: 0.40,
         v8_min_top_ratio_asymmetric_conclusive: 0.62,
         v8_max_second_evidence_asymmetric: 0.25,
+        v8_pairwise_margin_sparse_longform_conclusive: 18.0,
+        v8_pairwise_wins_sparse_longform_conclusive: 6,
+        v8_rank_gap_sparse_longform_conclusive: 45.0,
+        v8_evidence_gap_sparse_longform_conclusive: 12.0,
+        v8_min_top_evidence_sparse_longform_conclusive: 2.5,
+        v8_min_consistent_chunks_sparse_longform_conclusive: 3,
+        v8_max_second_evidence_sparse_longform: -8.0,
+        v8_min_top_ratio_sparse_longform_conclusive: 0.55,
+        v8_second_match_sparse_longform_max: 0.54,
+        v8_max_mismatch_rate_sparse_longform: 0.45,
+        v8_min_observable_capacity_sparse_longform_conclusive: 180,
       }
       return thresholds unless mode == "file_mode"
 
@@ -965,6 +976,17 @@ module ::MediaGallery
         "v8_second_match_asymmetric_max" => thresholds[:v8_second_match_asymmetric_max],
         "v8_min_top_ratio_asymmetric_conclusive" => thresholds[:v8_min_top_ratio_asymmetric_conclusive],
         "v8_max_second_evidence_asymmetric" => thresholds[:v8_max_second_evidence_asymmetric],
+        "v8_pairwise_margin_sparse_longform_conclusive" => thresholds[:v8_pairwise_margin_sparse_longform_conclusive],
+        "v8_pairwise_wins_sparse_longform_conclusive" => thresholds[:v8_pairwise_wins_sparse_longform_conclusive],
+        "v8_rank_gap_sparse_longform_conclusive" => thresholds[:v8_rank_gap_sparse_longform_conclusive],
+        "v8_evidence_gap_sparse_longform_conclusive" => thresholds[:v8_evidence_gap_sparse_longform_conclusive],
+        "v8_min_top_evidence_sparse_longform_conclusive" => thresholds[:v8_min_top_evidence_sparse_longform_conclusive],
+        "v8_min_consistent_chunks_sparse_longform_conclusive" => thresholds[:v8_min_consistent_chunks_sparse_longform_conclusive],
+        "v8_max_second_evidence_sparse_longform" => thresholds[:v8_max_second_evidence_sparse_longform],
+        "v8_min_top_ratio_sparse_longform_conclusive" => thresholds[:v8_min_top_ratio_sparse_longform_conclusive],
+        "v8_second_match_sparse_longform_max" => thresholds[:v8_second_match_sparse_longform_max],
+        "v8_max_mismatch_rate_sparse_longform" => thresholds[:v8_max_mismatch_rate_sparse_longform],
+        "v8_min_observable_capacity_sparse_longform_conclusive" => thresholds[:v8_min_observable_capacity_sparse_longform_conclusive],
         }
 
         result["meta"]["recommendation"] ||= "gather_longer_sample_or_try_url_mode"
@@ -1350,6 +1372,29 @@ module ::MediaGallery
           used: true,
           basis: "anchorless_pairwise_dominant",
           reason: "v8_pairwise_dominant_policy_passed",
+        }
+      end
+
+      sparse_longform_ok = true
+      sparse_longform_ok &&= !sync_used
+      sparse_longform_ok &&= (thresholds[:observable_capacity].to_i >= thresholds[:v8_min_observable_capacity_sparse_longform_conclusive].to_i)
+      sparse_longform_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_sparse_longform_conclusive].to_f)
+      sparse_longform_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_sparse_longform_conclusive].to_i)
+      sparse_longform_ok &&= (top_losses <= 2)
+      sparse_longform_ok &&= (rank_gap >= thresholds[:v8_rank_gap_sparse_longform_conclusive].to_f)
+      sparse_longform_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_sparse_longform_conclusive].to_f)
+      sparse_longform_ok &&= (top_consistent >= thresholds[:v8_min_consistent_chunks_sparse_longform_conclusive].to_i)
+      sparse_longform_ok &&= (top_evidence >= thresholds[:v8_min_top_evidence_sparse_longform_conclusive].to_f)
+      sparse_longform_ok &&= (second_evidence <= thresholds[:v8_max_second_evidence_sparse_longform].to_f)
+      sparse_longform_ok &&= (top_ratio >= thresholds[:v8_min_top_ratio_sparse_longform_conclusive].to_f)
+      sparse_longform_ok &&= (second_ratio <= thresholds[:v8_second_match_sparse_longform_max].to_f)
+      sparse_longform_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_sparse_longform].to_f)
+
+      if sparse_longform_ok
+        return {
+          used: true,
+          basis: "anchorless_pairwise_sparse_longform",
+          reason: "v8_pairwise_sparse_longform_policy_passed",
         }
       end
 
