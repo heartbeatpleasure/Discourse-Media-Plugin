@@ -54,11 +54,12 @@ module ::MediaGallery
     V7_PAIR_COUNT = 28
     V7_BOX_SIZE_FRAC = 0.058
 
-    # v8: distributed micro-grid payload. Each pair uses a sparse balanced template
-    # instead of two solid rectangles, which materially reduces visibility while
-    # still giving the detector a spatial pattern it can match later.
-    V8_PAIR_COUNT = 34
-    V8_BOX_SIZE_FRAC = 0.046
+    # v8: distributed micro-grid payload. This second-generation template keeps the
+    # same public layout name, but uses a denser spatial signature with tighter
+    # detection crops so the signal survives re-encode/screen capture better while
+    # remaining materially less visible than the old solid-box layouts.
+    V8_PAIR_COUNT = 40
+    V8_BOX_SIZE_FRAC = 0.05
 
     # Periodic sync beacons, identical in A and B, used to make reference-based
     # alignment more robust without sacrificing user-specific A/B capacity.
@@ -83,7 +84,7 @@ module ::MediaGallery
     V7_SYNC_PATTERN = %w[a a b b a b a a b a b b a b].freeze
 
     V8_SYNC_PAIR_COUNT = 8
-    V8_SYNC_OPACITY = 0.0155
+    V8_SYNC_OPACITY = 0.0145
     V8_SYNC_PATTERN = %w[a a b a b b a b a a b a].freeze
 
     V2_OPACITY = 0.006 # 0.6% alpha
@@ -92,7 +93,7 @@ module ::MediaGallery
     V5_OPACITY = 0.011 # 1.1% alpha
     V6_OPACITY = 0.0115 # 1.15% alpha
     V7_OPACITY = 0.0135 # 1.35% alpha, still subtle but materially easier to decode
-    V8_OPACITY = 0.0195 # sparse micro-cells -> higher local alpha, lower perceived visibility
+    V8_OPACITY = 0.0185 # denser but still sparse templates; slightly lower alpha reduces visibility
 
     # Keep away from the borders so mild crops don't remove everything.
     V1_MARGIN = 0.06
@@ -104,16 +105,22 @@ module ::MediaGallery
     V7_MARGIN = 0.06
     V8_MARGIN = 0.055
 
-    V8_TEMPLATE_GRID_W = 6
-    V8_TEMPLATE_GRID_H = 4
-    V8_ANALYSIS_GRID_W = 10
-    V8_ANALYSIS_GRID_H = 6
-    V8_ANALYSIS_PAD_FRAC = 0.22
+    V8_TEMPLATE_GRID_W = 8
+    V8_TEMPLATE_GRID_H = 5
+    V8_ANALYSIS_GRID_W = 14
+    V8_ANALYSIS_GRID_H = 10
+    V8_ANALYSIS_PAD_FRAC = 0.15
+    V8_TEMPLATE_POSITIVE_CELLS_LEGACY = [
+      [[0, 0], [3, 0], [6, 0], [1, 1], [5, 1], [2, 2], [7, 2], [0, 4]],
+      [[1, 0], [4, 0], [7, 0], [0, 1], [6, 1], [3, 2], [5, 3], [1, 4]],
+      [[0, 0], [5, 0], [2, 1], [7, 1], [1, 2], [4, 2], [6, 3], [0, 4]],
+      [[2, 0], [7, 0], [0, 1], [4, 1], [6, 2], [1, 3], [5, 3], [2, 4]]
+    ].freeze
     V8_TEMPLATE_POSITIVE_CELLS = [
-      [[0, 0], [2, 0], [1, 1], [0, 2], [2, 3]],
-      [[1, 0], [2, 1], [0, 1], [1, 2], [2, 3]],
-      [[0, 0], [1, 1], [2, 1], [0, 3], [2, 2]],
-      [[2, 0], [0, 1], [1, 2], [2, 2], [0, 3]]
+      [[0, 0], [1, 0], [2, 1], [3, 1], [1, 2], [2, 2], [0, 3], [1, 3], [2, 4], [3, 4]],
+      [[2, 0], [3, 0], [0, 1], [1, 1], [2, 2], [3, 2], [1, 3], [2, 3], [0, 4], [1, 4]],
+      [[1, 0], [2, 0], [0, 1], [1, 1], [1, 2], [2, 2], [2, 3], [3, 3], [1, 4], [2, 4]],
+      [[0, 0], [1, 0], [1, 1], [2, 1], [2, 2], [3, 2], [0, 3], [1, 3], [1, 4], [2, 4]]
     ].freeze
 
     def allowed_layouts
@@ -371,13 +378,15 @@ module ::MediaGallery
 
     def v8_analysis_config
       {
-        mode: "templated_pair_grid_v1",
+        mode: "templated_pair_grid_v2",
         pad_frac: V8_ANALYSIS_PAD_FRAC,
         sample_grid_w: V8_ANALYSIS_GRID_W,
         sample_grid_h: V8_ANALYSIS_GRID_H,
         template_grid_w: V8_TEMPLATE_GRID_W,
         template_grid_h: V8_TEMPLATE_GRID_H,
         template_variants: V8_TEMPLATE_POSITIVE_CELLS,
+        legacy_template_variants: V8_TEMPLATE_POSITIVE_CELLS_LEGACY,
+        score_mode: "bar_consensus_zscore",
       }
     end
     private_class_method :v8_analysis_config
@@ -551,7 +560,7 @@ module ::MediaGallery
           next if rect_overlaps_any?(rect, excluded)
 
           # Avoid overlapping with previously placed pairs (simple AABB overlap with small padding)
-          pad = (box * 0.20).round(6)
+          pad = (box * 0.17).round(6)
           padded = { x: (x - pad), y: (y - pad), w: (pair_w + 2 * pad), h: (box + 2 * pad) }
           next if rect_overlaps_any?(padded, occupied)
 
@@ -795,12 +804,12 @@ module ::MediaGallery
         { x_min: 0.72, x_max: 1.0 - margin - pair_w, y_min: margin, y_max: 0.17 - box },
         { x_min: margin, x_max: 0.18 - pair_w, y_min: 0.22, y_max: 0.40 - box },
         { x_min: 0.82, x_max: 1.0 - margin - pair_w, y_min: 0.22, y_max: 0.40 - box },
-        { x_min: 0.22, x_max: 0.40 - pair_w, y_min: 0.30, y_max: 0.48 - box },
-        { x_min: 0.60, x_max: 0.78 - pair_w, y_min: 0.30, y_max: 0.48 - box },
+        { x_min: 0.20, x_max: 0.41 - pair_w, y_min: 0.28, y_max: 0.48 - box },
+        { x_min: 0.59, x_max: 0.80 - pair_w, y_min: 0.28, y_max: 0.48 - box },
         { x_min: margin, x_max: 0.18 - pair_w, y_min: 0.58, y_max: 0.78 - box },
         { x_min: 0.82, x_max: 1.0 - margin - pair_w, y_min: 0.58, y_max: 0.78 - box },
-        { x_min: 0.22, x_max: 0.40 - pair_w, y_min: 0.52, y_max: 0.70 - box },
-        { x_min: 0.60, x_max: 0.78 - pair_w, y_min: 0.52, y_max: 0.70 - box },
+        { x_min: 0.20, x_max: 0.41 - pair_w, y_min: 0.52, y_max: 0.72 - box },
+        { x_min: 0.59, x_max: 0.80 - pair_w, y_min: 0.52, y_max: 0.72 - box },
         { x_min: margin, x_max: 0.28 - pair_w, y_min: 0.83 - box, y_max: 1.0 - margin - box },
         { x_min: 0.34, x_max: 0.66 - pair_w, y_min: 0.83 - box, y_max: 1.0 - margin - box },
         { x_min: 0.72, x_max: 1.0 - margin - pair_w, y_min: 0.83 - box, y_max: 1.0 - margin - box }
@@ -816,7 +825,7 @@ module ::MediaGallery
 
       V8_PAIR_COUNT.times do |i|
         placed = false
-        24.times do |try|
+        28.times do |try|
           off = (i * 16) + ((try % 4) * 4)
           band = bands[(i + try) % bands.length]
           x_r = u32_to_unit(seed_bytes, off)
@@ -830,7 +839,7 @@ module ::MediaGallery
           rect = { x: x, y: y, w: pair_w, h: box }
           next if rect_overlaps_any?(rect, excluded)
 
-          pad = (box * 0.20).round(6)
+          pad = (box * 0.17).round(6)
           padded = { x: (x - pad), y: (y - pad), w: (pair_w + 2 * pad), h: (box + 2 * pad) }
           next if rect_overlaps_any?(padded, occupied)
 

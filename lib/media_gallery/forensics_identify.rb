@@ -4269,6 +4269,7 @@ end
           template_grid_h: [analysis[:template_grid_h].to_i, 2].max,
           pad_frac: [[analysis[:pad_frac].to_f, 0.0].max, 0.35].min,
           template_variants: Array(analysis[:template_variants]),
+          legacy_template_variants: Array(analysis[:legacy_template_variants]),
           score_mode: analysis[:score_mode].to_s,
         }
       else
@@ -4297,8 +4298,8 @@ end
     end
     private_class_method :pair_analysis_config
 
-    def template_cells_for_pair(pair:, config:)
-      variants = Array(config[:template_variants]).select { |entry| entry.is_a?(Array) }
+    def template_cells_for_pair(pair:, config:, variants_key: :template_variants)
+      variants = Array(config[variants_key]).select { |entry| entry.is_a?(Array) }
       positives = if variants.present?
         idx = pair.is_a?(Hash) ? pair[:template_variant].to_i : 0
         Array(variants[idx % variants.length]).map { |cell| [Array(cell)[0].to_i, Array(cell)[1].to_i] }
@@ -4312,6 +4313,59 @@ end
       { positive: [[0, 0]], negative: [[1, 0]] }
     end
     private_class_method :template_cells_for_pair
+
+    def template_cell_sets_for_pair(pair:, config:)
+      sets = []
+      primary = template_cells_for_pair(pair: pair, config: config, variants_key: :template_variants)
+      sets << primary if primary[:positive].present? && primary[:negative].present?
+
+      legacy_variants = Array(config[:legacy_template_variants]).select { |entry| entry.is_a?(Array) }
+      if legacy_variants.present?
+        legacy = template_cells_for_pair(pair: pair, config: config, variants_key: :legacy_template_variants)
+        duplicate = sets.any? do |entry|
+          entry[:positive] == legacy[:positive] && entry[:negative] == legacy[:negative]
+        end
+        sets << legacy unless duplicate
+      end
+
+      sets = [{ positive: [[0, 0]], negative: [[1, 0]] }] if sets.blank?
+      sets
+    rescue
+      [{ positive: [[0, 0]], negative: [[1, 0]] }]
+    end
+    private_class_method :template_cell_sets_for_pair
+
+    def connected_template_groups(cells)
+      coords = Array(cells).map { |cell| [Array(cell)[0].to_i, Array(cell)[1].to_i] }.uniq
+      return [] if coords.blank?
+
+      remaining = coords.each_with_object({}) { |coord, memo| memo[coord] = true }
+      groups = []
+
+      until remaining.empty?
+        seed = remaining.keys.first
+        queue = [seed]
+        remaining.delete(seed)
+        group = []
+
+        until queue.empty?
+          x, y = queue.shift
+          group << [x, y]
+          [[1, 0], [-1, 0], [0, 1], [0, -1]].each do |dx, dy|
+            neighbor = [x + dx, y + dy]
+            next unless remaining.delete(neighbor)
+            queue << neighbor
+          end
+        end
+
+        groups << group
+      end
+
+      groups
+    rescue
+      []
+    end
+    private_class_method :connected_template_groups
 
     def pair_score_from_grid(chunk:, config:, pair:)
       gw = [config[:sample_grid_w].to_i, 1].max
@@ -4327,7 +4381,7 @@ end
       th = [[config[:template_grid_h].to_i, 1].max, gh].min
       max_x = [gw - tw, 0].max
       max_y = [gh - th, 0].max
-      cells = template_cells_for_pair(pair: pair, config: config)
+      cell_sets = template_cell_sets_for_pair(pair: pair, config: config)
       score_mode = config[:score_mode].to_s
       candidate_scores = []
       center_ox = max_x / 2.0
@@ -4349,31 +4403,77 @@ end
           local_std = Math.sqrt(local_var)
           local_std = 1.0 if local_std < 1.0
 
-          score = 0.0
-          if score_mode == "center_biased_zscore"
-            cells[:positive].each do |cx, cy|
+          if score_mode == "bar_consensus_zscore"
+            z_for = lambda do |cx, cy|
               idx = ((oy + cy.to_i) * gw) + ox + cx.to_i
-              score += ((chunk[idx].to_f - local_mean) / local_std)
+              (chunk[idx].to_f - local_mean) / local_std
             end
-            cells[:negative].each do |cx, cy|
-              idx = ((oy + cy.to_i) * gw) + ox + cx.to_i
-              score -= ((chunk[idx].to_f - local_mean) / local_std)
-            end
+
             center_dx = center_ox.positive? ? ((ox - center_ox).abs / center_ox) : 0.0
             center_dy = center_oy.positive? ? ((oy - center_oy).abs / center_oy) : 0.0
-            center_penalty = 1.0 - ([center_dx, 1.0].min * 0.12) - ([center_dy, 1.0].min * 0.10)
-            center_penalty = 0.70 if center_penalty < 0.70
-            contrast_bonus = [[local_std / 18.0, 1.0].min, 0.35].max
-            weighted = score * center_penalty * contrast_bonus
-            candidate_scores << { weighted: weighted.to_f, raw: score.to_f, std: local_std.to_f }
+            center_penalty = 1.0 - ([center_dx, 1.0].min * 0.10) - ([center_dy, 1.0].min * 0.08)
+            center_penalty = 0.74 if center_penalty < 0.74
+            contrast_bonus = [[local_std / 16.0, 1.0].min, 0.55].max
+
+            cell_sets.each do |cells|
+              pos_groups = connected_template_groups(cells[:positive])
+              neg_groups = connected_template_groups(cells[:negative])
+              pos_groups = [Array(cells[:positive])] if pos_groups.blank?
+              neg_groups = [Array(cells[:negative])] if neg_groups.blank?
+
+              pos_scores = pos_groups.map do |group|
+                group.sum { |cx, cy| z_for.call(cx, cy) } / [group.length, 1].max.to_f
+              end
+              neg_scores = neg_groups.map do |group|
+                group.sum { |cx, cy| z_for.call(cx, cy) } / [group.length, 1].max.to_f
+              end
+
+              raw_sum = pos_scores.sum.to_f - neg_scores.sum.to_f
+              pos_median = median(pos_scores).to_f
+              neg_median = median(neg_scores).to_f
+              support_hits = pos_scores.count { |s| s.positive? } + neg_scores.count { |s| s.negative? }
+              support = support_hits.to_f / [pos_scores.length + neg_scores.length, 1].max.to_f
+              worst_guard = [pos_scores.min.to_f, (-neg_scores.max.to_f)].min
+              worst_guard = 0.0 if worst_guard.negative?
+              structure_score = (raw_sum * 0.60) + ((pos_median - neg_median) * 0.95) + (worst_guard * 0.45)
+              support_bonus = 0.62 + (support * 0.46)
+              weighted = structure_score * center_penalty * contrast_bonus * support_bonus
+              candidate_scores << {
+                weighted: weighted.to_f,
+                raw: structure_score.to_f,
+                std: local_std.to_f,
+                support: support.to_f,
+              }
+            end
           else
-            cells[:positive].each do |cx, cy|
-              score += (chunk[((oy + cy.to_i) * gw) + ox + cx.to_i].to_f - local_mean)
+            cell_sets.each do |cells|
+              score = 0.0
+              if score_mode == "center_biased_zscore"
+                cells[:positive].each do |cx, cy|
+                  idx = ((oy + cy.to_i) * gw) + ox + cx.to_i
+                  score += ((chunk[idx].to_f - local_mean) / local_std)
+                end
+                cells[:negative].each do |cx, cy|
+                  idx = ((oy + cy.to_i) * gw) + ox + cx.to_i
+                  score -= ((chunk[idx].to_f - local_mean) / local_std)
+                end
+                center_dx = center_ox.positive? ? ((ox - center_ox).abs / center_ox) : 0.0
+                center_dy = center_oy.positive? ? ((oy - center_oy).abs / center_oy) : 0.0
+                center_penalty = 1.0 - ([center_dx, 1.0].min * 0.12) - ([center_dy, 1.0].min * 0.10)
+                center_penalty = 0.70 if center_penalty < 0.70
+                contrast_bonus = [[local_std / 18.0, 1.0].min, 0.35].max
+                weighted = score * center_penalty * contrast_bonus
+                candidate_scores << { weighted: weighted.to_f, raw: score.to_f, std: local_std.to_f, support: 0.5 }
+              else
+                cells[:positive].each do |cx, cy|
+                  score += (chunk[((oy + cy.to_i) * gw) + ox + cx.to_i].to_f - local_mean)
+                end
+                cells[:negative].each do |cx, cy|
+                  score -= (chunk[((oy + cy.to_i) * gw) + ox + cx.to_i].to_f - local_mean)
+                end
+                candidate_scores << { weighted: score.to_f, raw: score.to_f, std: local_std.to_f, support: 0.5 }
+              end
             end
-            cells[:negative].each do |cx, cy|
-              score -= (chunk[((oy + cy.to_i) * gw) + ox + cx.to_i].to_f - local_mean)
-            end
-            candidate_scores << { weighted: score.to_f, raw: score.to_f, std: local_std.to_f }
           end
         end
       end
@@ -4387,6 +4487,9 @@ end
       reliability = 0.58 + ([separation, 1.0].min * 0.72)
       if score_mode == "center_biased_zscore"
         reliability *= [[best[:std].to_f / 14.0, 1.0].min, 0.55].max
+      elsif score_mode == "bar_consensus_zscore"
+        reliability *= [[best[:std].to_f / 13.0, 1.0].min, 0.60].max
+        reliability *= (0.70 + (best[:support].to_f * 0.45))
       end
       (best[:raw].to_f * reliability).round(4)
     rescue
