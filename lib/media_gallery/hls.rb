@@ -135,6 +135,8 @@ module ::MediaGallery
       FileUtils.rm_rf(build_root) if build_root.present? && Dir.exist?(build_root)
       FileUtils.mkdir_p(build_root)
 
+      wm_profile = nil
+      wm_layout = nil
       if fingerprinting_enabled?
         tmp_variant_dir = File.join(build_root, variant)
         FileUtils.mkdir_p(tmp_variant_dir)
@@ -145,9 +147,11 @@ module ::MediaGallery
         FileUtils.mkdir_p(tmp_b_dir)
 
         v_kbps = estimate_video_bitrate_kbps(item)
+        wm_layout = MediaGallery::FingerprintWatermark.layout_mode
+        wm_profile = MediaGallery::FingerprintWatermark.hls_packaging_profile(layout: wm_layout)
 
-        vf_a = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "a")
-        vf_b = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "b")
+        vf_a = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "a", profile: wm_profile)
+        vf_b = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "b", profile: wm_profile)
 
         MediaGallery::Ffmpeg.package_hls_ab_variants(
           input_path: input_path,
@@ -190,11 +194,12 @@ module ::MediaGallery
       if fingerprinting_enabled?
         meta["ab_fingerprint"] = true
         meta["ab_layout"] = "hls/{a|b}/#{variant}/seg_XXXXX.ts"
-        wm_spec = MediaGallery::FingerprintWatermark.spec_for(media_item_id: item.id)
+        wm_spec = MediaGallery::FingerprintWatermark.spec_for(media_item_id: item.id, profile: wm_profile)
         wm_layout = wm_spec[:layout].to_s
         codebook_scheme = ::MediaGallery::Fingerprinting.ecc_profile(layout: wm_layout)[:scheme]
         meta["watermark"] = {
           "type" => wm_layout,
+          "profile" => wm_profile.to_s.presence,
           "opacity" => wm_spec[:opacity],
           "box_size_frac" => wm_spec[:box_size_frac],
           "margin" => wm_spec[:margin],

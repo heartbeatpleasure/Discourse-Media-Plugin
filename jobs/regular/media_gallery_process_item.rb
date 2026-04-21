@@ -296,6 +296,16 @@ module Jobs
             end
           rescue => e
             Rails.logger.warn("[media_gallery] HLS post-process failed public_id=#{item.public_id} error=#{e.class}: #{e.message}")
+            begin
+              meta = (item.extra_metadata || {}).dup
+              meta["hls_error"] = {
+                "message" => e.message.to_s,
+                "class" => e.class.to_s,
+                "failed_at" => Time.now.utc.iso8601
+              }
+              item.update_column(:extra_metadata, meta)
+            rescue
+            end
           end
         end
 
