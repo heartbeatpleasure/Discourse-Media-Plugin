@@ -265,25 +265,45 @@ module ::MediaGallery
     def shortlist_topk_metrics(result)
       arr = Array(result["candidates"])
       top = arr[0] || {}
-      third = arr[2] || {}
-      fourth = arr[3] || {}
+      third = arr[2]
+      fourth = arr[3]
+
+      gap = lambda do |cand, key|
+        next nil unless cand.is_a?(Hash)
+        (candidate_value(top, key) - candidate_value(cand, key)).round(4)
+      end
+
       {
-        top_vs_third_match_delta: (candidate_value(top, :match_ratio) - candidate_value(third, :match_ratio)).round(4),
-        top_vs_fourth_match_delta: (candidate_value(top, :match_ratio) - candidate_value(fourth, :match_ratio)).round(4),
-        top_vs_third_rank_gap: (candidate_value(top, :rank_score) - candidate_value(third, :rank_score)).round(4),
-        top_vs_fourth_rank_gap: (candidate_value(top, :rank_score) - candidate_value(fourth, :rank_score)).round(4),
-        top_vs_third_evidence_gap: (candidate_value(top, :evidence_score) - candidate_value(third, :evidence_score)).round(4),
-        top_vs_fourth_evidence_gap: (candidate_value(top, :evidence_score) - candidate_value(fourth, :evidence_score)).round(4),
+        top_vs_third_match_delta: gap.call(third, :match_ratio),
+        top_vs_fourth_match_delta: gap.call(fourth, :match_ratio),
+        top_vs_third_rank_gap: gap.call(third, :rank_score),
+        top_vs_fourth_rank_gap: gap.call(fourth, :rank_score),
+        top_vs_third_evidence_gap: gap.call(third, :evidence_score),
+        top_vs_fourth_evidence_gap: gap.call(fourth, :evidence_score),
       }
     rescue
       {
-        top_vs_third_match_delta: 0.0,
-        top_vs_fourth_match_delta: 0.0,
-        top_vs_third_rank_gap: 0.0,
-        top_vs_fourth_rank_gap: 0.0,
-        top_vs_third_evidence_gap: 0.0,
-        top_vs_fourth_evidence_gap: 0.0,
+        top_vs_third_match_delta: nil,
+        top_vs_fourth_match_delta: nil,
+        top_vs_third_rank_gap: nil,
+        top_vs_fourth_rank_gap: nil,
+        top_vs_third_evidence_gap: nil,
+        top_vs_fourth_evidence_gap: nil,
       }
+    end
+
+    def v8_pairwise_support_metrics(candidate)
+      return { decisive_chunks: 0, win_advantage: 0, margin_median: 0.0 } unless candidate.is_a?(Hash)
+
+      wins = candidate["pairwise_chunks_won"].to_i
+      losses = candidate["pairwise_chunks_lost"].to_i
+      {
+        decisive_chunks: wins + losses,
+        win_advantage: wins - losses,
+        margin_median: candidate["pairwise_chunk_margin_median"].to_f,
+      }
+    rescue
+      { decisive_chunks: 0, win_advantage: 0, margin_median: 0.0 }
     end
 
     def population_topk_guard_passes?(result, thresholds:)
@@ -371,6 +391,8 @@ module ::MediaGallery
         v8_sync_anchor_ratio_recovery_conclusive: 0.34,
         v8_pairwise_margin_recovery_conclusive: 8.5,
         v8_pairwise_wins_recovery_conclusive: 5,
+        v8_pairwise_win_advantage_recovery_conclusive: 4,
+        v8_pairwise_margin_median_recovery_conclusive: 0.20,
         v8_rank_gap_recovery_conclusive: 24.0,
         v8_evidence_gap_recovery_conclusive: 8.0,
         v8_match_delta_recovery_conclusive: 0.22,
@@ -378,7 +400,10 @@ module ::MediaGallery
         v8_second_match_recovery_max: 0.43,
         v8_min_top_ratio_recovery_conclusive: 0.64,
         v8_max_mismatch_rate_recovery: 0.37,
-        v8_min_top_evidence_recovery_conclusive: 1.0,
+        v8_min_top_evidence_recovery_conclusive: 2.0,
+        v8_targeted_fill_score_gain_recovery_max: 1.5,
+        v8_sync_anchor_ratio_recovery_fill_hardened: 0.45,
+        v8_pairwise_margin_recovery_fill_hardened: 12.0,
         v8_pairwise_margin_unanimous_conclusive: 16.0,
         v8_pairwise_wins_unanimous_conclusive: 7,
         v8_rank_gap_unanimous_conclusive: 40.0,
@@ -544,6 +569,10 @@ module ::MediaGallery
       top_margin = top_cand["pairwise_chunk_margin_total"].to_f
       top_wins = top_cand["pairwise_chunks_won"].to_i
       top_losses = top_cand["pairwise_chunks_lost"].to_i
+      pairwise_support = v8_pairwise_support_metrics(top_cand)
+      decisive_chunks = pairwise_support[:decisive_chunks].to_i
+      win_advantage = pairwise_support[:win_advantage].to_i
+      top_margin_median = pairwise_support[:margin_median].to_f
       rank_gap = result.dig("meta", "shortlist_rank_gap").to_f
       evidence_gap = result.dig("meta", "shortlist_evidence_gap").to_f
       top_rank = top_cand["rank_score"].to_f
@@ -562,6 +591,8 @@ module ::MediaGallery
       sync_used = result.dig("meta", "sync_anchor_used") == true
       discriminative_used = result.dig("meta", "discriminative_shortlist_decoder_used") == true
       discriminative_margin = top_cand["discriminative_margin_total"].to_f
+      targeted_fill_applied = result.dig("meta", "targeted_fill_applied") == true
+      targeted_fill_gain = result.dig("meta", "targeted_fill_score_gain").to_f
 
       # Keep only a light global sanity floor here. The actual conclusive routes below
       # intentionally have different thresholds. Earlier global gates were stricter than
@@ -639,7 +670,9 @@ module ::MediaGallery
       recovery_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_recovery].to_f)
       recovery_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_recovery_conclusive].to_f)
       recovery_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_recovery_conclusive].to_i)
-      recovery_ok &&= (top_wins >= (top_losses + 3))
+      recovery_ok &&= (win_advantage >= thresholds[:v8_pairwise_win_advantage_recovery_conclusive].to_i)
+      recovery_ok &&= (top_margin_median >= thresholds[:v8_pairwise_margin_median_recovery_conclusive].to_f)
+      recovery_ok &&= (decisive_chunks >= 7)
       recovery_ok &&= (top_losses <= 2)
       recovery_ok &&= (rank_gap >= thresholds[:v8_rank_gap_recovery_conclusive].to_f)
       recovery_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_recovery_conclusive].to_f)
@@ -651,6 +684,12 @@ module ::MediaGallery
       recovery_ok &&= (second_consistent <= 2)
       recovery_ok &&= (top_evidence >= thresholds[:v8_min_top_evidence_recovery_conclusive].to_f)
       recovery_ok &&= (second_evidence <= -6.0)
+
+      if targeted_fill_applied
+        recovery_ok &&= (targeted_fill_gain <= thresholds[:v8_targeted_fill_score_gain_recovery_max].to_f)
+        recovery_ok &&= (sync_ratio >= thresholds[:v8_sync_anchor_ratio_recovery_fill_hardened].to_f)
+        recovery_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_recovery_fill_hardened].to_f)
+      end
 
       if recovery_ok
         return {
@@ -782,6 +821,10 @@ module ::MediaGallery
       top_margin = top_cand["pairwise_chunk_margin_total"].to_f
       top_wins = top_cand["pairwise_chunks_won"].to_i
       top_losses = top_cand["pairwise_chunks_lost"].to_i
+      pairwise_support = v8_pairwise_support_metrics(top_cand)
+      decisive_chunks = pairwise_support[:decisive_chunks].to_i
+      win_advantage = pairwise_support[:win_advantage].to_i
+      top_margin_median = pairwise_support[:margin_median].to_f
       top_evidence = top_cand["evidence_score"].to_f
       second_evidence = second_cand["evidence_score"].to_f
       evidence_gap = top_evidence - second_evidence
@@ -990,6 +1033,8 @@ module ::MediaGallery
         "v8_sync_anchor_ratio_recovery_conclusive" => thresholds[:v8_sync_anchor_ratio_recovery_conclusive],
         "v8_pairwise_margin_recovery_conclusive" => thresholds[:v8_pairwise_margin_recovery_conclusive],
         "v8_pairwise_wins_recovery_conclusive" => thresholds[:v8_pairwise_wins_recovery_conclusive],
+        "v8_pairwise_win_advantage_recovery_conclusive" => thresholds[:v8_pairwise_win_advantage_recovery_conclusive],
+        "v8_pairwise_margin_median_recovery_conclusive" => thresholds[:v8_pairwise_margin_median_recovery_conclusive],
         "v8_rank_gap_recovery_conclusive" => thresholds[:v8_rank_gap_recovery_conclusive],
         "v8_evidence_gap_recovery_conclusive" => thresholds[:v8_evidence_gap_recovery_conclusive],
         "v8_match_delta_recovery_conclusive" => thresholds[:v8_match_delta_recovery_conclusive],
@@ -998,6 +1043,9 @@ module ::MediaGallery
         "v8_min_top_ratio_recovery_conclusive" => thresholds[:v8_min_top_ratio_recovery_conclusive],
         "v8_max_mismatch_rate_recovery" => thresholds[:v8_max_mismatch_rate_recovery],
         "v8_min_top_evidence_recovery_conclusive" => thresholds[:v8_min_top_evidence_recovery_conclusive],
+        "v8_targeted_fill_score_gain_recovery_max" => thresholds[:v8_targeted_fill_score_gain_recovery_max],
+        "v8_sync_anchor_ratio_recovery_fill_hardened" => thresholds[:v8_sync_anchor_ratio_recovery_fill_hardened],
+        "v8_pairwise_margin_recovery_fill_hardened" => thresholds[:v8_pairwise_margin_recovery_fill_hardened],
         "v8_pairwise_margin_unanimous_conclusive" => thresholds[:v8_pairwise_margin_unanimous_conclusive],
         "v8_pairwise_wins_unanimous_conclusive" => thresholds[:v8_pairwise_wins_unanimous_conclusive],
         "v8_rank_gap_unanimous_conclusive" => thresholds[:v8_rank_gap_unanimous_conclusive],
