@@ -2506,6 +2506,12 @@ module ::MediaGallery
         }
       end
 
+      prefilter_info = apply_shortlist_prefilter(
+        candidates: candidates,
+        observed_count: usable_count
+      )
+      candidates = prefilter_info[:candidates]
+
       enrich_candidates_with_evidence!(
         candidates: candidates,
         observed_variants: ref_obs,
@@ -2543,6 +2549,11 @@ module ::MediaGallery
             median_margin: median_margin
           ).round(4),
           chunked_resync_top_user_ids: chosen_chunks.map { |c| c[:top_user_id] }.compact,
+          candidate_population_count: fps.length,
+          candidate_prefilter_used: prefilter_info[:used],
+          candidate_prefilter_limit: prefilter_info[:limit],
+          candidate_prefilter_kept: prefilter_info[:kept],
+          candidate_prefilter_cutoff_weighted_ratio: prefilter_info[:cutoff_weighted_ratio],
         },
         score: chunked_resync_score(
           top_ratio: top_ratio,
@@ -3891,20 +3902,105 @@ end
     end
     private_class_method :enrich_candidates_with_evidence!
 
+    def shortlist_prefilter_limit(total_candidates:, observed_count:)
+      total = total_candidates.to_i
+      return total if total <= SHORTLIST_LIMIT
+
+      observed = observed_count.to_i
+      adaptive = [
+        SHORTLIST_PREFILTER_MIN,
+        SHORTLIST_LIMIT + 2,
+        (Math.sqrt(total.to_f) * SHORTLIST_PREFILTER_POP_SQRT_FACTOR).ceil,
+        (observed.to_f / SHORTLIST_PREFILTER_OBSERVED_DIVISOR).ceil,
+      ].max
+
+      [[adaptive, SHORTLIST_PREFILTER_MAX].min, total].min
+    rescue
+      [SHORTLIST_PREFILTER_MIN, total_candidates.to_i].min
+    end
+    private_class_method :shortlist_prefilter_limit
+
+    def candidate_prefilter_sort_tuple(candidate)
+      c = candidate.is_a?(Hash) ? candidate : {}
+      weighted = (c[:match_ratio_weighted] || c["match_ratio_weighted"]).to_f
+      raw = (c[:match_ratio] || c["match_ratio"]).to_f
+      compared_weighted = (c[:compared_weighted] || c["compared_weighted"]).to_f
+      compared = (c[:compared] || c["compared"]).to_i
+      mismatches = (c[:mismatches] || c["mismatches"]).to_i
+      [-(weighted.round(6)), -(raw.round(6)), -(compared_weighted.round(6)), -compared, mismatches]
+    rescue
+      [0.0, 0.0, 0.0, 0, 0]
+    end
+    private_class_method :candidate_prefilter_sort_tuple
+
+    def apply_shortlist_prefilter(candidates:, observed_count:)
+      arr = Array(candidates).dup
+      total = arr.length
+      return { candidates: arr, used: false, total: total, kept: total, limit: total, cutoff_weighted_ratio: 0.0 } if total <= SHORTLIST_LIMIT
+
+      arr.sort_by! { |candidate| candidate_prefilter_sort_tuple(candidate) }
+      limit = shortlist_prefilter_limit(total_candidates: total, observed_count: observed_count)
+      limit = [[limit, SHORTLIST_LIMIT].max, total].min
+
+      cutoff_weighted_ratio = arr[limit - 1] ? (arr[limit - 1][:match_ratio_weighted] || arr[limit - 1]["match_ratio_weighted"]).to_f : 0.0
+      cutoff_raw_ratio = arr[limit - 1] ? (arr[limit - 1][:match_ratio] || arr[limit - 1]["match_ratio"]).to_f : 0.0
+
+      kept = []
+      arr.each_with_index do |candidate, idx|
+        weighted = (candidate[:match_ratio_weighted] || candidate["match_ratio_weighted"]).to_f
+        raw = (candidate[:match_ratio] || candidate["match_ratio"]).to_f
+        keep = idx < limit
+        unless keep
+          keep ||= weighted >= (cutoff_weighted_ratio - SHORTLIST_PREFILTER_TIE_EPSILON)
+          keep ||= raw >= (cutoff_raw_ratio - (SHORTLIST_PREFILTER_TIE_EPSILON * 0.5))
+        end
+        kept << candidate if keep
+        break if kept.length >= SHORTLIST_PREFILTER_MAX
+      end
+
+      {
+        candidates: kept,
+        used: true,
+        total: total,
+        kept: kept.length,
+        limit: limit,
+        cutoff_weighted_ratio: cutoff_weighted_ratio.round(4),
+      }
+    rescue
+      { candidates: arr, used: false, total: total, kept: total, limit: total, cutoff_weighted_ratio: 0.0 }
+    end
+    private_class_method :apply_shortlist_prefilter
+
     def apply_shortlist_meta!(meta:, candidates:)
       return meta unless meta.is_a?(Hash)
 
       arr = Array(candidates)
       top = arr[0]
       second = arr[1]
+      third = arr[2]
+      fourth = arr[3]
       meta[:shortlist_metric] = meta[:shortlist_metric].presence || "rank_score"
       meta[:shortlist_count] = arr.length
       meta[:shortlist_top_rank_score] = top ? top[:rank_score].to_f.round(4) : 0.0
       meta[:shortlist_second_rank_score] = second ? second[:rank_score].to_f.round(4) : 0.0
+      meta[:shortlist_third_rank_score] = third ? third[:rank_score].to_f.round(4) : 0.0
+      meta[:shortlist_fourth_rank_score] = fourth ? fourth[:rank_score].to_f.round(4) : 0.0
       meta[:shortlist_rank_gap] = ((top ? top[:rank_score].to_f : 0.0) - (second ? second[:rank_score].to_f : 0.0)).round(4)
+      meta[:shortlist_top_vs_third_rank_gap] = ((top ? top[:rank_score].to_f : 0.0) - (third ? third[:rank_score].to_f : 0.0)).round(4)
+      meta[:shortlist_top_vs_fourth_rank_gap] = ((top ? top[:rank_score].to_f : 0.0) - (fourth ? fourth[:rank_score].to_f : 0.0)).round(4)
       meta[:shortlist_top_evidence_score] = top ? top[:evidence_score].to_f.round(4) : 0.0
       meta[:shortlist_second_evidence_score] = second ? second[:evidence_score].to_f.round(4) : 0.0
+      meta[:shortlist_third_evidence_score] = third ? third[:evidence_score].to_f.round(4) : 0.0
+      meta[:shortlist_fourth_evidence_score] = fourth ? fourth[:evidence_score].to_f.round(4) : 0.0
       meta[:shortlist_evidence_gap] = ((top ? top[:evidence_score].to_f : 0.0) - (second ? second[:evidence_score].to_f : 0.0)).round(4)
+      meta[:shortlist_top_vs_third_evidence_gap] = ((top ? top[:evidence_score].to_f : 0.0) - (third ? third[:evidence_score].to_f : 0.0)).round(4)
+      meta[:shortlist_top_vs_fourth_evidence_gap] = ((top ? top[:evidence_score].to_f : 0.0) - (fourth ? fourth[:evidence_score].to_f : 0.0)).round(4)
+      meta[:shortlist_top_match_ratio] = top ? (top[:match_ratio] || top["match_ratio"]).to_f.round(4) : 0.0
+      meta[:shortlist_second_match_ratio] = second ? (second[:match_ratio] || second["match_ratio"]).to_f.round(4) : 0.0
+      meta[:shortlist_third_match_ratio] = third ? (third[:match_ratio] || third["match_ratio"]).to_f.round(4) : 0.0
+      meta[:shortlist_fourth_match_ratio] = fourth ? (fourth[:match_ratio] || fourth["match_ratio"]).to_f.round(4) : 0.0
+      meta[:shortlist_top_vs_third_match_delta] = ((top ? (top[:match_ratio] || top["match_ratio"]).to_f : 0.0) - (third ? (third[:match_ratio] || third["match_ratio"]).to_f : 0.0)).round(4)
+      meta[:shortlist_top_vs_fourth_match_delta] = ((top ? (top[:match_ratio] || top["match_ratio"]).to_f : 0.0) - (fourth ? (fourth[:match_ratio] || fourth["match_ratio"]).to_f : 0.0)).round(4)
       meta[:shortlist_top_why] = top[:why] if top&.dig(:why).present?
       meta[:shortlist_second_why] = second[:why] if second&.dig(:why).present?
       meta
@@ -4159,6 +4255,12 @@ end
         }
       end
 
+      prefilter_info = apply_shortlist_prefilter(
+        candidates: candidates,
+        observed_count: chosen_samples.length
+      )
+      candidates = prefilter_info[:candidates]
+
       enrich_candidates_with_evidence!(
         candidates: candidates,
         observed_variants: chosen_obs,
@@ -4204,6 +4306,11 @@ end
         polarity_score_gain: polarity_choice[:score_gain],
         ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
         ecc_groups_used: chosen_samples.length,
+        candidate_population_count: fps.length,
+        candidate_prefilter_used: prefilter_info[:used],
+        candidate_prefilter_limit: prefilter_info[:limit],
+        candidate_prefilter_kept: prefilter_info[:kept],
+        candidate_prefilter_cutoff_weighted_ratio: prefilter_info[:cutoff_weighted_ratio],
       }
 
       if best_diag
@@ -5202,6 +5309,23 @@ end
     end
   end
 
+  prefilter_info = if use_chunked
+    {
+      candidates: Array(candidates),
+      used: (fps.length > Array(candidates).length),
+      total: fps.length,
+      kept: Array(candidates).length,
+      limit: Array(candidates).length,
+      cutoff_weighted_ratio: (Array(candidates).last ? (Array(candidates).last[:match_ratio_weighted] || Array(candidates).last["match_ratio_weighted"]).to_f.round(4) : 0.0),
+    }
+  else
+    apply_shortlist_prefilter(
+      candidates: candidates,
+      observed_count: u[:usable_count].to_i
+    )
+  end
+  candidates = prefilter_info[:candidates]
+
   local_evidence_radius = candidate_local_offset_radius(
     max_off: max_off,
     observed_count: u[:usable_count].to_i
@@ -5321,7 +5445,12 @@ end
     sync_anchor_second_ratio: sync_prior.to_h[:second_ratio].to_f.round(4),
     sync_anchor_delta: sync_prior.to_h[:delta].to_f.round(4),
     sync_anchor_trust: sync_prior.to_h[:trust].to_f.round(4),
-    observed_segment_indices_used: observed_indices_used
+    observed_segment_indices_used: observed_indices_used,
+    candidate_population_count: fps.length,
+    candidate_prefilter_used: prefilter_info[:used],
+    candidate_prefilter_limit: prefilter_info[:limit],
+    candidate_prefilter_kept: prefilter_info[:kept],
+    candidate_prefilter_cutoff_weighted_ratio: prefilter_info[:cutoff_weighted_ratio]
   }
 
   unless use_chunked

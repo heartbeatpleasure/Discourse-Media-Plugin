@@ -242,6 +242,69 @@ module ::MediaGallery
       0
     end
 
+    def candidate_population_count(result)
+      meta = result.is_a?(Hash) ? (result["meta"] || {}) : {}
+      v = meta["candidate_population_count"].to_i
+      return v if v > 0
+      Array(result["candidates"]).length
+    rescue
+      0
+    end
+
+    def candidate_value(candidate, key)
+      return 0.0 unless candidate.is_a?(Hash)
+      if candidate.key?(key.to_s)
+        candidate[key.to_s].to_f
+      else
+        candidate[key.to_sym].to_f
+      end
+    rescue
+      0.0
+    end
+
+    def shortlist_topk_metrics(result)
+      arr = Array(result["candidates"])
+      top = arr[0] || {}
+      third = arr[2] || {}
+      fourth = arr[3] || {}
+      {
+        top_vs_third_match_delta: (candidate_value(top, :match_ratio) - candidate_value(third, :match_ratio)).round(4),
+        top_vs_fourth_match_delta: (candidate_value(top, :match_ratio) - candidate_value(fourth, :match_ratio)).round(4),
+        top_vs_third_rank_gap: (candidate_value(top, :rank_score) - candidate_value(third, :rank_score)).round(4),
+        top_vs_fourth_rank_gap: (candidate_value(top, :rank_score) - candidate_value(fourth, :rank_score)).round(4),
+        top_vs_third_evidence_gap: (candidate_value(top, :evidence_score) - candidate_value(third, :evidence_score)).round(4),
+        top_vs_fourth_evidence_gap: (candidate_value(top, :evidence_score) - candidate_value(fourth, :evidence_score)).round(4),
+      }
+    rescue
+      {
+        top_vs_third_match_delta: 0.0,
+        top_vs_fourth_match_delta: 0.0,
+        top_vs_third_rank_gap: 0.0,
+        top_vs_fourth_rank_gap: 0.0,
+        top_vs_third_evidence_gap: 0.0,
+        top_vs_fourth_evidence_gap: 0.0,
+      }
+    end
+
+    def population_topk_guard_passes?(result, thresholds:)
+      pop = thresholds[:candidate_population_count].to_i
+      return true if pop < thresholds[:population_guard_medium_min].to_i
+
+      metrics = shortlist_topk_metrics(result)
+      return false if metrics[:top_vs_third_match_delta] < thresholds[:population_top3_match_delta_medium].to_f
+      return false if metrics[:top_vs_third_rank_gap] < thresholds[:population_top3_rank_gap_medium].to_f
+      return false if metrics[:top_vs_third_evidence_gap] < thresholds[:population_top3_evidence_gap_medium].to_f
+
+      if pop >= thresholds[:population_guard_large_min].to_i
+        return false if metrics[:top_vs_fourth_match_delta] < thresholds[:population_top4_match_delta_large].to_f
+        return false if metrics[:top_vs_fourth_rank_gap] < thresholds[:population_top4_rank_gap_large].to_f
+      end
+
+      true
+    rescue
+      true
+    end
+
     def decision_policy_thresholds_for(result)
       thresholds = {
         min_usable_any: setting_policy_min_usable_any,
@@ -327,6 +390,14 @@ module ::MediaGallery
         v8_max_mismatch_rate_unanimous: 0.35,
         v8_max_second_evidence_unanimous: -8.0,
         v8_min_top_evidence_unanimous_conclusive: -0.5,
+        candidate_population_count: 0,
+        population_guard_medium_min: 50,
+        population_guard_large_min: 250,
+        population_top3_match_delta_medium: 0.10,
+        population_top3_rank_gap_medium: 10.0,
+        population_top3_evidence_gap_medium: 5.0,
+        population_top4_match_delta_large: 0.12,
+        population_top4_rank_gap_large: 12.0,
       }
 
       thresholds[:min_usable_strong] = [thresholds[:min_usable_strong], 16].max
@@ -339,6 +410,7 @@ module ::MediaGallery
 
       available = filemode_observable_capacity(result)
       thresholds[:observable_capacity] = available
+      thresholds[:candidate_population_count] = candidate_population_count(result)
       if available > 0
         adaptive_strong = [[(available * 0.70).ceil, thresholds[:min_usable_any] + 2].max, available].min
         adaptive_likely = [[(available * 0.50).ceil, thresholds[:min_usable_any]].max, available].min
@@ -503,6 +575,7 @@ module ::MediaGallery
       return { used: false, basis: nil, reason: nil } if top_rank < -2.5
       return { used: false, basis: nil, reason: nil } if second_rank > 0.0 && second_evidence > 0.0
       return { used: false, basis: nil, reason: nil } if discriminative_used && discriminative_margin < -0.6
+      return { used: false, basis: nil, reason: nil } unless population_topk_guard_passes?(result, thresholds: thresholds)
 
       if sync_used && mismatch_rate <= thresholds[:v8_max_mismatch_rate_conclusive].to_f && sync_ratio >= thresholds[:v8_sync_anchor_ratio_conclusive].to_f
         return {
@@ -788,6 +861,14 @@ module ::MediaGallery
           "filemode_hardened" => thresholds[:filemode_hardened],
           "short_clip_adapted" => thresholds[:short_clip_adapted],
           "observable_capacity" => thresholds[:observable_capacity],
+          "candidate_population_count" => thresholds[:candidate_population_count],
+          "population_guard_medium_min" => thresholds[:population_guard_medium_min],
+          "population_guard_large_min" => thresholds[:population_guard_large_min],
+          "population_top3_match_delta_medium" => thresholds[:population_top3_match_delta_medium],
+          "population_top3_rank_gap_medium" => thresholds[:population_top3_rank_gap_medium],
+          "population_top3_evidence_gap_medium" => thresholds[:population_top3_evidence_gap_medium],
+          "population_top4_match_delta_large" => thresholds[:population_top4_match_delta_large],
+          "population_top4_rank_gap_large" => thresholds[:population_top4_rank_gap_large],
           "v8_pairwise_margin_conclusive" => thresholds[:v8_pairwise_margin_conclusive],
           "v8_pairwise_wins_conclusive" => thresholds[:v8_pairwise_wins_conclusive],
           "v8_rank_gap_conclusive" => thresholds[:v8_rank_gap_conclusive],
@@ -837,6 +918,14 @@ module ::MediaGallery
       result["meta"]["top_mismatches"] = mismatches
       result["meta"]["top_compared"] = compared
       result["meta"]["top_mismatch_rate"] = mismatch_rate
+
+      topk_metrics = shortlist_topk_metrics(result)
+      result["meta"]["shortlist_top_vs_third_match_delta"] = topk_metrics[:top_vs_third_match_delta]
+      result["meta"]["shortlist_top_vs_fourth_match_delta"] = topk_metrics[:top_vs_fourth_match_delta]
+      result["meta"]["shortlist_top_vs_third_rank_gap"] = topk_metrics[:top_vs_third_rank_gap]
+      result["meta"]["shortlist_top_vs_fourth_rank_gap"] = topk_metrics[:top_vs_fourth_rank_gap]
+      result["meta"]["shortlist_top_vs_third_evidence_gap"] = topk_metrics[:top_vs_third_evidence_gap]
+      result["meta"]["shortlist_top_vs_fourth_evidence_gap"] = topk_metrics[:top_vs_fourth_evidence_gap]
 
       thresholds = decision_policy_thresholds_for(result)
       result["meta"]["policy"] = {
