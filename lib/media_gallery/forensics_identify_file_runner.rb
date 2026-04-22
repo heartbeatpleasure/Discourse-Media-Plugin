@@ -302,6 +302,9 @@ module ::MediaGallery
         v8_second_match_sparse_longform_max: 0.54,
         v8_max_mismatch_rate_sparse_longform: 0.45,
         v8_min_observable_capacity_sparse_longform_conclusive: 180,
+        v8_weighted_top_ratio_sparse_longform_conclusive: 0.62,
+        v8_weighted_delta_sparse_longform_conclusive: 0.06,
+        v8_raw_delta_sparse_longform_floor: 0.02,
         v8_sync_anchor_ratio_recovery_conclusive: 0.34,
         v8_pairwise_margin_recovery_conclusive: 8.5,
         v8_pairwise_wins_recovery_conclusive: 5,
@@ -479,6 +482,8 @@ module ::MediaGallery
       second_consistent = second_cand["evidence_consistent_chunks"].to_i
       top_ratio = top_cand["match_ratio"].to_f
       second_ratio = second_cand["match_ratio"].to_f
+      weighted_top_ratio = top_cand["match_ratio_weighted"].to_f
+      weighted_second_ratio = second_cand["match_ratio_weighted"].to_f
       weighted_delta = result.dig("meta", "offset_delta").to_f
       raw_delta = top_ratio - second_ratio
       sync_ratio = result.dig("meta", "sync_anchor_best_ratio").to_f
@@ -621,6 +626,31 @@ module ::MediaGallery
           used: true,
           basis: "anchorless_pairwise_sparse_longform",
           reason: "v8_pairwise_sparse_longform_policy_passed",
+        }
+      end
+
+      sparse_weighted_ok = true
+      sparse_weighted_ok &&= !sync_used
+      sparse_weighted_ok &&= (thresholds[:observable_capacity].to_i >= thresholds[:v8_min_observable_capacity_sparse_longform_conclusive].to_i)
+      sparse_weighted_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_sparse_longform_conclusive].to_f)
+      sparse_weighted_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_sparse_longform_conclusive].to_i)
+      sparse_weighted_ok &&= (top_losses <= 1)
+      sparse_weighted_ok &&= (rank_gap >= thresholds[:v8_rank_gap_sparse_longform_conclusive].to_f)
+      sparse_weighted_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_sparse_longform_conclusive].to_f)
+      sparse_weighted_ok &&= (top_consistent >= thresholds[:v8_min_consistent_chunks_sparse_longform_conclusive].to_i)
+      sparse_weighted_ok &&= (top_evidence >= thresholds[:v8_min_top_evidence_sparse_longform_conclusive].to_f)
+      sparse_weighted_ok &&= (second_evidence <= thresholds[:v8_max_second_evidence_sparse_longform].to_f)
+      sparse_weighted_ok &&= (weighted_top_ratio >= thresholds[:v8_weighted_top_ratio_sparse_longform_conclusive].to_f)
+      sparse_weighted_ok &&= (weighted_delta >= thresholds[:v8_weighted_delta_sparse_longform_conclusive].to_f)
+      sparse_weighted_ok &&= (raw_delta >= thresholds[:v8_raw_delta_sparse_longform_floor].to_f)
+      sparse_weighted_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_sparse_longform].to_f)
+      sparse_weighted_ok &&= (second_ratio <= thresholds[:v8_second_match_sparse_longform_max].to_f)
+
+      if sparse_weighted_ok
+        return {
+          used: true,
+          basis: "anchorless_pairwise_sparse_weighted",
+          reason: "v8_pairwise_sparse_weighted_policy_passed",
         }
       end
 
@@ -861,6 +891,9 @@ module ::MediaGallery
         "v8_second_match_sparse_longform_max" => thresholds[:v8_second_match_sparse_longform_max],
         "v8_max_mismatch_rate_sparse_longform" => thresholds[:v8_max_mismatch_rate_sparse_longform],
         "v8_min_observable_capacity_sparse_longform_conclusive" => thresholds[:v8_min_observable_capacity_sparse_longform_conclusive],
+        "v8_weighted_top_ratio_sparse_longform_conclusive" => thresholds[:v8_weighted_top_ratio_sparse_longform_conclusive],
+        "v8_weighted_delta_sparse_longform_conclusive" => thresholds[:v8_weighted_delta_sparse_longform_conclusive],
+        "v8_raw_delta_sparse_longform_floor" => thresholds[:v8_raw_delta_sparse_longform_floor],
         "v8_sync_anchor_ratio_recovery_conclusive" => thresholds[:v8_sync_anchor_ratio_recovery_conclusive],
         "v8_pairwise_margin_recovery_conclusive" => thresholds[:v8_pairwise_margin_recovery_conclusive],
         "v8_pairwise_wins_recovery_conclusive" => thresholds[:v8_pairwise_wins_recovery_conclusive],
