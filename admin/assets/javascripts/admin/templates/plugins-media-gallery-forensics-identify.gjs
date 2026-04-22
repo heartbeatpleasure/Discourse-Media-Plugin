@@ -1258,6 +1258,12 @@ export default RouteTemplate(
             </div>
           {{/if}}
 
+          {{#if @controller.isAmbiguousTopCandidateSuppressed}}
+            <div class="mg-fi__notice is-warning" style="margin-top: 0.75rem;">
+              <strong>Note:</strong> No reliable top candidate is shown for this ambiguous result.
+            </div>
+          {{/if}}
+
           {{#if @controller.hasAlignmentDebug}}
             <details class="mg-fi__details" style="margin-top: 1rem;">
               <summary>Alignment debug</summary>

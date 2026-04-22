@@ -767,7 +767,18 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return this.decisionReasons.join(", ");
   }
 
+  get isAmbiguousTopCandidateSuppressed() {
+    return !!this.meta?.ambiguous_top_candidate_suppressed;
+  }
+
+  get ambiguousTopCandidateSuppressionReason() {
+    return this.meta?.ambiguous_top_candidate_suppression_reason || "";
+  }
+
   get topCandidateWhy() {
+    if (this.isAmbiguousTopCandidateSuppressed) {
+      return "";
+    }
     return this.meta?.top_candidate_why || this.topCandidate?.why || "";
   }
 
@@ -834,10 +845,16 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get expectedVariantsTopCandidate() {
+    if (this.isAmbiguousTopCandidateSuppressed) {
+      return "";
+    }
     return this.meta?.expected_variants_top_candidate || this.topCandidate?.expected_variants || "";
   }
 
   get mismatchPositions() {
+    if (this.isAmbiguousTopCandidateSuppressed) {
+      return [];
+    }
     const arr = this.meta?.mismatch_positions || this.topCandidate?.mismatch_positions || [];
     return Array.isArray(arr) ? arr : [];
   }

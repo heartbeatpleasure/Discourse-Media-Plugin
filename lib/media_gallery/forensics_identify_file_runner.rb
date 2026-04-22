@@ -652,6 +652,82 @@ module ::MediaGallery
       { used: false, basis: nil, reason: nil }
     end
 
+
+    def apply_v8_ambiguous_top_candidate_guard!(result)
+      meta = result["meta"] ||= {}
+      return unless meta["decision"].to_s == "ambiguous"
+      return unless meta["layout"].to_s == "v8_microgrid"
+
+      cands = result["candidates"]
+      return unless cands.is_a?(Array) && cands.size >= 2
+
+      top_cand = cands[0].is_a?(Hash) ? cands[0] : {}
+      second_cand = cands[1].is_a?(Hash) ? cands[1] : {}
+      return if top_cand.blank?
+
+      raw_top = top_cand["match_ratio"].to_f
+      raw_second = second_cand["match_ratio"].to_f
+      raw_delta = raw_top - raw_second
+      weighted_top = top_cand["local_match_ratio"].to_f
+      weighted_second = second_cand["local_match_ratio"].to_f
+      weighted_delta = weighted_top - weighted_second
+
+      top_margin = top_cand["pairwise_chunk_margin_total"].to_f
+      top_wins = top_cand["pairwise_chunks_won"].to_i
+      top_losses = top_cand["pairwise_chunks_lost"].to_i
+      top_evidence = top_cand["evidence_score"].to_f
+      second_evidence = second_cand["evidence_score"].to_f
+      evidence_gap = top_evidence - second_evidence
+      rank_gap = top_cand["rank_score"].to_f - second_cand["rank_score"].to_f
+      compared = top_cand["compared"].to_i
+      mismatches = top_cand["mismatches"].to_i
+      mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
+
+      sync_used = !!meta["sync_anchor_used"]
+      sync_ratio = meta["sync_anchor_best_ratio"].to_f
+
+      reliable_sync = true
+      reliable_sync &&= sync_used
+      reliable_sync &&= (sync_ratio >= 0.42)
+      reliable_sync &&= (raw_delta >= 0.22)
+      reliable_sync &&= (weighted_delta >= 0.20)
+      reliable_sync &&= (top_margin >= 8.5)
+      reliable_sync &&= (top_wins >= 5)
+      reliable_sync &&= (top_losses <= 2)
+      reliable_sync &&= (top_evidence >= 1.5)
+      reliable_sync &&= (evidence_gap >= 8.0)
+      reliable_sync &&= (rank_gap >= 24.0)
+      reliable_sync &&= (raw_second <= 0.43)
+      reliable_sync &&= (mismatch_rate <= 0.37)
+
+      reliable_pairwise = true
+      reliable_pairwise &&= !sync_used
+      reliable_pairwise &&= (top_margin >= 10.0)
+      reliable_pairwise &&= (top_wins >= 6)
+      reliable_pairwise &&= (top_losses <= 1)
+      reliable_pairwise &&= (raw_delta >= 0.12)
+      reliable_pairwise &&= (weighted_delta >= 0.10)
+      reliable_pairwise &&= (top_evidence >= 2.0)
+      reliable_pairwise &&= (evidence_gap >= 8.0)
+      reliable_pairwise &&= (rank_gap >= 24.0)
+      reliable_pairwise &&= (raw_second <= 0.50)
+      reliable_pairwise &&= (mismatch_rate <= 0.40)
+
+      reliable = reliable_sync || reliable_pairwise
+
+      if reliable
+        meta["ambiguous_top_candidate_suppressed"] = false
+        meta.delete("ambiguous_top_candidate_suppression_reason")
+        meta.delete("ambiguous_top_candidate_username")
+      else
+        meta["ambiguous_top_candidate_suppressed"] = true
+        meta["ambiguous_top_candidate_suppression_reason"] = "top_candidate_lacks_strong_corroboration"
+        meta["ambiguous_top_candidate_username"] = top_cand["username"].to_s if top_cand["username"].present?
+      end
+    rescue
+      nil
+    end
+
     def apply_decision_policy!(result)
       result["meta"] ||= {}
 
@@ -824,6 +900,8 @@ module ::MediaGallery
         else
           "try_longer_or_closer_to_original"
         end
+
+      apply_v8_ambiguous_top_candidate_guard!(result)
     end
 
     def classify_decision(result)
