@@ -244,6 +244,7 @@ module ::MediaGallery
               observed_sync_variants: obs[:sync_variants],
               observed_sync_confidences: obs[:sync_confidences],
               observed_segment_indices: obs[:segment_indices],
+              observed_quality_hints: obs[:quality_hints],
               spec: spec,
               max_offset_segments: effective_max_offset_segments,
               started_at: started_at,
@@ -1174,6 +1175,7 @@ module ::MediaGallery
         observed_sync_variants: refined_obs[:sync_variants],
         observed_sync_confidences: refined_obs[:sync_confidences],
         observed_segment_indices: refined_obs[:segment_indices],
+        observed_quality_hints: refined_obs[:quality_hints],
         spec: spec,
         max_offset_segments: max_offset_segments,
         started_at: started_at,
@@ -1184,7 +1186,15 @@ module ::MediaGallery
       refined_score = phase_result_score(match: refined_match)
       use_refined = refined_score >= (orig_score + 0.005)
 
+      refined_positions = materially_changed_refine_segment_indices(base_obs: obs, refined_obs: refined_obs)
+      if use_refined
+        refined_obs[:quality_hints] = merge_observation_quality_hints(
+          base_obs: obs,
+          refined_segment_indices: refined_positions,
+        )
+      end
       chosen_obs = use_refined ? refined_obs : obs
+      chosen_obs[:quality_hints] ||= obs[:quality_hints] if chosen_obs.is_a?(Hash)
       chosen_match = use_refined ? refined_match : match
       chosen_meta = chosen_match[:meta] || {}
       chosen_meta[:multisample_refine_used] = true
@@ -1628,6 +1638,7 @@ module ::MediaGallery
         observed_sync_variants: merged_obs[:sync_variants],
         observed_sync_confidences: merged_obs[:sync_confidences],
         observed_segment_indices: merged_obs[:segment_indices],
+        observed_quality_hints: merged_obs[:quality_hints],
         spec: spec,
         max_offset_segments: max_offset_segments,
         started_at: started_at,
@@ -1639,7 +1650,14 @@ module ::MediaGallery
       flip_corroborated = targeted_fill_candidate_flip_corroborated?(orig_match: match, merged_match: merged_match)
       use_merged = merged_score >= (orig_score + TARGETED_FILL_MIN_IMPROVEMENT) && flip_corroborated
 
+      if use_merged
+        merged_obs[:quality_hints] = merge_observation_quality_hints(
+          base_obs: obs,
+          added_segment_indices: positions,
+        )
+      end
       chosen_obs = use_merged ? merged_obs : obs
+      chosen_obs[:quality_hints] ||= obs[:quality_hints] if chosen_obs.is_a?(Hash)
       chosen_match = use_merged ? merged_match : match
       chosen_meta = chosen_match[:meta] || {}
       chosen_meta[:targeted_fill_used] = true
@@ -2104,6 +2122,8 @@ module ::MediaGallery
         ov = entry[2].to_s
         w = entry[3].to_f
         c = entry[4].to_f
+        adaptive_w = entry[5].to_f
+        adaptive_w = w if adaptive_w <= 0.0
         next if ov.blank? || w <= 0.0
 
         seg_idx = base_seg_idx + offset.to_i
@@ -2114,13 +2134,14 @@ module ::MediaGallery
         end
 
         key = [slot[:block_index].to_i, slot[:logical_index].to_i]
-        g = (groups[key] ||= { rep_obs_idx: obs_idx, rep_base_seg_idx: base_seg_idx, rep_seg: seg_idx, a_w: 0.0, b_w: 0.0, raw_weight: 0.0, raw_conf: [], raw_count: 0 })
+        g = (groups[key] ||= { rep_obs_idx: obs_idx, rep_base_seg_idx: base_seg_idx, rep_seg: seg_idx, a_w: 0.0, b_w: 0.0, raw_weight: 0.0, adaptive_weight: 0.0, raw_conf: [], raw_count: 0 })
         if ov == "a"
           g[:a_w] += w
         else
           g[:b_w] += w
         end
         g[:raw_weight] += w
+        g[:adaptive_weight] += adaptive_w
         g[:raw_conf] << c if c > 0.0
         g[:raw_count] += 1
         if seg_idx < g[:rep_seg].to_i
@@ -2138,8 +2159,11 @@ module ::MediaGallery
         ov = diff >= 0.0 ? "a" : "b"
         margin = diff.abs / [total, 1e-6].max
         w = total * (0.65 + (0.35 * margin))
+        adaptive_total = g[:adaptive_weight].to_f
+        adaptive_w = adaptive_total * (0.65 + (0.35 * margin))
+        adaptive_w = w if adaptive_w <= 0.0
         c = median(g[:raw_conf])
-        [g[:rep_obs_idx].to_i, g[:rep_base_seg_idx].to_i, ov, w.to_f, c.to_f, g[:raw_count].to_i, margin.to_f]
+        [g[:rep_obs_idx].to_i, g[:rep_base_seg_idx].to_i, ov, w.to_f, c.to_f, g[:raw_count].to_i, margin.to_f, adaptive_w.to_f]
       end.compact
     rescue
       arr
@@ -2730,7 +2754,8 @@ module ::MediaGallery
         elapsed_seconds: elapsed,
         effective_max_samples: cap,
         budget_exhausted: budget_exceeded.call,
-        sample_points: used_sample_points
+        sample_points: used_sample_points,
+        quality_hints: {},
       }
     end
     # Attempts to derive accurate segment midpoints from the packaged (template) HLS playlist on disk.
@@ -3920,16 +3945,139 @@ end
     end
     private_class_method :shortlist_prefilter_limit
 
+    def merge_observation_quality_hints(base_obs:, added_segment_indices: nil, refined_segment_indices: nil)
+      existing = (base_obs.is_a?(Hash) ? (base_obs[:quality_hints] || base_obs["quality_hints"]) : nil) || {}
+      fill = Set.new(Array(existing[:filled_segment_indices] || existing["filled_segment_indices"]).map(&:to_i))
+      refined = Set.new(Array(existing[:refined_segment_indices] || existing["refined_segment_indices"]).map(&:to_i))
+      Array(added_segment_indices).each { |v| fill << v.to_i }
+      Array(refined_segment_indices).each { |v| refined << v.to_i }
+      {
+        filled_segment_indices: fill.to_a.sort,
+        refined_segment_indices: refined.to_a.sort,
+      }
+    rescue
+      { filled_segment_indices: [], refined_segment_indices: [] }
+    end
+    private_class_method :merge_observation_quality_hints
+
+    def materially_changed_refine_segment_indices(base_obs:, refined_obs:)
+      base_idx = Array(base_obs[:segment_indices])
+      ref_idx = Array(refined_obs[:segment_indices])
+      return [] if base_idx.blank? || ref_idx.blank?
+
+      out = []
+      [base_idx.length, ref_idx.length].min.times do |i|
+        next unless base_idx[i].to_i == ref_idx[i].to_i
+        base_variant = Array(base_obs[:variants])[i].presence
+        ref_variant = Array(refined_obs[:variants])[i].presence
+        base_conf = Array(base_obs[:confidences])[i].to_f
+        ref_conf = Array(refined_obs[:confidences])[i].to_f
+        base_score = Array(base_obs[:scores])[i].to_f
+        ref_score = Array(refined_obs[:scores])[i].to_f
+        changed = false
+        changed ||= (base_variant != ref_variant)
+        changed ||= ((ref_conf - base_conf).abs >= 0.12)
+        changed ||= ((ref_score - base_score).abs >= 0.75)
+        out << ref_idx[i].to_i if changed
+      end
+      out.uniq.sort
+    rescue
+      []
+    end
+    private_class_method :materially_changed_refine_segment_indices
+
+    def build_adaptive_weight_context(observed_scores:, observed_sync_confidences:, observed_segment_indices:, observed_quality_hints: nil)
+      scores = Array(observed_scores).map { |v| v.to_f }
+      syncs = Array(observed_sync_confidences).map { |v| v.to_f }
+      segs = Array(observed_segment_indices)
+      abs_scores = scores.map { |v| v.abs }.select { |v| v > 0.0 && !v.nan? && !v.infinite? }.sort
+      low_score = abs_scores.empty? ? 0.0 : abs_scores[(abs_scores.length * 0.35).floor]
+      high_score = abs_scores.empty? ? 0.0 : abs_scores[(abs_scores.length * 0.70).floor]
+      low_score = 0.0 if low_score.nan? || low_score.infinite?
+      high_score = low_score if high_score.nan? || high_score.infinite?
+      filled = Set.new(Array((observed_quality_hints || {})[:filled_segment_indices] || (observed_quality_hints || {})["filled_segment_indices"]).map(&:to_i))
+      refined = Set.new(Array((observed_quality_hints || {})[:refined_segment_indices] || (observed_quality_hints || {})["refined_segment_indices"]).map(&:to_i))
+      usable_segment_indices = segs.compact.map(&:to_i).uniq.sort
+      nearest_gap = {}
+      usable_segment_indices.each_with_index do |seg, idx|
+        prev_gap = idx > 0 ? (seg - usable_segment_indices[idx - 1]).abs : nil
+        next_gap = idx + 1 < usable_segment_indices.length ? (usable_segment_indices[idx + 1] - seg).abs : nil
+        nearest_gap[seg] = [prev_gap, next_gap].compact.min
+      end
+      {
+        low_score_threshold: low_score.to_f,
+        high_score_threshold: high_score.to_f,
+        filled_segment_indices: filled,
+        refined_segment_indices: refined,
+        nearest_gap: nearest_gap,
+        syncs: syncs,
+        scores: scores,
+      }
+    rescue
+      {
+        low_score_threshold: 0.0,
+        high_score_threshold: 0.0,
+        filled_segment_indices: Set.new,
+        refined_segment_indices: Set.new,
+        nearest_gap: {},
+        syncs: [],
+        scores: [],
+      }
+    end
+    private_class_method :build_adaptive_weight_context
+
+    def adaptive_sample_weight_factor(obs_idx:, base_seg_idx:, confidence:, adaptive_ctx:)
+      factor = 1.0
+      conf = confidence.to_f
+      score = Array(adaptive_ctx[:scores])[obs_idx].to_f.abs
+      sync_conf = Array(adaptive_ctx[:syncs])[obs_idx].to_f
+      nearest_gap = adaptive_ctx[:nearest_gap][base_seg_idx.to_i]
+      filled = adaptive_ctx[:filled_segment_indices].include?(base_seg_idx.to_i)
+      refined = adaptive_ctx[:refined_segment_indices].include?(base_seg_idx.to_i)
+      low_score = adaptive_ctx[:low_score_threshold].to_f
+      high_score = adaptive_ctx[:high_score_threshold].to_f
+
+      factor *= 0.82 if conf > 0.0 && conf < 0.55
+      factor *= 1.06 if conf >= 0.82
+
+      if high_score > 0.0
+        factor *= 1.10 if score >= high_score
+        factor *= 0.85 if score > 0.0 && score < low_score
+      end
+
+      factor *= 1.06 if sync_conf >= 0.55
+      factor *= 0.92 if sync_conf > 0.0 && sync_conf < 0.22
+
+      if nearest_gap.present?
+        factor *= 0.84 if nearest_gap >= 18
+        factor *= 0.92 if nearest_gap >= 10 && nearest_gap < 18
+        factor *= 1.03 if nearest_gap <= 4
+      end
+
+      if filled
+        factor *= conf >= 0.75 ? 0.88 : 0.72
+      elsif refined
+        factor *= 0.96 if conf < 0.60
+      end
+
+      [[factor, 1.28].min, 0.45].max
+    rescue
+      1.0
+    end
+    private_class_method :adaptive_sample_weight_factor
+
     def candidate_prefilter_sort_tuple(candidate)
       c = candidate.is_a?(Hash) ? candidate : {}
+      adaptive_weighted = (c[:match_ratio_adaptive_weighted] || c["match_ratio_adaptive_weighted"]).to_f
       weighted = (c[:match_ratio_weighted] || c["match_ratio_weighted"]).to_f
       raw = (c[:match_ratio] || c["match_ratio"]).to_f
+      adaptive_compared = (c[:compared_adaptive_weighted] || c["compared_adaptive_weighted"]).to_f
       compared_weighted = (c[:compared_weighted] || c["compared_weighted"]).to_f
       compared = (c[:compared] || c["compared"]).to_i
       mismatches = (c[:mismatches] || c["mismatches"]).to_i
-      [-(weighted.round(6)), -(raw.round(6)), -(compared_weighted.round(6)), -compared, mismatches]
+      [-(adaptive_weighted.round(6)), -(weighted.round(6)), -(raw.round(6)), -(adaptive_compared.round(6)), -(compared_weighted.round(6)), -compared, mismatches]
     rescue
-      [0.0, 0.0, 0.0, 0, 0]
+      [0.0, 0.0, 0.0, 0.0, 0.0, 0, 0]
     end
     private_class_method :candidate_prefilter_sort_tuple
 
@@ -4009,7 +4157,7 @@ end
     end
     private_class_method :apply_shortlist_meta!
 
-    def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, observed_sync_variants: nil, observed_sync_confidences: nil, observed_segment_indices: nil, spec: nil, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
+    def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, observed_sync_variants: nil, observed_sync_confidences: nil, observed_segment_indices: nil, observed_quality_hints: nil, spec: nil, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
       fps = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).includes(:user).to_a
       return { candidates: [], meta: { offset_strategy: "global" } } if fps.empty?
 
@@ -4067,6 +4215,13 @@ end
       # - we always skip nil/blank bits
       # - higher confidence samples contribute more to mismatch scoring
       # - use confidence^2 to more strongly down-weight marginal readings
+      adaptive_ctx = build_adaptive_weight_context(
+        observed_scores: observed_scores,
+        observed_sync_confidences: observed_sync_confidences,
+        observed_segment_indices: seg_indices,
+        observed_quality_hints: observed_quality_hints,
+      )
+
       samples = []
       obs.each_with_index do |v, i|
         next if v.blank?
@@ -4082,7 +4237,15 @@ end
         next if w <= 0.0
 
         base_seg_idx = seg_indices[i].present? ? seg_indices[i].to_i : i
-        samples << [i, base_seg_idx, v.to_s, w.to_f, c.to_f]
+        adaptive_factor = adaptive_sample_weight_factor(
+          obs_idx: i,
+          base_seg_idx: base_seg_idx,
+          confidence: c,
+          adaptive_ctx: adaptive_ctx,
+        )
+        adaptive_w = (w.to_f * adaptive_factor.to_f)
+        adaptive_w = w.to_f if adaptive_w <= 0.0
+        samples << [i, base_seg_idx, v.to_s, w.to_f, c.to_f, adaptive_w.to_f, adaptive_factor.to_f]
       end
 
       return { candidates: [], meta: { offset_strategy: "global", chosen_offset_segments: 0, effective_samples: 0.0 } } if samples.empty?
@@ -4216,10 +4379,14 @@ end
       fps.each do |rec|
         mism_w = 0.0
         comp_w = 0.0
+        mism_aw = 0.0
+        comp_aw = 0.0
         mism = 0
         comp = 0
+        high_q_mismatches = 0
+        high_q_compared = 0
 
-        chosen_samples.each do |(_obs_idx, base_seg_idx, ov, w, _c, _raw_count, _margin)|
+        chosen_samples.each do |(_obs_idx, base_seg_idx, ov, w, _c, _raw_count, _margin, adaptive_w, adaptive_factor)|
           exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
             fingerprint_id: rec.fingerprint_id,
             media_item_id: media_item.id,
@@ -4228,9 +4395,14 @@ end
 
           comp += 1
           comp_w += w
+          aw = adaptive_w.to_f > 0.0 ? adaptive_w.to_f : w.to_f
+          comp_aw += aw
+          high_q_compared += 1 if adaptive_factor.to_f >= 1.0
           if exp != ov
             mism += 1
             mism_w += w
+            mism_aw += aw
+            high_q_mismatches += 1 if adaptive_factor.to_f >= 1.0
           end
         end
 
@@ -4238,6 +4410,8 @@ end
 
         raw_ratio = 1.0 - (mism.to_f / comp.to_f)
         w_ratio = 1.0 - (mism_w / comp_w)
+        aw_ratio = comp_aw > 0.0 ? (1.0 - (mism_aw / comp_aw)) : w_ratio
+        high_q_ratio = high_q_compared > 0 ? (1.0 - (high_q_mismatches.to_f / high_q_compared.to_f)) : raw_ratio
 
         candidates << {
           user_id: rec.user_id,
@@ -4248,8 +4422,14 @@ end
           compared: comp,
           mismatches_weighted: mism_w.round(6),
           compared_weighted: comp_w.round(6),
+          mismatches_adaptive_weighted: mism_aw.round(6),
+          compared_adaptive_weighted: comp_aw.round(6),
           match_ratio: raw_ratio.round(4),
           match_ratio_weighted: w_ratio.round(4),
+          match_ratio_adaptive_weighted: aw_ratio.round(4),
+          high_quality_matches: [high_q_compared - high_q_mismatches, 0].max,
+          high_quality_compared: high_q_compared,
+          high_quality_match_ratio: high_q_ratio.round(4),
           polarity_flip_used: chosen_polarity_flip,
           variant_polarity: (chosen_polarity_flip ? "inverted" : "normal"),
         }
@@ -4290,8 +4470,21 @@ end
       med_c = 0.03 if med_c <= 0.0
       norm = med_c * med_c
       chosen_total_weight = chosen_samples.reduce(0.0) { |acc, s| acc + s[3].to_f }.to_f
+      chosen_adaptive_total_weight = chosen_samples.reduce(0.0) { |acc, s| acc + (s[7].to_f > 0.0 ? s[7].to_f : s[3].to_f) }.to_f
       effective = norm > 0 ? (chosen_total_weight / norm) : chosen_samples.length.to_f
+      adaptive_effective = norm > 0 ? (chosen_adaptive_total_weight / norm) : chosen_samples.length.to_f
       effective = effective.round(2)
+      adaptive_effective = adaptive_effective.round(2)
+      quality_hints = observed_quality_hints.is_a?(Hash) ? observed_quality_hints : {}
+      filled_set = Set.new(Array(quality_hints[:filled_segment_indices] || quality_hints["filled_segment_indices"]).map(&:to_i))
+      high_quality_weight = chosen_samples.reduce(0.0) do |acc, s|
+        aw = (s[7].to_f > 0.0 ? s[7].to_f : s[3].to_f)
+        factor = s[6].to_f
+        acc + ((factor >= 1.0) ? aw : 0.0)
+      end.to_f
+      adaptive_high_quality_support_ratio = chosen_adaptive_total_weight > 0.0 ? (high_quality_weight / chosen_adaptive_total_weight) : 0.0
+      filled_count = chosen_samples.count { |s| filled_set.include?(s[1].to_i) }
+      adaptive_filled_segment_ratio = chosen_samples.length > 0 ? (filled_count.to_f / chosen_samples.length.to_f) : 0.0
 
       meta = {
         offset_strategy: "global",
@@ -4311,6 +4504,10 @@ end
         candidate_prefilter_limit: prefilter_info[:limit],
         candidate_prefilter_kept: prefilter_info[:kept],
         candidate_prefilter_cutoff_weighted_ratio: prefilter_info[:cutoff_weighted_ratio],
+        adaptive_weighting_used: true,
+        adaptive_effective_samples: adaptive_effective,
+        adaptive_high_quality_support_ratio: adaptive_high_quality_support_ratio.round(4),
+        adaptive_filled_segment_ratio: adaptive_filled_segment_ratio.round(4),
       }
 
       if best_diag

@@ -292,6 +292,28 @@ module ::MediaGallery
       }
     end
 
+    def adaptive_quality_metrics(result)
+      arr = Array(result["candidates"])
+      top = arr[0] || {}
+      second = arr[1] || {}
+      meta = result.is_a?(Hash) ? (result["meta"] || {}) : {}
+      {
+        top_adaptive_ratio: candidate_value(top, :match_ratio_adaptive_weighted),
+        second_adaptive_ratio: candidate_value(second, :match_ratio_adaptive_weighted),
+        adaptive_delta: (candidate_value(top, :match_ratio_adaptive_weighted) - candidate_value(second, :match_ratio_adaptive_weighted)).round(4),
+        top_high_quality_ratio: candidate_value(top, :high_quality_match_ratio),
+        support_ratio: meta["adaptive_high_quality_support_ratio"].to_f,
+      }
+    rescue
+      {
+        top_adaptive_ratio: 0.0,
+        second_adaptive_ratio: 0.0,
+        adaptive_delta: 0.0,
+        top_high_quality_ratio: 0.0,
+        support_ratio: 0.0,
+      }
+    end
+
     def v8_pairwise_support_metrics(candidate)
       return { decisive_chunks: 0, win_advantage: 0, margin_median: 0.0 } unless candidate.is_a?(Hash)
 
@@ -318,6 +340,28 @@ module ::MediaGallery
       if pop >= thresholds[:population_guard_large_min].to_i
         return false if metrics[:top_vs_fourth_match_delta] < thresholds[:population_top4_match_delta_large].to_f
         return false if metrics[:top_vs_fourth_rank_gap] < thresholds[:population_top4_rank_gap_large].to_f
+      end
+
+      true
+    rescue
+      true
+    end
+
+    def population_adaptive_guard_passes?(result, thresholds:)
+      pop = thresholds[:candidate_population_count].to_i
+      return true if pop < thresholds[:population_quality_guard_medium_min].to_i
+
+      metrics = adaptive_quality_metrics(result)
+      return false if metrics[:top_adaptive_ratio] < thresholds[:population_quality_top_adaptive_ratio_medium].to_f
+      return false if metrics[:adaptive_delta] < thresholds[:population_quality_adaptive_delta_medium].to_f
+      return false if metrics[:top_high_quality_ratio] < thresholds[:population_quality_top_high_quality_ratio_medium].to_f
+      return false if metrics[:support_ratio] < thresholds[:population_high_quality_support_medium].to_f
+
+      if pop >= thresholds[:population_quality_guard_large_min].to_i
+        return false if metrics[:top_adaptive_ratio] < thresholds[:population_quality_top_adaptive_ratio_large].to_f
+        return false if metrics[:adaptive_delta] < thresholds[:population_quality_adaptive_delta_large].to_f
+        return false if metrics[:top_high_quality_ratio] < thresholds[:population_quality_top_high_quality_ratio_large].to_f
+        return false if metrics[:support_ratio] < thresholds[:population_high_quality_support_large].to_f
       end
 
       true
@@ -607,6 +651,7 @@ module ::MediaGallery
       return { used: false, basis: nil, reason: nil } if second_rank > 0.0 && second_evidence > 0.0
       return { used: false, basis: nil, reason: nil } if discriminative_used && discriminative_margin < -0.6
       return { used: false, basis: nil, reason: nil } unless population_topk_guard_passes?(result, thresholds: thresholds)
+      return { used: false, basis: nil, reason: nil } unless population_adaptive_guard_passes?(result, thresholds: thresholds)
 
       if sync_used && mismatch_rate <= thresholds[:v8_max_mismatch_rate_conclusive].to_f && sync_ratio >= thresholds[:v8_sync_anchor_ratio_conclusive].to_f
         return {
@@ -814,8 +859,10 @@ module ::MediaGallery
       raw_top = top_cand["match_ratio"].to_f
       raw_second = second_cand["match_ratio"].to_f
       raw_delta = raw_top - raw_second
-      weighted_top = top_cand["local_match_ratio"].to_f
-      weighted_second = second_cand["local_match_ratio"].to_f
+      weighted_top = candidate_value(top_cand, :match_ratio_adaptive_weighted)
+      weighted_top = candidate_value(top_cand, :match_ratio_weighted) if weighted_top <= 0.0
+      weighted_second = candidate_value(second_cand, :match_ratio_adaptive_weighted)
+      weighted_second = candidate_value(second_cand, :match_ratio_weighted) if weighted_second <= 0.0
       weighted_delta = weighted_top - weighted_second
 
       top_margin = top_cand["pairwise_chunk_margin_total"].to_f
@@ -907,6 +954,16 @@ module ::MediaGallery
           "candidate_population_count" => thresholds[:candidate_population_count],
           "population_guard_medium_min" => thresholds[:population_guard_medium_min],
           "population_guard_large_min" => thresholds[:population_guard_large_min],
+          "population_quality_guard_medium_min" => thresholds[:population_quality_guard_medium_min],
+          "population_quality_guard_large_min" => thresholds[:population_quality_guard_large_min],
+          "population_quality_top_adaptive_ratio_medium" => thresholds[:population_quality_top_adaptive_ratio_medium],
+          "population_quality_adaptive_delta_medium" => thresholds[:population_quality_adaptive_delta_medium],
+          "population_quality_top_high_quality_ratio_medium" => thresholds[:population_quality_top_high_quality_ratio_medium],
+          "population_high_quality_support_medium" => thresholds[:population_high_quality_support_medium],
+          "population_quality_top_adaptive_ratio_large" => thresholds[:population_quality_top_adaptive_ratio_large],
+          "population_quality_adaptive_delta_large" => thresholds[:population_quality_adaptive_delta_large],
+          "population_quality_top_high_quality_ratio_large" => thresholds[:population_quality_top_high_quality_ratio_large],
+          "population_high_quality_support_large" => thresholds[:population_high_quality_support_large],
           "population_top3_match_delta_medium" => thresholds[:population_top3_match_delta_medium],
           "population_top3_rank_gap_medium" => thresholds[:population_top3_rank_gap_medium],
           "population_top3_evidence_gap_medium" => thresholds[:population_top3_evidence_gap_medium],
