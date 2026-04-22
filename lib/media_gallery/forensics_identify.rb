@@ -110,6 +110,16 @@ module ::MediaGallery
     TARGETED_FILL_MIN_REMAINING_SECONDS = 5.0
     TARGETED_FILL_MAX_SEGMENTS = 15
     TARGETED_FILL_MIN_IMPROVEMENT = 0.12
+    TARGETED_FILL_FLIP_MIN_PAIRWISE_MARGIN = 10.0
+    TARGETED_FILL_FLIP_MIN_PAIRWISE_WINS = 6
+    TARGETED_FILL_FLIP_MIN_RANK_GAP = 18.0
+    TARGETED_FILL_FLIP_MIN_EVIDENCE_GAP = 6.0
+    TARGETED_FILL_FLIP_MIN_MATCH_DELTA = 0.18
+    TARGETED_FILL_FLIP_MIN_WEIGHTED_DELTA = 0.16
+    TARGETED_FILL_FLIP_MIN_TOP_EVIDENCE = 2.0
+    TARGETED_FILL_FLIP_MAX_SECOND_MATCH = 0.46
+    TARGETED_FILL_FLIP_MAX_SECOND_EVIDENCE = -4.0
+    TARGETED_FILL_FLIP_MIN_SYNC_RATIO = 0.45
     TARGETED_FILL_LOW_CONFIDENCE = 0.42
     TARGETED_FILL_NEIGHBORHOOD = 1
     TARGETED_FILL_MIN_DIFF_POSITIONS = 4
@@ -1210,6 +1220,71 @@ module ::MediaGallery
     end
     private_class_method :targeted_fill_result_score
 
+    def targeted_fill_top_fingerprint_id(match)
+      Array(match[:candidates]).first.to_h[:fingerprint_id].to_s
+    rescue
+      ""
+    end
+    private_class_method :targeted_fill_top_fingerprint_id
+
+    def targeted_fill_candidate_flip_corroborated?(orig_match:, merged_match:)
+      orig_fp = targeted_fill_top_fingerprint_id(orig_match)
+      merged_fp = targeted_fill_top_fingerprint_id(merged_match)
+      return true if orig_fp.blank? || merged_fp.blank? || orig_fp == merged_fp
+
+      cands = Array(merged_match[:candidates])
+      top = cands[0] || {}
+      second = cands[1] || {}
+      meta = merged_match[:meta] || {}
+
+      pairwise_margin = top[:pairwise_chunk_margin_total].to_f
+      pairwise_wins = top[:pairwise_chunks_won].to_i
+      pairwise_losses = top[:pairwise_chunks_lost].to_i
+      rank_gap = meta[:shortlist_rank_gap].to_f
+      evidence_gap = meta[:shortlist_evidence_gap].to_f
+      raw_delta = top[:match_ratio].to_f - second[:match_ratio].to_f
+      weighted_delta = top[:match_ratio_weighted].to_f - second[:match_ratio_weighted].to_f
+      top_evidence = top[:evidence_score].to_f
+      second_evidence = second[:evidence_score].to_f
+      second_ratio = second[:match_ratio].to_f
+      sync_used = meta[:sync_anchor_used] == true
+      sync_ratio = meta[:sync_anchor_best_ratio].to_f
+
+      pairwise_corroborated =
+        pairwise_margin >= TARGETED_FILL_FLIP_MIN_PAIRWISE_MARGIN &&
+          pairwise_wins >= TARGETED_FILL_FLIP_MIN_PAIRWISE_WINS &&
+          pairwise_wins >= (pairwise_losses + 3) &&
+          rank_gap >= TARGETED_FILL_FLIP_MIN_RANK_GAP &&
+          evidence_gap >= TARGETED_FILL_FLIP_MIN_EVIDENCE_GAP &&
+          raw_delta >= TARGETED_FILL_FLIP_MIN_MATCH_DELTA &&
+          weighted_delta >= TARGETED_FILL_FLIP_MIN_WEIGHTED_DELTA &&
+          top_evidence >= TARGETED_FILL_FLIP_MIN_TOP_EVIDENCE &&
+          second_ratio <= TARGETED_FILL_FLIP_MAX_SECOND_MATCH &&
+          second_evidence <= TARGETED_FILL_FLIP_MAX_SECOND_EVIDENCE
+
+      sync_corroborated =
+        sync_used &&
+          sync_ratio >= TARGETED_FILL_FLIP_MIN_SYNC_RATIO &&
+          rank_gap >= TARGETED_FILL_FLIP_MIN_RANK_GAP &&
+          evidence_gap >= TARGETED_FILL_FLIP_MIN_EVIDENCE_GAP &&
+          raw_delta >= TARGETED_FILL_FLIP_MIN_MATCH_DELTA &&
+          weighted_delta >= TARGETED_FILL_FLIP_MIN_WEIGHTED_DELTA &&
+          top_evidence >= TARGETED_FILL_FLIP_MIN_TOP_EVIDENCE &&
+          second_ratio <= TARGETED_FILL_FLIP_MAX_SECOND_MATCH
+
+      unanimous_pairwise =
+        pairwise_wins >= 7 &&
+          pairwise_losses == 0 &&
+          rank_gap >= (TARGETED_FILL_FLIP_MIN_RANK_GAP + 10.0) &&
+          raw_delta >= (TARGETED_FILL_FLIP_MIN_MATCH_DELTA + 0.08) &&
+          weighted_delta >= (TARGETED_FILL_FLIP_MIN_WEIGHTED_DELTA + 0.08)
+
+      pairwise_corroborated || sync_corroborated || unanimous_pairwise
+    rescue
+      false
+    end
+    private_class_method :targeted_fill_candidate_flip_corroborated?
+
     def should_run_targeted_filemode_fill?(obs:, match:, started_at:, budget_seconds:)
       return { run: false, reason: "missing_observation_or_match" } if obs.blank? || match.blank?
 
@@ -1561,7 +1636,8 @@ module ::MediaGallery
 
       orig_score = targeted_fill_result_score(match: match, observed_variants: obs[:variants])
       merged_score = targeted_fill_result_score(match: merged_match, observed_variants: merged_obs[:variants])
-      use_merged = merged_score >= (orig_score + TARGETED_FILL_MIN_IMPROVEMENT)
+      flip_corroborated = targeted_fill_candidate_flip_corroborated?(orig_match: match, merged_match: merged_match)
+      use_merged = merged_score >= (orig_score + TARGETED_FILL_MIN_IMPROVEMENT) && flip_corroborated
 
       chosen_obs = use_merged ? merged_obs : obs
       chosen_match = use_merged ? merged_match : match
@@ -1573,7 +1649,14 @@ module ::MediaGallery
       chosen_meta[:targeted_fill_positions] = positions
       chosen_meta[:targeted_fill_score_gain] = (merged_score - orig_score).round(4)
       chosen_meta[:targeted_fill_points_per_segment] = extra_obs[:targeted_fill_points_per_segment].to_i
-      chosen_meta[:targeted_fill_rejected_reason] = (use_merged ? nil : "original_result_better")
+      chosen_meta[:targeted_fill_rejected_reason] = if use_merged
+        nil
+      elsif merged_score < (orig_score + TARGETED_FILL_MIN_IMPROVEMENT)
+        "original_result_better"
+      else
+        "candidate_flip_requires_stronger_corroboration"
+      end
+      chosen_meta[:targeted_fill_candidate_flip_guard_used] = (targeted_fill_top_fingerprint_id(match) != targeted_fill_top_fingerprint_id(merged_match))
       chosen_match[:meta] = chosen_meta
 
       { obs: chosen_obs, match: chosen_match }
