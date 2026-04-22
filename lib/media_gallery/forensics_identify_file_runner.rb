@@ -302,6 +302,28 @@ module ::MediaGallery
         v8_second_match_sparse_longform_max: 0.54,
         v8_max_mismatch_rate_sparse_longform: 0.45,
         v8_min_observable_capacity_sparse_longform_conclusive: 180,
+        v8_sync_anchor_ratio_recovery_conclusive: 0.34,
+        v8_pairwise_margin_recovery_conclusive: 8.5,
+        v8_pairwise_wins_recovery_conclusive: 5,
+        v8_rank_gap_recovery_conclusive: 24.0,
+        v8_evidence_gap_recovery_conclusive: 8.0,
+        v8_match_delta_recovery_conclusive: 0.22,
+        v8_weighted_delta_recovery_conclusive: 0.22,
+        v8_second_match_recovery_max: 0.43,
+        v8_min_top_ratio_recovery_conclusive: 0.64,
+        v8_max_mismatch_rate_recovery: 0.37,
+        v8_min_top_evidence_recovery_conclusive: 1.0,
+        v8_pairwise_margin_unanimous_conclusive: 16.0,
+        v8_pairwise_wins_unanimous_conclusive: 7,
+        v8_rank_gap_unanimous_conclusive: 40.0,
+        v8_evidence_gap_unanimous_conclusive: 10.0,
+        v8_match_delta_unanimous_conclusive: 0.30,
+        v8_weighted_delta_unanimous_conclusive: 0.30,
+        v8_second_match_unanimous_max: 0.40,
+        v8_min_top_ratio_unanimous_conclusive: 0.68,
+        v8_max_mismatch_rate_unanimous: 0.35,
+        v8_max_second_evidence_unanimous: -8.0,
+        v8_min_top_evidence_unanimous_conclusive: -0.5,
       }
 
       thresholds[:min_usable_strong] = [thresholds[:min_usable_strong], 16].max
@@ -529,6 +551,56 @@ module ::MediaGallery
         }
       end
 
+      recovery_ok = true
+      recovery_ok &&= sync_used
+      recovery_ok &&= (sync_ratio >= thresholds[:v8_sync_anchor_ratio_recovery_conclusive].to_f)
+      recovery_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_recovery].to_f)
+      recovery_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_recovery_conclusive].to_f)
+      recovery_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_recovery_conclusive].to_i)
+      recovery_ok &&= (top_wins >= (top_losses + 3))
+      recovery_ok &&= (top_losses <= 2)
+      recovery_ok &&= (rank_gap >= thresholds[:v8_rank_gap_recovery_conclusive].to_f)
+      recovery_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_recovery_conclusive].to_f)
+      recovery_ok &&= (raw_delta >= thresholds[:v8_match_delta_recovery_conclusive].to_f)
+      recovery_ok &&= (weighted_delta >= thresholds[:v8_weighted_delta_recovery_conclusive].to_f)
+      recovery_ok &&= (second_ratio <= thresholds[:v8_second_match_recovery_max].to_f)
+      recovery_ok &&= (top_ratio >= thresholds[:v8_min_top_ratio_recovery_conclusive].to_f)
+      recovery_ok &&= (top_consistent >= 2)
+      recovery_ok &&= (second_consistent <= 2)
+      recovery_ok &&= (top_evidence >= thresholds[:v8_min_top_evidence_recovery_conclusive].to_f)
+      recovery_ok &&= (second_evidence <= -6.0)
+
+      if recovery_ok
+        return {
+          used: true,
+          basis: "sync_anchor_pairwise_recovery",
+          reason: "v8_pairwise_recovery_policy_passed",
+        }
+      end
+
+      unanimous_ok = true
+      unanimous_ok &&= !sync_used
+      unanimous_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_unanimous].to_f)
+      unanimous_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_unanimous_conclusive].to_f)
+      unanimous_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_unanimous_conclusive].to_i)
+      unanimous_ok &&= (top_losses == 0)
+      unanimous_ok &&= (rank_gap >= thresholds[:v8_rank_gap_unanimous_conclusive].to_f)
+      unanimous_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_unanimous_conclusive].to_f)
+      unanimous_ok &&= (raw_delta >= thresholds[:v8_match_delta_unanimous_conclusive].to_f)
+      unanimous_ok &&= (weighted_delta >= thresholds[:v8_weighted_delta_unanimous_conclusive].to_f)
+      unanimous_ok &&= (second_ratio <= thresholds[:v8_second_match_unanimous_max].to_f)
+      unanimous_ok &&= (top_ratio >= thresholds[:v8_min_top_ratio_unanimous_conclusive].to_f)
+      unanimous_ok &&= (second_evidence <= thresholds[:v8_max_second_evidence_unanimous].to_f)
+      unanimous_ok &&= (top_evidence >= thresholds[:v8_min_top_evidence_unanimous_conclusive].to_f)
+
+      if unanimous_ok
+        return {
+          used: true,
+          basis: "anchorless_pairwise_unanimous",
+          reason: "v8_pairwise_unanimous_policy_passed",
+        }
+      end
+
       sparse_longform_ok = true
       sparse_longform_ok &&= !sync_used
       sparse_longform_ok &&= (thresholds[:observable_capacity].to_i >= thresholds[:v8_min_observable_capacity_sparse_longform_conclusive].to_i)
@@ -713,6 +785,28 @@ module ::MediaGallery
         "v8_second_match_sparse_longform_max" => thresholds[:v8_second_match_sparse_longform_max],
         "v8_max_mismatch_rate_sparse_longform" => thresholds[:v8_max_mismatch_rate_sparse_longform],
         "v8_min_observable_capacity_sparse_longform_conclusive" => thresholds[:v8_min_observable_capacity_sparse_longform_conclusive],
+        "v8_sync_anchor_ratio_recovery_conclusive" => thresholds[:v8_sync_anchor_ratio_recovery_conclusive],
+        "v8_pairwise_margin_recovery_conclusive" => thresholds[:v8_pairwise_margin_recovery_conclusive],
+        "v8_pairwise_wins_recovery_conclusive" => thresholds[:v8_pairwise_wins_recovery_conclusive],
+        "v8_rank_gap_recovery_conclusive" => thresholds[:v8_rank_gap_recovery_conclusive],
+        "v8_evidence_gap_recovery_conclusive" => thresholds[:v8_evidence_gap_recovery_conclusive],
+        "v8_match_delta_recovery_conclusive" => thresholds[:v8_match_delta_recovery_conclusive],
+        "v8_weighted_delta_recovery_conclusive" => thresholds[:v8_weighted_delta_recovery_conclusive],
+        "v8_second_match_recovery_max" => thresholds[:v8_second_match_recovery_max],
+        "v8_min_top_ratio_recovery_conclusive" => thresholds[:v8_min_top_ratio_recovery_conclusive],
+        "v8_max_mismatch_rate_recovery" => thresholds[:v8_max_mismatch_rate_recovery],
+        "v8_min_top_evidence_recovery_conclusive" => thresholds[:v8_min_top_evidence_recovery_conclusive],
+        "v8_pairwise_margin_unanimous_conclusive" => thresholds[:v8_pairwise_margin_unanimous_conclusive],
+        "v8_pairwise_wins_unanimous_conclusive" => thresholds[:v8_pairwise_wins_unanimous_conclusive],
+        "v8_rank_gap_unanimous_conclusive" => thresholds[:v8_rank_gap_unanimous_conclusive],
+        "v8_evidence_gap_unanimous_conclusive" => thresholds[:v8_evidence_gap_unanimous_conclusive],
+        "v8_match_delta_unanimous_conclusive" => thresholds[:v8_match_delta_unanimous_conclusive],
+        "v8_weighted_delta_unanimous_conclusive" => thresholds[:v8_weighted_delta_unanimous_conclusive],
+        "v8_second_match_unanimous_max" => thresholds[:v8_second_match_unanimous_max],
+        "v8_min_top_ratio_unanimous_conclusive" => thresholds[:v8_min_top_ratio_unanimous_conclusive],
+        "v8_max_mismatch_rate_unanimous" => thresholds[:v8_max_mismatch_rate_unanimous],
+        "v8_max_second_evidence_unanimous" => thresholds[:v8_max_second_evidence_unanimous],
+        "v8_min_top_evidence_unanimous_conclusive" => thresholds[:v8_min_top_evidence_unanimous_conclusive],
       }
 
       result["meta"]["recommendation"] =
