@@ -491,14 +491,18 @@ module ::MediaGallery
       discriminative_used = result.dig("meta", "discriminative_shortlist_decoder_used") == true
       discriminative_margin = top_cand["discriminative_margin_total"].to_f
 
-      return { used: false, basis: nil, reason: nil } if top_margin < thresholds[:v8_pairwise_margin_conclusive].to_f
-      return { used: false, basis: nil, reason: nil } if top_wins < thresholds[:v8_pairwise_wins_conclusive].to_i
-      return { used: false, basis: nil, reason: nil } if top_wins < (top_losses + 4)
-      return { used: false, basis: nil, reason: nil } if rank_gap < thresholds[:v8_rank_gap_conclusive].to_f
-      return { used: false, basis: nil, reason: nil } if evidence_gap < thresholds[:v8_evidence_gap_conclusive].to_f
-      return { used: false, basis: nil, reason: nil } if top_rank < thresholds[:v8_evidence_gap_conclusive].to_f
+      # Keep only a light global sanity floor here. The actual conclusive routes below
+      # intentionally have different thresholds. Earlier global gates were stricter than
+      # the recovery / sparse-weighted routes and prevented those paths from ever being
+      # reached on legitimate borderline v8 runs.
+      return { used: false, basis: nil, reason: nil } if top_margin < 3.0
+      return { used: false, basis: nil, reason: nil } if top_wins < 4
+      return { used: false, basis: nil, reason: nil } if top_wins <= top_losses
+      return { used: false, basis: nil, reason: nil } if rank_gap < 5.0
+      return { used: false, basis: nil, reason: nil } if evidence_gap < 0.0
+      return { used: false, basis: nil, reason: nil } if top_rank < -2.5
       return { used: false, basis: nil, reason: nil } if second_rank > 0.0 && second_evidence > 0.0
-      return { used: false, basis: nil, reason: nil } if discriminative_used && discriminative_margin < -0.25
+      return { used: false, basis: nil, reason: nil } if discriminative_used && discriminative_margin < -0.6
 
       if sync_used && mismatch_rate <= thresholds[:v8_max_mismatch_rate_conclusive].to_f && sync_ratio >= thresholds[:v8_sync_anchor_ratio_conclusive].to_f
         return {
