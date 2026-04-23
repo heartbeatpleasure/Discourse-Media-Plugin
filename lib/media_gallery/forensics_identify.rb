@@ -126,6 +126,20 @@ module ::MediaGallery
     TARGETED_FILL_TAIL_RESERVE = 4
     TARGETED_FILL_TAIL_FRACTION = 0.28
 
+    DISCRIMINATIVE_REREAD_MIN_REMAINING_SECONDS = 8.0
+    DISCRIMINATIVE_REREAD_MAX_SEGMENTS = 18
+    DISCRIMINATIVE_REREAD_MIN_DIFF_SEGMENTS = 6
+    DISCRIMINATIVE_REREAD_MIN_SCORE_GAIN = 0.08
+    DISCRIMINATIVE_REREAD_MIN_SUPPORT_RATIO = 0.58
+    DISCRIMINATIVE_REREAD_MIN_SUPPORT_MARGIN = 0.10
+    DISCRIMINATIVE_REREAD_FLIP_MIN_SCORE_GAIN = 0.18
+    DISCRIMINATIVE_REREAD_FLIP_MIN_SUPPORT_RATIO = 0.62
+    DISCRIMINATIVE_REREAD_FLIP_MIN_SUPPORT_MARGIN = 0.16
+    DISCRIMINATIVE_REREAD_FLIP_MIN_PAIRWISE_MARGIN = 8.0
+    DISCRIMINATIVE_REREAD_FLIP_MIN_PAIRWISE_WINS = 5
+    DISCRIMINATIVE_REREAD_FLIP_MIN_RANK_GAP = 18.0
+    DISCRIMINATIVE_REREAD_FLIP_MIN_EVIDENCE_GAP = 6.0
+
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
 
@@ -303,6 +317,23 @@ module ::MediaGallery
           if targeted_fill.present?
             obs = targeted_fill[:obs] if targeted_fill[:obs].present?
             match = targeted_fill[:match] if targeted_fill[:match].present?
+          end
+
+          discriminative_reread = maybe_discriminative_reread_filemode_observations(
+            media_item: media_item,
+            file_path: file_path,
+            obs: obs,
+            match: match,
+            segment_seconds: seg,
+            spec: spec,
+            sample_times: sample_times,
+            started_at: started_at,
+            time_budget_seconds: filemode_budget_seconds,
+            max_offset_segments: effective_max_offset_segments
+          )
+          if discriminative_reread.present?
+            obs = discriminative_reread[:obs] if discriminative_reread[:obs].present?
+            match = discriminative_reread[:match] if discriminative_reread[:match].present?
           end
 
           match[:meta] ||= {}
@@ -1346,14 +1377,15 @@ module ::MediaGallery
     end
     private_class_method :should_run_targeted_filemode_fill?
 
-    def expected_variant_for_candidate_local_segment(candidate:, media_item_id:, local_segment_index:)
+    def expected_variant_for_candidate_local_segment(candidate:, media_item_id:, local_segment_index:, layout: nil)
       fp = candidate[:fingerprint_id].to_s
       return nil if fp.blank?
       offset = candidate[:best_offset_segments].to_i
       variant = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
         fingerprint_id: fp,
         media_item_id: media_item_id,
-        segment_index: local_segment_index.to_i + offset
+        segment_index: local_segment_index.to_i + offset,
+        layout: layout
       )
       if candidate[:polarity_flip_used] == true || candidate[:variant_polarity].to_s == "inverted"
         variant = invert_variant(variant)
@@ -1681,6 +1713,474 @@ module ::MediaGallery
     rescue
       nil
     end
+
+    def build_discriminative_pair_entries(match:, media_item:, total_segments:, layout: nil)
+      cands = Array(match[:candidates])
+      top = cands[0] || {}
+      second = cands[1] || {}
+      return { top: top, second: second, entries: [] } if top.blank? || second.blank? || total_segments.to_i <= 0
+
+      entries = []
+      total_segments.to_i.times do |local_seg|
+        top_v = expected_variant_for_candidate_local_segment(
+          candidate: top,
+          media_item_id: media_item.id,
+          local_segment_index: local_seg,
+          layout: layout
+        )
+        second_v = expected_variant_for_candidate_local_segment(
+          candidate: second,
+          media_item_id: media_item.id,
+          local_segment_index: local_seg,
+          layout: layout
+        )
+        next if top_v.blank? || second_v.blank? || top_v == second_v
+
+        entries << {
+          segment_index: local_seg,
+          top_variant: top_v,
+          second_variant: second_v,
+        }
+      end
+
+      { top: top, second: second, entries: entries }
+    rescue
+      { top: {}, second: {}, entries: [] }
+    end
+    private_class_method :build_discriminative_pair_entries
+
+    def discriminative_support_metrics(pair_entries:, obs:)
+      variant_by_seg = {}
+      conf_by_seg = {}
+
+      Array(obs[:segment_indices]).each_with_index do |seg_idx, idx|
+        next if seg_idx.blank?
+        key = seg_idx.to_i
+        ov = Array(obs[:variants])[idx]
+        next if ov.blank?
+
+        variant_by_seg[key] = ov.to_s
+        conf_by_seg[key] = [conf_by_seg[key].to_f, Array(obs[:confidences])[idx].to_f].max
+      end
+
+      compared = 0
+      top_hits = 0
+      second_hits = 0
+      compared_w = 0.0
+      top_w = 0.0
+      second_w = 0.0
+
+      Array(pair_entries).each do |entry|
+        seg_idx = entry[:segment_index].to_i
+        ov = variant_by_seg[seg_idx].to_s
+        next if ov.blank?
+
+        conf = conf_by_seg[seg_idx].to_f
+        weight = if conf > 0.0
+          [(conf * conf), 0.05].max
+        else
+          0.05
+        end
+
+        compared += 1
+        compared_w += weight
+        if ov == entry[:top_variant].to_s
+          top_hits += 1
+          top_w += weight
+        elsif ov == entry[:second_variant].to_s
+          second_hits += 1
+          second_w += weight
+        end
+      end
+
+      top_ratio = compared > 0 ? (top_hits.to_f / compared.to_f) : 0.0
+      second_ratio = compared > 0 ? (second_hits.to_f / compared.to_f) : 0.0
+      top_ratio_w = compared_w > 0.0 ? (top_w / compared_w) : 0.0
+      second_ratio_w = compared_w > 0.0 ? (second_w / compared_w) : 0.0
+
+      {
+        compared: compared,
+        compared_weighted: compared_w.round(6),
+        top_hits: top_hits,
+        second_hits: second_hits,
+        top_ratio: top_ratio.round(4),
+        second_ratio: second_ratio.round(4),
+        top_ratio_weighted: top_ratio_w.round(4),
+        second_ratio_weighted: second_ratio_w.round(4),
+        weighted_margin: (top_ratio_w - second_ratio_w).round(4),
+      }
+    rescue
+      {
+        compared: 0,
+        compared_weighted: 0.0,
+        top_hits: 0,
+        second_hits: 0,
+        top_ratio: 0.0,
+        second_ratio: 0.0,
+        top_ratio_weighted: 0.0,
+        second_ratio_weighted: 0.0,
+        weighted_margin: 0.0,
+      }
+    end
+    private_class_method :discriminative_support_metrics
+
+    def discriminative_total_segments(obs:, segment_seconds:, sample_times: nil)
+      duration = obs[:duration_seconds].to_f
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+
+      if sample_times.is_a?(Array) && sample_times.present?
+        Array(sample_times).each_with_index.count { |t, _i| sample_point_time_value(t) < duration + 0.05 }
+      else
+        observed_max = Array(obs[:segment_indices]).compact.map(&:to_i).max
+        [((duration / seg).ceil), observed_max.to_i + 1].max
+      end
+    rescue
+      Array(obs[:segment_indices]).compact.map(&:to_i).max.to_i + 1
+    end
+    private_class_method :discriminative_total_segments
+
+    def should_run_discriminative_filemode_reread?(match:, pair_entries:, support:, started_at:, budget_seconds:)
+      cands = Array(match[:candidates])
+      return { run: false, reason: "no_pair_candidates" } if cands.length < 2
+      return { run: false, reason: "too_few_discriminative_segments" } if Array(pair_entries).length < DISCRIMINATIVE_REREAD_MIN_DIFF_SEGMENTS
+
+      remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds)
+      return { run: false, reason: "insufficient_time_budget" } if remaining < DISCRIMINATIVE_REREAD_MIN_REMAINING_SECONDS
+
+      meta = match[:meta] || {}
+      top = cands[0] || {}
+      second = cands[1] || {}
+      rank_gap = meta[:shortlist_rank_gap].to_f
+      evidence_gap = meta[:shortlist_evidence_gap].to_f
+      pairwise_margin = top[:pairwise_chunk_margin_total].to_f
+      top_ratio = top[:match_ratio_weighted].to_f
+      second_ratio = second[:match_ratio_weighted].to_f
+      ratio_delta = top_ratio - second_ratio
+      support_margin = support[:weighted_margin].to_f
+      support_top = support[:top_ratio_weighted].to_f
+
+      already_dominant =
+        pairwise_margin >= 14.0 &&
+          rank_gap >= 30.0 &&
+          evidence_gap >= 9.0 &&
+          ratio_delta >= 0.20 &&
+          support[:compared].to_i >= 10 &&
+          support_top >= 0.72 &&
+          support_margin >= 0.24
+
+      return { run: false, reason: "existing_result_already_dominant" } if already_dominant
+
+      run =
+        support[:compared].to_i < [Array(pair_entries).length, 10].min ||
+          support_top < 0.72 ||
+          support_margin.abs < 0.24 ||
+          pairwise_margin < 12.0 ||
+          rank_gap < 24.0
+
+      {
+        run: run,
+        reason: (run ? "top2_discriminative_recheck" : "current_result_already_separated"),
+        remaining_seconds: remaining.round(3),
+        compared_discriminative_segments: support[:compared].to_i,
+      }
+    rescue
+      { run: false, reason: "discriminative_reread_decision_failed" }
+    end
+    private_class_method :should_run_discriminative_filemode_reread?
+
+    def build_discriminative_reread_segment_indices(pair_entries:, obs:)
+      conf_by_seg = {}
+      variant_by_seg = {}
+      Array(obs[:segment_indices]).each_with_index do |seg_idx, idx|
+        next if seg_idx.blank?
+        key = seg_idx.to_i
+        conf_by_seg[key] = [conf_by_seg[key].to_f, Array(obs[:confidences])[idx].to_f].max
+        variant_by_seg[key] = Array(obs[:variants])[idx].to_s.presence
+      end
+
+      diff_keys = Set.new(Array(pair_entries).map { |entry| entry[:segment_index].to_i })
+      priorities = Array(pair_entries).map do |entry|
+        seg_idx = entry[:segment_index].to_i
+        conf = conf_by_seg[seg_idx].to_f
+        current = variant_by_seg[seg_idx].to_s.presence
+        score = 0.0
+        score += 3.5 if current.blank?
+        score += (1.0 - [[conf, 1.0].min, 0.0].max) * 2.5
+        score += 1.6 if current.present? && current == entry[:second_variant].to_s
+        score += 0.4 if current.present? && current != entry[:top_variant].to_s
+        neighborhood = ((seg_idx - 2)..(seg_idx + 2)).count { |probe| diff_keys.include?(probe) } - 1
+        score += [neighborhood, 0].max * 0.15
+        [score, seg_idx]
+      end
+
+      priorities.sort_by { |score, seg_idx| [-score, seg_idx] }.first(DISCRIMINATIVE_REREAD_MAX_SEGMENTS).map { |_score, seg_idx| seg_idx }.sort
+    rescue
+      []
+    end
+    private_class_method :build_discriminative_reread_segment_indices
+
+    def extract_discriminative_filemode_segments(file_path:, segment_indices:, segment_seconds:, spec:, duration_seconds:, phase_seconds:, started_at:, time_budget_seconds:)
+      segs = Array(segment_indices).map(&:to_i).uniq.sort
+      return nil if segs.blank?
+
+      budget = normalize_filemode_time_budget_seconds(time_budget_seconds)
+      remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget)
+      return nil if remaining < DISCRIMINATIVE_REREAD_MIN_REMAINING_SECONDS
+
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+      delta = [[seg * 0.16, 0.28].max, 0.75].min
+      chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
+      chunk_size = 15 if chunk_size <= 0
+      point_offsets = [-delta, -(delta * 0.66), -(delta * 0.33), 0.0, (delta * 0.33), (delta * 0.66), delta].map { |v| v.round(3) }.uniq
+
+      times = []
+      mapping = []
+      segs.each do |seg_idx|
+        mid = ((seg_idx.to_f + 0.5) * seg) + phase_seconds.to_f
+        mid = clamp_time(mid, duration_seconds: duration_seconds)
+        point_offsets.each_with_index do |offset_value, point_idx|
+          tt = clamp_time(mid + offset_value.to_f, duration_seconds: duration_seconds)
+          times << tt
+          mapping << [seg_idx, point_idx, mid]
+        end
+      end
+
+      sampled = []
+      used_mapping = []
+      times.each_slice(chunk_size).with_index do |chunk, batch_idx|
+        break if time_remaining_seconds(started_at: started_at, budget_seconds: budget) <= 1.0
+        res = sample_variants_batch_single(file_path: file_path, times: chunk, spec: spec)
+        sampled.concat(Array(res))
+        start = batch_idx * chunk_size
+        used_mapping.concat(mapping[start, Array(res).length])
+      end
+      return nil if sampled.blank?
+
+      per_seg_scores = Hash.new { |h, k| h[k] = [] }
+      per_seg_confs = Hash.new { |h, k| h[k] = [] }
+      per_seg_sync_scores = Hash.new { |h, k| h[k] = [] }
+      per_seg_sync_confs = Hash.new { |h, k| h[k] = [] }
+      per_seg_mid = {}
+      used_mapping.each_with_index do |entry, idx|
+        seg_idx, _point_idx, mid = entry
+        r = sampled[idx] || {}
+        per_seg_scores[seg_idx] << r[:score].to_f
+        per_seg_confs[seg_idx] << r[:confidence].to_f
+        per_seg_sync_scores[seg_idx] << r[:sync_score].to_f
+        per_seg_sync_confs[seg_idx] << r[:sync_confidence].to_f
+        per_seg_mid[seg_idx] ||= mid
+      end
+
+      variants = []
+      confidences = []
+      scores = []
+      sync_scores = []
+      sync_confidences = []
+      sync_variants = []
+      mids = []
+      out_indices = []
+      segs.each do |seg_idx|
+        sc = per_seg_scores[seg_idx]
+        cf = per_seg_confs[seg_idx]
+        next if sc.blank?
+        med_score = median(sc).to_f
+        med_conf = median(cf).to_f.round(4)
+        variant = med_score >= 0.0 ? "a" : "b"
+        variant = nil if med_conf < MIN_CONFIDENCE
+        variants << variant
+        confidences << med_conf
+        scores << med_score.round(4)
+        med_sync_score = median(per_seg_sync_scores[seg_idx]).to_f
+        med_sync_conf = median(per_seg_sync_confs[seg_idx]).to_f.round(4)
+        sync_scores << med_sync_score.round(4)
+        sync_confidences << med_sync_conf
+        sync_variants << (med_sync_conf >= MIN_CONFIDENCE ? (med_sync_score >= 0.0 ? "a" : "b") : nil)
+        mids << per_seg_mid[seg_idx].to_f.round(3)
+        out_indices << seg_idx
+      end
+
+      return nil if out_indices.blank?
+
+      {
+        duration_seconds: duration_seconds,
+        variants: variants,
+        confidences: confidences,
+        scores: scores,
+        sync_scores: sync_scores,
+        sync_confidences: sync_confidences,
+        sync_variants: sync_variants,
+        times: mids,
+        segment_indices: out_indices,
+        layout: spec[:layout].to_s,
+        truncated: false,
+        effective_max_samples: out_indices.length,
+        budget_exhausted: false,
+        discriminative_reread_points_per_segment: point_offsets.length,
+      }
+    rescue
+      nil
+    end
+    private_class_method :extract_discriminative_filemode_segments
+
+    def discriminative_reread_flip_corroborated?(merged_match:, selected_top_support_weighted:, selected_support_margin_weighted:)
+      cands = Array(merged_match[:candidates])
+      top = cands[0] || {}
+      meta = merged_match[:meta] || {}
+
+      pairwise_margin = top[:pairwise_chunk_margin_total].to_f
+      pairwise_wins = top[:pairwise_chunks_won].to_i
+      rank_gap = meta[:shortlist_rank_gap].to_f
+      evidence_gap = meta[:shortlist_evidence_gap].to_f
+
+      pairwise_margin >= DISCRIMINATIVE_REREAD_FLIP_MIN_PAIRWISE_MARGIN &&
+        pairwise_wins >= DISCRIMINATIVE_REREAD_FLIP_MIN_PAIRWISE_WINS &&
+        rank_gap >= DISCRIMINATIVE_REREAD_FLIP_MIN_RANK_GAP &&
+        evidence_gap >= DISCRIMINATIVE_REREAD_FLIP_MIN_EVIDENCE_GAP &&
+        selected_top_support_weighted >= DISCRIMINATIVE_REREAD_FLIP_MIN_SUPPORT_RATIO &&
+        selected_support_margin_weighted >= DISCRIMINATIVE_REREAD_FLIP_MIN_SUPPORT_MARGIN
+    rescue
+      false
+    end
+    private_class_method :discriminative_reread_flip_corroborated?
+
+    def maybe_discriminative_reread_filemode_observations(media_item:, file_path:, obs:, match:, segment_seconds:, spec:, sample_times:, started_at:, time_budget_seconds:, max_offset_segments:)
+      total_segments = discriminative_total_segments(obs: obs, segment_seconds: segment_seconds, sample_times: sample_times)
+      pair_info = build_discriminative_pair_entries(
+        match: match,
+        media_item: media_item,
+        total_segments: total_segments,
+        layout: v8_layout_name(spec&.dig(:layout) || spec&.[](:layout))
+      )
+      pair_entries = Array(pair_info[:entries])
+      pre_support = discriminative_support_metrics(pair_entries: pair_entries, obs: obs)
+      decision = should_run_discriminative_filemode_reread?(
+        match: match,
+        pair_entries: pair_entries,
+        support: pre_support,
+        started_at: started_at,
+        budget_seconds: time_budget_seconds
+      )
+      return nil unless decision[:run]
+
+      positions = build_discriminative_reread_segment_indices(pair_entries: pair_entries, obs: obs)
+      return nil if positions.blank?
+
+      extra_obs = extract_discriminative_filemode_segments(
+        file_path: file_path,
+        segment_indices: positions,
+        segment_seconds: segment_seconds,
+        spec: spec,
+        duration_seconds: obs[:duration_seconds],
+        phase_seconds: match.dig(:meta, :chosen_phase_seconds).to_f,
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds
+      )
+      return nil if extra_obs.blank?
+
+      merged_obs = merge_filemode_observations(base_obs: obs, extra_obs: extra_obs)
+      return nil if merged_obs.blank?
+
+      merged_match = match_fingerprints(
+        media_item: media_item,
+        observed_variants: merged_obs[:variants],
+        observed_confidences: merged_obs[:confidences],
+        observed_scores: merged_obs[:scores],
+        observed_sync_variants: merged_obs[:sync_variants],
+        observed_sync_confidences: merged_obs[:sync_confidences],
+        observed_segment_indices: merged_obs[:segment_indices],
+        observed_quality_hints: merged_obs[:quality_hints],
+        spec: spec,
+        max_offset_segments: max_offset_segments,
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds
+      )
+
+      post_support = discriminative_support_metrics(pair_entries: pair_entries, obs: merged_obs)
+      orig_score = targeted_fill_result_score(match: match, observed_variants: obs[:variants])
+      merged_score = targeted_fill_result_score(match: merged_match, observed_variants: merged_obs[:variants])
+      orig_top_fp = targeted_fill_top_fingerprint_id(match)
+      orig_second_fp = Array(match[:candidates])[1].to_h[:fingerprint_id].to_s
+      merged_top_fp = targeted_fill_top_fingerprint_id(merged_match)
+
+      selected_top_support_weighted =
+        if merged_top_fp.present? && merged_top_fp == orig_second_fp
+          post_support[:second_ratio_weighted].to_f
+        else
+          post_support[:top_ratio_weighted].to_f
+        end
+      selected_support_margin_weighted =
+        if merged_top_fp.present? && merged_top_fp == orig_second_fp
+          (-post_support[:weighted_margin].to_f)
+        else
+          post_support[:weighted_margin].to_f
+        end
+
+      same_top_improved =
+        merged_top_fp.present? &&
+          merged_top_fp == orig_top_fp &&
+          merged_score >= (orig_score + DISCRIMINATIVE_REREAD_MIN_SCORE_GAIN) &&
+          selected_top_support_weighted >= DISCRIMINATIVE_REREAD_MIN_SUPPORT_RATIO &&
+          selected_support_margin_weighted >= [pre_support[:weighted_margin].to_f + DISCRIMINATIVE_REREAD_MIN_SUPPORT_MARGIN, DISCRIMINATIVE_REREAD_MIN_SUPPORT_MARGIN].max
+
+      flipped_to_second =
+        merged_top_fp.present? &&
+          merged_top_fp == orig_second_fp &&
+          merged_score >= (orig_score + DISCRIMINATIVE_REREAD_FLIP_MIN_SCORE_GAIN) &&
+          discriminative_reread_flip_corroborated?(merged_match: merged_match, selected_top_support_weighted: selected_top_support_weighted, selected_support_margin_weighted: selected_support_margin_weighted)
+
+      use_merged = same_top_improved || flipped_to_second
+
+      if use_merged
+        merged_obs[:quality_hints] = merge_observation_quality_hints(
+          base_obs: obs,
+          added_segment_indices: positions,
+        )
+      end
+
+      chosen_obs = use_merged ? merged_obs : obs
+      chosen_obs[:quality_hints] ||= obs[:quality_hints] if chosen_obs.is_a?(Hash)
+      chosen_match = use_merged ? merged_match : match
+      chosen_meta = chosen_match[:meta] || {}
+      chosen_meta[:discriminative_reread_used] = true
+      chosen_meta[:discriminative_reread_applied] = use_merged
+      chosen_meta[:discriminative_reread_reason] = decision[:reason]
+      chosen_meta[:discriminative_reread_segments_added] = positions.length
+      chosen_meta[:discriminative_reread_positions] = positions
+      chosen_meta[:discriminative_reread_points_per_segment] = extra_obs[:discriminative_reread_points_per_segment].to_i
+      chosen_meta[:discriminative_reread_score_gain] = (merged_score - orig_score).round(4)
+      chosen_meta[:discriminative_reread_pair_fingerprint_ids] = [orig_top_fp, orig_second_fp].reject(&:blank?)
+      chosen_meta[:discriminative_reread_support_before_top_weighted] = pre_support[:top_ratio_weighted].to_f.round(4)
+      chosen_meta[:discriminative_reread_support_before_second_weighted] = pre_support[:second_ratio_weighted].to_f.round(4)
+      chosen_meta[:discriminative_reread_support_before_margin_weighted] = pre_support[:weighted_margin].to_f.round(4)
+      chosen_meta[:discriminative_reread_support_after_top_weighted] = post_support[:top_ratio_weighted].to_f.round(4)
+      chosen_meta[:discriminative_reread_support_after_second_weighted] = post_support[:second_ratio_weighted].to_f.round(4)
+      chosen_meta[:discriminative_reread_support_after_margin_weighted] = post_support[:weighted_margin].to_f.round(4)
+      chosen_meta[:discriminative_reread_compared_segments_before] = pre_support[:compared].to_i
+      chosen_meta[:discriminative_reread_compared_segments_after] = post_support[:compared].to_i
+      chosen_meta[:discriminative_reread_selected_top_fingerprint_id] = merged_top_fp if merged_top_fp.present?
+      chosen_meta[:discriminative_reread_selected_top_support_weighted] = selected_top_support_weighted.round(4)
+      chosen_meta[:discriminative_reread_selected_support_margin_weighted] = selected_support_margin_weighted.round(4)
+      chosen_meta[:discriminative_reread_candidate_flip_guard_used] = (orig_top_fp.present? && merged_top_fp.present? && orig_top_fp != merged_top_fp)
+      chosen_meta[:discriminative_reread_candidate_flip_verified] = flipped_to_second
+      chosen_meta[:discriminative_reread_rejected_reason] = if use_merged
+        nil
+      elsif merged_top_fp.present? && orig_second_fp.present? && merged_top_fp == orig_second_fp
+        "candidate_flip_requires_stronger_pair_support"
+      elsif merged_top_fp.present? && orig_top_fp.present? && merged_top_fp != orig_top_fp
+        "non_pair_top_candidate_after_reread"
+      else
+        "original_result_better"
+      end
+      chosen_match[:meta] = chosen_meta
+
+      { obs: chosen_obs, match: chosen_match }
+    rescue
+      nil
+    end
+    private_class_method :maybe_discriminative_reread_filemode_observations
+
     private_class_method :maybe_targeted_fill_filemode_observations
 
     def sample_point_time_value(point)
@@ -3075,7 +3575,7 @@ end
 
 
 
-    def annotate_candidate_debugs!(candidates:, observed_variants:, media_item_id:, observed_segment_indices: nil)
+    def annotate_candidate_debugs!(candidates:, observed_variants:, media_item_id:, observed_segment_indices: nil, layout: nil)
       obs = Array(observed_variants)
       seg_indices = Array(observed_segment_indices)
       return if candidates.blank? || obs.empty?
@@ -3095,7 +3595,8 @@ end
           exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
             fingerprint_id: cand[:fingerprint_id],
             media_item_id: media_item_id,
-            segment_index: seg_idx
+            segment_index: seg_idx,
+            layout: layout
           )
           expected[i] = exp
           mismatches << i if exp != ov
@@ -4638,7 +5139,7 @@ end
         meta[:polarity_score_delta] = (best_score - other_score).round(4)
       end
 
-      annotate_candidate_debugs!(candidates: candidates, observed_variants: chosen_obs, observed_segment_indices: seg_indices, media_item_id: media_item.id)
+      annotate_candidate_debugs!(candidates: candidates, observed_variants: chosen_obs, observed_segment_indices: seg_indices, media_item_id: media_item.id, layout: v8_layout_name(spec&.dig(:layout) || spec&.[](:layout)))
       apply_shortlist_meta!(meta: meta, candidates: candidates)
       apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
 
@@ -5858,7 +6359,7 @@ end
 
   meta[:shortlist_metric] = "pairwise_chunk_rank_score" if pairwise_chunk_decoder[:used] == true
   meta[:shortlist_metric] = "discriminative_shortlist_rank_score" if discriminative_shortlist_decoder[:used] == true
-  annotate_candidate_debugs!(candidates: candidates, observed_variants: ref_obs, observed_segment_indices: seg_indices, media_item_id: media_item.id)
+  annotate_candidate_debugs!(candidates: candidates, observed_variants: ref_obs, observed_segment_indices: seg_indices, media_item_id: media_item.id, layout: v8_layout_name(spec&.dig(:layout) || spec&.[](:layout)))
   apply_shortlist_meta!(meta: meta, candidates: candidates)
   apply_top_candidate_debug_to_meta!(meta: meta, candidates: candidates)
 

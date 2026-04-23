@@ -455,6 +455,15 @@ module ::MediaGallery
         v8_min_high_quality_support_ratio_recovery_hq_conclusive: 0.50,
         v8_targeted_fill_score_gain_recovery_hq_max: 2.6,
         v8_sync_anchor_ratio_recovery_hq_fill_hardened: 0.34,
+        v8_discriminative_reread_min_segments: 8,
+        v8_discriminative_reread_top_support_weighted: 0.72,
+        v8_discriminative_reread_support_margin_weighted: 0.20,
+        v8_discriminative_reread_pairwise_margin: 8.5,
+        v8_discriminative_reread_rank_gap: 18.0,
+        v8_discriminative_reread_evidence_gap: 6.0,
+        v8_discriminative_reread_second_match_max: 0.44,
+        v8_discriminative_reread_flip_top_support_weighted: 0.76,
+        v8_discriminative_reread_flip_support_margin_weighted: 0.24,
         v8_pairwise_margin_unanimous_conclusive: 16.0,
         v8_pairwise_wins_unanimous_conclusive: 7,
         v8_rank_gap_unanimous_conclusive: 40.0,
@@ -660,6 +669,30 @@ module ::MediaGallery
       return { used: false, basis: nil, reason: nil } if discriminative_used && discriminative_margin < -0.6
       return { used: false, basis: nil, reason: nil } unless population_topk_guard_passes?(result, thresholds: thresholds)
       return { used: false, basis: nil, reason: nil } unless population_adaptive_guard_passes?(result, thresholds: thresholds)
+
+      discriminative_reread_applied = result.dig("meta", "discriminative_reread_applied") == true
+      discriminative_reread_segments = result.dig("meta", "discriminative_reread_compared_segments_after").to_i
+      discriminative_reread_top_support = result.dig("meta", "discriminative_reread_selected_top_support_weighted").to_f
+      discriminative_reread_support_margin = result.dig("meta", "discriminative_reread_selected_support_margin_weighted").to_f
+      discriminative_reread_flip_verified = result.dig("meta", "discriminative_reread_candidate_flip_verified") == true
+
+      if discriminative_reread_applied &&
+           discriminative_reread_segments >= thresholds[:v8_discriminative_reread_min_segments].to_i &&
+           top_margin >= thresholds[:v8_discriminative_reread_pairwise_margin].to_f &&
+           top_wins >= 5 &&
+           rank_gap >= thresholds[:v8_discriminative_reread_rank_gap].to_f &&
+           evidence_gap >= thresholds[:v8_discriminative_reread_evidence_gap].to_f &&
+           second_ratio <= thresholds[:v8_discriminative_reread_second_match_max].to_f
+        min_support = discriminative_reread_flip_verified ? thresholds[:v8_discriminative_reread_flip_top_support_weighted].to_f : thresholds[:v8_discriminative_reread_top_support_weighted].to_f
+        min_margin = discriminative_reread_flip_verified ? thresholds[:v8_discriminative_reread_flip_support_margin_weighted].to_f : thresholds[:v8_discriminative_reread_support_margin_weighted].to_f
+        if discriminative_reread_top_support >= min_support && discriminative_reread_support_margin >= min_margin
+          return {
+            used: true,
+            basis: (discriminative_reread_flip_verified ? "artifact_discriminative_reread_flip" : "artifact_discriminative_reread"),
+            reason: "v8_discriminative_reread_policy_passed",
+          }
+        end
+      end
 
       if sync_used && mismatch_rate <= thresholds[:v8_max_mismatch_rate_conclusive].to_f && sync_ratio >= thresholds[:v8_sync_anchor_ratio_conclusive].to_f
         return {
@@ -1181,6 +1214,15 @@ module ::MediaGallery
         "v8_min_high_quality_support_ratio_recovery_hq_conclusive" => thresholds[:v8_min_high_quality_support_ratio_recovery_hq_conclusive],
         "v8_targeted_fill_score_gain_recovery_hq_max" => thresholds[:v8_targeted_fill_score_gain_recovery_hq_max],
         "v8_sync_anchor_ratio_recovery_hq_fill_hardened" => thresholds[:v8_sync_anchor_ratio_recovery_hq_fill_hardened],
+        "v8_discriminative_reread_min_segments" => thresholds[:v8_discriminative_reread_min_segments],
+        "v8_discriminative_reread_top_support_weighted" => thresholds[:v8_discriminative_reread_top_support_weighted],
+        "v8_discriminative_reread_support_margin_weighted" => thresholds[:v8_discriminative_reread_support_margin_weighted],
+        "v8_discriminative_reread_pairwise_margin" => thresholds[:v8_discriminative_reread_pairwise_margin],
+        "v8_discriminative_reread_rank_gap" => thresholds[:v8_discriminative_reread_rank_gap],
+        "v8_discriminative_reread_evidence_gap" => thresholds[:v8_discriminative_reread_evidence_gap],
+        "v8_discriminative_reread_second_match_max" => thresholds[:v8_discriminative_reread_second_match_max],
+        "v8_discriminative_reread_flip_top_support_weighted" => thresholds[:v8_discriminative_reread_flip_top_support_weighted],
+        "v8_discriminative_reread_flip_support_margin_weighted" => thresholds[:v8_discriminative_reread_flip_support_margin_weighted],
         "v8_pairwise_margin_unanimous_conclusive" => thresholds[:v8_pairwise_margin_unanimous_conclusive],
         "v8_pairwise_wins_unanimous_conclusive" => thresholds[:v8_pairwise_wins_unanimous_conclusive],
         "v8_rank_gap_unanimous_conclusive" => thresholds[:v8_rank_gap_unanimous_conclusive],
