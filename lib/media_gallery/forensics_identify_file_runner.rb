@@ -448,6 +448,13 @@ module ::MediaGallery
         v8_targeted_fill_score_gain_recovery_max: 1.5,
         v8_sync_anchor_ratio_recovery_fill_hardened: 0.45,
         v8_pairwise_margin_recovery_fill_hardened: 12.0,
+        v8_pairwise_win_advantage_recovery_hq_conclusive: 3,
+        v8_min_top_adaptive_ratio_recovery_hq_conclusive: 0.66,
+        v8_min_adaptive_delta_recovery_hq_conclusive: 0.10,
+        v8_min_top_high_quality_ratio_recovery_hq_conclusive: 0.70,
+        v8_min_high_quality_support_ratio_recovery_hq_conclusive: 0.50,
+        v8_targeted_fill_score_gain_recovery_hq_max: 2.6,
+        v8_sync_anchor_ratio_recovery_hq_fill_hardened: 0.34,
         v8_pairwise_margin_unanimous_conclusive: 16.0,
         v8_pairwise_wins_unanimous_conclusive: 7,
         v8_rank_gap_unanimous_conclusive: 40.0,
@@ -613,6 +620,7 @@ module ::MediaGallery
       top_margin = top_cand["pairwise_chunk_margin_total"].to_f
       top_wins = top_cand["pairwise_chunks_won"].to_i
       top_losses = top_cand["pairwise_chunks_lost"].to_i
+      adaptive_metrics = adaptive_quality_metrics(result)
       pairwise_support = v8_pairwise_support_metrics(top_cand)
       decisive_chunks = pairwise_support[:decisive_chunks].to_i
       win_advantage = pairwise_support[:win_advantage].to_i
@@ -744,6 +752,43 @@ module ::MediaGallery
         }
       end
 
+      recovery_hq_ok = true
+      recovery_hq_ok &&= sync_used
+      recovery_hq_ok &&= (sync_ratio >= thresholds[:v8_sync_anchor_ratio_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_recovery].to_f)
+      recovery_hq_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_recovery_conclusive].to_i)
+      recovery_hq_ok &&= (win_advantage >= thresholds[:v8_pairwise_win_advantage_recovery_hq_conclusive].to_i)
+      recovery_hq_ok &&= (top_margin_median >= thresholds[:v8_pairwise_margin_median_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (decisive_chunks >= 7)
+      recovery_hq_ok &&= (top_losses <= 2)
+      recovery_hq_ok &&= (rank_gap >= thresholds[:v8_rank_gap_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (raw_delta >= thresholds[:v8_match_delta_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (weighted_delta >= thresholds[:v8_weighted_delta_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (second_ratio <= thresholds[:v8_second_match_recovery_max].to_f)
+      recovery_hq_ok &&= (top_ratio >= thresholds[:v8_min_top_ratio_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (top_consistent >= 2)
+      recovery_hq_ok &&= (second_consistent <= 2)
+      recovery_hq_ok &&= (second_evidence <= -6.0)
+      recovery_hq_ok &&= (adaptive_metrics[:top_adaptive_ratio] >= thresholds[:v8_min_top_adaptive_ratio_recovery_hq_conclusive].to_f)
+      recovery_hq_ok &&= (adaptive_metrics[:adaptive_delta] >= thresholds[:v8_min_adaptive_delta_recovery_hq_conclusive].to_f)
+      recovery_hq_ok &&= (adaptive_metrics[:top_high_quality_ratio] >= thresholds[:v8_min_top_high_quality_ratio_recovery_hq_conclusive].to_f)
+      recovery_hq_ok &&= (adaptive_metrics[:support_ratio] >= thresholds[:v8_min_high_quality_support_ratio_recovery_hq_conclusive].to_f)
+
+      if targeted_fill_applied
+        recovery_hq_ok &&= (targeted_fill_gain <= thresholds[:v8_targeted_fill_score_gain_recovery_hq_max].to_f)
+        recovery_hq_ok &&= (sync_ratio >= thresholds[:v8_sync_anchor_ratio_recovery_hq_fill_hardened].to_f)
+      end
+
+      if recovery_hq_ok
+        return {
+          used: true,
+          basis: "sync_anchor_pairwise_recovery_high_quality",
+          reason: "v8_pairwise_recovery_high_quality_policy_passed",
+        }
+      end
+
       unanimous_ok = true
       unanimous_ok &&= !sync_used
       unanimous_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_unanimous].to_f)
@@ -869,6 +914,7 @@ module ::MediaGallery
       top_wins = top_cand["pairwise_chunks_won"].to_i
       top_losses = top_cand["pairwise_chunks_lost"].to_i
       pairwise_support = v8_pairwise_support_metrics(top_cand)
+      adaptive_metrics = adaptive_quality_metrics(result)
       decisive_chunks = pairwise_support[:decisive_chunks].to_i
       win_advantage = pairwise_support[:win_advantage].to_i
       top_margin_median = pairwise_support[:margin_median].to_f
@@ -910,7 +956,32 @@ module ::MediaGallery
       reliable_pairwise &&= (raw_second <= 0.50)
       reliable_pairwise &&= (mismatch_rate <= 0.40)
 
-      reliable = reliable_sync || reliable_pairwise
+      reliable_high_quality = true
+      reliable_high_quality &&= sync_used
+      reliable_high_quality &&= (sync_ratio >= 0.34)
+      reliable_high_quality &&= (raw_delta >= 0.22)
+      reliable_high_quality &&= (weighted_delta >= 0.20)
+      reliable_high_quality &&= (top_margin >= 8.5)
+      reliable_high_quality &&= (top_wins >= 5)
+      reliable_high_quality &&= (win_advantage >= 3)
+      reliable_high_quality &&= (top_losses <= 2)
+      reliable_high_quality &&= (decisive_chunks >= 7)
+      reliable_high_quality &&= (top_margin_median >= 0.20)
+      reliable_high_quality &&= (top_evidence >= 1.0)
+      reliable_high_quality &&= (evidence_gap >= 8.0)
+      reliable_high_quality &&= (rank_gap >= 24.0)
+      reliable_high_quality &&= (raw_second <= 0.43)
+      reliable_high_quality &&= (mismatch_rate <= 0.37)
+      reliable_high_quality &&= (adaptive_metrics[:top_adaptive_ratio] >= 0.66)
+      reliable_high_quality &&= (adaptive_metrics[:adaptive_delta] >= 0.10)
+      reliable_high_quality &&= (adaptive_metrics[:top_high_quality_ratio] >= 0.70)
+      reliable_high_quality &&= (adaptive_metrics[:support_ratio] >= 0.50)
+
+      if meta["targeted_fill_applied"] == true
+        reliable_high_quality &&= (meta["targeted_fill_score_gain"].to_f <= 2.6)
+      end
+
+      reliable = reliable_sync || reliable_pairwise || reliable_high_quality
 
       if reliable
         meta["ambiguous_top_candidate_suppressed"] = false
@@ -1103,6 +1174,13 @@ module ::MediaGallery
         "v8_targeted_fill_score_gain_recovery_max" => thresholds[:v8_targeted_fill_score_gain_recovery_max],
         "v8_sync_anchor_ratio_recovery_fill_hardened" => thresholds[:v8_sync_anchor_ratio_recovery_fill_hardened],
         "v8_pairwise_margin_recovery_fill_hardened" => thresholds[:v8_pairwise_margin_recovery_fill_hardened],
+        "v8_pairwise_win_advantage_recovery_hq_conclusive" => thresholds[:v8_pairwise_win_advantage_recovery_hq_conclusive],
+        "v8_min_top_adaptive_ratio_recovery_hq_conclusive" => thresholds[:v8_min_top_adaptive_ratio_recovery_hq_conclusive],
+        "v8_min_adaptive_delta_recovery_hq_conclusive" => thresholds[:v8_min_adaptive_delta_recovery_hq_conclusive],
+        "v8_min_top_high_quality_ratio_recovery_hq_conclusive" => thresholds[:v8_min_top_high_quality_ratio_recovery_hq_conclusive],
+        "v8_min_high_quality_support_ratio_recovery_hq_conclusive" => thresholds[:v8_min_high_quality_support_ratio_recovery_hq_conclusive],
+        "v8_targeted_fill_score_gain_recovery_hq_max" => thresholds[:v8_targeted_fill_score_gain_recovery_hq_max],
+        "v8_sync_anchor_ratio_recovery_hq_fill_hardened" => thresholds[:v8_sync_anchor_ratio_recovery_hq_fill_hardened],
         "v8_pairwise_margin_unanimous_conclusive" => thresholds[:v8_pairwise_margin_unanimous_conclusive],
         "v8_pairwise_wins_unanimous_conclusive" => thresholds[:v8_pairwise_wins_unanimous_conclusive],
         "v8_rank_gap_unanimous_conclusive" => thresholds[:v8_rank_gap_unanimous_conclusive],

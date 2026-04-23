@@ -666,6 +666,13 @@ module ::MediaGallery
         v8_min_top_ratio_recovery_conclusive: 0.64,
         v8_max_mismatch_rate_recovery: 0.37,
         v8_min_top_evidence_recovery_conclusive: 1.0,
+        v8_pairwise_win_advantage_recovery_hq_conclusive: 3,
+        v8_min_top_adaptive_ratio_recovery_hq_conclusive: 0.66,
+        v8_min_adaptive_delta_recovery_hq_conclusive: 0.10,
+        v8_min_top_high_quality_ratio_recovery_hq_conclusive: 0.70,
+        v8_min_high_quality_support_ratio_recovery_hq_conclusive: 0.50,
+        v8_targeted_fill_score_gain_recovery_hq_max: 2.6,
+        v8_sync_anchor_ratio_recovery_hq_fill_hardened: 0.34,
         v8_pairwise_margin_unanimous_conclusive: 16.0,
         v8_pairwise_wins_unanimous_conclusive: 7,
         v8_rank_gap_unanimous_conclusive: 40.0,
@@ -1026,6 +1033,13 @@ module ::MediaGallery
         "v8_min_top_ratio_recovery_conclusive" => thresholds[:v8_min_top_ratio_recovery_conclusive],
         "v8_max_mismatch_rate_recovery" => thresholds[:v8_max_mismatch_rate_recovery],
         "v8_min_top_evidence_recovery_conclusive" => thresholds[:v8_min_top_evidence_recovery_conclusive],
+        "v8_pairwise_win_advantage_recovery_hq_conclusive" => thresholds[:v8_pairwise_win_advantage_recovery_hq_conclusive],
+        "v8_min_top_adaptive_ratio_recovery_hq_conclusive" => thresholds[:v8_min_top_adaptive_ratio_recovery_hq_conclusive],
+        "v8_min_adaptive_delta_recovery_hq_conclusive" => thresholds[:v8_min_adaptive_delta_recovery_hq_conclusive],
+        "v8_min_top_high_quality_ratio_recovery_hq_conclusive" => thresholds[:v8_min_top_high_quality_ratio_recovery_hq_conclusive],
+        "v8_min_high_quality_support_ratio_recovery_hq_conclusive" => thresholds[:v8_min_high_quality_support_ratio_recovery_hq_conclusive],
+        "v8_targeted_fill_score_gain_recovery_hq_max" => thresholds[:v8_targeted_fill_score_gain_recovery_hq_max],
+        "v8_sync_anchor_ratio_recovery_hq_fill_hardened" => thresholds[:v8_sync_anchor_ratio_recovery_hq_fill_hardened],
         "v8_pairwise_margin_unanimous_conclusive" => thresholds[:v8_pairwise_margin_unanimous_conclusive],
         "v8_pairwise_wins_unanimous_conclusive" => thresholds[:v8_pairwise_wins_unanimous_conclusive],
         "v8_rank_gap_unanimous_conclusive" => thresholds[:v8_rank_gap_unanimous_conclusive],
@@ -1344,6 +1358,11 @@ module ::MediaGallery
       top_margin = top_cand["pairwise_chunk_margin_total"].to_f
       top_wins = top_cand["pairwise_chunks_won"].to_i
       top_losses = top_cand["pairwise_chunks_lost"].to_i
+      adaptive_metrics = adaptive_quality_metrics(result)
+      pairwise_support = v8_pairwise_support_metrics(top_cand)
+      decisive_chunks = pairwise_support[:decisive_chunks].to_i
+      win_advantage = pairwise_support[:win_advantage].to_i
+      top_margin_median = pairwise_support[:margin_median].to_f
       rank_gap = result.dig("meta", "shortlist_rank_gap").to_f
       evidence_gap = result.dig("meta", "shortlist_evidence_gap").to_f
       top_rank = top_cand["rank_score"].to_f
@@ -1451,6 +1470,43 @@ module ::MediaGallery
           used: true,
           basis: "sync_anchor_pairwise_recovery",
           reason: "v8_pairwise_recovery_policy_passed",
+        }
+      end
+
+      recovery_hq_ok = true
+      recovery_hq_ok &&= sync_used
+      recovery_hq_ok &&= (sync_ratio >= thresholds[:v8_sync_anchor_ratio_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (mismatch_rate <= thresholds[:v8_max_mismatch_rate_recovery].to_f)
+      recovery_hq_ok &&= (top_margin >= thresholds[:v8_pairwise_margin_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (top_wins >= thresholds[:v8_pairwise_wins_recovery_conclusive].to_i)
+      recovery_hq_ok &&= (win_advantage >= thresholds[:v8_pairwise_win_advantage_recovery_hq_conclusive].to_i)
+      recovery_hq_ok &&= (top_margin_median >= 0.20)
+      recovery_hq_ok &&= (decisive_chunks >= 7)
+      recovery_hq_ok &&= (top_losses <= 2)
+      recovery_hq_ok &&= (rank_gap >= thresholds[:v8_rank_gap_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (evidence_gap >= thresholds[:v8_evidence_gap_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (raw_delta >= thresholds[:v8_match_delta_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (weighted_delta >= thresholds[:v8_weighted_delta_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (second_ratio <= thresholds[:v8_second_match_recovery_max].to_f)
+      recovery_hq_ok &&= (top_ratio >= thresholds[:v8_min_top_ratio_recovery_conclusive].to_f)
+      recovery_hq_ok &&= (top_consistent >= 2)
+      recovery_hq_ok &&= (second_consistent <= 2)
+      recovery_hq_ok &&= (second_evidence <= -6.0)
+      recovery_hq_ok &&= (adaptive_metrics[:top_adaptive_ratio] >= thresholds[:v8_min_top_adaptive_ratio_recovery_hq_conclusive].to_f)
+      recovery_hq_ok &&= (adaptive_metrics[:adaptive_delta] >= thresholds[:v8_min_adaptive_delta_recovery_hq_conclusive].to_f)
+      recovery_hq_ok &&= (adaptive_metrics[:top_high_quality_ratio] >= thresholds[:v8_min_top_high_quality_ratio_recovery_hq_conclusive].to_f)
+      recovery_hq_ok &&= (adaptive_metrics[:support_ratio] >= thresholds[:v8_min_high_quality_support_ratio_recovery_hq_conclusive].to_f)
+
+      if result.dig("meta", "targeted_fill_applied") == true
+        recovery_hq_ok &&= (result.dig("meta", "targeted_fill_score_gain").to_f <= thresholds[:v8_targeted_fill_score_gain_recovery_hq_max].to_f)
+        recovery_hq_ok &&= (sync_ratio >= thresholds[:v8_sync_anchor_ratio_recovery_hq_fill_hardened].to_f)
+      end
+
+      if recovery_hq_ok
+        return {
+          used: true,
+          basis: "sync_anchor_pairwise_recovery_high_quality",
+          reason: "v8_pairwise_recovery_high_quality_policy_passed",
         }
       end
 
@@ -1643,6 +1699,50 @@ module ::MediaGallery
       return f.round(8) if f >= 0.0001
 
       f
+    end
+
+    def candidate_value(candidate, key)
+      return 0.0 unless candidate.is_a?(Hash)
+
+      candidate[key.to_s].to_f
+    rescue
+      0.0
+    end
+
+    def adaptive_quality_metrics(result)
+      arr = Array(result["candidates"])
+      top = arr[0] || {}
+      second = arr[1] || {}
+      meta = result.is_a?(Hash) ? (result["meta"] || {}) : {}
+      {
+        top_adaptive_ratio: candidate_value(top, :match_ratio_adaptive_weighted),
+        second_adaptive_ratio: candidate_value(second, :match_ratio_adaptive_weighted),
+        adaptive_delta: (candidate_value(top, :match_ratio_adaptive_weighted) - candidate_value(second, :match_ratio_adaptive_weighted)).round(4),
+        top_high_quality_ratio: candidate_value(top, :high_quality_match_ratio),
+        support_ratio: meta["adaptive_high_quality_support_ratio"].to_f,
+      }
+    rescue
+      {
+        top_adaptive_ratio: 0.0,
+        second_adaptive_ratio: 0.0,
+        adaptive_delta: 0.0,
+        top_high_quality_ratio: 0.0,
+        support_ratio: 0.0,
+      }
+    end
+
+    def v8_pairwise_support_metrics(candidate)
+      return { decisive_chunks: 0, win_advantage: 0, margin_median: 0.0 } unless candidate.is_a?(Hash)
+
+      wins = candidate["pairwise_chunks_won"].to_i
+      losses = candidate["pairwise_chunks_lost"].to_i
+      {
+        decisive_chunks: wins + losses,
+        win_advantage: wins - losses,
+        margin_median: candidate["pairwise_chunk_margin_median"].to_f,
+      }
+    rescue
+      { decisive_chunks: 0, win_advantage: 0, margin_median: 0.0 }
     end
 
     def candidate_match_ratio(candidate)

@@ -2243,6 +2243,122 @@ module ::MediaGallery
     end
     private_class_method :ecc_grouped_reference_usable
 
+    def quantile_value(values, q)
+      arr = Array(values).map { |v| v.to_f }.select { |v| v.finite? }.sort
+      return 0.0 if arr.empty?
+
+      idx = ((arr.length - 1) * q.to_f).round
+      idx = 0 if idx.negative?
+      idx = arr.length - 1 if idx >= arr.length
+      arr[idx].to_f
+    rescue
+      0.0
+    end
+    private_class_method :quantile_value
+
+    def build_reference_adaptive_context(usable:)
+      entries = Array(usable)
+      segs = entries.map { |entry| entry[6].to_i }.sort
+      nearest_gap = {}
+      density_12 = {}
+      density_24 = {}
+
+      segs.each_with_index do |seg, idx|
+        prev_gap = idx > 0 ? (seg - segs[idx - 1]).abs : nil
+        next_gap = idx + 1 < segs.length ? (segs[idx + 1] - seg).abs : nil
+        nearest_gap[seg] = [prev_gap, next_gap].compact.min
+        density_12[seg] = segs.count { |other| other != seg && (other - seg).abs <= 12 }
+        density_24[seg] = segs.count { |other| other != seg && (other - seg).abs <= 24 }
+      end
+
+      margins = entries.map { |entry| entry[4].to_f }.select { |v| v.positive? && v.finite? }
+      weights = entries.map { |entry| entry[3].to_f }.select { |v| v.positive? && v.finite? }
+
+      {
+        nearest_gap: nearest_gap,
+        density_12: density_12,
+        density_24: density_24,
+        margin_p35: quantile_value(margins, 0.35),
+        margin_p60: quantile_value(margins, 0.60),
+        weight_p60: quantile_value(weights, 0.60),
+        high_quality_factor_threshold: 1.08,
+        density_window_segments: 12,
+      }
+    rescue
+      {
+        nearest_gap: {},
+        density_12: {},
+        density_24: {},
+        margin_p35: 0.0,
+        margin_p60: 0.0,
+        weight_p60: 0.0,
+        high_quality_factor_threshold: 1.08,
+        density_window_segments: 12,
+      }
+    end
+    private_class_method :build_reference_adaptive_context
+
+    def reference_sample_weight_factor(entry:, adaptive_ctx:)
+      weight = entry[3].to_f
+      margin = entry[4].to_f
+      seg_idx = entry[6].to_i
+      raw_count = entry[7].to_i
+
+      factor = 1.0
+      dense_12 = adaptive_ctx[:density_12][seg_idx].to_i
+      dense_24 = adaptive_ctx[:density_24][seg_idx].to_i
+      nearest_gap = adaptive_ctx[:nearest_gap][seg_idx]
+
+      factor *= 1.12 if dense_12 >= 3
+      factor *= 1.06 if dense_12 == 2
+      factor *= 1.05 if dense_24 >= 5
+      factor *= 1.08 if raw_count >= 2
+      factor *= 1.04 if raw_count >= 3
+      factor *= 1.05 if margin >= adaptive_ctx[:margin_p60].to_f && adaptive_ctx[:margin_p60].to_f > 0.0
+      factor *= 1.04 if weight >= adaptive_ctx[:weight_p60].to_f && adaptive_ctx[:weight_p60].to_f > 0.0
+      factor *= 0.90 if dense_12 == 0 && raw_count <= 1
+      factor *= 0.94 if nearest_gap.present? && nearest_gap >= 20
+      factor *= 0.90 if margin > 0.0 && margin < adaptive_ctx[:margin_p35].to_f
+
+      [[factor, 1.35].min, 0.60].max
+    rescue
+      1.0
+    end
+    private_class_method :reference_sample_weight_factor
+
+    def annotate_reference_usable_with_adaptive(usable:)
+      entries = Array(usable)
+      adaptive_ctx = build_reference_adaptive_context(usable: entries)
+      factor_threshold = adaptive_ctx[:high_quality_factor_threshold].to_f
+
+      adaptive_total_weight = 0.0
+      high_quality_weight = 0.0
+      usable_with_adaptive = entries.map do |entry|
+        factor = reference_sample_weight_factor(entry: entry, adaptive_ctx: adaptive_ctx)
+        adaptive_w = entry[3].to_f * factor
+        adaptive_total_weight += adaptive_w
+        high_quality_weight += adaptive_w if factor >= factor_threshold
+        entry + [adaptive_w.to_f, factor.to_f]
+      end
+
+      {
+        usable: usable_with_adaptive,
+        adaptive_total_weight: adaptive_total_weight.to_f,
+        high_quality_weight: high_quality_weight.to_f,
+        high_quality_factor_threshold: factor_threshold,
+        density_window_segments: adaptive_ctx[:density_window_segments].to_i,
+      }
+    rescue
+      {
+        usable: entries.map { |entry| entry + [entry[3].to_f, 1.0] },
+        adaptive_total_weight: entries.reduce(0.0) { |acc, entry| acc + entry[3].to_f },
+        high_quality_weight: 0.0,
+        high_quality_factor_threshold: 1.08,
+        density_window_segments: 12,
+      }
+    end
+    private_class_method :annotate_reference_usable_with_adaptive
+
     def invert_variant(v)
       return nil if v.blank?
 
@@ -5401,6 +5517,10 @@ end
   end
 
   u = build_usable.call(best_offset, best_polarity_flip)
+  reference_adaptive = annotate_reference_usable_with_adaptive(usable: u[:usable])
+  scored_reference_usable = reference_adaptive[:usable]
+  adaptive_total_weight = reference_adaptive[:adaptive_total_weight].to_f
+  high_quality_weight = reference_adaptive[:high_quality_weight].to_f
   anchor_trust = reference_anchor_trust(
     top_ratio: (best_diag ? best_diag[:top_ratio_w].to_f : 0.0),
     delta: (best_diag ? best_diag[:delta].to_f : 0.0),
@@ -5464,20 +5584,43 @@ end
       mism = 0
       comp = 0
 
-      u[:usable].each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count)|
+      mism_aw = 0.0
+      comp_aw = 0.0
+      high_q_mismatches = 0
+      high_q_compared = 0
+      high_q_mismatches_w = 0.0
+      high_q_compared_w = 0.0
+
+      scored_reference_usable.each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count, adaptive_w, adaptive_factor)|
         exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
           fingerprint_id: rec.fingerprint_id,
           media_item_id: media_item.id,
           segment_index: base_seg_idx.to_i + best_offset
         )
         comp += 1
+        comp_aw += adaptive_w.to_f
+        if adaptive_factor.to_f >= reference_adaptive[:high_quality_factor_threshold].to_f
+          high_q_compared += 1
+          high_q_compared_w += adaptive_w.to_f
+        end
         if exp != ov
           mism += 1
           mism_w += w
+          mism_aw += adaptive_w.to_f
+          if adaptive_factor.to_f >= reference_adaptive[:high_quality_factor_threshold].to_f
+            high_q_mismatches += 1
+            high_q_mismatches_w += adaptive_w.to_f
+          end
         end
       end
 
       next if comp == 0 || u[:comp_w] <= 0.0
+
+      raw_ratio = 1.0 - (mism.to_f / comp.to_f)
+      weighted_ratio = 1.0 - (mism_w / u[:comp_w])
+      adaptive_ratio = comp_aw > 0.0 ? (1.0 - (mism_aw / comp_aw)) : weighted_ratio
+      high_q_ratio = high_q_compared > 0 ? (1.0 - (high_q_mismatches.to_f / high_q_compared.to_f)) : raw_ratio
+      high_q_weighted_ratio = high_q_compared_w > 0.0 ? (1.0 - (high_q_mismatches_w / high_q_compared_w)) : high_q_ratio
 
       candidates << {
         user_id: rec.user_id,
@@ -5488,22 +5631,24 @@ end
         compared: comp,
         mismatches_weighted: mism_w.round(6),
         compared_weighted: u[:comp_w].round(6),
-        match_ratio: (1.0 - (mism.to_f / comp.to_f)).round(4),
-        match_ratio_weighted: (1.0 - (mism_w / u[:comp_w])).round(4),
+        mismatches_adaptive_weighted: mism_aw.round(6),
+        compared_adaptive_weighted: comp_aw.round(6),
+        match_ratio: raw_ratio.round(4),
+        match_ratio_weighted: weighted_ratio.round(4),
+        match_ratio_adaptive_weighted: adaptive_ratio.round(4),
+        high_quality_matches: [high_q_compared - high_q_mismatches, 0].max,
+        high_quality_compared: high_q_compared,
+        high_quality_match_ratio: high_q_ratio.round(4),
+        high_quality_compared_weighted: high_q_compared_w.round(6),
+        high_quality_match_ratio_weighted: high_q_weighted_ratio.round(4),
         local_best_offset_segments: best_offset,
-        local_match_ratio: (1.0 - (mism_w / u[:comp_w])).round(4),
+        local_match_ratio: weighted_ratio.round(4),
         polarity_flip_used: best_polarity_flip,
         variant_polarity: (best_polarity_flip ? "inverted" : "normal"),
       }
     end
 
-    candidates.sort_by! do |candidate|
-      [
-        -candidate[:match_ratio_weighted].to_f,
-        -candidate[:compared].to_i,
-        candidate[:mismatches].to_i,
-      ]
-    end
+    candidates.sort_by! { |candidate| candidate_prefilter_sort_tuple(candidate) }
   end
 
   prefilter_info = if use_chunked
@@ -5611,6 +5756,12 @@ end
     observed_indices_used[obs_idx.to_i] = base_seg_idx.to_i
   end
 
+  adaptive_support_ratio = adaptive_total_weight > 0.0 ? (high_quality_weight / adaptive_total_weight) : 0.0
+  adaptive_effective = u[:usable_count].to_f
+  if u[:comp_w].to_f > 0.0
+    adaptive_effective *= (adaptive_total_weight / u[:comp_w].to_f)
+  end
+
   meta = {
     offset_strategy: "global_reference",
     chosen_offset_segments: best_offset,
@@ -5647,7 +5798,12 @@ end
     candidate_prefilter_used: prefilter_info[:used],
     candidate_prefilter_limit: prefilter_info[:limit],
     candidate_prefilter_kept: prefilter_info[:kept],
-    candidate_prefilter_cutoff_weighted_ratio: prefilter_info[:cutoff_weighted_ratio]
+    candidate_prefilter_cutoff_weighted_ratio: prefilter_info[:cutoff_weighted_ratio],
+    adaptive_weighting_used: true,
+    adaptive_effective_samples: adaptive_effective.round(2),
+    adaptive_high_quality_support_ratio: adaptive_support_ratio.round(4),
+    reference_high_quality_factor_threshold: reference_adaptive[:high_quality_factor_threshold].to_f.round(4),
+    reference_adaptive_density_window_segments: reference_adaptive[:density_window_segments].to_i
   }
 
   unless use_chunked
