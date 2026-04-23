@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require "fileutils"
 require "json"
 require "securerandom"
@@ -135,6 +136,43 @@ module ::MediaGallery
 
     def artifact_file_path(public_id, artifact_id, ext = "mp4")
       File.join(artifact_dir(public_id, artifact_id), "artifact.#{ext}")
+    end
+
+    def metadata_url_for(public_id, artifact_id)
+      "/admin/plugins/media-gallery/test-downloads/#{public_id}/#{artifact_id}?meta=1"
+    end
+
+    def download_url_for(public_id, artifact_id)
+      "/admin/plugins/media-gallery/test-downloads/#{public_id}/#{artifact_id}"
+    end
+
+    def recent_artifacts_for(public_id, limit: 10)
+      root = item_dir(public_id)
+      return [] unless Dir.exist?(root)
+
+      entries = Dir.children(root).sort_by do |artifact_id|
+        dir = artifact_dir(public_id, artifact_id)
+        begin
+          -File.mtime(File.join(dir, ".complete")).to_f
+        rescue
+          begin
+            -File.mtime(artifact_meta_path(public_id, artifact_id)).to_f
+          rescue
+            0
+          end
+        end
+      end
+
+      entries.first([limit.to_i, 1].max).filter_map do |artifact_id|
+        begin
+          meta = read_meta!(public_id, artifact_id)
+          artifact_summary_from_meta(meta)
+        rescue
+          nil
+        end
+      end
+    rescue
+      []
     end
 
     def template_playlist_path(item, variant: DEFAULT_VARIANT)
@@ -297,6 +335,10 @@ module ::MediaGallery
         segment_count: segment_count,
       )
 
+      user = ::User.find_by(id: user_id.to_i)
+      provenance = build_provenance_context(item: item, user: user, user_id: user_id.to_i, selection: selected)
+      verify_selection_provenance!(item: item, selection: selected, provenance: provenance)
+
       artifact_id = SecureRandom.hex(12)
       dir = artifact_dir(item.public_id, artifact_id)
       FileUtils.mkdir_p(dir)
@@ -306,15 +348,18 @@ module ::MediaGallery
 
       generation_method = "concat_copy_primary"
       generation_error = nil
+      verification = nil
+      staged_entries = []
 
       Dir.mktmpdir("media_gallery_test_download") do |stage_dir|
         staged_entries = stage_selected_segments!(item: item, selection: selected, stage_dir: stage_dir)
+        verification = verify_staged_selection!(selection: selected, staged_entries: staged_entries)
+        raise "artifact_provenance_guard_failed: staged_selection_mismatch" unless verification["verified"]
+
         playlist_path = File.join(stage_dir, "artifact.m3u8")
         build_local_hls_playlist!(playlist_path: playlist_path, staged_entries: staged_entries)
         begin
-          File.write(concat_list, staged_entries.map { |entry| "file '#{entry[:path].to_s.gsub("'", %q('\''))}'" }.join("
-") + "
-")
+          File.write(concat_list, staged_entries.map { |entry| "file '#{entry[:path].to_s.gsub("'", %q('\\''))}'" }.join("\n") + "\n")
 
           ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
             concat_file_path: concat_list,
@@ -330,7 +375,11 @@ module ::MediaGallery
         end
       end
 
-      user = ::User.find_by(id: user_id.to_i)
+      raise "artifact_output_missing" unless File.exist?(output_path)
+      verification ||= {}
+      verification["artifact_file_present"] = File.exist?(output_path)
+      checks = verification.reject { |k, _| k.to_s == "warnings" || k.to_s == "verified" }
+      verification["verified"] = checks.values.all? { |v| v == true }
 
       meta = {
         "artifact_id" => artifact_id,
@@ -351,7 +400,11 @@ module ::MediaGallery
         "generation_method_fallback_error" => generation_error,
         "segment_indices" => Array(selected[:segment_entries]).map { |entry| entry[:segment_index].to_i },
         "segment_filenames" => Array(selected[:segment_entries]).map { |entry| entry[:filename].to_s },
+        "segment_variants" => Array(selected[:segment_entries]).map { |entry| entry[:ab].to_s },
         "segment_durations" => Array(selected[:segment_entries]).map { |entry| entry[:duration].to_f.round(6) },
+        "segment_source_locators" => Array(staged_entries).map { |entry| entry[:source_locator].to_s },
+        "provenance" => provenance,
+        "verification" => verification,
         "created_at" => Time.now.utc.iso8601,
         "file_path" => output_path,
         "file_size_bytes" => File.size?(output_path).to_i,
@@ -375,6 +428,34 @@ module ::MediaGallery
       JSON.parse(File.read(path))
     end
 
+    def artifact_summary_from_meta(meta)
+      return nil unless meta.is_a?(Hash)
+
+      {
+        "artifact_id" => meta["artifact_id"].to_s,
+        "public_id" => meta["public_id"].to_s,
+        "media_item_id" => meta["media_item_id"].to_i,
+        "user_id" => meta["user_id"].to_i,
+        "username" => meta["username"],
+        "fingerprint_id" => meta["fingerprint_id"],
+        "mode" => meta["mode"],
+        "variant" => meta["variant"],
+        "segment_count" => meta["segment_count"].to_i,
+        "random_clip_region" => meta["random_clip_region"],
+        "created_at" => meta["created_at"],
+        "file_size_bytes" => meta["file_size_bytes"].to_i,
+        "download_url" => download_url_for(meta["public_id"], meta["artifact_id"]),
+        "metadata_url" => metadata_url_for(meta["public_id"], meta["artifact_id"]),
+        "provenance_verified" => !!meta.dig("verification", "verified"),
+        "segment_variants_sha256" => meta.dig("provenance", "segment_variants_sha256").to_s.presence,
+        "segment_manifest_sha256" => meta.dig("provenance", "segment_manifest_sha256").to_s.presence,
+        "packaged_layout" => meta.dig("provenance", "packaged_layout").to_s.presence,
+        "packaged_codebook_scheme" => meta.dig("provenance", "packaged_codebook_scheme").to_s.presence,
+      }.compact
+    rescue
+      nil
+    end
+
     def template_playlist_raw(item, variant: DEFAULT_VARIANT)
       access = managed_hls_access_for(item)
       if access.present?
@@ -387,6 +468,70 @@ module ::MediaGallery
       File.read(path)
     end
     private_class_method :template_playlist_raw
+
+    def build_provenance_context(item:, user:, user_id:, selection:)
+      package_meta = ::MediaGallery::Hls.fingerprint_meta_for(item)
+      requested_fingerprint_id = ::MediaGallery::Fingerprinting.fingerprint_id_for(
+        user_id: user_id.to_i,
+        media_item_id: item.id,
+      )
+      segment_entries = Array(selection[:segment_entries])
+      variants = segment_entries.map { |entry| entry[:ab].to_s }
+      segment_manifest = segment_entries.map do |entry|
+        [entry[:segment_index].to_i, entry[:filename].to_s, entry[:ab].to_s]
+      end
+      warnings = []
+      warnings << "missing_packaged_fingerprint_meta" unless package_meta.is_a?(Hash)
+      warnings << "selection_all_same_variant" if variants.uniq.length <= 1
+
+      {
+        "requested_user_id" => user_id.to_i,
+        "requested_username" => user&.username,
+        "requested_fingerprint_id" => requested_fingerprint_id,
+        "selection_fingerprint_id" => selection[:fingerprint_id].to_s,
+        "segment_variants_compact" => variants.join,
+        "segment_variants_sha256" => Digest::SHA256.hexdigest(variants.join),
+        "segment_manifest_sha256" => Digest::SHA256.hexdigest(JSON.dump(segment_manifest)),
+        "segment_variant_counts" => {
+          "a" => variants.count("a"),
+          "b" => variants.count("b"),
+        },
+        "packaged_layout" => package_meta.is_a?(Hash) ? package_meta["layout"].to_s.presence : nil,
+        "packaged_configured_layout" => package_meta.is_a?(Hash) ? package_meta["configured_layout"].to_s.presence : nil,
+        "packaged_layout_selection_reason" => package_meta.is_a?(Hash) ? package_meta["layout_selection_reason"].to_s.presence : nil,
+        "packaged_legacy_layout_auto_upgraded" => package_meta.is_a?(Hash) ? !!ActiveModel::Type::Boolean.new.cast(package_meta["legacy_layout_auto_upgraded"]) : nil,
+        "packaged_codebook_scheme" => package_meta.is_a?(Hash) ? package_meta["codebook_scheme"].to_s.presence : nil,
+        "packaged_profile" => package_meta.is_a?(Hash) ? package_meta["profile"].to_s.presence : nil,
+        "packaged_generated_at" => package_meta.is_a?(Hash) ? package_meta["generated_at"] : nil,
+        "warnings" => warnings,
+      }.compact
+    end
+    private_class_method :build_provenance_context
+
+    def verify_selection_provenance!(item:, selection:, provenance:)
+      errors = []
+      requested_fp = provenance["requested_fingerprint_id"].to_s
+      selected_fp = selection[:fingerprint_id].to_s
+      errors << "fingerprint_id_mismatch" unless requested_fp.present? && requested_fp == selected_fp
+
+      codebook_scheme = provenance["packaged_codebook_scheme"].to_s.presence || packaged_codebook_scheme_for(item)
+      Array(selection[:segment_entries]).each do |entry|
+        expected = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          fingerprint_id: selected_fp,
+          media_item_id: item.id,
+          segment_index: entry[:segment_index].to_i,
+          codebook: codebook_scheme,
+        )
+        next if expected.to_s == entry[:ab].to_s
+
+        errors << "variant_mismatch_at_segment_#{entry[:segment_index]}"
+        break
+      end
+
+      raise "artifact_provenance_guard_failed: #{errors.join(', ')}" if errors.present?
+      true
+    end
+    private_class_method :verify_selection_provenance!
 
     def managed_hls_access_for(item)
       role = ::MediaGallery::Hls.managed_role_for(item)
@@ -429,6 +574,24 @@ module ::MediaGallery
     end
     private_class_method :build_local_hls_playlist!
 
+    def verify_staged_selection!(selection:, staged_entries:)
+      expected = Array(selection[:segment_entries])
+      actual = Array(staged_entries)
+      checks = {
+        "selection_count_matches_staged" => expected.length == actual.length,
+        "segment_indices_match_staged" => expected.map { |entry| entry[:segment_index].to_i } == actual.map { |entry| entry[:segment_index].to_i },
+        "segment_filenames_match_staged" => expected.map { |entry| entry[:filename].to_s } == actual.map { |entry| entry[:filename].to_s },
+        "segment_variants_match_staged" => expected.map { |entry| entry[:ab].to_s } == actual.map { |entry| entry[:ab].to_s },
+        "source_locators_present" => actual.all? { |entry| entry[:source_locator].to_s.present? },
+        "staged_files_present" => actual.all? { |entry| File.exist?(entry[:path].to_s) },
+      }
+      {
+        "verified" => checks.values.all? { |v| v == true },
+        "warnings" => [],
+      }.merge(checks)
+    end
+    private_class_method :verify_staged_selection!
+
     def stage_selected_segments!(item:, selection:, stage_dir:)
       access = managed_hls_access_for(item)
 
@@ -436,6 +599,7 @@ module ::MediaGallery
         filename = entry[:filename].to_s
         ab = entry[:ab].to_s
         dest = File.join(stage_dir, format("%05d_%s", idx, filename))
+        source_locator = nil
 
         if access.present?
           key = ::MediaGallery::Hls.segment_key_for(
@@ -446,11 +610,14 @@ module ::MediaGallery
             role: access[:role]
           )
           access[:store].download_to_file!(key, dest)
+          source_locator = "managed:#{key}"
         else
           base = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-          source = File.join(base, ab, selection[:variant].to_s, filename)
+          relative = File.join(ab, selection[:variant].to_s, filename)
+          source = File.join(base, relative)
           raise "missing_segment_file: #{source}" unless File.exist?(source)
           FileUtils.cp(source, dest)
+          source_locator = "local:#{relative}"
         end
 
         raise "staged_segment_missing: #{dest}" unless File.exist?(dest)
@@ -460,6 +627,7 @@ module ::MediaGallery
           segment_index: entry[:segment_index].to_i,
           duration: entry[:duration].to_f,
           ab: ab,
+          source_locator: source_locator,
         }
       end
     end

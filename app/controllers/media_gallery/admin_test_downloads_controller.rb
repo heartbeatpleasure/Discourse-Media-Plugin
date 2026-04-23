@@ -66,7 +66,18 @@ module ::MediaGallery
 
       artifact = task["artifact"].is_a?(Hash) ? task["artifact"].dup : nil
       if artifact.present?
-        artifact["download_url"] ||= "/admin/plugins/media-gallery/test-downloads/#{artifact['public_id'] || task['public_id']}/#{artifact['artifact_id']}"
+        artifact["download_url"] ||= ::MediaGallery::TestDownloads.download_url_for(artifact["public_id"] || task["public_id"], artifact["artifact_id"])
+        artifact["metadata_url"] ||= ::MediaGallery::TestDownloads.metadata_url_for(artifact["public_id"] || task["public_id"], artifact["artifact_id"])
+
+        begin
+          meta = ::MediaGallery::TestDownloads.read_meta!(artifact["public_id"] || task["public_id"], artifact["artifact_id"])
+          summary = ::MediaGallery::TestDownloads.artifact_summary_from_meta(meta)
+          artifact["summary"] = summary if summary.present?
+          artifact["provenance"] = compact_provenance(meta)
+          artifact["verification"] = meta["verification"] if meta["verification"].is_a?(Hash)
+        rescue
+          nil
+        end
       end
 
       render_json_dump(
@@ -88,8 +99,6 @@ module ::MediaGallery
       path = meta["file_path"].to_s
       raise Discourse::NotFound if path.blank? || !File.exist?(path)
 
-      ensure_artifact_path_allowed!(path)
-
       username = meta["username"].presence || ::User.find_by(id: meta["user_id"].to_i)&.username || "user#{meta['user_id']}"
       basename = [
         item.public_id,
@@ -101,6 +110,19 @@ module ::MediaGallery
       ].compact.join("-").gsub(/[^a-zA-Z0-9._-]+/, "_")
 
       response.headers["Cache-Control"] = "no-store"
+
+      if ActiveModel::Type::Boolean.new.cast(params[:meta]) || request.format.json?
+        return send_data(
+          JSON.pretty_generate(meta),
+          filename: "#{basename}.json",
+          type: "application/json",
+          disposition: "attachment",
+        )
+      end
+
+      ensure_artifact_path_allowed!(path)
+      attach_provenance_headers!(meta)
+
       return send_data(
         File.binread(path),
         filename: "#{basename}.mp4",
@@ -116,6 +138,37 @@ module ::MediaGallery
 
     def ensure_test_downloads_enabled
       raise Discourse::InvalidAccess unless ::MediaGallery::TestDownloads.enabled?
+    end
+
+    def compact_provenance(meta)
+      prov = meta["provenance"]
+      return nil unless prov.is_a?(Hash)
+
+      {
+        "requested_user_id" => prov["requested_user_id"],
+        "requested_username" => prov["requested_username"],
+        "requested_fingerprint_id" => prov["requested_fingerprint_id"],
+        "selection_fingerprint_id" => prov["selection_fingerprint_id"],
+        "segment_variants_sha256" => prov["segment_variants_sha256"],
+        "segment_manifest_sha256" => prov["segment_manifest_sha256"],
+        "segment_variant_counts" => prov["segment_variant_counts"],
+        "packaged_layout" => prov["packaged_layout"],
+        "packaged_codebook_scheme" => prov["packaged_codebook_scheme"],
+        "packaged_profile" => prov["packaged_profile"],
+        "warnings" => prov["warnings"],
+      }.compact
+    end
+
+    def attach_provenance_headers!(meta)
+      prov = meta["provenance"].is_a?(Hash) ? meta["provenance"] : {}
+      verification = meta["verification"].is_a?(Hash) ? meta["verification"] : {}
+
+      response.headers["X-Media-Gallery-Test-Fingerprint-Id"] = meta["fingerprint_id"].to_s if meta["fingerprint_id"].present?
+      response.headers["X-Media-Gallery-Test-Variants-Sha256"] = prov["segment_variants_sha256"].to_s if prov["segment_variants_sha256"].present?
+      response.headers["X-Media-Gallery-Test-Manifest-Sha256"] = prov["segment_manifest_sha256"].to_s if prov["segment_manifest_sha256"].present?
+      response.headers["X-Media-Gallery-Test-Provenance-Verified"] = verification["verified"] ? "true" : "false"
+    rescue
+      nil
     end
 
     def ensure_artifact_path_allowed!(path)
