@@ -187,6 +187,7 @@ module ::MediaGallery
         admin_diagnostics: build_admin_diagnostics(item),
         orphan_cleanup_preview: ::MediaGallery::OrphanInspector.preview_for_item(item),
         security_review: ::MediaGallery::SecurityReview.for_item(item),
+        hls_fingerprint: hls_fingerprint_diagnostics(item),
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
       )
@@ -688,6 +689,35 @@ module ::MediaGallery
       store
     end
 
+
+    def hls_fingerprint_diagnostics(item)
+      configured_layout = ::MediaGallery::FingerprintWatermark.layout_mode
+      packaging_selection = ::MediaGallery::FingerprintWatermark.packaging_layout_selection
+      role = ::MediaGallery::Hls.managed_role_for(item)
+      store = role.present? ? ::MediaGallery::Hls.store_for_managed_role(item, role) : nil
+      meta = ::MediaGallery::Hls.fingerprint_meta_for(item, role: role, store: store)
+
+      {
+        configured_layout: configured_layout,
+        effective_new_upload_layout: packaging_selection[:effective_layout],
+        layout_selection_reason: packaging_selection[:reason],
+        preserve_legacy_layouts_for_new_uploads: !!packaging_selection[:preserve_legacy],
+        packaged_layout: meta.is_a?(Hash) ? meta["layout"].to_s.presence : nil,
+        packaged_configured_layout: meta.is_a?(Hash) ? meta["configured_layout"].to_s.presence : nil,
+        packaged_layout_selection_reason: meta.is_a?(Hash) ? meta["layout_selection_reason"].to_s.presence : nil,
+        packaged_legacy_layout_auto_upgraded: meta.is_a?(Hash) ? ActiveModel::Type::Boolean.new.cast(meta["legacy_layout_auto_upgraded"]) : nil,
+        packaged_codebook_scheme: meta.is_a?(Hash) ? meta["codebook_scheme"].to_s.presence : nil,
+        packaged_profile: meta.is_a?(Hash) ? meta["profile"].to_s.presence : nil,
+        packaged_generated_at: meta.is_a?(Hash) ? meta["generated_at"] : nil,
+      }.compact
+    rescue => e
+      {
+        configured_layout: configured_layout,
+        effective_new_upload_layout: packaging_selection[:effective_layout],
+        layout_selection_reason: packaging_selection[:reason],
+        error: "#{e.class}: #{e.message}"
+      }.compact
+    end
 
     def build_admin_diagnostics(item)
       {

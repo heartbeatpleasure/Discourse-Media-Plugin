@@ -34,7 +34,7 @@ module ::MediaGallery
     end
 
     def packaged_codebook_scheme_for(item)
-      meta = fingerprint_meta_for(item)
+      meta = ::MediaGallery::Hls.fingerprint_meta_for(item)
       return nil unless meta.is_a?(Hash)
 
       meta["codebook_scheme"].to_s.presence ||
@@ -387,30 +387,6 @@ module ::MediaGallery
       File.read(path)
     end
     private_class_method :template_playlist_raw
-
-    def fingerprint_meta_for(item)
-      access = managed_hls_access_for(item)
-      if access.present?
-        key = ::MediaGallery::Hls.fingerprint_meta_key_for(item, role: access[:role])
-        begin
-          raw = access[:store].read(key)
-          meta = JSON.parse(raw) rescue nil
-          return meta if meta.is_a?(Hash)
-        rescue
-          nil
-        end
-      end
-
-      root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-      meta_path = File.join(root, "fingerprint_meta.json")
-      return nil unless File.exist?(meta_path)
-
-      meta = JSON.parse(File.read(meta_path)) rescue nil
-      meta.is_a?(Hash) ? meta : nil
-    rescue
-      nil
-    end
-    private_class_method :fingerprint_meta_for
 
     def managed_hls_access_for(item)
       role = ::MediaGallery::Hls.managed_role_for(item)

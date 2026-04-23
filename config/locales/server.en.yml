@@ -172,6 +172,10 @@ en:
     media_gallery_processing_root_path: "Temporary working directory for processing jobs."
     media_gallery_delivery_mode_default_title: "Media gallery delivery mode default"
     media_gallery_delivery_mode_default: "Default delivery method for managed media."
+    media_gallery_fingerprint_watermark_layout_title: "Media gallery fingerprint watermark layout"
+    media_gallery_fingerprint_watermark_layout: "Configured forensic layout used as the base selection for new HLS packaging and fallback detection."
+    media_gallery_fingerprint_preserve_legacy_layouts_for_new_uploads_title: "Media gallery preserve legacy fingerprint layouts for new uploads"
+    media_gallery_fingerprint_preserve_legacy_layouts_for_new_uploads: "When disabled, legacy configured layouts v1-v5 are auto-upgraded to v8_microgrid for newly packaged uploads. Existing packaged media are not changed."
 
     media_gallery_default_storage_profile_key_local: "Local storage"
     media_gallery_default_storage_profile_key_s3_1: "S3 profile 1"

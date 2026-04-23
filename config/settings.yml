@@ -491,10 +491,11 @@ plugins:
     client: false
 
   # Watermark layout used when generating A/B HLS variants.
-  # v1_tiles = legacy 6 independent tiles (subtle but harder to decode later)
-  # v2_pairs = 3 adjacent pairs (still subtle, but much easier to extract from a leaked copy)
+  # v8_microgrid is the hardened default for new packaging. Legacy layouts can
+  # still be selected, but v1-v5 are auto-promoted to v8 for new uploads unless
+  # legacy preservation is explicitly enabled below.
   media_gallery_fingerprint_watermark_layout:
-    default: "v2_pairs"
+    default: "v8_microgrid"
     type: enum
     choices:
       - v1_tiles
@@ -505,6 +506,13 @@ plugins:
       - v6_local_sync
       - v7_high_separation
       - v8_microgrid
+    client: false
+
+  # If enabled, keep using configured legacy layouts (v1-v5) for new uploads.
+  # Disabled by default so stale site settings do not keep packaging new uploads
+  # with old forensic layouts. Existing packaged media remain unchanged.
+  media_gallery_fingerprint_preserve_legacy_layouts_for_new_uploads:
+    default: false
     client: false
 
 

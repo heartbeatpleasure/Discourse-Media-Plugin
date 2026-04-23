@@ -147,11 +147,18 @@ module ::MediaGallery
         FileUtils.mkdir_p(tmp_b_dir)
 
         v_kbps = estimate_video_bitrate_kbps(item)
-        wm_layout = MediaGallery::FingerprintWatermark.layout_mode
+        wm_selection = MediaGallery::FingerprintWatermark.packaging_layout_selection
+        wm_layout = wm_selection[:effective_layout].to_s
         wm_profile = MediaGallery::FingerprintWatermark.hls_packaging_profile(layout: wm_layout)
 
-        vf_a = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "a", profile: wm_profile)
-        vf_b = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "b", profile: wm_profile)
+        if wm_selection[:auto_upgraded]
+          Rails.logger.info(
+            "[media_gallery] fingerprint packaging auto-upgraded legacy layout public_id=#{item.public_id} configured_layout=#{wm_selection[:configured_layout]} effective_layout=#{wm_layout}"
+          )
+        end
+
+        vf_a = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "a", layout: wm_layout, profile: wm_profile)
+        vf_b = MediaGallery::FingerprintWatermark.vf_for(media_item_id: item.id, variant: "b", layout: wm_layout, profile: wm_profile)
 
         MediaGallery::Ffmpeg.package_hls_ab_variants(
           input_path: input_path,
@@ -194,11 +201,14 @@ module ::MediaGallery
       if fingerprinting_enabled?
         meta["ab_fingerprint"] = true
         meta["ab_layout"] = "hls/{a|b}/#{variant}/seg_XXXXX.ts"
-        wm_spec = MediaGallery::FingerprintWatermark.spec_for(media_item_id: item.id, profile: wm_profile)
+        wm_spec = MediaGallery::FingerprintWatermark.spec_for(media_item_id: item.id, layout: wm_layout, profile: wm_profile)
         wm_layout = wm_spec[:layout].to_s
         codebook_scheme = ::MediaGallery::Fingerprinting.ecc_profile(layout: wm_layout)[:scheme]
         meta["watermark"] = {
           "type" => wm_layout,
+          "configured_type" => wm_selection[:configured_layout].to_s.presence,
+          "selection_reason" => wm_selection[:reason].to_s.presence,
+          "legacy_layout_auto_upgraded" => !!wm_selection[:auto_upgraded],
           "profile" => wm_profile.to_s.presence,
           "opacity" => wm_spec[:opacity],
           "box_size_frac" => wm_spec[:box_size_frac],
@@ -239,7 +249,11 @@ module ::MediaGallery
             File.join(build_root, "fingerprint_meta.json"),
             JSON.pretty_generate({
               "layout" => wm_layout,
+              "configured_layout" => wm_selection[:configured_layout].to_s.presence,
+              "layout_selection_reason" => wm_selection[:reason].to_s.presence,
+              "legacy_layout_auto_upgraded" => !!wm_selection[:auto_upgraded],
               "codebook_scheme" => codebook_scheme,
+              "profile" => wm_profile.to_s.presence,
               "segment_seconds" => segment_duration_seconds,
               "watermark_spec" => serialized_wm_spec,
               "generated_at" => Time.now.utc.iso8601,
@@ -311,6 +325,27 @@ module ::MediaGallery
       role ||= managed_role_for(item)
       return role["fingerprint_meta_key"].to_s if role.is_a?(Hash) && role["fingerprint_meta_key"].present?
       File.join(item.public_id.to_s, "hls", "fingerprint_meta.json")
+    end
+
+    def fingerprint_meta_for(item, role: nil, store: nil)
+      role ||= managed_role_for(item)
+      if role.is_a?(Hash)
+        key = fingerprint_meta_key_for(item, role: role)
+        resolved_store = store || store_for_managed_role(item, role)
+        if key.present? && resolved_store.present?
+          raw = resolved_store.read(key)
+          meta = JSON.parse(raw) rescue nil
+          return meta.deep_stringify_keys if meta.is_a?(Hash)
+        end
+      end
+
+      path = File.join(::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id), "fingerprint_meta.json")
+      return nil unless File.exist?(path)
+
+      meta = JSON.parse(File.read(path)) rescue nil
+      meta.is_a?(Hash) ? meta.deep_stringify_keys : nil
+    rescue
+      nil
     end
 
     def variant_playlist_key_for(item, variant, role: nil)

@@ -142,34 +142,111 @@ module ::MediaGallery
       [[0, 0], [1, 0], [1, 1], [2, 1], [2, 2], [3, 2], [0, 3], [1, 3], [1, 4], [2, 4]]
     ].freeze
 
+    LEGACY_PACKAGING_LAYOUTS = [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5].freeze
+
     def allowed_layouts
       [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5, LAYOUT_V6, LAYOUT_V7, LAYOUT_V8]
     end
     private_class_method :allowed_layouts
 
-    def layout_mode
+    def default_layout_mode
+      LAYOUT_V8
+    end
+    private_class_method :default_layout_mode
+
+    def preserve_legacy_layouts_for_new_uploads?
+      SiteSetting.respond_to?(:media_gallery_fingerprint_preserve_legacy_layouts_for_new_uploads) &&
+        SiteSetting.media_gallery_fingerprint_preserve_legacy_layouts_for_new_uploads
+    rescue
+      false
+    end
+
+    def legacy_packaging_layout?(layout)
+      LEGACY_PACKAGING_LAYOUTS.include?(layout.to_s)
+    end
+    private_class_method :legacy_packaging_layout?
+
+    def configured_layout_mode
       if SiteSetting.respond_to?(:media_gallery_fingerprint_watermark_layout)
         v = SiteSetting.media_gallery_fingerprint_watermark_layout.to_s
         return v if allowed_layouts.include?(v)
       end
 
-      LAYOUT_V1
+      default_layout_mode
     rescue
-      LAYOUT_V1
+      default_layout_mode
+    end
+
+    def layout_mode
+      configured_layout_mode
+    end
+
+    def packaging_layout_selection(layout: nil)
+      explicit = layout.to_s.presence
+      configured = configured_layout_mode
+      preserve_legacy = preserve_legacy_layouts_for_new_uploads?
+
+      if explicit.present?
+        effective = allowed_layouts.include?(explicit) ? explicit : configured
+        return {
+          requested_layout: explicit,
+          configured_layout: configured,
+          effective_layout: effective,
+          auto_upgraded: false,
+          preserve_legacy: preserve_legacy,
+          reason: allowed_layouts.include?(explicit) ? "explicit_layout" : "invalid_explicit_layout_fallback"
+        }
+      end
+
+      if legacy_packaging_layout?(configured) && !preserve_legacy
+        {
+          requested_layout: nil,
+          configured_layout: configured,
+          effective_layout: LAYOUT_V8,
+          auto_upgraded: true,
+          preserve_legacy: false,
+          reason: "auto_upgraded_legacy_configured_layout"
+        }
+      else
+        {
+          requested_layout: nil,
+          configured_layout: configured,
+          effective_layout: configured,
+          auto_upgraded: false,
+          preserve_legacy: preserve_legacy,
+          reason: "configured_layout"
+        }
+      end
+    rescue
+      {
+        requested_layout: nil,
+        configured_layout: default_layout_mode,
+        effective_layout: default_layout_mode,
+        auto_upgraded: false,
+        preserve_legacy: false,
+        reason: "fallback_default_layout"
+      }
+    end
+
+    def packaging_layout_mode(layout: nil)
+      packaging_layout_selection(layout: layout)[:effective_layout].to_s.presence || default_layout_mode
+    rescue
+      default_layout_mode
     end
 
     def hls_packaging_profile(layout: nil)
-      mode = layout.to_s.presence || layout_mode
+      mode = packaging_layout_mode(layout: layout)
       mode == LAYOUT_V8 ? :hls_compat : nil
     rescue
       nil
     end
 
-    def vf_for(media_item_id:, variant:, profile: nil)
+    def vf_for(media_item_id:, variant:, layout: nil, profile: nil)
       v = variant.to_s.downcase
       v = "a" unless %w[a b].include?(v)
 
-      mode = layout_mode
+      mode = layout.to_s.presence || layout_mode
+      mode = layout_mode unless allowed_layouts.include?(mode)
       if mode == LAYOUT_V2 || mode == LAYOUT_V3 || mode == LAYOUT_V4 || mode == LAYOUT_V5 || mode == LAYOUT_V6 || mode == LAYOUT_V7 || mode == LAYOUT_V8
         vf_pairs(media_item_id: media_item_id, variant: v, layout: mode, profile: profile)
       else

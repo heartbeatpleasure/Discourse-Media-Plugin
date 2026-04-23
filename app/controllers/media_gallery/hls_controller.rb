@@ -389,23 +389,8 @@ module ::MediaGallery
 
     def packaged_codebook_scheme_for(item)
       role = hls_role_for(item)
-      if role.present?
-        key = ::MediaGallery::Hls.fingerprint_meta_key_for(item, role: role)
-        store = hls_store_for(item, role)
-        if key.present? && store.present? && store.exists?(key)
-          meta = JSON.parse(store.read(key)) rescue nil
-          if meta.is_a?(Hash)
-            return meta["codebook_scheme"].to_s.presence ||
-              ::MediaGallery::Fingerprinting.codebook_scheme_for(layout: meta["layout"].to_s)
-          end
-        end
-      end
-
-      root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-      meta_path = File.join(root, "fingerprint_meta.json")
-      return nil unless File.exist?(meta_path)
-
-      meta = JSON.parse(File.read(meta_path)) rescue nil
+      store = role.present? ? hls_store_for(item, role) : nil
+      meta = ::MediaGallery::Hls.fingerprint_meta_for(item, role: role, store: store)
       return nil unless meta.is_a?(Hash)
 
       meta["codebook_scheme"].to_s.presence ||
