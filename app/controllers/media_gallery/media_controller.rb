@@ -62,38 +62,11 @@ module ::MediaGallery
       per_page = bounded_per_page_param(params[:per_page], default: 24, max: 100)
       offset = (page - 1) * per_page
 
-      items = apply_admin_visibility_filter(MediaGallery::MediaItem.where(status: "ready")).order(created_at: :desc)
-
-      if params[:media_type].present? && MediaGallery::MediaItem::TYPES.include?(params[:media_type].to_s)
-        items = items.where(media_type: params[:media_type].to_s)
-      end
-
-      if params[:gender].present? && MediaGallery::MediaItem::GENDERS.include?(params[:gender].to_s)
-        items = items.where(gender: params[:gender].to_s)
-      end
-
-      if params[:tags].present?
-        tags = ::MediaGallery::TextSanitizer.tag_list(
-          params[:tags],
-          max_count: [SiteSetting.media_gallery_max_tags_per_item.to_i, 50].max,
-          max_length: 40,
-          allowed: MediaGallery::Permissions.allowed_tags
-        )
-        if tags.present?
-          # Be defensive about the DB column type.
-          # Some installs may have tags as text[]; others as varchar[] (older schema).
-          # Postgres will 500 with "operator does not exist" if the array types differ.
-          col_type = MediaGallery::MediaItem.columns_hash["tags"]&.sql_type.to_s
-          if col_type.include?("character varying") || col_type.include?("varchar")
-            items = items.where("tags @> ARRAY[?]::varchar[]", tags)
-          else
-            items = items.where("tags @> ARRAY[?]::text[]", tags)
-          end
-        end
-      end
+      items = apply_admin_visibility_filter(MediaGallery::MediaItem.where(status: "ready"))
+      items = apply_library_filters(items)
 
       total = items.count
-      items = items.offset(offset).limit(per_page)
+      items = apply_library_sort(items).offset(offset).limit(per_page)
 
       render_json_dump(
         media_items: serialize_data(items, MediaGallery::MediaItemSerializer, root: false),
@@ -108,14 +81,11 @@ module ::MediaGallery
       per_page = bounded_per_page_param(params[:per_page], default: 24, max: 100)
       offset = (page - 1) * per_page
 
-      items = apply_admin_visibility_filter(MediaGallery::MediaItem.where(user_id: current_user.id)).order(created_at: :desc)
-
-      if params[:status].present? && MediaGallery::MediaItem::STATUSES.include?(params[:status].to_s)
-        items = items.where(status: params[:status].to_s)
-      end
+      items = apply_admin_visibility_filter(MediaGallery::MediaItem.where(user_id: current_user.id))
+      items = apply_library_filters(items, include_status: true)
 
       total = items.count
-      items = items.offset(offset).limit(per_page)
+      items = apply_library_sort(items).offset(offset).limit(per_page)
 
       render_json_dump(
         media_items: serialize_data(items, MediaGallery::MediaItemSerializer, root: false),
@@ -1058,6 +1028,88 @@ module ::MediaGallery
 
     def apply_admin_visibility_filter(scope)
       scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = false")
+    end
+
+    def apply_library_filters(scope, include_status: false)
+      if params[:media_type].present? && MediaGallery::MediaItem::TYPES.include?(params[:media_type].to_s)
+        scope = scope.where(media_type: params[:media_type].to_s)
+      end
+
+      if params[:gender].present? && MediaGallery::MediaItem::GENDERS.include?(params[:gender].to_s)
+        scope = scope.where(gender: params[:gender].to_s)
+      end
+
+      if include_status && params[:status].present? && MediaGallery::MediaItem::STATUSES.include?(params[:status].to_s)
+        scope = scope.where(status: params[:status].to_s)
+      end
+
+      scope = apply_tag_filter(scope)
+      scope = apply_search_filter(scope)
+      scope
+    end
+
+    def apply_tag_filter(scope)
+      return scope if params[:tags].blank?
+
+      tags = ::MediaGallery::TextSanitizer.tag_list(
+        params[:tags],
+        max_count: [SiteSetting.media_gallery_max_tags_per_item.to_i, 50].max,
+        max_length: 40,
+        allowed: MediaGallery::Permissions.allowed_tags
+      )
+      return scope if tags.blank?
+
+      # Be defensive about the DB column type.
+      # Some installs may have tags as text[]; others as varchar[] (older schema).
+      # Postgres will 500 with "operator does not exist" if the array types differ.
+      col_type = MediaGallery::MediaItem.columns_hash["tags"]&.sql_type.to_s
+      if col_type.include?("character varying") || col_type.include?("varchar")
+        scope.where("tags @> ARRAY[?]::varchar[]", tags)
+      else
+        scope.where("tags @> ARRAY[?]::text[]", tags)
+      end
+    end
+
+    def apply_search_filter(scope)
+      terms = search_terms_param
+      return scope if terms.blank?
+
+      terms.each do |term|
+        pattern = "%#{ActiveRecord::Base.sanitize_sql_like(term)}%"
+        scope = scope.where(
+          "LOWER(COALESCE(title, '') || ' ' || COALESCE(description, '')) LIKE ?",
+          pattern
+        )
+      end
+
+      scope
+    end
+
+    def search_terms_param
+      query = ::MediaGallery::TextSanitizer.plain_text(
+        params[:q].presence || params[:search],
+        max_length: 200,
+        allow_newlines: false
+      ).to_s.downcase
+
+      query.split(/\s+/).reject(&:blank?).first(10)
+    end
+
+    def apply_library_sort(scope)
+      case params[:sort].to_s
+      when "oldest"
+        scope.order(created_at: :asc, id: :asc)
+      when "title_asc"
+        scope.order(Arel.sql("LOWER(title) ASC"), created_at: :desc, id: :desc)
+      when "title_desc"
+        scope.order(Arel.sql("LOWER(title) DESC"), created_at: :desc, id: :desc)
+      when "most_liked"
+        scope.order(likes_count: :desc, created_at: :desc, id: :desc)
+      when "most_viewed"
+        scope.order(views_count: :desc, created_at: :desc, id: :desc)
+      else
+        scope.order(created_at: :desc, id: :desc)
+      end
     end
 
     def find_item_by_public_id!(public_id)
