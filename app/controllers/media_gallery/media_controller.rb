@@ -167,7 +167,22 @@ module ::MediaGallery
         )
       end
 
-            # Watermark (burned into processed video/image outputs) - configured server-side via presets.
+      duplicate_action = duplicate_upload_action
+      duplicate_match = find_duplicate_upload_match(upload)
+      if duplicate_match.present?
+        duplicate_override = ActiveModel::Type::Boolean.new.cast(params[:duplicate_override])
+        staff_override_allowed = current_user&.staff? || current_user&.admin?
+
+        if duplicate_action == "warn" && !duplicate_override
+          return render_duplicate_upload_response("duplicate_upload_warning", duplicate_match, upload, override_allowed: true)
+        end
+
+        if duplicate_action == "block" && !(duplicate_override && staff_override_allowed)
+          return render_duplicate_upload_response("duplicate_upload_blocked", duplicate_match, upload, override_allowed: staff_override_allowed)
+        end
+      end
+
+      # Watermark (burned into processed video/image outputs) - configured server-side via presets.
       watermark_enabled = false
       watermark_preset_id = nil
 
@@ -218,6 +233,7 @@ module ::MediaGallery
       extra_metadata = {} if extra_metadata.blank?
       extra_metadata = extra_metadata.is_a?(Hash) ? extra_metadata.deep_dup : { "raw" => extra_metadata.to_s }
       extra_metadata["upload_terms_acceptance"] = upload_terms_acceptance_payload
+      extra_metadata["duplicate_detection"] = duplicate_detection_metadata(upload, duplicate_match, duplicate_action, ActiveModel::Type::Boolean.new.cast(params[:duplicate_override]))
 
       transcode_images =
         if SiteSetting.respond_to?(:media_gallery_transcode_images_to_jpg)
@@ -1012,6 +1028,131 @@ module ::MediaGallery
         "terms_url" => SiteSetting.media_gallery_upload_terms_url.to_s.strip.presence,
         "terms_setting_key" => "media_gallery_upload_terms_url",
       }.compact
+    end
+
+    def duplicate_upload_action
+      value = SiteSetting.media_gallery_duplicate_upload_action.to_s.strip.downcase
+      %w[allow warn block].include?(value) ? value : "allow"
+    end
+
+    def upload_identity_for_duplicate_detection(upload)
+      return {} if upload.blank?
+
+      {
+        "sha1" => upload.respond_to?(:sha1) ? upload.sha1.to_s.strip.presence : nil,
+        "filesize" => upload.respond_to?(:filesize) ? upload.filesize.to_i : nil,
+        "extension" => upload.respond_to?(:extension) ? upload.extension.to_s.downcase.presence : nil,
+        "original_filename" => upload.respond_to?(:original_filename) ? upload.original_filename.to_s.presence : nil,
+      }.compact
+    end
+
+    def find_duplicate_upload_match(upload)
+      identity = upload_identity_for_duplicate_detection(upload)
+      sha1 = identity["sha1"].to_s
+      filesize = identity["filesize"].to_i
+      return nil if sha1.blank? || filesize <= 0
+
+      MediaGallery::MediaItem
+        .joins("INNER JOIN uploads media_gallery_original_uploads ON media_gallery_original_uploads.id = media_gallery_media_items.original_upload_id")
+        .where("media_gallery_original_uploads.sha1 = ? AND media_gallery_original_uploads.filesize = ?", sha1, filesize)
+        .order(created_at: :asc, id: :asc)
+        .first
+    rescue => e
+      Rails.logger.warn("[media_gallery] duplicate check failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      nil
+    end
+
+    def duplicate_item_visible_to_current_user?(item)
+      return false if item.blank?
+      return true if current_user&.staff? || current_user&.admin?
+      return false if item.respond_to?(:admin_hidden?) && item.admin_hidden?
+
+      MediaGallery::Permissions.can_view?(guardian)
+    end
+
+    def duplicate_upload_client_payload(item, upload, override_allowed: false)
+      identity = upload_identity_for_duplicate_detection(upload)
+      visible = duplicate_item_visible_to_current_user?(item)
+
+      {
+        match_found: item.present?,
+        override_allowed: !!override_allowed,
+        existing_public_id: (visible ? item&.public_id : nil),
+        existing_title: (visible ? item&.title.to_s : nil),
+        existing_uploader_username: (visible ? item&.user&.username.to_s : nil),
+        existing_created_at: (visible ? item&.created_at&.iso8601 : nil),
+        filename: identity["original_filename"],
+        filesize: identity["filesize"],
+      }.compact
+    end
+
+    def duplicate_upload_message(error_code, item, upload)
+      setting_key =
+        error_code.to_s == "duplicate_upload_warning" ?
+          :media_gallery_duplicate_upload_warning_message :
+          :media_gallery_duplicate_upload_block_message
+
+      template = SiteSetting.public_send(setting_key).to_s
+      template = default_duplicate_upload_message(error_code) if template.blank?
+
+      duplicate = duplicate_upload_client_payload(item, upload, override_allowed: false)
+      replacements = {
+        "filename" => duplicate[:filename].to_s.presence || "this file",
+        "title" => duplicate[:existing_title].to_s.presence || "an existing media item",
+        "uploader" => duplicate[:existing_uploader_username].to_s.presence || "another user",
+        "created_at" => duplicate[:existing_created_at].to_s.presence || "an earlier date",
+      }
+
+      text = template.gsub(/\{(filename|title|uploader|created_at)\}/) { replacements[$1].to_s }
+      ::MediaGallery::TextSanitizer.plain_text(text, max_length: 600, allow_newlines: false)
+    end
+
+    def default_duplicate_upload_message(error_code)
+      if error_code.to_s == "duplicate_upload_warning"
+        "This file appears to already exist in the media library. Please check whether you really need to upload it again."
+      else
+        "This file appears to already exist in the media library and duplicate uploads are currently blocked."
+      end
+    end
+
+    def render_duplicate_upload_response(error_code, item, upload, override_allowed: false)
+      message = duplicate_upload_message(error_code, item, upload)
+      log_security_event(
+        event_type: error_code,
+        severity: error_code.to_s == "duplicate_upload_blocked" ? "warning" : "info",
+        category: "upload",
+        user: current_user,
+        media_item: item,
+        message: message,
+        details: duplicate_upload_client_payload(item, upload, override_allowed: override_allowed).merge(action: duplicate_upload_action),
+      )
+
+      render_json_error(
+        error_code,
+        status: 409,
+        message: message,
+        extra: {
+          duplicate: duplicate_upload_client_payload(item, upload, override_allowed: override_allowed)
+        }
+      )
+    end
+
+    def duplicate_detection_metadata(upload, item, action, override)
+      identity = upload_identity_for_duplicate_detection(upload)
+      payload = {
+        "checked_at" => Time.now.utc.iso8601,
+        "action" => action.to_s.presence || "allow",
+        "override" => !!override,
+        "source_sha1" => identity["sha1"],
+        "source_filesize" => identity["filesize"],
+        "source_extension" => identity["extension"],
+        "source_original_filename" => identity["original_filename"],
+        "duplicate_found" => item.present?,
+        "duplicate_media_item_id" => item&.id,
+        "duplicate_public_id" => item&.public_id,
+      }.compact
+
+      payload
     end
 
     def media_gallery_permissions_payload

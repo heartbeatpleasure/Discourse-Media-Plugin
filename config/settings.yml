@@ -154,6 +154,27 @@ plugins:
     default: "mp3|m4a|ogg|wav"
     type: list
     client: true
+
+  # Exact duplicate upload handling for media gallery registration.
+  # allow = permit duplicates, warn = ask users to confirm, block = prevent duplicates unless staff overrides.
+  media_gallery_duplicate_upload_action:
+    default: "allow"
+    type: enum
+    choices:
+      - allow
+      - warn
+      - block
+    client: false
+
+  media_gallery_duplicate_upload_warning_message:
+    default: "This file appears to already exist in the media library. Please check whether you really need to upload it again."
+    type: string
+    client: false
+
+  media_gallery_duplicate_upload_block_message:
+    default: "This file appears to already exist in the media library and duplicate uploads are currently blocked."
+    type: string
+    client: false
   # Transcoding / policy
   media_gallery_video_max_duration_seconds:
     default: 600
