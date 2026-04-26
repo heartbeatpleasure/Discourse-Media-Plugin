@@ -15,10 +15,10 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                   only: [:index, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :retry_processing, :destroy, :update]
+                   only: [:index, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :report, :retry_processing, :destroy, :update]
 
     before_action :ensure_can_upload, only: [:create]
-    before_action :ensure_secure_write_request!, only: [:create, :update, :destroy, :retry_processing, :like, :unlike, :heartbeat, :revoke]
+    before_action :ensure_secure_write_request!, only: [:create, :update, :destroy, :retry_processing, :like, :unlike, :report, :heartbeat, :revoke]
     before_action :ensure_secure_play_request!, only: [:play]
 
     # NOTE: do not name this action `config` (conflicts with ActionController::Base#config)
@@ -53,7 +53,8 @@ module ::MediaGallery
         },
         playback_overlay: can_view ? MediaGallery::PlaybackOverlay.client_enabled_config : nil,
         permissions: media_gallery_permissions_payload,
-        upload_policy: can_upload ? upload_policy_payload : nil
+        upload_policy: can_upload ? upload_policy_payload : nil,
+        reports: can_view ? media_reports_config_payload : { enabled: false }
       )
     end
     
@@ -880,6 +881,40 @@ module ::MediaGallery
       send_data(data, disposition: "inline", filename: thumb[:filename], type: thumb[:content_type])
     end
 
+    # POST /media/:public_id/report
+    def report
+      unless SiteSetting.media_gallery_reports_enabled
+        return render_json_error("reports_disabled", status: 404, message: "Reports are not enabled.")
+      end
+
+      item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
+      raise Discourse::NotFound unless item.ready?
+
+      reason = normalize_report_reason(params[:reason])
+      return render_json_error("invalid_report_reason", status: 422, message: "Please choose a report reason.") if reason.blank?
+
+      message = ::MediaGallery::TextSanitizer.plain_text(
+        params[:message],
+        max_length: 1200,
+        allow_newlines: true
+      ).presence
+
+      result = create_media_report!(item, reason: reason, message: message)
+      render_json_dump(
+        ok: true,
+        duplicate: result[:duplicate],
+        auto_hidden: result[:auto_hidden],
+        report: result[:report],
+        message: result[:duplicate] ? "You already reported this media item. Staff can review your existing report." : "Report submitted. Staff will review it."
+      )
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.error("[media_gallery] report failed request_id=#{request.request_id}: #{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}")
+      render_json_error("report_failed", status: 500, message: "Report failed. Please try again.")
+    end
+
     def like
       item = find_item_by_public_id!(params[:public_id])
       ensure_item_visible_to_current_user!(item)
@@ -1178,6 +1213,215 @@ module ::MediaGallery
       end
 
       payload
+    end
+
+    REPORTS_METADATA_KEY = "media_reports"
+    REPORT_AUTO_HIDE_GROUP_SETTING_SEPARATOR = /[\|,\n]/
+
+    def media_reports_config_payload
+      {
+        enabled: SiteSetting.media_gallery_reports_enabled,
+        reasons: media_report_reason_payloads,
+      }
+    end
+
+    def media_report_reason_payloads
+      media_report_reason_options.map { |reason| { id: reason[:id], label: reason[:label] } }
+    end
+
+    def media_report_reason_options
+      [
+        { id: "copyright", label: "Copyright or ownership issue" },
+        { id: "personal_info", label: "Personal or private information" },
+        { id: "illegal", label: "Illegal or prohibited content" },
+        { id: "inappropriate", label: "Inappropriate content" },
+        { id: "rule_violation", label: "Media guideline violation" },
+        { id: "other", label: "Other" },
+      ]
+    end
+
+    def normalize_report_reason(value)
+      reason = ::MediaGallery::TextSanitizer.plain_text(value, max_length: 40, allow_newlines: false).to_s.strip
+      media_report_reason_options.any? { |entry| entry[:id] == reason } ? reason : nil
+    end
+
+    def create_media_report!(item, reason:, message: nil)
+      now = Time.now.utc
+      auto_hidden = false
+      duplicate = false
+      report = nil
+
+      item.with_lock do
+        meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+        reports = meta[REPORTS_METADATA_KEY]
+        reports = [] unless reports.is_a?(Array)
+
+        existing = reports.find do |entry|
+          entry.is_a?(Hash) &&
+            entry["reporter_user_id"].to_i == current_user.id &&
+            entry["status"].to_s == "open"
+        end
+
+        if existing.present?
+          duplicate = true
+          report = public_media_report_payload(existing)
+        else
+          report_hash = build_media_report_hash(item, reason: reason, message: message, at: now)
+
+          if media_report_auto_hide_user?(current_user)
+            auto_hidden = true
+            report_hash["auto_hidden"] = true
+            report_hash["auto_hidden_at"] = now.iso8601
+            report_hash["auto_hidden_reason"] = "Reported by trusted media reviewer"
+            apply_media_report_auto_hide!(meta, item, report_hash)
+          end
+
+          reports.unshift(report_hash)
+          meta[REPORTS_METADATA_KEY] = reports.first(100)
+          item.update_columns(extra_metadata: meta, updated_at: Time.now)
+          report = public_media_report_payload(report_hash)
+        end
+      end
+
+      if duplicate
+        ::MediaGallery::OperationLogger.info("media_report_duplicate_ignored", item: item, operation: "report", data: { reporter_user_id: current_user.id, reporter_username: current_user.username })
+      else
+        event = auto_hidden ? "media_report_created_auto_hidden" : "media_report_created"
+        ::MediaGallery::OperationLogger.warn(event, item: item, operation: "report", data: { reporter_user_id: current_user.id, reporter_username: current_user.username, reason: reason, auto_hidden: auto_hidden })
+        log_security_event(
+          event_type: event,
+          severity: auto_hidden ? "warning" : "info",
+          category: "media_reports",
+          media_item: item,
+          message: reason,
+          details: { reason: reason, auto_hidden: auto_hidden }
+        )
+      end
+
+      { duplicate: duplicate, auto_hidden: auto_hidden, report: report }
+    end
+
+    def build_media_report_hash(item, reason:, message:, at:)
+      {
+        "id" => SecureRandom.uuid,
+        "status" => "open",
+        "reason" => reason.to_s,
+        "reason_label" => media_report_reason_options.find { |entry| entry[:id] == reason }&.dig(:label).to_s.presence || reason.to_s,
+        "message" => message.to_s.presence,
+        "reporter_user_id" => current_user.id,
+        "reporter_username" => current_user.username,
+        "reporter_trust_level" => current_user.trust_level.to_i,
+        "reporter_staff" => current_user.staff?,
+        "created_at" => at.iso8601,
+        "item_snapshot" => media_report_item_snapshot(item),
+      }.compact
+    end
+
+    def media_report_item_snapshot(item)
+      original = item.original_upload
+      processed = item.processed_upload
+      thumbnail = item.thumbnail_upload
+      {
+        "media_item_id" => item.id,
+        "public_id" => item.public_id.to_s,
+        "title" => item.title.to_s,
+        "description" => item.description.to_s.presence,
+        "media_type" => item.media_type.to_s.presence,
+        "gender" => item.gender.to_s.presence,
+        "tags" => Array(item.tags).map(&:to_s),
+        "status" => item.status.to_s,
+        "uploader_user_id" => item.user_id,
+        "uploader_username" => item.user&.username.to_s.presence,
+        "created_at" => item.created_at&.iso8601,
+        "updated_at" => item.updated_at&.iso8601,
+        "filesize_original_bytes" => item.filesize_original_bytes,
+        "filesize_processed_bytes" => item.filesize_processed_bytes,
+        "original_upload_id" => item.original_upload_id,
+        "processed_upload_id" => item.processed_upload_id,
+        "thumbnail_upload_id" => item.thumbnail_upload_id,
+        "original_upload_sha1" => original&.sha1.to_s.presence,
+        "processed_upload_sha1" => processed&.sha1.to_s.presence,
+        "thumbnail_upload_sha1" => thumbnail&.sha1.to_s.presence,
+        "original_upload_filesize" => original&.filesize,
+        "processed_upload_filesize" => processed&.filesize,
+        "thumbnail_upload_filesize" => thumbnail&.filesize,
+        "original_filename" => original&.original_filename.to_s.presence || processed&.original_filename.to_s.presence,
+        "managed_storage_backend" => item.managed_storage_backend.to_s.presence,
+        "managed_storage_profile" => item.managed_storage_profile.to_s.presence,
+        "delivery_mode" => item.delivery_mode.to_s.presence,
+        "storage_manifest" => item.storage_manifest_hash,
+      }.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] report snapshot failed item_id=#{item&.id}: #{e.class}: #{e.message}")
+      {
+        "media_item_id" => item&.id,
+        "public_id" => item&.public_id.to_s,
+        "title" => item&.title.to_s,
+      }.compact
+    end
+
+    def public_media_report_payload(report)
+      return {} unless report.is_a?(Hash)
+
+      {
+        id: report["id"].to_s,
+        status: report["status"].to_s,
+        reason: report["reason"].to_s,
+        reason_label: report["reason_label"].to_s,
+        created_at: report["created_at"].to_s,
+      }
+    end
+
+    def media_report_auto_hide_user?(user)
+      return false if user.blank?
+
+      media_report_auto_hide_groups.any? do |entry|
+        token = entry.downcase
+        case token
+        when "staff"
+          user.staff? || user.admin?
+        when "admin", "admins"
+          user.admin?
+        when /\A(?:trust_level_|tl)(\d+)\z/
+          user.trust_level.to_i >= Regexp.last_match(1).to_i
+        else
+          user.groups.where("LOWER(name) = ?", token).exists?
+        end
+      end
+    end
+
+    def media_report_auto_hide_groups
+      SiteSetting.media_gallery_report_auto_hide_groups.to_s
+        .split(REPORT_AUTO_HIDE_GROUP_SETTING_SEPARATOR)
+        .map { |value| ::MediaGallery::TextSanitizer.plain_text(value, max_length: 80, allow_newlines: false).to_s.strip.downcase }
+        .reject(&:blank?)
+        .uniq
+    end
+
+    def apply_media_report_auto_hide!(meta, item, report_hash)
+      now = Time.now.utc.iso8601
+      visibility = meta["admin_visibility"].is_a?(Hash) ? meta["admin_visibility"].deep_dup : {}
+      was_hidden = ActiveModel::Type::Boolean.new.cast(visibility["hidden"])
+      visibility["hidden"] = true
+      visibility["updated_at"] = now
+      visibility["updated_by"] = "media_report_auto_hide"
+      visibility["reason"] = "Auto-hidden after a trusted report."
+      visibility["hidden_at"] ||= now
+      visibility["hidden_by"] ||= report_hash["reporter_username"].to_s.presence || "media_report_auto_hide"
+      meta["admin_visibility"] = visibility
+
+      log = meta["admin_management_log"]
+      log = [] unless log.is_a?(Array)
+      log.unshift(
+        "action" => "report_auto_hide",
+        "at" => now,
+        "admin_username" => "media_report_auto_hide",
+        "admin_user_id" => nil,
+        "public_id" => item.public_id.to_s,
+        "note" => "Auto-hidden after report #{report_hash["id"]} by #{report_hash["reporter_username"]}.",
+        "changes" => { "hidden" => [was_hidden, true], "report_id" => [nil, report_hash["id"]] }
+      )
+      meta["admin_management_log"] = log.first(50)
     end
 
     def media_gallery_permissions_payload

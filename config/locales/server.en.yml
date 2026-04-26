@@ -59,6 +59,24 @@ en:
       total: "total"
       views: "views"
       likes: "likes"
+      report_media: "Report media"
+      report_item_title: "Report media"
+      report_reason_label: "Reason"
+      report_message_label: "Additional details"
+      report_message_placeholder: "Add any details staff should know (optional)"
+      report_submit: "Submit report"
+      report_submitting: "Submitting…"
+      report_submitted: "Report submitted. Staff will review it."
+      report_duplicate: "You already reported this media item. Staff can review your existing report."
+      report_failed: "Report failed. Please try again."
+      report_cancel: "Cancel"
+      report_reasons:
+        copyright: "Copyright or ownership issue"
+        personal_info: "Personal or private information"
+        illegal: "Illegal or prohibited content"
+        inappropriate: "Inappropriate content"
+        rule_violation: "Media guideline violation"
+        other: "Other"
       errors:
         not_available: "Media library is not available (plugin disabled or access denied)."
         upload_not_allowed: "You do not have permission to upload."
@@ -169,6 +187,10 @@ en:
 
 
   site_settings:
+    media_gallery_reports_enabled_title: "Media gallery reports enabled"
+    media_gallery_reports_enabled: "Allow users with media view access to report media items for staff review."
+    media_gallery_report_auto_hide_groups_title: "Media gallery report auto-hide groups"
+    media_gallery_report_auto_hide_groups: "Groups or trust levels whose reports immediately hide the media item until staff review. Use names separated by |, comma, or new lines. Supports staff and trust_level_4."
     media_gallery_blocked_groups_title: "Media gallery blocked groups"
     media_gallery_blocked_groups: "Members of these groups cannot view or upload media gallery items, even if they are also in an allowed viewer or uploader group. Staff and admins are not blocked by this setting."
     media_gallery_quick_block_group_title: "Media gallery quick block group"

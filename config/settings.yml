@@ -909,3 +909,11 @@ plugins:
     min: 0
     max: 100
     client: false
+
+  media_gallery_reports_enabled:
+    default: true
+    client: false
+
+  media_gallery_report_auto_hide_groups:
+    default: "staff|trust_level_4"
+    client: false

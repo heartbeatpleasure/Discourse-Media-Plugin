@@ -56,6 +56,24 @@ en:
       total: "total"
       views: "views"
       likes: "likes"
+      report_media: "Report media"
+      report_item_title: "Report media"
+      report_reason_label: "Reason"
+      report_message_label: "Additional details"
+      report_message_placeholder: "Add any details staff should know (optional)"
+      report_submit: "Submit report"
+      report_submitting: "Submitting…"
+      report_submitted: "Report submitted. Staff will review it."
+      report_duplicate: "You already reported this media item. Staff can review your existing report."
+      report_failed: "Report failed. Please try again."
+      report_cancel: "Cancel"
+      report_reasons:
+        copyright: "Copyright or ownership issue"
+        personal_info: "Personal or private information"
+        illegal: "Illegal or prohibited content"
+        inappropriate: "Inappropriate content"
+        rule_violation: "Media guideline violation"
+        other: "Other"
       errors:
         not_available: "Media library is not available (plugin disabled or access denied)."
         upload_not_allowed: "You do not have permission to upload."
@@ -126,6 +144,11 @@ en:
           title: "Media management"
           short_title: "Management"
           description: "Search, edit, hide, retry, or delete media items from one admin page."
+
+        reports:
+          title: "Media reports"
+          short_title: "Reports"
+          description: "Review user reports, hide media, delete reported asset files, or reject reports while keeping an audit trail."
 
         logs:
           title: "Logs"

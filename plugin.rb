@@ -68,6 +68,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_media_items_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_reports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_logs_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_storage_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
@@ -91,6 +92,7 @@ after_initialize do
     get "/admin/plugins/media-gallery-test-downloads" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-migrations" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-management" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-reports" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-logs" => "admin/plugins#index", constraints: AdminConstraint.new
 
     get "/media-library" => "media_gallery/library#index"
@@ -112,6 +114,8 @@ after_initialize do
 
     # Admin-only helper to find media items by public_id/title/id.
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/reports" => "media_gallery/admin_reports#index", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/reports/:report_id/review" => "media_gallery/admin_reports#review", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/profiles" => "media_gallery/admin_storage#profiles", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/health" => "media_gallery/admin_storage#health", defaults: { format: :json }
     get "/admin/plugins/media-gallery/logs" => "media_gallery/admin_logs#index", defaults: { format: :json }
@@ -187,5 +191,6 @@ after_initialize do
 
     post "/media/:public_id/like" => "media_gallery/media#like", defaults: { format: :json }
     post "/media/:public_id/unlike" => "media_gallery/media#unlike", defaults: { format: :json }
+    post "/media/:public_id/report" => "media_gallery/media#report", defaults: { format: :json }
   end
 end
