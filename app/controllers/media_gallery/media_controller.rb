@@ -1035,6 +1035,7 @@ module ::MediaGallery
       {
         can_view: MediaGallery::Permissions.can_view?(guardian),
         can_upload: MediaGallery::Permissions.can_upload?(guardian),
+        access_blocked: MediaGallery::Permissions.access_blocked?(guardian),
         viewer_groups: access_group_names_for_client(MediaGallery::Permissions.viewer_groups),
         uploader_groups: access_group_names_for_client(MediaGallery::Permissions.uploader_groups)
       }

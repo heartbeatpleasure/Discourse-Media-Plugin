@@ -166,6 +166,8 @@ en:
 
 
   site_settings:
+    media_gallery_blocked_groups_title: "Media gallery blocked groups"
+    media_gallery_blocked_groups: "Members of these groups cannot view or upload media gallery items, even if they are also in an allowed viewer or uploader group. Staff and admins are not blocked by this setting."
     media_gallery_default_storage_profile_key_title: "Media gallery default storage profile"
     media_gallery_default_storage_profile_key: "Choose which configured storage profile is used by default for managed media."
     media_gallery_processing_root_path_title: "Media gallery processing root path"

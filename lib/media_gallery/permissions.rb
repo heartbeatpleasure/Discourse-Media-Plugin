@@ -28,6 +28,10 @@ module ::MediaGallery
       list_setting(SiteSetting.media_gallery_allowed_uploader_groups).map(&:downcase)
     end
 
+    def blocked_groups
+      list_setting(SiteSetting.media_gallery_blocked_groups).map(&:downcase)
+    end
+
     def allowed_tags
       MediaGallery::TextSanitizer.tag_list(
         list_setting(SiteSetting.media_gallery_allowed_tags),
@@ -36,22 +40,42 @@ module ::MediaGallery
       )
     end
 
+    def user_in_any_group?(user, groups)
+      return false if user.nil? || groups.blank?
+
+      user.groups.where("lower(name) IN (?)", groups).exists?
+    end
+
+    # A blocked group is an explicit staff/admin decision and takes precedence over
+    # viewer/uploader groups for regular users. Staff/admin are kept unblocked so
+    # they can always recover access and manage the setting.
+    def access_blocked?(guardian)
+      return false unless enabled?
+      user = guardian&.user
+      return false if user.nil?
+      return false if user.admin? || user.staff?
+
+      user_in_any_group?(user, blocked_groups)
+    end
+
     # Members-only: always requires a logged-in user.
     def can_view?(guardian)
       return false unless enabled?
       user = guardian&.user
       return false if user.nil?
+      return false if access_blocked?(guardian)
 
       groups = viewer_groups
       return true if groups.blank?
 
-      user.groups.where("lower(name) IN (?)", groups).exists?
+      user_in_any_group?(user, groups)
     end
 
     def can_upload?(guardian)
       return false unless enabled?
       user = guardian&.user
       return false if user.nil?
+      return false if access_blocked?(guardian)
 
       # Avoid relying on Guardian internal helper methods that may change across Discourse versions.
       return true if user.admin? || user.staff?
@@ -59,7 +83,7 @@ module ::MediaGallery
       groups = uploader_groups
       return true if groups.blank?
 
-      user.groups.where("lower(name) IN (?)", groups).exists?
+      user_in_any_group?(user, groups)
     end
   end
 end
