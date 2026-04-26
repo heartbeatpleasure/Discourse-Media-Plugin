@@ -10,5 +10,11 @@ module ::MediaGallery
       # Theme component renders the Ember route + template.
       render layout: "application"
     end
+
+    private
+
+    def ensure_can_view
+      raise Discourse::NotFound unless MediaGallery::Permissions.can_view?(guardian)
+    end
   end
 end
