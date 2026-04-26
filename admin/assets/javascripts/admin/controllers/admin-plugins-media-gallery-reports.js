@@ -47,11 +47,11 @@ function decisionLabel(value) {
     case "accept_hide":
       return "Accepted / hidden";
     case "accept_delete_asset":
-      return "Accepted / asset deleted";
+      return "Accepted / files deleted";
     case "reject":
       return "Rejected";
     case "resolve":
-      return "Resolved";
+      return "Resolved without action";
     default:
       return "—";
   }
@@ -111,6 +111,51 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     return !this.hasSelectedReport || !this.selectedIsOpen || this.isReviewing;
   }
 
+  get selectedOwnerAccess() {
+    return this.selectedReport?.owner_access || {};
+  }
+
+  get selectedOwnerBlocked() {
+    return !!this.selectedOwnerAccess?.blocked;
+  }
+
+  get ownerBlockDisabled() {
+    return !this.hasSelectedReport || this.isReviewing || !this.selectedOwnerAccess?.can_quick_block;
+  }
+
+  get ownerUnblockDisabled() {
+    return !this.hasSelectedReport || this.isReviewing || !this.selectedOwnerAccess?.can_quick_unblock;
+  }
+
+  get ownerAccessHelp() {
+    const state = this.selectedOwnerAccess;
+    if (!state?.username) {
+      return "The media owner could not be found.";
+    }
+    if (state.blocked) {
+      return `${state.username} is currently blocked from viewing and uploading media.`;
+    }
+    if (state.can_quick_block) {
+      return `Block ${state.username} from viewing and uploading media by adding them to the configured quick block group.`;
+    }
+    if (!state.quick_block_group_name) {
+      return "Configure the Media gallery quick block group setting before using this action.";
+    }
+    if (state.reason === "media_owner_is_staff") {
+      return "Staff and admin users cannot be blocked from media with this action.";
+    }
+    return "The quick block action is not available for this owner right now.";
+  }
+
+  get actionHelpItems() {
+    return [
+      { label: "Accept / Hide asset", text: "Marks the report as accepted and hides the media item from normal users. The asset files remain stored." },
+      { label: "Accept / Delete asset", text: "Marks the report as accepted, hides the media item, deletes stored asset files, and keeps the audit snapshot/report history." },
+      { label: "Resolve without action", text: "Closes the report without accepting or rejecting it. If this report auto-hidden the item, the item is restored." },
+      { label: "Reject report", text: "Closes the report as rejected. If this report auto-hidden the item, the item is restored." },
+    ];
+  }
+
   get noticeClass() {
     return this.noticeTone === "danger" ? "mg-reports__flash is-danger" : "mg-reports__flash is-success";
   }
@@ -124,7 +169,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         isSelected: report?.id === this.selectedReportId,
         createdAtLabel: formatDateTime(report?.created_at),
         reviewedAtLabel: formatDateTime(report?.reviewed_at),
-        statusLabel: titleize(status),
+        statusLabel: status === "open" ? "Open" : "Closed",
+        statusDetailLabel: status === "open" ? "Needs review" : titleize(status),
         decisionLabel: decisionLabel(report?.decision),
         mediaTitle: media.title || report?.item_snapshot?.title || "Untitled media",
         mediaPublicId: media.public_id || report?.item_snapshot?.public_id || "—",
@@ -132,17 +178,16 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         mediaCreatedAt: formatDateTime(media.created_at || report?.item_snapshot?.created_at),
         mediaTypeLabel: titleize(media.media_type || report?.item_snapshot?.media_type),
         reporterLabel: report?.reporter_username ? `${report.reporter_username} (TL${report.reporter_trust_level ?? "—"})` : "—",
-        statusBadgeClass:
-          status === "open"
-            ? "is-warning"
-            : status === "accepted"
-              ? "is-danger"
-              : status === "rejected"
-                ? ""
-                : "is-success",
+        statusBadgeClass: status === "open" ? "is-warning" : "is-success",
+        statusDetailBadgeClass:
+          status === "accepted"
+            ? "is-danger"
+            : status === "resolved"
+              ? "is-success"
+              : "",
         hiddenLabel: media.hidden ? "Hidden" : "Visible",
         hiddenBadgeClass: media.hidden ? "is-danger" : "is-success",
-        assetLabel: media.asset_deleted ? "Asset deleted" : "Asset retained",
+        assetLabel: media.asset_deleted ? "Files deleted" : "Files present",
         assetBadgeClass: media.asset_deleted ? "is-danger" : "",
       };
     });
@@ -151,17 +196,17 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   get selectedSnapshotRows() {
     const snapshot = this.selectedReport?.item_snapshot || {};
     return [
-      { label: "Public ID", value: snapshot.public_id || "—" },
+      { label: "Public ID", value: snapshot.public_id || "—", wide: true },
       { label: "Title", value: snapshot.title || "—" },
       { label: "Uploader", value: snapshot.uploader_username ? `${snapshot.uploader_username} (#${snapshot.uploader_user_id || "—"})` : "—" },
       { label: "Media type", value: titleize(snapshot.media_type) || "—" },
       { label: "File contains", value: titleize(snapshot.gender) || "—" },
-      { label: "Original filename", value: snapshot.original_filename || "—" },
-      { label: "Original SHA1", value: snapshot.original_upload_sha1 || "—" },
+      { label: "Source filename", value: snapshot.source_filename || snapshot.original_filename || "—" },
+      { label: "Source SHA1", value: snapshot.original_upload_sha1 || "—" },
       { label: "Processed SHA1", value: snapshot.processed_upload_sha1 || "—" },
-      { label: "Original size", value: formatBytes(snapshot.filesize_original_bytes || snapshot.original_upload_filesize) },
+      { label: "Source size", value: formatBytes(snapshot.filesize_original_bytes || snapshot.original_upload_filesize) },
       { label: "Processed size", value: formatBytes(snapshot.filesize_processed_bytes || snapshot.processed_upload_filesize) },
-      { label: "Storage", value: [snapshot.managed_storage_backend, snapshot.managed_storage_profile].filter(Boolean).join(" / ") || "—" },
+      { label: "Storage", value: [snapshot.managed_storage_backend, snapshot.managed_storage_profile_name || snapshot.managed_storage_profile].filter(Boolean).join(" / ") || "—" },
     ];
   }
 
@@ -288,7 +333,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
 
     if (decision === "accept_delete_asset") {
       const ok = window.confirm(
-        "Delete the underlying asset files for this media item? The report and media audit record will be kept, but the file itself will be removed."
+        "Delete the stored asset files for this media item? The report, media snapshot, checksum data, and audit history will be kept, but the playable/viewable files will be removed."
       );
       if (!ok) {
         return;
@@ -313,6 +358,46 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       }
     } catch (error) {
       this.noticeMessage = error?.message || "Report review failed.";
+      this.noticeTone = "danger";
+    } finally {
+      this.isReviewing = false;
+    }
+  }
+
+  @action
+  async toggleOwnerBlock(action) {
+    const report = this.selectedReport;
+    if (!report?.id || this.isReviewing) {
+      return;
+    }
+
+    const isBlock = action === "block";
+    if (isBlock) {
+      const ok = window.confirm("Block this media owner from viewing and uploading media?");
+      if (!ok) {
+        return;
+      }
+    }
+
+    this.isReviewing = true;
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const endpoint = isBlock ? "block-owner" : "unblock-owner";
+      const data = await this._fetchJson(`/admin/plugins/media-gallery/reports/${encodeURIComponent(report.id)}/${endpoint}`, {
+        method: "POST",
+        body: JSON.stringify({ admin_note: this.reviewNote }),
+      });
+      this.noticeMessage = data?.message || "Owner access updated.";
+      this.noticeTone = "success";
+      this.reviewNote = "";
+      await this.loadReports();
+      if (data?.report?.id) {
+        this.selectedReportId = data.report.id;
+      }
+    } catch (error) {
+      this.noticeMessage = error?.message || "Owner access update failed.";
       this.noticeTone = "danger";
     } finally {
       this.isReviewing = false;

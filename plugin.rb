@@ -116,6 +116,8 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
     get "/admin/plugins/media-gallery/reports" => "media_gallery/admin_reports#index", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/review" => "media_gallery/admin_reports#review", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/reports/:report_id/block-owner" => "media_gallery/admin_reports#block_owner", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/reports/:report_id/unblock-owner" => "media_gallery/admin_reports#unblock_owner", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/profiles" => "media_gallery/admin_storage#profiles", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/health" => "media_gallery/admin_storage#health", defaults: { format: :json }
     get "/admin/plugins/media-gallery/logs" => "media_gallery/admin_logs#index", defaults: { format: :json }

@@ -191,6 +191,8 @@ en:
     media_gallery_reports_enabled: "Allow users with media view access to report media items for staff review."
     media_gallery_report_auto_hide_groups_title: "Media gallery report auto-hide groups"
     media_gallery_report_auto_hide_groups: "Groups or trust levels whose reports immediately hide the media item until staff review. Use names separated by |, comma, or new lines. Supports staff and trust_level_4."
+    media_gallery_report_notify_group_title: "Media gallery report notification group"
+    media_gallery_report_notify_group: "Group name that receives a private message when a new media report is submitted. Leave empty to disable report notifications. Default is staff."
     media_gallery_blocked_groups_title: "Media gallery blocked groups"
     media_gallery_blocked_groups: "Members of these groups cannot view or upload media gallery items, even if they are also in an allowed viewer or uploader group. Staff and admins are not blocked by this setting."
     media_gallery_quick_block_group_title: "Media gallery quick block group"

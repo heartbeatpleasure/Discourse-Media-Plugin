@@ -257,6 +257,63 @@ export default RouteTemplate(
         background: var(--mg-surface-alt);
       }
 
+
+
+      .mg-reports__summary-card.is-wide {
+        grid-column: 1 / -1;
+      }
+
+      .mg-reports__help-list {
+        display: grid;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+
+      .mg-reports__help-item {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        width: fit-content;
+        max-width: 100%;
+      }
+
+      .mg-reports__help-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 1px solid var(--primary-low-mid);
+        color: var(--primary-medium);
+        font-size: var(--font-down-2);
+        cursor: help;
+      }
+
+      .mg-reports__help-text {
+        position: absolute;
+        left: 0;
+        top: calc(100% + 0.35rem);
+        z-index: 20;
+        width: min(420px, calc(100vw - 3rem));
+        max-width: 80vw;
+        padding: 0.65rem 0.75rem;
+        border-radius: 10px;
+        border: 1px solid var(--primary-low);
+        background: var(--secondary);
+        color: var(--primary);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+        white-space: normal;
+        overflow-wrap: anywhere;
+        display: none;
+      }
+
+      .mg-reports__help-item:hover .mg-reports__help-text,
+      .mg-reports__help-item:focus-within .mg-reports__help-text {
+        display: block;
+      }
+
       @media (max-width: 1100px) {
         .mg-reports__grid,
         .mg-reports__filters {
@@ -293,6 +350,7 @@ export default RouteTemplate(
             <label>Status</label>
             <select value={{@controller.statusFilter}} {{on "change" @controller.onStatusFilterChange}}>
               <option value="open">Open</option>
+              <option value="closed">Closed</option>
               <option value="accepted">Accepted</option>
               <option value="rejected">Rejected</option>
               <option value="resolved">Resolved</option>
@@ -346,6 +404,7 @@ export default RouteTemplate(
                     <div class="mg-reports__subtitle">Reporter: {{report.reporterLabel}}</div>
                     <div class="mg-reports__badge-row">
                       <span class="mg-reports__badge {{report.statusBadgeClass}}">{{report.statusLabel}}</span>
+                      <span class="mg-reports__badge {{report.statusDetailBadgeClass}}">{{report.statusDetailLabel}}</span>
                       <span class="mg-reports__badge">{{report.reason_label}}</span>
                       <span class="mg-reports__badge {{report.hiddenBadgeClass}}">{{report.hiddenLabel}}</span>
                       <span class="mg-reports__badge {{report.assetBadgeClass}}">{{report.assetLabel}}</span>
@@ -399,6 +458,10 @@ export default RouteTemplate(
                 <div class="mg-reports__summary-value">{{@controller.selectedReport.reporterLabel}}</div>
               </div>
               <div class="mg-reports__summary-card">
+                <div class="mg-reports__summary-label">Uploader</div>
+                <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaUploader}}</div>
+              </div>
+              <div class="mg-reports__summary-card">
                 <div class="mg-reports__summary-label">Reason</div>
                 <div class="mg-reports__summary-value">{{@controller.selectedReport.reason_label}}</div>
               </div>
@@ -424,11 +487,26 @@ export default RouteTemplate(
               <p class="mg-reports__muted" style="margin-top: 0.3rem;">This snapshot is kept for audit even if the asset files are deleted.</p>
               <div class="mg-reports__summary-grid" style="margin-top: 1rem;">
                 {{#each @controller.selectedSnapshotRows as |row|}}
-                  <div class="mg-reports__summary-card">
+                  <div class="mg-reports__summary-card {{if row.wide "is-wide"}}">
                     <div class="mg-reports__summary-label">{{row.label}}</div>
                     <div class="mg-reports__summary-value">{{row.value}}</div>
                   </div>
                 {{/each}}
+              </div>
+            </section>
+
+
+
+            <section class="mg-reports__section" style="margin-top: 1rem;">
+              <h3>Owner access</h3>
+              <p class="mg-reports__muted" style="margin-top: 0.35rem;">{{@controller.ownerAccessHelp}}</p>
+              <div class="mg-reports__actions" style="margin-top: 1rem;">
+                <button class="btn btn-danger" type="button" disabled={{@controller.ownerBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "block")}}>
+                  Block owner from media
+                </button>
+                <button class="btn" type="button" disabled={{@controller.ownerUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "unblock")}}>
+                  Unblock owner
+                </button>
               </div>
             </section>
 
@@ -438,6 +516,16 @@ export default RouteTemplate(
                 <div class="mg-reports__field" style="margin-top: 0.75rem;">
                   <label>Staff note</label>
                   <textarea value={{@controller.reviewNote}} placeholder="Optional note for the audit trail" {{on "input" @controller.onReviewNote}}></textarea>
+                </div>
+
+                <div class="mg-reports__help-list">
+                  {{#each @controller.actionHelpItems as |help|}}
+                    <div class="mg-reports__help-item">
+                      <span>{{help.label}}</span>
+                      <span class="mg-reports__help-icon" tabindex="0">i</span>
+                      <span class="mg-reports__help-text">{{help.text}}</span>
+                    </div>
+                  {{/each}}
                 </div>
 
                 <div class="mg-reports__actions" style="margin-top: 1rem;">

@@ -917,3 +917,7 @@ plugins:
   media_gallery_report_auto_hide_groups:
     default: "staff|trust_level_4"
     client: false
+
+  media_gallery_report_notify_group:
+    default: "staff"
+    client: false

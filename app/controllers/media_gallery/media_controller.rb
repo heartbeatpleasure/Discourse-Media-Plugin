@@ -1081,21 +1081,34 @@ module ::MediaGallery
       }.compact
     end
 
-    def find_duplicate_upload_match(upload)
-      identity = upload_identity_for_duplicate_detection(upload)
-      sha1 = identity["sha1"].to_s
-      filesize = identity["filesize"].to_i
-      return nil if sha1.blank? || filesize <= 0
+def find_duplicate_upload_match(upload)
+  identity = upload_identity_for_duplicate_detection(upload)
+  sha1 = identity["sha1"].to_s
+  filesize = identity["filesize"].to_i
+  return nil if sha1.blank? || filesize <= 0
 
-      MediaGallery::MediaItem
-        .joins("INNER JOIN uploads media_gallery_original_uploads ON media_gallery_original_uploads.id = media_gallery_media_items.original_upload_id")
-        .where("media_gallery_original_uploads.sha1 = ? AND media_gallery_original_uploads.filesize = ?", sha1, filesize)
-        .order(created_at: :asc, id: :asc)
-        .first
-    rescue => e
-      Rails.logger.warn("[media_gallery] duplicate check failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
-      nil
-    end
+  # Prefer the original upload relation when it is still present, but also
+  # fall back to the media metadata written at registration time. Processed
+  # media can be watermarked/transcoded/HLS, so duplicate detection must use
+  # the source upload identity, not the processed output identity.
+  relation_match = MediaGallery::MediaItem
+    .joins("INNER JOIN uploads media_gallery_original_uploads ON media_gallery_original_uploads.id = media_gallery_media_items.original_upload_id")
+    .where("media_gallery_original_uploads.sha1 = ? AND media_gallery_original_uploads.filesize = ?", sha1, filesize)
+    .order(created_at: :asc, id: :asc)
+    .first
+
+  return relation_match if relation_match.present?
+
+  MediaGallery::MediaItem
+    .where("extra_metadata -> 'duplicate_detection' ->> 'source_sha1' = ?", sha1)
+    .where("extra_metadata -> 'duplicate_detection' ->> 'source_filesize' ~ ?", "^[0-9]+$")
+    .where("(extra_metadata -> 'duplicate_detection' ->> 'source_filesize')::bigint = ?", filesize)
+    .order(created_at: :asc, id: :asc)
+    .first
+rescue => e
+  Rails.logger.warn("[media_gallery] duplicate check failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+  nil
+end
 
     def duplicate_item_visible_to_current_user?(item)
       return false if item.blank?
@@ -1296,10 +1309,46 @@ module ::MediaGallery
           message: reason,
           details: { reason: reason, auto_hidden: auto_hidden }
         )
+        notify_media_report_group(item, report: report, reason: reason, auto_hidden: auto_hidden)
       end
 
       { duplicate: duplicate, auto_hidden: auto_hidden, report: report }
     end
+
+def notify_media_report_group(item, report:, reason:, auto_hidden: false)
+  group_name = ::MediaGallery::TextSanitizer.plain_text(
+    SiteSetting.media_gallery_report_notify_group,
+    max_length: 100,
+    allow_newlines: false
+  ).to_s.strip
+  return if group_name.blank?
+
+  report_id = report[:id].to_s.presence || report["id"].to_s.presence
+  admin_url = Discourse.base_url + "/admin/plugins/media-gallery-reports"
+  title = "Media report: #{item.title.to_s.presence || item.public_id}"
+  raw = <<~MD
+    A media item has been reported and needs staff review.
+
+    Media: #{item.title.to_s.presence || "Untitled media"}
+    Public ID: #{item.public_id}
+    Reporter: #{current_user.username}
+    Reason: #{media_report_reason_options.find { |entry| entry[:id] == reason }&.dig(:label).to_s.presence || reason}
+    Auto-hidden: #{auto_hidden ? "yes" : "no"}
+    Report ID: #{report_id}
+
+    Review it here: #{admin_url}
+  MD
+
+  ::PostCreator.create!(
+    Discourse.system_user,
+    target_group_names: [group_name],
+    archetype: Archetype.private_message,
+    title: title.truncate(200),
+    raw: raw
+  )
+rescue => e
+  Rails.logger.warn("[media_gallery] report notification failed item_id=#{item&.id} group=#{group_name}: #{e.class}: #{e.message}")
+end
 
     def build_media_report_hash(item, reason:, message:, at:)
       {
@@ -1317,48 +1366,67 @@ module ::MediaGallery
       }.compact
     end
 
-    def media_report_item_snapshot(item)
-      original = item.original_upload
-      processed = item.processed_upload
-      thumbnail = item.thumbnail_upload
-      {
-        "media_item_id" => item.id,
-        "public_id" => item.public_id.to_s,
-        "title" => item.title.to_s,
-        "description" => item.description.to_s.presence,
-        "media_type" => item.media_type.to_s.presence,
-        "gender" => item.gender.to_s.presence,
-        "tags" => Array(item.tags).map(&:to_s),
-        "status" => item.status.to_s,
-        "uploader_user_id" => item.user_id,
-        "uploader_username" => item.user&.username.to_s.presence,
-        "created_at" => item.created_at&.iso8601,
-        "updated_at" => item.updated_at&.iso8601,
-        "filesize_original_bytes" => item.filesize_original_bytes,
-        "filesize_processed_bytes" => item.filesize_processed_bytes,
-        "original_upload_id" => item.original_upload_id,
-        "processed_upload_id" => item.processed_upload_id,
-        "thumbnail_upload_id" => item.thumbnail_upload_id,
-        "original_upload_sha1" => original&.sha1.to_s.presence,
-        "processed_upload_sha1" => processed&.sha1.to_s.presence,
-        "thumbnail_upload_sha1" => thumbnail&.sha1.to_s.presence,
-        "original_upload_filesize" => original&.filesize,
-        "processed_upload_filesize" => processed&.filesize,
-        "thumbnail_upload_filesize" => thumbnail&.filesize,
-        "original_filename" => original&.original_filename.to_s.presence || processed&.original_filename.to_s.presence,
-        "managed_storage_backend" => item.managed_storage_backend.to_s.presence,
-        "managed_storage_profile" => item.managed_storage_profile.to_s.presence,
-        "delivery_mode" => item.delivery_mode.to_s.presence,
-        "storage_manifest" => item.storage_manifest_hash,
-      }.compact
-    rescue => e
-      Rails.logger.warn("[media_gallery] report snapshot failed item_id=#{item&.id}: #{e.class}: #{e.message}")
-      {
-        "media_item_id" => item&.id,
-        "public_id" => item&.public_id.to_s,
-        "title" => item&.title.to_s,
-      }.compact
-    end
+def media_report_item_snapshot(item)
+  original = item.original_upload
+  processed = item.processed_upload
+  thumbnail = item.thumbnail_upload
+  meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
+  duplicate_identity = meta["duplicate_detection"].is_a?(Hash) ? meta["duplicate_detection"] : {}
+  storage_profile = item.managed_storage_profile.to_s.presence
+  {
+    "media_item_id" => item.id,
+    "public_id" => item.public_id.to_s,
+    "title" => item.title.to_s,
+    "description" => item.description.to_s.presence,
+    "media_type" => item.media_type.to_s.presence,
+    "gender" => item.gender.to_s.presence,
+    "tags" => Array(item.tags).map(&:to_s),
+    "status" => item.status.to_s,
+    "uploader_user_id" => item.user_id,
+    "uploader_username" => item.user&.username.to_s.presence,
+    "created_at" => item.created_at&.iso8601,
+    "updated_at" => item.updated_at&.iso8601,
+    "filesize_original_bytes" => item.filesize_original_bytes.presence || duplicate_identity["source_filesize"],
+    "filesize_processed_bytes" => item.filesize_processed_bytes,
+    "original_upload_id" => item.original_upload_id,
+    "processed_upload_id" => item.processed_upload_id,
+    "thumbnail_upload_id" => item.thumbnail_upload_id,
+    "original_upload_sha1" => original&.sha1.to_s.presence || duplicate_identity["source_sha1"].to_s.presence,
+    "processed_upload_sha1" => processed&.sha1.to_s.presence,
+    "thumbnail_upload_sha1" => thumbnail&.sha1.to_s.presence,
+    "original_upload_filesize" => original&.filesize || duplicate_identity["source_filesize"],
+    "processed_upload_filesize" => processed&.filesize,
+    "thumbnail_upload_filesize" => thumbnail&.filesize,
+    "source_filename" => duplicate_identity["source_original_filename"].to_s.presence || original&.original_filename.to_s.presence || processed&.original_filename.to_s.presence,
+    "managed_storage_backend" => item.managed_storage_backend.to_s.presence,
+    "managed_storage_profile" => storage_profile,
+    "managed_storage_profile_name" => media_gallery_storage_profile_name(storage_profile),
+    "delivery_mode" => item.delivery_mode.to_s.presence,
+    "storage_manifest" => item.storage_manifest_hash,
+  }.compact
+rescue => e
+  Rails.logger.warn("[media_gallery] report snapshot failed item_id=#{item&.id}: #{e.class}: #{e.message}")
+  {
+    "media_item_id" => item&.id,
+    "public_id" => item&.public_id.to_s,
+    "title" => item&.title.to_s,
+  }.compact
+end
+
+def media_gallery_storage_profile_name(profile_key)
+  case profile_key.to_s
+  when "local"
+    SiteSetting.media_gallery_local_profile_name.to_s.presence || "Local storage"
+  when "s3_1"
+    SiteSetting.media_gallery_s3_profile_name.to_s.presence || "S3 profile 1"
+  when "s3_2"
+    SiteSetting.media_gallery_target_s3_profile_name.to_s.presence || "S3 profile 2"
+  when "s3_3"
+    SiteSetting.media_gallery_target_s3_2_profile_name.to_s.presence || "S3 profile 3"
+  else
+    profile_key.to_s.presence
+  end
+end
 
     def public_media_report_payload(report)
       return {} unless report.is_a?(Hash)

@@ -52,7 +52,7 @@ module ::MediaGallery
         end
 
         now = Time.now.utc.iso8601
-        report["status"] = decision == "reject" ? "rejected" : "accepted"
+        report["status"] = decision == "reject" ? "rejected" : (decision == "resolve" ? "resolved" : "accepted")
         report["decision"] = decision
         report["reviewed_at"] = now
         report["reviewed_by_user_id"] = current_user.id
@@ -70,10 +70,11 @@ module ::MediaGallery
           apply_visibility!(meta, item, hidden: true, reason: "Report accepted by staff; asset deleted.", at: now)
           append_management_log!(meta, action: "report_accept_delete_asset", item: item, note: note, changes: { "hidden" => [item.admin_hidden?, true], "asset_deleted" => [false, true], "report_id" => [nil, report_id] })
         when "reject"
-          append_management_log!(meta, action: "report_reject", item: item, note: note, changes: { "report_id" => [nil, report_id] })
+          restore_auto_hidden_media_if_needed!(meta, item, report, at: now, reason: "Report rejected by staff.")
+          append_management_log!(meta, action: "report_reject", item: item, note: note, changes: { "report_id" => [nil, report_id], "auto_hidden_restored" => [nil, auto_hidden_restored?(report)] })
         when "resolve"
-          report["status"] = "resolved"
-          append_management_log!(meta, action: "report_resolve", item: item, note: note, changes: { "report_id" => [nil, report_id] })
+          restore_auto_hidden_media_if_needed!(meta, item, report, at: now, reason: "Report resolved without action by staff.")
+          append_management_log!(meta, action: "report_resolve", item: item, note: note, changes: { "report_id" => [nil, report_id], "auto_hidden_restored" => [nil, auto_hidden_restored?(report)] })
         end
 
         meta[REPORTS_KEY] = reports
@@ -115,6 +116,70 @@ module ::MediaGallery
       render_json_error("report_review_failed", status: 422, message: "Report review failed. Please try again.")
     end
 
+
+def block_owner
+  item = find_item_by_report_id!(safe_report_id(params[:report_id]))
+  owner = item.user
+  return render_json_error("media_owner_not_found", status: 422, message: "The media owner could not be found.") if owner.blank?
+
+  group = quick_block_group
+  state = owner_media_access_payload(owner, group: group)
+  return render_owner_access_error(state[:reason]) unless state[:can_quick_block]
+
+  note = ::MediaGallery::TextSanitizer.plain_text(params[:admin_note], max_length: 2000, allow_newlines: true).presence
+  ::GroupUser.find_or_create_by!(group_id: group.id, user_id: owner.id)
+  owner.reload
+
+  item.with_lock do
+    meta = metadata_for(item)
+    append_owner_access_log!(meta, item, owner: owner, action: "block_owner_from_report", note: note, group: group, from_blocked: false, to_blocked: true)
+    item.update_columns(extra_metadata: meta, updated_at: Time.now)
+  end
+
+  ::MediaGallery::OperationLogger.warn(
+    "admin_media_owner_blocked_from_report",
+    item: item,
+    operation: "block_owner_from_report",
+    data: { owner_user_id: owner.id, owner_username: owner.username, group: group.name, requested_by: current_user.username, note_present: note.present? }
+  )
+
+  render_json_dump(ok: true, report: report_payload_for_current_item(item, params[:report_id]), owner_access: owner_media_access_payload(owner), message: "#{owner.username} has been blocked from the media library.")
+rescue => e
+  Rails.logger.error("[media_gallery] report owner block failed report_id=#{params[:report_id]} request_id=#{request.request_id}: #{e.class}: #{e.message}")
+  render_json_error("block_owner_failed", status: 422, message: "The media owner could not be blocked. Please try again.")
+end
+
+def unblock_owner
+  item = find_item_by_report_id!(safe_report_id(params[:report_id]))
+  owner = item.user
+  return render_json_error("media_owner_not_found", status: 422, message: "The media owner could not be found.") if owner.blank?
+
+  group = quick_block_group
+  state = owner_media_access_payload(owner, group: group)
+  return render_owner_access_error(state[:reason]) unless state[:can_quick_unblock]
+
+  note = ::MediaGallery::TextSanitizer.plain_text(params[:admin_note], max_length: 2000, allow_newlines: true).presence
+  ::GroupUser.where(group_id: group.id, user_id: owner.id).destroy_all
+  owner.reload
+
+  item.with_lock do
+    meta = metadata_for(item)
+    append_owner_access_log!(meta, item, owner: owner, action: "unblock_owner_from_report", note: note, group: group, from_blocked: true, to_blocked: false)
+    item.update_columns(extra_metadata: meta, updated_at: Time.now)
+  end
+
+  ::MediaGallery::OperationLogger.info(
+    "admin_media_owner_unblocked_from_report",
+    item: item,
+    operation: "unblock_owner_from_report",
+    data: { owner_user_id: owner.id, owner_username: owner.username, group: group.name, requested_by: current_user.username, note_present: note.present? }
+  )
+
+  render_json_dump(ok: true, report: report_payload_for_current_item(item, params[:report_id]), owner_access: owner_media_access_payload(owner), message: "#{owner.username} has been removed from the media quick block group.")
+rescue => e
+  Rails.logger.error("[media_gallery] report owner unblock failed report_id=#{params[:report_id]} request_id=#{request.request_id}: #{e.class}: #{e.message}")
+  render_json_error("unblock_owner_failed", status: 422, message: "The media owner could not be unblocked. Please try again.")
+end
     private
 
     def report_scope
@@ -149,7 +214,8 @@ module ::MediaGallery
         reviewed_by_username: report["reviewed_by_username"].to_s.presence,
         review_note: report["review_note"].to_s.presence,
         media: item_summary_payload(item, snapshot: snapshot),
-        item_snapshot: snapshot_payload(snapshot),
+        item_snapshot: snapshot_payload(snapshot, item: item),
+        owner_access: owner_media_access_payload(item.user),
         delete_summary: report["delete_summary"].is_a?(Hash) ? report["delete_summary"] : nil,
       }.compact
     end
@@ -173,10 +239,10 @@ module ::MediaGallery
       }.compact
     end
 
-    def snapshot_payload(snapshot)
+    def snapshot_payload(snapshot, item: nil)
       return {} unless snapshot.is_a?(Hash)
 
-      snapshot.slice(
+      payload = snapshot.slice(
         "public_id",
         "title",
         "description",
@@ -196,15 +262,45 @@ module ::MediaGallery
         "processed_upload_sha1",
         "thumbnail_upload_sha1",
         "original_filename",
+        "source_filename",
         "managed_storage_backend",
         "managed_storage_profile",
+        "managed_storage_profile_name",
         "delivery_mode"
       )
+
+      if item.present?
+        meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
+        duplicate_identity = meta["duplicate_detection"].is_a?(Hash) ? meta["duplicate_detection"] : {}
+        payload["original_upload_sha1"] ||= duplicate_identity["source_sha1"].to_s.presence
+        payload["filesize_original_bytes"] ||= duplicate_identity["source_filesize"]
+        payload["original_upload_filesize"] ||= duplicate_identity["source_filesize"]
+        payload["source_filename"] ||= duplicate_identity["source_original_filename"].to_s.presence
+        payload["managed_storage_profile_name"] ||= storage_profile_name(payload["managed_storage_profile"])
+      end
+
+      payload.compact
+    end
+
+    def storage_profile_name(profile_key)
+      case profile_key.to_s
+      when "local"
+        SiteSetting.media_gallery_local_profile_name.to_s.presence || "Local storage"
+      when "s3_1"
+        SiteSetting.media_gallery_s3_profile_name.to_s.presence || "S3 profile 1"
+      when "s3_2"
+        SiteSetting.media_gallery_target_s3_profile_name.to_s.presence || "S3 profile 2"
+      when "s3_3"
+        SiteSetting.media_gallery_target_s3_2_profile_name.to_s.presence || "S3 profile 3"
+      else
+        profile_key.to_s.presence
+      end
     end
 
     def apply_status_filter(reports)
       status = params[:status].to_s.strip.presence || "open"
       return reports if status == "all"
+      return reports.reject { |report| report[:status].to_s == "open" } if status == "closed"
 
       reports.select { |report| report[:status].to_s == status }
     end
@@ -444,6 +540,113 @@ module ::MediaGallery
       deleted
     end
 
+def report_payload_for_current_item(item, report_id)
+  reports = reports_from_meta(metadata_for(item))
+  report = reports.find { |entry| entry.is_a?(Hash) && entry["id"].to_s == report_id.to_s }
+  report.present? ? report_payload_for(item, report) : nil
+end
+
+def auto_hidden_restored?(report)
+  ActiveModel::Type::Boolean.new.cast(report["auto_hidden_restored"])
+end
+
+def restore_auto_hidden_media_if_needed!(meta, item, report, at:, reason:)
+  return false unless ActiveModel::Type::Boolean.new.cast(report["auto_hidden"])
+  return false if asset_deletion_state_from_meta(meta).present?
+
+  visibility = meta[VISIBILITY_KEY].is_a?(Hash) ? meta[VISIBILITY_KEY].deep_dup : {}
+  return false unless ActiveModel::Type::Boolean.new.cast(visibility["hidden"])
+  return false unless visibility["updated_by"].to_s == "media_report_auto_hide" || visibility["reason"].to_s.include?("Auto-hidden")
+
+  apply_visibility!(meta, item, hidden: false, reason: reason, at: at)
+  report["auto_hidden_restored"] = true
+  report["auto_hidden_restored_at"] = at
+  report["auto_hidden_restored_by_username"] = current_user.username
+  true
+end
+
+def asset_deletion_state_from_meta(meta)
+  value = meta[ASSET_DELETION_KEY]
+  value.is_a?(Hash) ? value : {}
+end
+
+def quick_block_group_name
+  ::MediaGallery::TextSanitizer.plain_text(SiteSetting.media_gallery_quick_block_group, max_length: 100, allow_newlines: false).to_s.strip.presence
+end
+
+def quick_block_group
+  name = quick_block_group_name
+  return nil if name.blank?
+
+  ::Group.where("LOWER(name) = ?", name.downcase).first
+end
+
+def quick_block_group_usable?(group)
+  return false if group.blank?
+  return false if group.respond_to?(:automatic) && group.automatic
+
+  true
+end
+
+def user_member_of_group?(user, group)
+  return false if user.blank? || group.blank?
+
+  ::GroupUser.where(group_id: group.id, user_id: user.id).exists?
+end
+
+def user_member_of_named_groups?(user, names)
+  normalized = Array(names).map(&:to_s).map(&:downcase).reject(&:blank?)
+  return false if user.blank? || normalized.blank?
+
+  user.groups.where("LOWER(name) IN (?)", normalized).exists?
+end
+
+def owner_media_access_payload(user, group: nil)
+  configured_name = quick_block_group_name
+  group ||= quick_block_group
+  group_exists = group.present?
+  group_usable = quick_block_group_usable?(group)
+
+  return { user_id: nil, username: nil, quick_block_group_name: configured_name, quick_block_group_exists: group_exists, quick_block_group_usable: group_usable, user_blockable: false, blocked_by_quick_group: false, blocked_by_media_groups: false, blocked: false, can_quick_block: false, can_quick_unblock: false, reason: "media_owner_not_found" } if user.blank?
+
+  user_blockable = !(user.admin? || user.staff?)
+  quick_member = group_exists ? user_member_of_group?(user, group) : false
+  media_blocked = user_blockable && user_member_of_named_groups?(user, ::MediaGallery::Permissions.blocked_groups)
+
+  reason = nil
+  reason ||= "media_gallery_quick_block_group_not_configured" if configured_name.blank?
+  reason ||= "media_gallery_quick_block_group_not_found" if configured_name.present? && !group_exists
+  reason ||= "media_gallery_quick_block_group_not_usable" if group_exists && !group_usable
+  reason ||= "media_owner_is_staff" unless user_blockable
+
+  { user_id: user.id, username: user.username, quick_block_group_name: configured_name, quick_block_group_exists: group_exists, quick_block_group_usable: group_usable, user_blockable: user_blockable, blocked_by_quick_group: quick_member, blocked_by_media_groups: media_blocked, blocked: media_blocked, can_quick_block: reason.blank? && !quick_member, can_quick_unblock: reason.blank? && quick_member, reason: reason }
+end
+
+def owner_access_error_message(code)
+  case code.to_s
+  when "media_gallery_quick_block_group_not_configured"
+    "Configure the Media gallery quick block group setting before using this action."
+  when "media_gallery_quick_block_group_not_found"
+    "The configured media quick block group does not exist. Check the site setting and group name."
+  when "media_gallery_quick_block_group_not_usable"
+    "The configured media quick block group cannot be used for manual blocking. Use a regular custom group."
+  when "media_owner_is_staff"
+    "Staff and admin users cannot be blocked from media with this action."
+  when "media_owner_not_found"
+    "The media owner could not be found."
+  else
+    "The media owner access action is not available right now."
+  end
+end
+
+def render_owner_access_error(code)
+  render json: { error: owner_access_error_message(code), code: code.to_s }, status: 422
+end
+
+def append_owner_access_log!(meta, item, owner:, action:, note:, group:, from_blocked:, to_blocked:)
+  append_management_log!(meta, action: action, item: item, note: note, changes: { "owner_media_blocked" => [from_blocked, to_blocked], "owner" => [owner.username, owner.username], "quick_block_group" => [group.name, group.name] })
+end
+
     def review_message(decision)
       case decision
       when "accept_hide"
@@ -451,9 +654,9 @@ module ::MediaGallery
       when "accept_delete_asset"
         "Report accepted. The asset files were deleted and the audit record was kept."
       when "reject"
-        "Report rejected."
+        "Report rejected. If this report auto-hidden the asset, it has been restored."
       when "resolve"
-        "Report resolved without further action."
+        "Report resolved without further action. If this report auto-hidden the asset, it has been restored."
       else
         "Report updated."
       end
