@@ -15,7 +15,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                   only: [:index, :plugin_config, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :retry_processing, :destroy, :update]
+                   only: [:index, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :retry_processing, :destroy, :update]
 
     before_action :ensure_can_upload, only: [:create]
     before_action :ensure_secure_write_request!, only: [:create, :update, :destroy, :retry_processing, :like, :unlike, :heartbeat, :revoke]
@@ -23,7 +23,9 @@ module ::MediaGallery
 
     # NOTE: do not name this action `config` (conflicts with ActionController::Base#config)
     def plugin_config
-      wm_enabled = !!SiteSetting.media_gallery_watermark_enabled
+      can_view = MediaGallery::Permissions.can_view?(guardian)
+      can_upload = MediaGallery::Permissions.can_upload?(guardian)
+      wm_enabled = can_upload && !!SiteSetting.media_gallery_watermark_enabled
 
       choices = wm_enabled ? MediaGallery::Watermark.safe_choices_for_client(user: current_user) : []
       default_choice = wm_enabled ? MediaGallery::Watermark.default_choice_for_client(user: current_user) : nil
@@ -49,8 +51,9 @@ module ::MediaGallery
           size_percent: MediaGallery::Watermark.global_size_percent,
           margin_px: MediaGallery::Watermark.global_margin_px
         },
-        playback_overlay: MediaGallery::PlaybackOverlay.client_enabled_config,
-        upload_policy: upload_policy_payload
+        playback_overlay: can_view ? MediaGallery::PlaybackOverlay.client_enabled_config : nil,
+        permissions: media_gallery_permissions_payload,
+        upload_policy: can_upload ? upload_policy_payload : nil
       )
     end
     
@@ -1018,6 +1021,23 @@ module ::MediaGallery
 
     def ensure_can_upload
       raise Discourse::NotFound unless MediaGallery::Permissions.can_upload?(guardian)
+    end
+
+    def access_group_names_for_client(groups)
+      groups
+        .map { |g| g.to_s.strip }
+        .reject(&:blank?)
+        .uniq
+        .first(50)
+    end
+
+    def media_gallery_permissions_payload
+      {
+        can_view: MediaGallery::Permissions.can_view?(guardian),
+        can_upload: MediaGallery::Permissions.can_upload?(guardian),
+        viewer_groups: access_group_names_for_client(MediaGallery::Permissions.viewer_groups),
+        uploader_groups: access_group_names_for_client(MediaGallery::Permissions.uploader_groups)
+      }
     end
 
     def can_manage_item?(item)
