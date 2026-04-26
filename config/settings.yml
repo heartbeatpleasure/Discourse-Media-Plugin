@@ -49,6 +49,59 @@ plugins:
     type: string
     client: true
 
+
+  # Permission/access messages shown on /media-library. Plain text only.
+  # Use {groups} in the restricted messages to show the configured viewer/uploader groups.
+  media_gallery_view_restricted_title:
+    default: "Media access is limited."
+    type: string
+    client: true
+
+  media_gallery_view_restricted_message:
+    default: "You can open this page, but media items are currently available only to: {groups}. Please contact staff if you need access."
+    type: string
+    client: true
+
+  media_gallery_view_restricted_no_groups_message:
+    default: "You can open this page, but media items are not available for your account. Please contact staff if you need access."
+    type: string
+    client: true
+
+  media_gallery_upload_restricted_title:
+    default: "Upload access is limited."
+    type: string
+    client: true
+
+  media_gallery_upload_restricted_message:
+    default: "Uploading to the media library is currently available only to: {groups}. Please contact staff if you need upload access."
+    type: string
+    client: true
+
+  media_gallery_upload_restricted_no_groups_message:
+    default: "Uploading to the media library is not available for your account. Please contact staff if you need upload access."
+    type: string
+    client: true
+
+  media_gallery_blocked_view_title:
+    default: "Media access has been restricted."
+    type: string
+    client: true
+
+  media_gallery_blocked_view_message:
+    default: "Your access to the media library has been restricted by staff. Please contact staff if you have questions or think this is a mistake."
+    type: string
+    client: true
+
+  media_gallery_blocked_upload_title:
+    default: "Upload access has been restricted."
+    type: string
+    client: true
+
+  media_gallery_blocked_upload_message:
+    default: "Your access to upload to the media library has been restricted by staff. Please contact staff if you have questions or think this is a mistake."
+    type: string
+    client: true
+
   # Optional extra size limit (MB) on top of Discourse's max_attachment_size_kb. 0 = disabled.
   media_gallery_max_upload_size_mb:
     default: 0
