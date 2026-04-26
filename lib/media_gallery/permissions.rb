@@ -28,8 +28,12 @@ module ::MediaGallery
       list_setting(SiteSetting.media_gallery_allowed_uploader_groups).map(&:downcase)
     end
 
+    def quick_block_group
+      list_setting(SiteSetting.media_gallery_quick_block_group).map(&:downcase)
+    end
+
     def blocked_groups
-      list_setting(SiteSetting.media_gallery_blocked_groups).map(&:downcase)
+      (list_setting(SiteSetting.media_gallery_blocked_groups) + quick_block_group).map(&:downcase).uniq
     end
 
     def allowed_tags

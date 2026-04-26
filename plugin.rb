@@ -132,6 +132,8 @@ after_initialize do
     post "/admin/plugins/media-gallery/media-items/:public_id/clear-queued-state" => "media_gallery/admin_media_items#clear_queued_state", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/bulk-migrate" => "media_gallery/admin_media_items#bulk_migrate", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/block-owner" => "media_gallery/admin_media_items#block_owner", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/unblock-owner" => "media_gallery/admin_media_items#unblock_owner", defaults: { format: :json }
 
     # Admin-only: generate temporary personalized remux/clip downloads for testing.
     post "/admin/plugins/media-gallery/test-downloads/:public_id" => "media_gallery/admin_test_downloads#create", defaults: { format: :json }

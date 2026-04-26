@@ -216,6 +216,8 @@ module ::MediaGallery
 
       extra_metadata = params[:extra_metadata]
       extra_metadata = {} if extra_metadata.blank?
+      extra_metadata = extra_metadata.is_a?(Hash) ? extra_metadata.deep_dup : { "raw" => extra_metadata.to_s }
+      extra_metadata["upload_terms_acceptance"] = upload_terms_acceptance_payload
 
       transcode_images =
         if SiteSetting.respond_to?(:media_gallery_transcode_images_to_jpg)
@@ -241,7 +243,7 @@ module ::MediaGallery
         user_id: current_user.id,
         title: title,
         description: ::MediaGallery::TextSanitizer.plain_text(params[:description], max_length: 4000, allow_newlines: true).presence,
-        extra_metadata: (extra_metadata.is_a?(Hash) ? extra_metadata : { "raw" => extra_metadata.to_s }),
+        extra_metadata: extra_metadata,
         media_type: media_type,
         watermark_enabled: watermark_enabled,
         watermark_preset_id: watermark_preset_id,
@@ -999,6 +1001,17 @@ module ::MediaGallery
         .reject(&:blank?)
         .uniq
         .first(50)
+    end
+
+    def upload_terms_acceptance_payload
+      {
+        "accepted" => true,
+        "accepted_at" => Time.now.utc.iso8601,
+        "accepted_by_user_id" => current_user&.id,
+        "accepted_by_username" => current_user&.username,
+        "terms_url" => SiteSetting.media_gallery_upload_terms_url.to_s.strip.presence,
+        "terms_setting_key" => "media_gallery_upload_terms_url",
+      }.compact
     end
 
     def media_gallery_permissions_payload

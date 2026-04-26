@@ -72,6 +72,14 @@ function stringifyValue(value, key = "") {
     return value ? "Hidden" : "Visible";
   }
 
+  if (key === "owner_media_blocked") {
+    return value ? "Blocked" : "Allowed";
+  }
+
+  if (key === "quick_block_group") {
+    return String(value || "").trim() || "—";
+  }
+
   if (Array.isArray(value)) {
     const entries = value
       .map((entry) => String(entry || "").trim())
@@ -94,6 +102,10 @@ function formatHistoryAction(action) {
       return "Made item visible";
     case "admin_note":
       return "Added admin note";
+    case "block_owner":
+      return "Blocked owner from media";
+    case "unblock_owner":
+      return "Unblocked owner from media";
     default:
       return titleize(action || "change");
   }
@@ -120,6 +132,10 @@ function formatHistoryChanges(entry) {
         label = "The file contains";
       } else if (key === "hidden") {
         label = "Visibility";
+      } else if (key === "owner_media_blocked") {
+        label = "Owner media access";
+      } else if (key === "quick_block_group") {
+        label = "Quick block group";
       }
 
       return {
@@ -166,6 +182,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isTogglingHidden = false;
   @tracked isDeleting = false;
   @tracked isRetrying = false;
+  @tracked isBlockingOwner = false;
   @tracked availableSearchProfiles = [];
 
   searchAbortController = null;
@@ -205,6 +222,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.isTogglingHidden = false;
     this.isDeleting = false;
     this.isRetrying = false;
+    this.isBlockingOwner = false;
     this.availableSearchProfiles = [];
   }
 
@@ -309,6 +327,74 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return !this.hasSelectedItem || this.isRetrying || this.selectedItem?.status !== "failed";
   }
 
+  get ownerMediaAccess() {
+    return this.selectedItem?.owner_media_access || {};
+  }
+
+  get ownerMediaAccessLabel() {
+    const access = this.ownerMediaAccess;
+    if (!access?.user_id) {
+      return "Owner unavailable";
+    }
+    if (!access.user_blockable) {
+      return "Not blockable (staff/admin)";
+    }
+    if (access.blocked_by_quick_group) {
+      return `Blocked by ${access.quick_block_group_name || "quick block group"}`;
+    }
+    if (access.blocked_by_media_groups) {
+      return "Blocked by media blocked groups";
+    }
+    return "Allowed";
+  }
+
+  get ownerMediaAccessHelp() {
+    const access = this.ownerMediaAccess;
+    if (!access?.user_id) {
+      return "The media owner could not be found.";
+    }
+    if (!access.quick_block_group_name) {
+      return "Configure the Media gallery quick block group setting to enable quick blocking.";
+    }
+    if (!access.quick_block_group_exists) {
+      return "The configured quick block group does not exist.";
+    }
+    if (!access.quick_block_group_usable) {
+      return "Use a regular custom group for quick blocking, not an automatic system group.";
+    }
+    if (!access.user_blockable) {
+      return "Staff and admin users cannot be blocked with this action.";
+    }
+    if (access.blocked_by_quick_group) {
+      return "This removes the owner from the quick block group only.";
+    }
+    return "This adds the owner to the configured quick block group, which blocks both viewing and uploading media.";
+  }
+
+  get ownerBlockActionDisabled() {
+    const access = this.ownerMediaAccess;
+    return !(
+      this.hasSelectedItem &&
+      !this.isBlockingOwner &&
+      access?.user_id &&
+      access.quick_block_group_name &&
+      access.quick_block_group_exists &&
+      access.quick_block_group_usable &&
+      access.user_blockable
+    );
+  }
+
+  get ownerBlockButtonLabel() {
+    if (this.isBlockingOwner) {
+      return "Updating…";
+    }
+    return this.ownerMediaAccess?.blocked_by_quick_group ? "Unblock owner from media" : "Block owner from media";
+  }
+
+  get ownerBlockButtonClass() {
+    return this.ownerMediaAccess?.blocked_by_quick_group ? "btn" : "btn btn-danger";
+  }
+
   get hiddenButtonLabel() {
     return this.selectedItem?.hidden ? "Unhide item" : "Hide item";
   }
@@ -381,6 +467,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       { label: "Media type", value: titleize(item.media_type) || "—" },
       { label: "The file contains", value: genderLabel(item.gender) },
       { label: "Owner", value: item.username ? `${item.username} (#${item.user_id})` : String(item.user_id || "—") },
+      { label: "Owner media access", value: this.ownerMediaAccessLabel },
+      { label: "Upload terms", value: this.uploadTermsAcceptanceLabel(item.upload_terms_acceptance) },
       { label: "Created", value: formatDateTime(item.created_at) },
       { label: "Updated", value: formatDateTime(item.updated_at) },
       { label: "Storage", value: item.managed_storage_profile_label || item.managed_storage_profile || item.managed_storage_backend || "—" },
@@ -396,6 +484,17 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       prettyAt: formatDateTime(entry?.at),
       changeRows: formatHistoryChanges(entry),
     }));
+  }
+
+  uploadTermsAcceptanceLabel(acceptance) {
+    if (!acceptance?.accepted) {
+      return "Not recorded";
+    }
+
+    const acceptedAt = formatDateTime(acceptance.accepted_at);
+    const username = String(acceptance.accepted_by_username || "").trim();
+    const suffix = username ? ` by ${username}` : "";
+    return `${acceptedAt}${suffix}`;
   }
 
   async _extractError(response) {
@@ -873,6 +972,46 @@ This cannot be undone.`)) {
       this.selectionError = e?.message || String(e);
     } finally {
       this.isDeleting = false;
+    }
+  }
+
+  @action
+  async toggleOwnerMediaBlock() {
+    if (this.ownerBlockActionDisabled) {
+      return;
+    }
+
+    const access = this.ownerMediaAccess;
+    const username = String(access?.username || this.selectedItem?.username || "this user").trim();
+    const isUnblock = !!access?.blocked_by_quick_group;
+    const endpoint = isUnblock ? "unblock-owner" : "block-owner";
+    const confirmText = isUnblock
+      ? `Remove ${username} from the media quick block group?`
+      : `Block ${username} from viewing and uploading media?`;
+
+    if (!window.confirm(confirmText)) {
+      return;
+    }
+
+    this.isBlockingOwner = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/${endpoint}.json`, {
+        method: "POST",
+        body: JSON.stringify({ admin_note: this.adminNote }),
+      });
+      this.selectedItem = json?.item || this.selectedItem;
+      this._syncEditForm(this.selectedItem);
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || (isUnblock ? "Owner unblocked from media." : "Owner blocked from media.");
+      this._syncSearchResult(this.selectedItem);
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isBlockingOwner = false;
     }
   }
 

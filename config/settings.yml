@@ -22,6 +22,13 @@ plugins:
     type: list
     client: false
 
+  # Optional dedicated group used by the admin quick action "Block owner from media".
+  # Members of this group are treated as blocked in addition to media_gallery_blocked_groups.
+  media_gallery_quick_block_group:
+    default: ""
+    type: string
+    client: false
+
   # Optional URL to an "Upload Terms" topic/page. Shown next to the required authorization checkbox.
   media_gallery_upload_terms_url:
     default: ""

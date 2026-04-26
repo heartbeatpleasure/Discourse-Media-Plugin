@@ -697,6 +697,12 @@ export default RouteTemplate(
               <section class="mg-management__editor-section">
                 <h3>Actions</h3>
                 <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, add an admin note, toggle visibility, queue a retry for failed items, or remove the item.</p>
+                <div class="mg-management__summary-card" style="margin-top: 1rem;">
+                  <div class="mg-management__summary-label">Owner media access</div>
+                  <div class="mg-management__summary-value">{{@controller.ownerMediaAccessLabel}}</div>
+                  <p class="mg-management__muted" style="margin-top: 0.35rem;">{{@controller.ownerMediaAccessHelp}}</p>
+                </div>
+
                 <div class="mg-management__actions" style="margin-top: 1rem;">
                   <button class="btn btn-primary" type="button" {{on "click" @controller.saveChanges}} disabled={{@controller.saveDisabled}}>
                     {{if @controller.isSaving "Saving…" "Save changes"}}
@@ -706,6 +712,9 @@ export default RouteTemplate(
                   </button>
                   <button class="btn" type="button" {{on "click" @controller.retryProcessing}} disabled={{@controller.retryDisabled}}>
                     {{if @controller.isRetrying "Queuing…" "Retry processing"}}
+                  </button>
+                  <button class={{@controller.ownerBlockButtonClass}} type="button" {{on "click" @controller.toggleOwnerMediaBlock}} disabled={{@controller.ownerBlockActionDisabled}}>
+                    {{@controller.ownerBlockButtonLabel}}
                   </button>
                   <button class="btn btn-danger" type="button" {{on "click" @controller.deleteItem}} disabled={{@controller.deleteDisabled}}>
                     {{if @controller.isDeleting "Deleting…" "Delete item"}}
