@@ -28,6 +28,27 @@ plugins:
     type: string
     client: true
 
+  # Optional notice shown at the top of /media-library. Uses media_gallery_upload_terms_url for the guidelines link.
+  media_gallery_library_notice_enabled:
+    default: true
+    client: true
+
+  media_gallery_library_notice_title:
+    default: "Use this media library responsibly."
+    type: string
+    client: true
+
+  # Use {guidelines_link} where the media_gallery_upload_terms_url link should appear.
+  media_gallery_library_notice_body:
+    default: "Please review and follow the {guidelines_link}. Content may include visible or invisible watermarking."
+    type: string
+    client: true
+
+  media_gallery_library_notice_link_text:
+    default: "media guidelines"
+    type: string
+    client: true
+
   # Optional extra size limit (MB) on top of Discourse's max_attachment_size_kb. 0 = disabled.
   media_gallery_max_upload_size_mb:
     default: 0
