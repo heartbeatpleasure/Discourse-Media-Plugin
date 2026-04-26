@@ -27,6 +27,24 @@ function formatDateTime(value) {
   }).format(date);
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "—";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size = size / 1024;
+    unitIndex += 1;
+  }
+
+  const decimals = unitIndex === 0 || size >= 10 ? 0 : 1;
+  return `${size.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
 function titleize(value) {
   return String(value || "")
     .replace(/_/g, " ")
@@ -155,6 +173,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked statusFilter = "all";
   @tracked mediaTypeFilter = "all";
   @tracked hiddenFilter = "all";
+  @tracked duplicateFilter = "all";
   @tracked genderFilter = "all";
   @tracked limit = "50";
   @tracked sortBy = "newest";
@@ -195,6 +214,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.statusFilter = "all";
     this.mediaTypeFilter = "all";
     this.hiddenFilter = "all";
+    this.duplicateFilter = "all";
     this.genderFilter = "all";
     this.limit = "50";
     this.sortBy = "newest";
@@ -399,6 +419,44 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return this.selectedItem?.hidden ? "Unhide item" : "Hide item";
   }
 
+  get selectedDuplicateDetection() {
+    return this.selectedItem?.duplicate_detection || {};
+  }
+
+  get selectedHasPossibleDuplicate() {
+    return !!this.selectedDuplicateDetection?.possible_duplicate;
+  }
+
+  get selectedDuplicateBadgeClass() {
+    return this.selectedHasPossibleDuplicate ? "is-warning" : "";
+  }
+
+  get selectedDuplicateLabel() {
+    return this.selectedHasPossibleDuplicate ? "Possible duplicate" : "No duplicate recorded";
+  }
+
+  get selectedDuplicateDetectionRows() {
+    const detection = this.selectedDuplicateDetection || {};
+    const match = detection.match || {};
+    const matchedLabel = match.public_id
+      ? `${match.title || "Untitled media"} (${match.public_id})`
+      : "Recorded match not available";
+
+    return [
+      { label: "Matched media", value: matchedLabel },
+      { label: "Matched owner", value: match.username ? `${match.username} (#${match.user_id || "—"})` : "—" },
+      { label: "Matched created", value: formatDateTime(match.created_at) },
+      { label: "Matched status", value: match.still_exists === false ? "Deleted or no longer available" : titleize(match.status) || "—" },
+      { label: "Match method", value: detection.method === "sha1_filesize" ? "SHA1 + file size" : titleize(detection.method) || "—" },
+      { label: "Original filename", value: detection.source_original_filename || "—" },
+      { label: "File size", value: formatBytes(detection.source_filesize) },
+      { label: "SHA1", value: detection.source_sha1 || "—" },
+      { label: "Upload action", value: titleize(detection.action) || "—" },
+      { label: "Override", value: detection.override ? `Yes${detection.override_by_username ? ` by ${detection.override_by_username}` : ""}` : "No" },
+      { label: "Checked", value: formatDateTime(detection.checked_at) },
+    ];
+  }
+
 
   get noticeClass() {
     return this.noticeTone === "danger" ? "mg-management__flash is-danger" : "mg-management__flash is-success";
@@ -427,6 +485,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
               ? "is-warning"
               : "",
       visibilityBadgeClass: item?.hidden ? "is-danger" : "is-success",
+      displayDuplicate: item?.possible_duplicate ? "Possible duplicate" : "",
+      duplicateBadgeClass: item?.possible_duplicate ? "is-warning" : "",
     }));
   }
 
@@ -469,6 +529,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       { label: "Owner", value: item.username ? `${item.username} (#${item.user_id})` : String(item.user_id || "—") },
       { label: "Owner media access", value: this.ownerMediaAccessLabel },
       { label: "Upload terms", value: this.uploadTermsAcceptanceLabel(item.upload_terms_acceptance) },
+      { label: "Duplicate detection", value: this.selectedDuplicateLabel },
       { label: "Created", value: formatDateTime(item.created_at) },
       { label: "Updated", value: formatDateTime(item.updated_at) },
       { label: "Storage", value: item.managed_storage_profile_label || item.managed_storage_profile || item.managed_storage_backend || "—" },
@@ -622,6 +683,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       return false;
     }
 
+    if (this.duplicateFilter === "possible" && !item?.possible_duplicate) {
+      return false;
+    }
+
     return true;
   }
 
@@ -651,6 +716,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       has_hls: item.has_hls,
       hidden: item.hidden,
       hidden_reason: item.visibility?.reason || item.hidden_reason,
+      possible_duplicate: !!item.possible_duplicate,
+      duplicate_detection: item.duplicate_detection || {},
     };
 
     const existing = Array.isArray(this.searchResults) ? [...this.searchResults] : [];
@@ -695,6 +762,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   @action onHiddenFilterChange(event) {
     this.hiddenFilter = event?.target?.value || "all";
+  }
+
+  @action onDuplicateFilterChange(event) {
+    this.duplicateFilter = event?.target?.value || "all";
   }
 
   @action onGenderFilterChange(event) {
@@ -753,6 +824,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.statusFilter = "all";
     this.mediaTypeFilter = "all";
     this.hiddenFilter = "all";
+    this.duplicateFilter = "all";
     this.genderFilter = "all";
     this.limit = "50";
     this.sortBy = "newest";
@@ -789,6 +861,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       }
       if (this.hiddenFilter !== "all") {
         params.set("hidden", this.hiddenFilter);
+      }
+      if (this.duplicateFilter !== "all") {
+        params.set("duplicate", this.duplicateFilter);
       }
       if (this.genderFilter !== "all") {
         params.set("gender", this.genderFilter);

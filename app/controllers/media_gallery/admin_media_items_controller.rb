@@ -530,6 +530,13 @@ module ::MediaGallery
         scope = scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = false")
       end
 
+      duplicate_filter = params[:duplicate].to_s.strip
+      if duplicate_filter == "possible"
+        scope = scope.where(
+          "COALESCE((extra_metadata -> 'duplicate_detection' ->> 'duplicate_found')::boolean, false) = true OR COALESCE((extra_metadata -> 'duplicate_detection' ->> 'possible_duplicate')::boolean, false) = true"
+        )
+      end
+
       profile = params[:profile].to_s.strip
       if profile.present? && profile != "all"
         scope = scope.where(managed_storage_profile: profile)
@@ -609,6 +616,8 @@ module ::MediaGallery
         has_hls: has_hls,
         hidden: item.admin_hidden?,
         hidden_reason: visibility["reason"],
+        possible_duplicate: possible_duplicate_item?(item),
+        duplicate_detection: duplicate_detection_payload(item, resolve_match: false),
       }
     end
 
@@ -638,6 +647,7 @@ module ::MediaGallery
         visibility: visibility,
         processing: processing_metadata(item),
         upload_terms_acceptance: upload_terms_acceptance_for(item),
+        duplicate_detection: duplicate_detection_payload(item, resolve_match: true),
         owner_media_access: owner_media_access_payload(item.user),
         allowed_tags: ::MediaGallery::Permissions.allowed_tags,
         management_log: item.admin_management_log,
@@ -648,6 +658,77 @@ module ::MediaGallery
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
       value = meta["upload_terms_acceptance"]
       value.is_a?(Hash) ? value : {}
+    end
+
+    def duplicate_detection_for(item)
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
+      value = meta["duplicate_detection"]
+      value.is_a?(Hash) ? value : {}
+    end
+
+    def possible_duplicate_item?(item)
+      detection = duplicate_detection_for(item)
+      ActiveModel::Type::Boolean.new.cast(detection["possible_duplicate"]) ||
+        ActiveModel::Type::Boolean.new.cast(detection["duplicate_found"])
+    end
+
+    def duplicate_detection_payload(item, resolve_match: false)
+      detection = duplicate_detection_for(item)
+      possible = possible_duplicate_item?(item)
+      return { possible_duplicate: false } unless possible
+
+      match = duplicate_match_snapshot(detection, resolve_match: resolve_match)
+      {
+        possible_duplicate: true,
+        checked_at: detection["checked_at"].presence,
+        method: detection["method"].presence || "sha1_filesize",
+        action: detection["action"].presence || "allow",
+        override: ActiveModel::Type::Boolean.new.cast(detection["override"]),
+        override_at: detection["override_at"].presence,
+        override_by_username: detection["override_by_username"].presence,
+        source_sha1: detection["source_sha1"].presence,
+        source_filesize: detection["source_filesize"],
+        source_extension: detection["source_extension"].presence,
+        source_original_filename: detection["source_original_filename"].presence,
+        match: match,
+      }.compact
+    end
+
+    def duplicate_match_snapshot(detection, resolve_match:)
+      snapshot = detection["duplicate_item"].is_a?(Hash) ? detection["duplicate_item"].deep_dup : {}
+      snapshot["id"] ||= detection["duplicate_media_item_id"]
+      snapshot["public_id"] ||= detection["duplicate_public_id"]
+
+      return snapshot.compact unless resolve_match
+
+      match = nil
+      public_id = snapshot["public_id"].to_s.presence
+      item_id = snapshot["id"].presence
+      match = ::MediaGallery::MediaItem.includes(:user).find_by(public_id: public_id) if public_id.present?
+      match ||= ::MediaGallery::MediaItem.includes(:user).find_by(id: item_id) if item_id.present?
+
+      if match.present?
+        snapshot.merge!(
+          "id" => match.id,
+          "public_id" => match.public_id.to_s,
+          "title" => match.title.to_s,
+          "user_id" => match.user_id,
+          "username" => match.user&.username.to_s.presence,
+          "created_at" => match.created_at&.iso8601,
+          "status" => match.status.to_s,
+          "media_type" => match.media_type.to_s,
+          "original_upload_id" => match.original_upload_id,
+          "hidden" => (match.respond_to?(:admin_hidden?) ? match.admin_hidden? : nil),
+          "still_exists" => true
+        )
+      elsif public_id.present? || item_id.present?
+        snapshot["still_exists"] = false
+      end
+
+      snapshot.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] duplicate detection snapshot failed item_id=#{detection['duplicate_media_item_id']}: #{e.class}: #{e.message}")
+      snapshot.compact
     end
 
     def sanitized_admin_note

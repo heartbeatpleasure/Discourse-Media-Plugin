@@ -1076,6 +1076,7 @@ module ::MediaGallery
 
       {
         match_found: item.present?,
+        match_method: (item.present? ? "sha1_filesize" : nil),
         override_allowed: !!override_allowed,
         existing_public_id: (visible ? item&.public_id : nil),
         existing_title: (visible ? item&.title.to_s : nil),
@@ -1109,9 +1110,9 @@ module ::MediaGallery
 
     def default_duplicate_upload_message(error_code)
       if error_code.to_s == "duplicate_upload_warning"
-        "This file appears to already exist in the media library. Please check whether you really need to upload it again."
+        "This exact file appears to match an existing media item. Please check whether a separate media item is really needed before continuing."
       else
-        "This file appears to already exist in the media library and duplicate uploads are currently blocked."
+        "This exact file appears to match an existing media item, and duplicate media items are currently blocked."
       end
     end
 
@@ -1139,8 +1140,10 @@ module ::MediaGallery
 
     def duplicate_detection_metadata(upload, item, action, override)
       identity = upload_identity_for_duplicate_detection(upload)
+      now = Time.now.utc.iso8601
       payload = {
-        "checked_at" => Time.now.utc.iso8601,
+        "checked_at" => now,
+        "method" => "sha1_filesize",
         "action" => action.to_s.presence || "allow",
         "override" => !!override,
         "source_sha1" => identity["sha1"],
@@ -1148,9 +1151,31 @@ module ::MediaGallery
         "source_extension" => identity["extension"],
         "source_original_filename" => identity["original_filename"],
         "duplicate_found" => item.present?,
+        "possible_duplicate" => item.present?,
         "duplicate_media_item_id" => item&.id,
         "duplicate_public_id" => item&.public_id,
       }.compact
+
+      if override
+        payload["override_at"] = now
+        payload["override_by_user_id"] = current_user&.id
+        payload["override_by_username"] = current_user&.username
+      end
+
+      if item.present?
+        payload["duplicate_item"] = {
+          "id" => item.id,
+          "public_id" => item.public_id.to_s,
+          "title" => item.title.to_s,
+          "user_id" => item.user_id,
+          "username" => item.user&.username.to_s.presence,
+          "created_at" => item.created_at&.iso8601,
+          "status" => item.status.to_s,
+          "media_type" => item.media_type.to_s,
+          "original_upload_id" => item.original_upload_id,
+          "hidden" => (item.respond_to?(:admin_hidden?) ? item.admin_hidden? : nil),
+        }.compact
+      end
 
       payload
     end

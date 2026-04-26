@@ -167,12 +167,12 @@ plugins:
     client: false
 
   media_gallery_duplicate_upload_warning_message:
-    default: "This file appears to already exist in the media library. Please check whether you really need to upload it again."
+    default: "This exact file appears to match an existing media item. Please check whether a separate media item is really needed before continuing."
     type: string
     client: false
 
   media_gallery_duplicate_upload_block_message:
-    default: "This file appears to already exist in the media library and duplicate uploads are currently blocked."
+    default: "This exact file appears to match an existing media item, and duplicate media items are currently blocked."
     type: string
     client: false
   # Transcoding / policy

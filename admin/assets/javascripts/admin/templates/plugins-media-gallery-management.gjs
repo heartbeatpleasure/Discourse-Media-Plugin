@@ -292,6 +292,11 @@ export default RouteTemplate(
         padding: 0.95rem;
       }
 
+      .mg-management__editor-section.is-warning {
+        background: var(--tertiary-very-low);
+        border-color: var(--tertiary-low);
+      }
+
       .mg-management__summary-card {
         display: flex;
         flex-direction: column;
@@ -501,6 +506,14 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-management__field">
+            <label>Duplicates</label>
+            <select value={{@controller.duplicateFilter}} {{on "change" @controller.onDuplicateFilterChange}}>
+              <option value="all">All</option>
+              <option value="possible">Possible duplicates only</option>
+            </select>
+          </div>
+
+          <div class="mg-management__field">
             <label>The file contains</label>
             <select value={{@controller.genderFilter}} {{on "change" @controller.onGenderFilterChange}}>
               <option value="all">All</option>
@@ -588,6 +601,9 @@ export default RouteTemplate(
                       <span class="mg-management__badge">{{item.displayMediaType}}</span>
                       <span class="mg-management__badge">{{item.displayStorage}}</span>
                       <span class="mg-management__badge {{item.visibilityBadgeClass}}">{{item.displayVisibility}}</span>
+                      {{#if item.displayDuplicate}}
+                        <span class="mg-management__badge {{item.duplicateBadgeClass}}">{{item.displayDuplicate}}</span>
+                      {{/if}}
                     </div>
                   </article>
                 {{/each}}
@@ -634,6 +650,9 @@ export default RouteTemplate(
                 <span class="mg-management__badge">{{@controller.selectedDisplayMediaType}}</span>
                 <span class="mg-management__badge">{{@controller.selectedDisplayStorage}}</span>
                 <span class="mg-management__badge {{@controller.selectedVisibilityBadgeClass}}">{{if @controller.selectedItem.hidden "Hidden" "Visible"}}</span>
+                {{#if @controller.selectedHasPossibleDuplicate}}
+                  <span class="mg-management__badge {{@controller.selectedDuplicateBadgeClass}}">Possible duplicate</span>
+                {{/if}}
               </div>
             </div>
 
@@ -645,6 +664,23 @@ export default RouteTemplate(
                 </div>
               {{/each}}
             </div>
+
+            {{#if @controller.selectedHasPossibleDuplicate}}
+              <section class="mg-management__editor-section is-warning" style="margin-top: 1rem;">
+                <h3>Duplicate detection</h3>
+                <p class="mg-management__muted" style="margin-top: 0.3rem;">
+                  This item was created after an exact SHA1 + file size match with an existing media item. Review the match before deciding whether to keep, hide, or delete this item.
+                </p>
+                <div class="mg-management__summary-grid" style="margin-top: 1rem;">
+                  {{#each @controller.selectedDuplicateDetectionRows as |row|}}
+                    <div class="mg-management__summary-card">
+                      <div class="mg-management__summary-label">{{row.label}}</div>
+                      <div class="mg-management__summary-value">{{row.value}}</div>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
+            {{/if}}
 
             <div class="mg-management__editor">
               <section class="mg-management__editor-section">
