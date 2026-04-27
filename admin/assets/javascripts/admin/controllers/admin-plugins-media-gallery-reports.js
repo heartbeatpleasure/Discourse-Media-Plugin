@@ -24,6 +24,25 @@ function titleize(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+
+const GENDER_OPTIONS = [
+  { value: "male", label: "Male hearts" },
+  { value: "female", label: "Female hearts" },
+  { value: "both", label: "Both male and female hearts" },
+  { value: "non_binary", label: "Non-binary hearts" },
+  { value: "objects", label: "Heart-related objects" },
+  { value: "other", label: "Other" },
+];
+
+function genderLabel(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "—";
+  }
+
+  return GENDER_OPTIONS.find((option) => option.value === normalized)?.label || titleize(normalized);
+}
+
 function formatBytes(value) {
   const bytes = Number(value || 0);
   if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -211,7 +230,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       { label: "Title", value: snapshot.title || "—", wide: true },
       { label: "Uploader", value: snapshot.uploader_username ? `${snapshot.uploader_username} (#${snapshot.uploader_user_id || "—"})` : "—" },
       { label: "Media type", value: titleize(snapshot.media_type) || "—" },
-      { label: "File contains", value: titleize(snapshot.gender) || "—" },
+      { label: "File contains", value: genderLabel(snapshot.gender) },
       { label: "Source filename", value: snapshot.source_filename || snapshot.original_filename || "—", wide: true },
       { label: "Source SHA1", value: snapshot.original_upload_sha1 || "—", wide: true },
       { label: "Source size", value: formatBytes(snapshot.filesize_original_bytes || snapshot.original_upload_filesize) },

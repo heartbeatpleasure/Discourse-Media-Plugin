@@ -313,6 +313,74 @@ export default RouteTemplate(
         overflow-wrap: anywhere;
       }
 
+
+      .mg-management__summary-card.is-wide {
+        grid-column: 1 / -1;
+      }
+
+      .mg-management__section-title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.65rem;
+        position: relative;
+      }
+
+      .mg-management__help-item {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .mg-management__help-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.35rem;
+        height: 1.35rem;
+        border-radius: 999px;
+        border: 1px solid var(--tertiary);
+        background: var(--tertiary);
+        color: var(--secondary);
+        font-size: 0.76rem;
+        font-weight: 700;
+        line-height: 1;
+        cursor: help;
+        user-select: none;
+      }
+
+      .mg-management__help-text {
+        position: absolute;
+        right: 0;
+        bottom: calc(100% + 0.5rem);
+        z-index: 3000;
+        width: min(28rem, calc(100vw - 3rem));
+        max-width: 80vw;
+        padding: 0.75rem 0.85rem;
+        border-radius: 12px;
+        border: 1px solid var(--mg-border);
+        background: var(--secondary);
+        color: var(--primary-high);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        white-space: normal;
+        overflow-wrap: anywhere;
+        font-size: var(--font-down-1);
+        font-weight: 400;
+        line-height: 1.4;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(0.15rem);
+        transition: opacity 0.14s ease, transform 0.14s ease;
+      }
+
+      .mg-management__help-item:hover .mg-management__help-text,
+      .mg-management__help-item:focus-within .mg-management__help-text {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
       .mg-management__selected-header {
         display: grid;
         grid-template-columns: 180px minmax(0, 1fr);
@@ -666,14 +734,14 @@ export default RouteTemplate(
             </div>
 
             {{#if @controller.selectedHasPossibleDuplicate}}
-              <section class="mg-management__editor-section is-warning" style="margin-top: 1rem;">
+              <section class="mg-management__editor-section" style="margin-top: 1rem;">
                 <h3>Duplicate detection</h3>
                 <p class="mg-management__muted" style="margin-top: 0.3rem;">
                   This item was created after an exact SHA1 + file size match with an existing media item. Review the match before deciding whether to keep, hide, or delete this item.
                 </p>
                 <div class="mg-management__summary-grid" style="margin-top: 1rem;">
                   {{#each @controller.selectedDuplicateDetectionRows as |row|}}
-                    <div class="mg-management__summary-card">
+                    <div class="mg-management__summary-card {{if row.wide "is-wide"}}">
                       <div class="mg-management__summary-label">{{row.label}}</div>
                       <div class="mg-management__summary-value">{{row.value}}</div>
                     </div>
@@ -734,9 +802,16 @@ export default RouteTemplate(
                 <h3>Actions</h3>
                 <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, add an admin note, toggle visibility, queue a retry for failed items, or remove the item.</p>
                 <div class="mg-management__summary-card" style="margin-top: 1rem;">
-                  <div class="mg-management__summary-label">Owner media access</div>
-                  <div class="mg-management__summary-value">{{@controller.ownerMediaAccessLabel}}</div>
-                  <p class="mg-management__muted" style="margin-top: 0.35rem;">{{@controller.ownerMediaAccessHelp}}</p>
+                  <div class="mg-management__section-title-row">
+                    <div>
+                      <div class="mg-management__summary-label">Uploader access to media section</div>
+                      <div class="mg-management__summary-value">{{@controller.ownerMediaAccessLabel}}</div>
+                    </div>
+                    <div class="mg-management__help-item">
+                      <span class="mg-management__help-icon" tabindex="0" aria-label="Uploader access help">i</span>
+                      <div class="mg-management__help-text">{{@controller.ownerMediaAccessHelp}}</div>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="mg-management__actions" style="margin-top: 1rem;">

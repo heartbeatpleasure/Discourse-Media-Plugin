@@ -121,9 +121,9 @@ function formatHistoryAction(action) {
     case "admin_note":
       return "Added admin note";
     case "block_owner":
-      return "Blocked owner from media";
+      return "Blocked uploader from media";
     case "unblock_owner":
-      return "Unblocked owner from media";
+      return "Unblocked uploader from media";
     default:
       return titleize(action || "change");
   }
@@ -151,7 +151,7 @@ function formatHistoryChanges(entry) {
       } else if (key === "hidden") {
         label = "Visibility";
       } else if (key === "owner_media_blocked") {
-        label = "Owner media access";
+        label = "Uploader access";
       } else if (key === "quick_block_group") {
         label = "Quick block group";
       }
@@ -354,7 +354,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   get ownerMediaAccessLabel() {
     const access = this.ownerMediaAccess;
     if (!access?.user_id) {
-      return "Owner unavailable";
+      return "Uploader unavailable";
     }
     if (!access.user_blockable) {
       return "Not blockable (staff/admin)";
@@ -371,7 +371,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   get ownerMediaAccessHelp() {
     const access = this.ownerMediaAccess;
     if (!access?.user_id) {
-      return "The media owner could not be found.";
+      return "The media uploader could not be found.";
     }
     if (!access.quick_block_group_name) {
       return "Configure the Media gallery quick block group setting to enable quick blocking.";
@@ -383,12 +383,12 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       return "Use a regular custom group for quick blocking, not an automatic system group.";
     }
     if (!access.user_blockable) {
-      return "Staff and admin users cannot be blocked with this action.";
+      return "Staff and admin users cannot be blocked from the media section.";
     }
     if (access.blocked_by_quick_group) {
-      return "This removes the owner from the quick block group only.";
+      return "This removes the uploader from the quick block group only.";
     }
-    return "This adds the owner to the configured quick block group, which blocks both viewing and uploading media.";
+    return "This adds the uploader to the configured quick block group, which blocks both viewing and uploading in the media section.";
   }
 
   get ownerBlockActionDisabled() {
@@ -408,7 +408,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     if (this.isBlockingOwner) {
       return "Updating…";
     }
-    return this.ownerMediaAccess?.blocked_by_quick_group ? "Unblock owner from media" : "Block owner from media";
+    return this.ownerMediaAccess?.blocked_by_quick_group ? "Unblock" : "Block uploader from media section";
   }
 
   get ownerBlockButtonClass() {
@@ -443,14 +443,14 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       : "Recorded match not available";
 
     return [
-      { label: "Matched media", value: matchedLabel },
-      { label: "Matched owner", value: match.username ? `${match.username} (#${match.user_id || "—"})` : "—" },
+      { label: "Matched media", value: matchedLabel, wide: true },
+      { label: "Matched uploader", value: match.username ? `${match.username} (#${match.user_id || "—"})` : "—" },
       { label: "Matched created", value: formatDateTime(match.created_at) },
       { label: "Matched status", value: match.still_exists === false ? "Deleted or no longer available" : titleize(match.status) || "—" },
       { label: "Match method", value: detection.method === "sha1_filesize" ? "SHA1 + file size" : titleize(detection.method) || "—" },
-      { label: "Original filename", value: detection.source_original_filename || "—" },
+      { label: "Original filename", value: detection.source_original_filename || "—", wide: true },
       { label: "File size", value: formatBytes(detection.source_filesize) },
-      { label: "SHA1", value: detection.source_sha1 || "—" },
+      { label: "SHA1", value: detection.source_sha1 || "—", wide: true },
       { label: "Upload action", value: titleize(detection.action) || "—" },
       { label: "Override", value: detection.override ? `Yes${detection.override_by_username ? ` by ${detection.override_by_username}` : ""}` : "No" },
       { label: "Checked", value: formatDateTime(detection.checked_at) },
@@ -526,8 +526,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       { label: "Status", value: titleize(item.status) || "—" },
       { label: "Media type", value: titleize(item.media_type) || "—" },
       { label: "The file contains", value: genderLabel(item.gender) },
-      { label: "Owner", value: item.username ? `${item.username} (#${item.user_id})` : String(item.user_id || "—") },
-      { label: "Owner media access", value: this.ownerMediaAccessLabel },
+      { label: "Uploader", value: item.username ? `${item.username} (#${item.user_id})` : String(item.user_id || "—") },
+      { label: "Uploader access", value: this.ownerMediaAccessLabel },
       { label: "Upload terms", value: this.uploadTermsAcceptanceLabel(item.upload_terms_acceptance) },
       { label: "Duplicate detection", value: this.selectedDuplicateLabel },
       { label: "Created", value: formatDateTime(item.created_at) },
@@ -1081,7 +1081,7 @@ This cannot be undone.`)) {
       this.selectedItem = json?.item || this.selectedItem;
       this._syncEditForm(this.selectedItem);
       this.noticeTone = "success";
-      this.noticeMessage = json?.message || (isUnblock ? "Owner unblocked from media." : "Owner blocked from media.");
+      this.noticeMessage = json?.message || (isUnblock ? "Uploader unblocked from media." : "Uploader blocked from media.");
       this._syncSearchResult(this.selectedItem);
     } catch (e) {
       this.selectionError = e?.message || String(e);
