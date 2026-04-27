@@ -320,6 +320,12 @@ export default RouteTemplate(
             <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runFullStorage}}>
               Run full storage check
             </button>
+            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runReconciliation}}>
+              Run storage reconciliation
+            </button>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
+              Export reconciliation
+            </button>
             <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
           </div>
         </div>
@@ -341,6 +347,29 @@ export default RouteTemplate(
             <span class="mg-health__badge {{card.badgeClass}}">{{card.severity}}</span>
           </article>
         {{/each}}
+      </section>
+
+      <section class="mg-health__panel">
+        <div class="mg-health__panel-header">
+          <div class="mg-health__panel-copy">
+            <h2>Storage reconciliation</h2>
+            <p class="mg-health__muted">Read-only reconciliation compares media records, manifests, and configured storage profiles. Cleanup is intentionally not available in this iteration.</p>
+          </div>
+          <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">Run reconciliation manually when you want to review missing assets, orphan candidates, deleted media leftovers, and invalid storage references. Export downloads the latest stored report as JSON.</span></span>
+        </div>
+
+        {{#if @controller.hasReconciliation}}
+          <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 1rem;">
+            {{#each @controller.reconciliationStatsRows as |row|}}
+              <div class="mg-health__alert-card">
+                <div class="mg-health__alert-label">{{row.label}}</div>
+                <div class="mg-health__alert-value">{{row.value}}</div>
+              </div>
+            {{/each}}
+          </div>
+        {{else}}
+          <p class="mg-health__muted" style="margin-top: 1rem;">Storage reconciliation has not been run yet.</p>
+        {{/if}}
       </section>
 
       {{#if @controller.hasAttentionIssues}}
@@ -380,6 +409,12 @@ export default RouteTemplate(
                           {{/if}}
                           {{#if example.subtitle}}
                             <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
+                          {{/if}}
+                          {{#if example.hasDetail}}
+                            <div class="mg-health__example-subtitle">{{example.detail}}</div>
+                          {{/if}}
+                          {{#if example.hasSuggestion}}
+                            <div class="mg-health__example-subtitle"><strong>Suggested action:</strong> {{example.suggestion}}</div>
                           {{/if}}
                           <div class="mg-health__example-actions">
                             {{#if example.url}}
@@ -496,6 +531,12 @@ export default RouteTemplate(
                             {{/if}}
                             {{#if example.subtitle}}
                               <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
+                            {{/if}}
+                            {{#if example.hasDetail}}
+                              <div class="mg-health__example-subtitle">{{example.detail}}</div>
+                            {{/if}}
+                            {{#if example.hasSuggestion}}
+                              <div class="mg-health__example-subtitle"><strong>Suggested action:</strong> {{example.suggestion}}</div>
                             {{/if}}
                             <div class="mg-health__example-actions">
                               {{#if example.url}}

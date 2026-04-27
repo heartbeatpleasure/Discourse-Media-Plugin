@@ -32,6 +32,27 @@ module ::MediaGallery
       render_json_error("health_unignore_failed", status: 422, message: "Could not restore this health finding. Please check Rails logs and try again.")
     end
 
+
+    def reconcile
+      ::MediaGallery::HealthCheck.run_reconciliation!
+      render_json_dump(::MediaGallery::HealthCheck.summary(full_storage: false))
+    rescue => e
+      Rails.logger.error("[media_gallery] storage reconciliation failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      render_json_error("storage_reconciliation_failed", status: 422, message: "Storage reconciliation failed. Please check Rails logs and try again.")
+    end
+
+    def reconciliation_export
+      report = ::MediaGallery::HealthCheck.last_reconciliation
+      if report.blank?
+        return render_json_error("storage_reconciliation_not_run", status: 404, message: "Run storage reconciliation before exporting a report.")
+      end
+
+      render_json_dump(reconciliation: report, exported_at: Time.zone.now.iso8601)
+    rescue => e
+      Rails.logger.error("[media_gallery] storage reconciliation export failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      render_json_error("storage_reconciliation_export_failed", status: 422, message: "Could not export the reconciliation report. Please check Rails logs and try again.")
+    end
+
     def notify_test
       result = ::MediaGallery::HealthCheck.summary(full_storage: false)
       sent = ::MediaGallery::HealthCheck.maybe_notify!(result)

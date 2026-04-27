@@ -12,6 +12,7 @@ module ::MediaGallery
     STORE_NAMESPACE = "media_gallery_health"
     LAST_ALERT_KEY = "last_alert"
     LAST_FULL_STORAGE_CHECK_KEY = "last_full_storage_check"
+    LAST_RECONCILIATION_KEY = "last_storage_reconciliation"
     IGNORED_FINDINGS_KEY = "ignored_findings"
     SEVERITY_ORDER = { "ok" => 0, "warning" => 1, "critical" => 2 }.freeze
     VALID_NOTIFY_SEVERITIES = %w[warning critical].freeze
@@ -22,6 +23,7 @@ module ::MediaGallery
 
       sections << processing_section
       sections << storage_section(full_storage: full_storage)
+      sections << reconciliation_section
       sections << settings_section
       sections << permissions_section
       sections << reports_section
@@ -41,6 +43,7 @@ module ::MediaGallery
         alert_state: last_alert_state,
         ignored_findings: ignored_findings_for_ui,
         last_full_storage_check: last_full_storage_check_summary,
+        reconciliation: last_reconciliation_summary,
       }
     rescue => e
       Rails.logger.error("[media_gallery] health summary failed: #{e.class}: #{e.message}")
@@ -80,6 +83,7 @@ module ::MediaGallery
         alert_state: last_alert_state,
         ignored_findings: ignored_findings_for_ui,
         last_full_storage_check: last_full_storage_check_summary,
+        reconciliation: last_reconciliation_summary,
       }
     end
 
@@ -315,6 +319,157 @@ module ::MediaGallery
         help: "The regular watchdog performs light storage checks and reuses the latest full storage result. Run full storage check to refresh the stored missing-file findings. Ignored findings are excluded from warning and critical status.",
         items: items
       )
+    end
+
+    def reconciliation_section
+      cached = last_reconciliation
+      if cached.blank?
+        return section(
+          id: "storage_reconciliation",
+          title: "Storage reconciliation",
+          description: "Review whether database records and storage objects still match.",
+          help: "Run storage reconciliation to detect missing assets, orphan candidates, deleted media leftovers, and invalid storage references. This first iteration is read-only and never deletes files.",
+          items: [
+            issue(
+              id: "storage_reconciliation_not_run",
+              label: "Storage reconciliation",
+              severity: "ok",
+              count: 0,
+              message: "Storage reconciliation has not been run yet.",
+              detail: "Use Run storage reconciliation to perform a bounded read-only scan. Results are cached until the next run and can be exported."
+            ),
+          ]
+        )
+      end
+
+      categories = Array(cached["categories"])
+      items = categories.map do |category|
+        all_findings = Array(category["findings"])
+        active_findings = active_reconciliation_rows(all_findings)
+        ignored_count = ignored_matching_rows(all_findings).length
+        severity = active_findings.present? ? highest_severity(active_findings.map { |row| row["severity"] || row[:severity] }) : "ok"
+        issue(
+          id: "reconciliation_#{category["id"]}",
+          label: category["title"].to_s.presence || category["id"].to_s.titleize,
+          severity: severity,
+          count: active_findings.length,
+          message: reconciliation_category_message(category, active_findings.length, ignored_count),
+          detail: reconciliation_category_detail(category, cached, ignored_count),
+          examples: active_findings.first(10),
+          metadata: { checked_at: cached["generated_at"], read_only: true, category_id: category["id"] }
+        )
+      end
+
+      if Array(cached.dig("stats", "truncated_profiles")).present?
+        items << issue(
+          id: "reconciliation_scan_truncated",
+          label: "Bounded storage scan",
+          severity: "warning",
+          count: Array(cached.dig("stats", "truncated_profiles")).length,
+          message: "One or more storage profiles reached the scan limit.",
+          detail: "Profiles: #{Array(cached.dig("stats", "truncated_profiles")).join(', ')}. Increase the reconciliation object limit only after considering performance impact.",
+          metadata: { checked_at: cached["generated_at"], read_only: true }
+        )
+      end
+
+      section(
+        id: "storage_reconciliation",
+        title: "Storage reconciliation",
+        description: "Detect missing assets, orphan candidates, deleted media leftovers, and invalid storage references.",
+        help: "This section is read-only. It stores the latest bounded reconciliation result for review and export. Cleanup is intentionally not available in this iteration.",
+        items: items.presence || [
+          issue(
+            id: "storage_reconciliation_ok",
+            label: "Storage reconciliation",
+            severity: "ok",
+            count: 0,
+            message: "The latest reconciliation result has no active findings.",
+            detail: "Ignored findings remain available in the ignored findings panel."
+          )
+        ]
+      )
+    end
+
+    def run_reconciliation!
+      report = ::MediaGallery::StorageReconciler.run(
+        item_limit: setting_int(:media_gallery_health_reconciliation_item_limit, 500),
+        object_limit: setting_int(:media_gallery_health_reconciliation_object_limit, 2000),
+        orphan_sample_limit: setting_int(:media_gallery_health_reconciliation_orphan_sample_limit, 50)
+      )
+      store_reconciliation!(report)
+      record_log_event(
+        event_type: "media_gallery_storage_reconciliation_run",
+        severity: report[:severity].to_s == "critical" ? "error" : (report[:severity].to_s == "warning" ? "warning" : "info"),
+        message: "Media Gallery storage reconciliation completed.",
+        details: {
+          severity: report[:severity],
+          duration_ms: report[:duration_ms],
+          stats: report[:stats],
+          counts: Array(report[:categories]).to_h { |category| [category[:id], category[:count]] },
+        }
+      )
+      report
+    end
+
+    def store_reconciliation!(report)
+      ::PluginStore.set(STORE_NAMESPACE, LAST_RECONCILIATION_KEY, report.deep_stringify_keys)
+      true
+    rescue => e
+      Rails.logger.warn("[media_gallery] storing storage reconciliation result failed: #{e.class}: #{e.message}")
+      false
+    end
+
+    def last_reconciliation
+      value = ::PluginStore.get(STORE_NAMESPACE, LAST_RECONCILIATION_KEY)
+      value.is_a?(Hash) ? value.deep_stringify_keys : {}
+    rescue
+      {}
+    end
+
+    def last_reconciliation_summary
+      cached = last_reconciliation
+      return nil if cached.blank?
+
+      categories = Array(cached["categories"])
+      active_count = categories.sum { |category| active_reconciliation_rows(Array(category["findings"])).length }
+      ignored_count = categories.sum { |category| ignored_matching_rows(Array(category["findings"])).length }
+      {
+        generated_at: cached["generated_at"],
+        generated_at_label: cached["generated_at_label"],
+        severity: cached["severity"],
+        read_only: true,
+        cleanup_available: false,
+        active_findings_count: active_count,
+        ignored_findings_count: ignored_count,
+        duration_ms: cached["duration_ms"],
+        stats: cached["stats"] || {},
+        limits: cached["limits"] || {},
+      }
+    end
+
+    def active_reconciliation_rows(rows)
+      ignored = ignored_findings_hash
+      Array(rows).reject { |row| ignored.key?(row_key(row)) }
+    end
+
+    def reconciliation_category_message(category, active_count, ignored_count)
+      title = category["title"].to_s.presence || category["id"].to_s.titleize
+      if active_count.positive?
+        "#{active_count} active #{title.downcase} finding#{'s' if active_count != 1}."
+      else
+        "No active #{title.downcase} findings."
+      end.tap do |message|
+        message << " #{ignored_count} ignored." if ignored_count.positive?
+      end
+    end
+
+    def reconciliation_category_detail(category, cached, ignored_count)
+      checked_at = cached["generated_at_label"].to_s.presence || cached["generated_at"].to_s
+      description = category["description"].to_s.presence
+      limits = cached["limits"] || {}
+      limit_text = "Items checked: #{cached.dig("stats", "items_checked").to_i}; objects scanned: #{cached.dig("stats", "objects_scanned").to_i}; object limit: #{limits["object_limit"].presence || 'n/a'}."
+      ignored_text = ignored_count.positive? ? " Ignored findings are excluded from the health status." : ""
+      [description, "Last run: #{checked_at}.", limit_text + ignored_text, "No cleanup is performed from this page."].compact.join(" ")
     end
 
     def settings_section
@@ -653,6 +808,7 @@ module ::MediaGallery
     def summary_cards(sections, issues)
       processing = sections.find { |s| s[:id] == "processing" }
       storage = sections.find { |s| s[:id] == "storage" }
+      reconciliation = sections.find { |s| s[:id] == "storage_reconciliation" }
       reports = sections.find { |s| s[:id] == "reports" }
 
       [
@@ -675,6 +831,11 @@ module ::MediaGallery
           label: "Storage",
           value: storage&.dig(:severity).to_s.titleize,
           severity: storage&.dig(:severity) || "ok",
+        },
+        {
+          label: "Reconciliation",
+          value: reconciliation&.dig(:severity).to_s.titleize,
+          severity: reconciliation&.dig(:severity) || "ok",
         },
         {
           label: "Reports",

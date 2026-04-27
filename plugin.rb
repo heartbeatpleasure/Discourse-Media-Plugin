@@ -24,6 +24,7 @@ after_initialize do
   require_relative "lib/media_gallery/operation_coordinator"
   require_relative "lib/media_gallery/orphan_inspector"
   require_relative "lib/media_gallery/storage_health"
+  require_relative "lib/media_gallery/storage_reconciler"
   require_relative "lib/media_gallery/migration_preview"
   require_relative "lib/media_gallery/migration_run_history"
   require_relative "lib/media_gallery/migration_copy"
@@ -121,6 +122,8 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
     get "/admin/plugins/media-gallery/reports" => "media_gallery/admin_reports#index", defaults: { format: :json }
     get "/admin/plugins/media-gallery/health" => "media_gallery/admin_health#index", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/health/reconcile" => "media_gallery/admin_health#reconcile", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/health/reconciliation-export" => "media_gallery/admin_health#reconciliation_export", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/ignore" => "media_gallery/admin_health#ignore", defaults: { format: :json }
     delete "/admin/plugins/media-gallery/health/ignore" => "media_gallery/admin_health#unignore", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/review" => "media_gallery/admin_reports#review", defaults: { format: :json }

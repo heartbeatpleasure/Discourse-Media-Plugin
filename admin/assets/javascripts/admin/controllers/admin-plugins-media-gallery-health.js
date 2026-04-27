@@ -94,6 +94,18 @@ function decorateExample(example) {
   if (example?.missing) {
     subtitleParts.push(`missing: ${example.missing}`);
   }
+  if (example?.profile_key) {
+    subtitleParts.push(`profile: ${example.profile_key}`);
+  }
+  if (example?.backend) {
+    subtitleParts.push(`backend: ${example.backend}`);
+  }
+  if (example?.role) {
+    subtitleParts.push(`role: ${example.role}`);
+  }
+  if (example?.storage_key) {
+    subtitleParts.push(`key: ${example.storage_key}`);
+  }
   if (example?.error) {
     subtitleParts.push(example.error);
   }
@@ -104,6 +116,10 @@ function decorateExample(example) {
     issueType: example?.issue_type || "missing_ready_asset",
     title,
     subtitle: subtitleParts.filter(Boolean).join(" • "),
+    detail: example?.detail || "",
+    suggestion: example?.suggestion || "",
+    hasDetail: Boolean(example?.detail),
+    hasSuggestion: Boolean(example?.suggestion),
     url: example?.url || null,
     canIgnore: Boolean(example?.can_ignore && (example?.key || example?.public_id)),
   };
@@ -184,6 +200,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked sections = [];
   @tracked attentionIssues = [];
   @tracked ignoredFindings = [];
+  @tracked reconciliation = null;
 
   resetState() {
     this.isLoading = false;
@@ -195,6 +212,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.sections = [];
     this.attentionIssues = [];
     this.ignoredFindings = [];
+    this.reconciliation = null;
   }
 
   get overallSeverity() {
@@ -231,6 +249,35 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     return this.ignoredFindings.length > 0;
   }
 
+  get hasReconciliation() {
+    return !!this.reconciliation;
+  }
+
+  get reconciliationGeneratedAtLabel() {
+    return formatDateTime(this.reconciliation?.generated_at);
+  }
+
+  get reconciliationActiveFindingsCount() {
+    return formatNumber(this.reconciliation?.active_findings_count || 0);
+  }
+
+  get reconciliationIgnoredFindingsCount() {
+    return formatNumber(this.reconciliation?.ignored_findings_count || 0);
+  }
+
+  get reconciliationStatsRows() {
+    const stats = this.reconciliation?.stats || {};
+    const limits = this.reconciliation?.limits || {};
+    return [
+      { label: "Last run", value: formatDateTime(this.reconciliation?.generated_at) },
+      { label: "Active findings", value: this.reconciliationActiveFindingsCount },
+      { label: "Ignored findings", value: this.reconciliationIgnoredFindingsCount },
+      { label: "Items checked", value: formatNumber(stats.items_checked || 0) },
+      { label: "Objects scanned", value: formatNumber(stats.objects_scanned || 0) },
+      { label: "Object limit", value: formatNumber(limits.object_limit || 0) },
+    ];
+  }
+
   flattenAttentionIssues(data) {
     if (Array.isArray(data?.issues)) {
       return data.issues
@@ -260,6 +307,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.ignoredFindings = Array.isArray(data?.ignored_findings)
       ? data.ignored_findings.map(decorateIgnoredFinding)
       : [];
+    this.reconciliation = data?.reconciliation || null;
   }
 
   errorMessage(error) {
@@ -311,6 +359,69 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   runFullStorage(event) {
     event?.preventDefault?.();
     return this.loadHealth({ fullStorage: true });
+  }
+
+  @action
+  async runReconciliation(event) {
+    event?.preventDefault?.();
+    if (this.isLoading) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Run storage reconciliation now? This is read-only, but it may take longer on large storage profiles."
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    this.isLoading = true;
+    this.error = "";
+    this.notice = "";
+
+    try {
+      const data = await ajax("/admin/plugins/media-gallery/health/reconcile.json", {
+        type: "POST",
+      });
+      this.isFullStorage = false;
+      this.applyResponse(data);
+      this.notice = "Storage reconciliation completed. No files were changed or deleted.";
+    } catch (error) {
+      this.error = this.errorMessage(error);
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  @action
+  async exportReconciliation(event) {
+    event?.preventDefault?.();
+    if (this.isLoading) {
+      return;
+    }
+
+    this.isLoading = true;
+    this.error = "";
+    this.notice = "";
+
+    try {
+      const data = await ajax("/admin/plugins/media-gallery/health/reconciliation-export.json");
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      link.href = url;
+      link.download = `media-gallery-storage-reconciliation-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      this.notice = "Storage reconciliation report exported.";
+    } catch (error) {
+      this.error = this.errorMessage(error);
+    } finally {
+      this.isLoading = false;
+    }
   }
 
   @action
