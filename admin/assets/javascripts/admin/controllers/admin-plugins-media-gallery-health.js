@@ -365,8 +365,8 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     const state = this.data?.alert_state || {};
     return [
       { label: "Notify group", value: stringify(state.group || "admins") },
-      { label: "Last sent", value: formatDateTime(state.sent_at, { showLocalSuffix: true }) },
-      { label: "Last attempted", value: formatDateTime(state.attempted_at, { showLocalSuffix: true }) },
+      { label: "Last sent", value: formatDateTime(state.sent_at) },
+      { label: "Last attempted", value: formatDateTime(state.attempted_at) },
       { label: "Last error", value: stringify(state.error) },
     ];
   }
@@ -450,14 +450,14 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       { label: "Active findings", value: this.reconciliationActiveFindingsCount },
       { label: "Ignored findings", value: this.reconciliationIgnoredFindingsCount },
       {
-        label: "New since previous",
+        label: "New",
         value: formatNumber(this.reconciliation?.new_findings_count || 0),
-        help: "Number of active finding keys that were not present in the previous reconciliation run.",
+        help: "New active finding keys compared with the previous reconciliation run.",
       },
       {
-        label: "Resolved since previous",
+        label: "Resolved",
         value: formatNumber(this.reconciliation?.resolved_findings_count || 0),
-        help: "Number of active finding keys that were present in the previous run but are not present in the latest run.",
+        help: "Finding keys from the previous run that are no longer present in the latest run.",
       },
       {
         label: "Items checked",

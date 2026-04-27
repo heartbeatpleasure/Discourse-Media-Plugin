@@ -140,16 +140,24 @@ export default RouteTemplate(
       .mg-health__toolbar {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.65rem;
+        gap: 0.75rem;
         align-items: end;
+        margin-top: 0.85rem;
+      }
+
+      .mg-health__export-panel {
         margin-top: 1rem;
+        border: 1px solid var(--mg-health-border);
+        border-radius: 16px;
+        background: var(--mg-health-surface-alt);
+        padding: 0.95rem 1rem;
       }
 
       .mg-health__toolbar-field {
         display: flex;
         flex-direction: column;
-        gap: 0.25rem;
-        min-width: min(260px, 100%);
+        gap: 0.35rem;
+        min-width: min(440px, 100%);
       }
 
       .mg-health__toolbar-field label {
@@ -161,6 +169,8 @@ export default RouteTemplate(
       .mg-health__toolbar-field select,
       .mg-health__modal textarea,
       .mg-health__modal select {
+        width: 100%;
+        box-sizing: border-box;
         border: 1px solid var(--primary-low);
         border-radius: 10px;
         background: var(--secondary);
@@ -222,14 +232,14 @@ export default RouteTemplate(
       }
 
       .mg-health__modal {
-        width: min(620px, 100%);
+        width: min(760px, 100%);
         max-height: min(760px, calc(100vh - 2rem));
         overflow: auto;
         border-radius: 18px;
         background: var(--secondary);
         border: 1px solid var(--primary-low);
         box-shadow: 0 18px 70px rgba(0, 0, 0, 0.28);
-        padding: 1rem;
+        padding: 1.15rem 1.25rem;
       }
 
       .mg-health__modal-header {
@@ -237,17 +247,44 @@ export default RouteTemplate(
         align-items: flex-start;
         justify-content: space-between;
         gap: 1rem;
-        margin-bottom: 0.75rem;
+        margin-bottom: 1rem;
+      }
+
+      .mg-health__modal-close {
+        min-height: 0;
+        padding: 0.25rem 0.55rem;
+        font-size: 1.35rem;
+        line-height: 1;
       }
 
       .mg-health__modal-form {
         display: grid;
-        gap: 0.75rem;
+        gap: 1rem;
+      }
+
+      .mg-health__modal-row {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
+        gap: 0.85rem;
+        align-items: start;
+      }
+
+      .mg-health__modal-row .mg-health__alert-label {
+        padding-top: 0.6rem;
+        font-weight: 700;
+      }
+
+      .mg-health__modal-field {
+        min-width: 0;
       }
 
       .mg-health__modal-form textarea {
-        min-height: 120px;
+        min-height: 150px;
         resize: vertical;
+      }
+
+      .mg-health__modal-form select {
+        max-width: 360px;
       }
 
       .mg-health__summary-card {
@@ -494,6 +531,15 @@ export default RouteTemplate(
           grid-column: 2;
           justify-self: start;
         }
+
+        .mg-health__modal-row {
+          grid-template-columns: 1fr;
+          gap: 0.35rem;
+        }
+
+        .mg-health__modal-row .mg-health__alert-label {
+          padding-top: 0;
+        }
       }
     </style>
 
@@ -590,21 +636,24 @@ export default RouteTemplate(
             </div>
           {{/if}}
 
-          <div class="mg-health__toolbar">
-            <div class="mg-health__toolbar-field">
-              <label>Export category</label>
-              <select value={{@controller.exportCategory}} disabled={{@controller.isLoading}} {{on "change" @controller.setExportCategory}}>
-                {{#each @controller.reconciliationExportCategories as |category|}}
-                  <option value={{category.id}}>{{category.title}}</option>
-                {{/each}}
-              </select>
+          <div class="mg-health__export-panel">
+            <div class="mg-health__alert-label">Export report</div>
+            <div class="mg-health__toolbar">
+              <div class="mg-health__toolbar-field">
+                <label>Export category</label>
+                <select value={{@controller.exportCategory}} disabled={{@controller.isLoading}} {{on "change" @controller.setExportCategory}}>
+                  {{#each @controller.reconciliationExportCategories as |category|}}
+                    <option value={{category.id}}>{{category.title}}</option>
+                  {{/each}}
+                </select>
+              </div>
+              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
+                Export JSON
+              </button>
+              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliationCsv}}>
+                Export CSV
+              </button>
             </div>
-            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
-              Export JSON
-            </button>
-            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliationCsv}}>
-              Export CSV
-            </button>
           </div>
         {{else}}
           <p class="mg-health__muted" style="margin-top: 1rem;">Storage reconciliation has not been run yet.</p>
@@ -764,7 +813,7 @@ export default RouteTemplate(
                   {{#if finding.url}}
                     <a class="btn" href={{finding.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
                   {{/if}}
-                  <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.unignoreFinding finding)}}>Unignore</button>
+                  <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.unignoreFinding finding)}}>Stop ignoring</button>
                 </div>
               </div>
             {{/each}}
@@ -798,7 +847,7 @@ export default RouteTemplate(
                 <h2>Ignore finding</h2>
                 <p class="mg-health__muted">Ignoring suppresses this finding from Health status. It does not delete or change any media files.</p>
               </div>
-              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelIgnoreFinding}}>Cancel</button>
+              <button class="btn mg-health__modal-close" type="button" aria-label="Close" title="Close" disabled={{@controller.isLoading}} {{on "click" @controller.cancelIgnoreFinding}}>×</button>
             </div>
 
             <div class="mg-health__modal-form">
@@ -806,21 +855,25 @@ export default RouteTemplate(
                 <strong>{{@controller.ignoreTargetTitle}}</strong>
               </div>
 
-              <label>
-                <span class="mg-health__alert-label">Reason</span>
-                <textarea value={{@controller.ignoreReason}} maxlength="500" {{on "input" @controller.setIgnoreReason}}></textarea>
-              </label>
+              <div class="mg-health__modal-row">
+                <label class="mg-health__alert-label" for="media-gallery-health-ignore-reason">Reason</label>
+                <div class="mg-health__modal-field">
+                  <textarea id="media-gallery-health-ignore-reason" value={{@controller.ignoreReason}} maxlength="500" {{on "input" @controller.setIgnoreReason}}></textarea>
+                </div>
+              </div>
 
-              <label>
-                <span class="mg-health__alert-label">Expires</span>
-                <select value={{@controller.ignoreExpiresInDays}} {{on "change" @controller.setIgnoreExpiry}}>
-                  <option value="0">Never</option>
-                  <option value="7">In 7 days</option>
-                  <option value="30">In 30 days</option>
-                  <option value="90">In 90 days</option>
-                  <option value="365">In 365 days</option>
-                </select>
-              </label>
+              <div class="mg-health__modal-row">
+                <label class="mg-health__alert-label" for="media-gallery-health-ignore-expiry">Expires</label>
+                <div class="mg-health__modal-field">
+                  <select id="media-gallery-health-ignore-expiry" value={{@controller.ignoreExpiresInDays}} {{on "change" @controller.setIgnoreExpiry}}>
+                    <option value="0">Never</option>
+                    <option value="7">In 7 days</option>
+                    <option value="30">In 30 days</option>
+                    <option value="90">In 90 days</option>
+                    <option value="365">In 365 days</option>
+                  </select>
+                </div>
+              </div>
 
               <div class="mg-health__actions">
                 <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelIgnoreFinding}}>Cancel</button>
