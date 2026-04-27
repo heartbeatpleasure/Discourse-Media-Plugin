@@ -297,6 +297,11 @@ export default RouteTemplate(
         border-color: var(--tertiary-low);
       }
 
+      .mg-management__editor-section.is-duplicate-section {
+        background: var(--mg-surface);
+        border-color: var(--mg-border);
+      }
+
       .mg-management__summary-card {
         display: flex;
         flex-direction: column;
@@ -356,8 +361,8 @@ export default RouteTemplate(
         right: 0;
         bottom: calc(100% + 0.5rem);
         z-index: 3000;
-        width: min(28rem, calc(100vw - 3rem));
-        max-width: 80vw;
+        width: min(19rem, calc(100vw - 3rem));
+        max-width: 19rem;
         padding: 0.75rem 0.85rem;
         border-radius: 12px;
         border: 1px solid var(--mg-border);
@@ -734,7 +739,7 @@ export default RouteTemplate(
             </div>
 
             {{#if @controller.selectedHasPossibleDuplicate}}
-              <section class="mg-management__editor-section" style="margin-top: 1rem;">
+              <section class="mg-management__editor-section is-duplicate-section" style="margin-top: 1rem;">
                 <h3>Duplicate detection</h3>
                 <p class="mg-management__muted" style="margin-top: 0.3rem;">
                   This item was created after an exact SHA1 + file size match with an existing media item. Review the match before deciding whether to keep, hide, or delete this item.

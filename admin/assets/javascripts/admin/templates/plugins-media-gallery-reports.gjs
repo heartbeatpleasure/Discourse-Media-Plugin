@@ -70,7 +70,7 @@ export default RouteTemplate(
         align-items: center;
         gap: 0.65rem;
         min-height: 42px;
-        transform: translateY(-0.45rem);
+        transform: translateY(-0.65rem);
       }
 
       .mg-reports__filter-actions .btn {

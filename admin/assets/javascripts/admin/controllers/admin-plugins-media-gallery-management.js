@@ -438,9 +438,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   get selectedDuplicateDetectionRows() {
     const detection = this.selectedDuplicateDetection || {};
     const match = detection.match || {};
-    const matchedLabel = match.public_id
-      ? `${match.title || "Untitled media"} (${match.public_id})`
-      : "Recorded match not available";
+    const matchedLabel = match.public_id || "Recorded match not available";
 
     return [
       { label: "Matched media", value: matchedLabel, wide: true },
