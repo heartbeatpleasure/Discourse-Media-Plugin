@@ -34,7 +34,12 @@ module ::MediaGallery
 
 
     def reconcile
-      ::MediaGallery::HealthCheck.run_reconciliation!
+      profile_scope = ::MediaGallery::TextSanitizer.plain_text(
+        params[:profile_scope],
+        max_length: 80,
+        allow_newlines: false
+      ).to_s.strip.presence || "all_configured"
+      ::MediaGallery::HealthCheck.run_reconciliation!(profile_scope: profile_scope)
       render_json_dump(::MediaGallery::HealthCheck.summary(full_storage: false))
     rescue => e
       Rails.logger.error("[media_gallery] storage reconciliation failed request_id=#{request.request_id}: #{e.class}: #{e.message}")

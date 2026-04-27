@@ -72,10 +72,80 @@ function formatDateTime(value) {
     return String(value);
   }
 
-  return new Intl.DateTimeFormat(undefined, {
+  return `${new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(date);
+  }).format(date)} (local time)`;
+}
+
+function formatRelativeTime(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime()) || typeof Intl.RelativeTimeFormat !== "function") {
+    return "";
+  }
+
+  let seconds = Math.round((date.getTime() - Date.now()) / 1000);
+  const divisions = [
+    { amount: 60, unit: "second" },
+    { amount: 60, unit: "minute" },
+    { amount: 24, unit: "hour" },
+    { amount: 7, unit: "day" },
+    { amount: 4.345, unit: "week" },
+    { amount: 12, unit: "month" },
+    { amount: Number.POSITIVE_INFINITY, unit: "year" },
+  ];
+
+  for (const division of divisions) {
+    if (Math.abs(seconds) < division.amount) {
+      return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(seconds), division.unit);
+    }
+    seconds = seconds / division.amount;
+  }
+
+  return "";
+}
+
+function formatDuration(value) {
+  const ms = Number(value || 0);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return "—";
+  }
+
+  if (ms < 1000) {
+    return `${Math.round(ms)} ms`;
+  }
+
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
+  }
+
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
+
+function profileLabel(profile) {
+  const label = String(profile?.label || profile?.profile_key || "Unknown profile");
+  const backend = profile?.backend ? ` (${profile.backend})` : "";
+  return `${label}${backend}`;
+}
+
+function decorateProfile(profile, fallbackStatus = "Checked") {
+  const statusText = profile?.reason || (profile?.truncated ? "Partial" : fallbackStatus);
+  const statusClass = profile?.truncated ? "is-warning" : (profile?.reason ? "is-muted" : "is-success");
+  return {
+    ...profile,
+    key: profile?.profile_key || profile?.label || "unknown-profile",
+    label: profile?.label || profile?.profile_key || "Unknown profile",
+    backend: profile?.backend || "unknown",
+    displayLabel: profileLabel(profile),
+    statusText,
+    statusClass,
+    dotClass: `mg-health__status-dot ${statusClass}`,
+  };
 }
 
 function decorateExample(example) {
@@ -94,8 +164,8 @@ function decorateExample(example) {
   if (example?.missing) {
     subtitleParts.push(`missing: ${example.missing}`);
   }
-  if (example?.profile_key) {
-    subtitleParts.push(`profile: ${example.profile_key}`);
+  if (example?.profile_label || example?.profile_key) {
+    subtitleParts.push(`profile: ${example.profile_label || example.profile_key}`);
   }
   if (example?.backend) {
     subtitleParts.push(`backend: ${example.backend}`);
@@ -169,10 +239,14 @@ function decorateSection(section) {
 
 function decorateCard(card) {
   const severity = card?.severity || "ok";
+  const badge = badgeClass(severity);
   return {
     ...card,
     severity,
-    badgeClass: badgeClass(severity),
+    severityLabel: severityLabel(severity),
+    badgeClass: badge,
+    cardClass: `mg-health__summary-card ${badge}`,
+    dotClass: `mg-health__status-dot ${badge}`,
     value: stringify(card?.value),
   };
 }
@@ -201,6 +275,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked attentionIssues = [];
   @tracked ignoredFindings = [];
   @tracked reconciliation = null;
+  @tracked reconciliationProfileScope = "all_configured";
 
   resetState() {
     this.isLoading = false;
@@ -213,6 +288,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.attentionIssues = [];
     this.ignoredFindings = [];
     this.reconciliation = null;
+    this.reconciliationProfileScope = "all_configured";
   }
 
   get overallSeverity() {
@@ -228,7 +304,11 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   get generatedAtLabel() {
-    return this.data?.generated_at_label || "—";
+    return formatDateTime(this.data?.generated_at);
+  }
+
+  get generatedAtRelativeLabel() {
+    return formatRelativeTime(this.data?.generated_at);
   }
 
   get alertStateRows() {
@@ -257,6 +337,88 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     return formatDateTime(this.reconciliation?.generated_at);
   }
 
+  get reconciliationGeneratedAtRelativeLabel() {
+    return formatRelativeTime(this.reconciliation?.generated_at);
+  }
+
+  get reconciliationDurationLabel() {
+    return formatDuration(this.reconciliation?.duration_ms);
+  }
+
+  get storageProfiles() {
+    const profiles = new Map();
+    const addProfiles = (list) => {
+      if (!Array.isArray(list)) {
+        return;
+      }
+
+      list.forEach((profile) => {
+        const key = profile?.profile_key;
+        if (key) {
+          profiles.set(key, profile);
+        }
+      });
+    };
+
+    addProfiles(this.data?.storage_profiles);
+    addProfiles(this.reconciliation?.configured_profiles);
+    return Array.from(profiles.values());
+  }
+
+  get reconciliationProfileOptions() {
+    return [
+      { id: "all_configured", label: "All configured profiles" },
+      { id: "referenced", label: "Referenced profiles only" },
+      ...this.storageProfiles.map((profile) => ({ id: profile.profile_key, label: profileLabel(profile) })),
+    ];
+  }
+
+  get reconciliationScopeLabel() {
+    const scope = this.reconciliation?.profile_scope || this.reconciliationProfileScope || "all_configured";
+    if (scope === "all_configured") {
+      return "All configured profiles";
+    }
+    if (scope === "referenced") {
+      return "Referenced profiles only";
+    }
+
+    const profile = this.storageProfiles.find((item) => item.profile_key === scope);
+    return profile ? profileLabel(profile) : String(scope);
+  }
+
+  get reconciliationCompletenessLabel() {
+    switch (String(this.reconciliation?.scan_completeness || "unknown")) {
+      case "complete":
+        return "Complete";
+      case "partial":
+        return "Partial";
+      case "failed":
+        return "Failed";
+      default:
+        return "Unknown";
+    }
+  }
+
+  get checkedProfiles() {
+    return Array.isArray(this.reconciliation?.checked_profiles)
+      ? this.reconciliation.checked_profiles.map((profile) => decorateProfile(profile))
+      : [];
+  }
+
+  get skippedProfiles() {
+    return Array.isArray(this.reconciliation?.skipped_profiles)
+      ? this.reconciliation.skipped_profiles.map((profile) => decorateProfile(profile, "Skipped"))
+      : [];
+  }
+
+  get hasCheckedProfiles() {
+    return this.checkedProfiles.length > 0;
+  }
+
+  get hasSkippedProfiles() {
+    return this.skippedProfiles.length > 0;
+  }
+
   get reconciliationActiveFindingsCount() {
     return formatNumber(this.reconciliation?.active_findings_count || 0);
   }
@@ -269,10 +431,16 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     const stats = this.reconciliation?.stats || {};
     const limits = this.reconciliation?.limits || {};
     return [
-      { label: "Last run", value: formatDateTime(this.reconciliation?.generated_at) },
+      { label: "Last run", value: this.reconciliationGeneratedAtLabel },
+      { label: "Relative", value: this.reconciliationGeneratedAtRelativeLabel || "—" },
+      { label: "Duration", value: this.reconciliationDurationLabel },
+      { label: "Scope", value: this.reconciliationScopeLabel },
+      { label: "Completeness", value: this.reconciliationCompletenessLabel },
       { label: "Active findings", value: this.reconciliationActiveFindingsCount },
       { label: "Ignored findings", value: this.reconciliationIgnoredFindingsCount },
       { label: "Items checked", value: formatNumber(stats.items_checked || 0) },
+      { label: "Items skipped by scope", value: formatNumber(stats.items_skipped_by_scope || 0) },
+      { label: "Profiles checked", value: formatNumber(stats.profiles_checked || 0) },
       { label: "Objects scanned", value: formatNumber(stats.objects_scanned || 0) },
       { label: "Object limit", value: formatNumber(limits.object_limit || 0) },
     ];
@@ -362,6 +530,11 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   @action
+  onReconciliationProfileScopeChange(event) {
+    this.reconciliationProfileScope = event?.target?.value || "all_configured";
+  }
+
+  @action
   async runReconciliation(event) {
     event?.preventDefault?.();
     if (this.isLoading) {
@@ -382,10 +555,11 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     try {
       const data = await ajax("/admin/plugins/media-gallery/health/reconcile.json", {
         type: "POST",
+        data: { profile_scope: this.reconciliationProfileScope },
       });
       this.isFullStorage = false;
       this.applyResponse(data);
-      this.notice = "Storage reconciliation completed. No files were changed or deleted.";
+      this.notice = "Reconciliation completed. Read-only scan only; no files were changed or deleted.";
     } catch (error) {
       this.error = this.errorMessage(error);
     } finally {
