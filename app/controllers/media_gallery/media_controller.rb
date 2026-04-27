@@ -1280,13 +1280,39 @@ end
           report = public_media_report_payload(existing)
         else
           report_hash = build_media_report_hash(item, reason: reason, message: message, at: now)
+          instant_auto_hide = media_report_auto_hide_user?(current_user)
 
-          if media_report_auto_hide_user?(current_user)
+          if instant_auto_hide
             auto_hidden = true
             report_hash["auto_hidden"] = true
             report_hash["auto_hidden_at"] = now.iso8601
             report_hash["auto_hidden_reason"] = "Reported by trusted media reviewer"
-            apply_media_report_auto_hide!(meta, item, report_hash)
+            report_hash["auto_hide_mode"] = "instant"
+            apply_media_report_auto_hide!(meta, item, report_hash, reason: "Auto-hidden after a trusted report.")
+          else
+            score_result = media_report_score_for_reports(reports + [report_hash])
+            report_hash["score_after_report"] = score_result if score_result["enabled"]
+
+            if media_report_score_threshold_met?(score_result)
+              auto_hidden = true
+              report_hash["auto_hidden"] = true
+              report_hash["auto_hidden_at"] = now.iso8601
+              report_hash["auto_hidden_reason"] = "Report score threshold reached"
+              report_hash["auto_hide_mode"] = "score_threshold"
+              report_hash["auto_hide_score"] = score_result["score"]
+              report_hash["auto_hide_threshold"] = score_result["threshold"]
+              meta["media_report_score_auto_hide"] = score_result.merge(
+                "trigger_report_id" => report_hash["id"],
+                "triggered_at" => now.iso8601
+              )
+              apply_media_report_auto_hide!(
+                meta,
+                item,
+                report_hash,
+                reason: "Auto-hidden after media report score threshold was reached.",
+                note: "Auto-hidden after report #{report_hash["id"]}; score #{score_result["score"]}/#{score_result["threshold"]}."
+              )
+            end
           end
 
           reports.unshift(report_hash)
@@ -1307,7 +1333,7 @@ end
           category: "media_reports",
           media_item: item,
           message: reason,
-          details: { reason: reason, auto_hidden: auto_hidden }
+          details: { reason: reason, auto_hidden: auto_hidden, auto_hide_mode: report.is_a?(Hash) ? report[:auto_hide_mode] : nil }
         )
         notify_media_report_group(item, report: report, reason: reason, auto_hidden: auto_hidden)
       end
@@ -1437,7 +1463,71 @@ end
         reason: report["reason"].to_s,
         reason_label: report["reason_label"].to_s,
         created_at: report["created_at"].to_s,
+        auto_hide_mode: report["auto_hide_mode"].to_s.presence,
+        auto_hide_score: report["auto_hide_score"],
+        auto_hide_threshold: report["auto_hide_threshold"],
+      }.compact
+    end
+
+    def media_report_score_threshold
+      SiteSetting.media_gallery_report_auto_hide_score_threshold.to_i
+    end
+
+    def media_report_score_enabled?
+      media_report_score_threshold.positive?
+    end
+
+    def media_report_points_by_trust_level
+      {
+        0 => SiteSetting.media_gallery_report_auto_hide_tl0_points.to_i,
+        1 => SiteSetting.media_gallery_report_auto_hide_tl1_points.to_i,
+        2 => SiteSetting.media_gallery_report_auto_hide_tl2_points.to_i,
+        3 => SiteSetting.media_gallery_report_auto_hide_tl3_points.to_i,
+        4 => SiteSetting.media_gallery_report_auto_hide_tl4_points.to_i,
       }
+    end
+
+    def media_report_score_for_reports(reports)
+      threshold = media_report_score_threshold
+      points_by_tl = media_report_points_by_trust_level
+      result = {
+        "enabled" => threshold.positive?,
+        "threshold" => threshold,
+        "score" => 0,
+        "contributors" => 0,
+        "points_by_trust_level" => points_by_tl.transform_keys(&:to_s),
+        "score_by_trust_level" => Hash.new(0),
+      }
+      return result unless result["enabled"]
+
+      seen_reporters = {}
+      Array(reports).each do |report|
+        next unless report.is_a?(Hash)
+        next unless report["status"].to_s.blank? || report["status"].to_s == "open"
+
+        reporter_id = report["reporter_user_id"].to_i
+        next if reporter_id <= 0 || seen_reporters[reporter_id]
+
+        seen_reporters[reporter_id] = true
+        trust_level = [[report["reporter_trust_level"].to_i, 0].max, 4].min
+        points = [points_by_tl[trust_level].to_i, 0].max
+        next if points <= 0
+
+        result["score"] += points
+        result["contributors"] += 1
+        result["score_by_trust_level"][trust_level.to_s] += points
+      end
+
+      result["score_by_trust_level"] = result["score_by_trust_level"].to_h
+      result["threshold_met"] = result["score"] >= threshold
+      result
+    end
+
+    def media_report_score_threshold_met?(score_result)
+      score_result.is_a?(Hash) &&
+        score_result["enabled"] &&
+        score_result["threshold"].to_i.positive? &&
+        score_result["score"].to_i >= score_result["threshold"].to_i
     end
 
     def media_report_auto_hide_user?(user)
@@ -1466,14 +1556,14 @@ end
         .uniq
     end
 
-    def apply_media_report_auto_hide!(meta, item, report_hash)
+    def apply_media_report_auto_hide!(meta, item, report_hash, reason: "Auto-hidden after a trusted report.", note: nil)
       now = Time.now.utc.iso8601
       visibility = meta["admin_visibility"].is_a?(Hash) ? meta["admin_visibility"].deep_dup : {}
       was_hidden = ActiveModel::Type::Boolean.new.cast(visibility["hidden"])
       visibility["hidden"] = true
       visibility["updated_at"] = now
       visibility["updated_by"] = "media_report_auto_hide"
-      visibility["reason"] = "Auto-hidden after a trusted report."
+      visibility["reason"] = reason
       visibility["hidden_at"] ||= now
       visibility["hidden_by"] ||= report_hash["reporter_username"].to_s.presence || "media_report_auto_hide"
       meta["admin_visibility"] = visibility
@@ -1486,7 +1576,7 @@ end
         "admin_username" => "media_report_auto_hide",
         "admin_user_id" => nil,
         "public_id" => item.public_id.to_s,
-        "note" => "Auto-hidden after report #{report_hash["id"]} by #{report_hash["reporter_username"]}.",
+        "note" => note.presence || "Auto-hidden after report #{report_hash["id"]} by #{report_hash["reporter_username"]}.",
         "changes" => { "hidden" => [was_hidden, true], "report_id" => [nil, report_hash["id"]] }
       )
       meta["admin_management_log"] = log.first(50)

@@ -219,6 +219,14 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         hiddenBadgeClass: media.hidden ? "is-danger" : "is-success",
         assetLabel: media.asset_deleted ? "Files deleted" : "Files present",
         assetBadgeClass: media.asset_deleted ? "is-danger" : "",
+        autoHideLabel:
+          report?.auto_hide_mode === "score_threshold"
+            ? `Score threshold ${report?.auto_hide_score ?? "—"}/${report?.auto_hide_threshold ?? "—"}`
+            : report?.auto_hide_mode === "instant"
+              ? "Instant trusted report"
+              : report?.auto_hidden
+                ? "Auto-hidden"
+                : "—",
       };
     });
   }

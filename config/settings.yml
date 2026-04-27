@@ -923,6 +923,50 @@ plugins:
     default: "staff|trust_level_4"
     client: false
 
+  # Optional scored auto-hide for reports from users who are not matched by media_gallery_report_auto_hide_groups.
+  # A value of 0 disables scored auto-hide and preserves the existing instant auto-hide behavior.
+  media_gallery_report_auto_hide_score_threshold:
+    default: 0
+    type: integer
+    min: 0
+    max: 10000
+    client: false
+
+  media_gallery_report_auto_hide_tl0_points:
+    default: 1
+    type: integer
+    min: 0
+    max: 10000
+    client: false
+
+  media_gallery_report_auto_hide_tl1_points:
+    default: 2
+    type: integer
+    min: 0
+    max: 10000
+    client: false
+
+  media_gallery_report_auto_hide_tl2_points:
+    default: 3
+    type: integer
+    min: 0
+    max: 10000
+    client: false
+
+  media_gallery_report_auto_hide_tl3_points:
+    default: 5
+    type: integer
+    min: 0
+    max: 10000
+    client: false
+
+  media_gallery_report_auto_hide_tl4_points:
+    default: 8
+    type: integer
+    min: 0
+    max: 10000
+    client: false
+
   media_gallery_report_notify_group:
     default: "staff"
     client: false

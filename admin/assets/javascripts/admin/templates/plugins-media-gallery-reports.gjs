@@ -533,6 +533,12 @@ export default RouteTemplate(
                 <div class="mg-reports__summary-label">Decision</div>
                 <div class="mg-reports__summary-value">{{@controller.selectedReport.decisionLabel}}</div>
               </div>
+              {{#if @controller.selectedReport.auto_hidden}}
+                <div class="mg-reports__summary-card">
+                  <div class="mg-reports__summary-label">Auto-hide</div>
+                  <div class="mg-reports__summary-value">{{@controller.selectedReport.autoHideLabel}}</div>
+                </div>
+              {{/if}}
             </div>
 
             {{#if @controller.selectedReport.message}}
