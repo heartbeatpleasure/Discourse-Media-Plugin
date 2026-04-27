@@ -89,6 +89,20 @@ export default RouteTemplate(
         min-width: 0;
       }
 
+      .mg-health__alert-card {
+        position: relative;
+      }
+
+      .mg-health__alert-card > .mg-health__info {
+        position: absolute;
+        right: 0.75rem;
+        top: 0.75rem;
+      }
+
+      .mg-health__alert-card.has-help {
+        padding-right: 2.75rem;
+      }
+
       .mg-health__summary-card {
         position: relative;
         padding-right: 2.6rem;
@@ -396,9 +410,12 @@ export default RouteTemplate(
         {{#if @controller.hasReconciliation}}
           <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 1rem;">
             {{#each @controller.reconciliationStatsRows as |row|}}
-              <div class="mg-health__alert-card">
+              <div class="mg-health__alert-card {{if row.help "has-help"}}">
                 <div class="mg-health__alert-label">{{row.label}}</div>
                 <div class="mg-health__alert-value">{{row.value}}</div>
+                {{#if row.help}}
+                  <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">{{row.help}}</span></span>
+                {{/if}}
               </div>
             {{/each}}
           </div>

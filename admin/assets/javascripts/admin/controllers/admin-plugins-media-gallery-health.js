@@ -62,7 +62,7 @@ function formatNumber(value) {
   return new Intl.NumberFormat().format(number);
 }
 
-function formatDateTime(value) {
+function formatDateTime(value, options = {}) {
   if (!value) {
     return "—";
   }
@@ -72,10 +72,12 @@ function formatDateTime(value) {
     return String(value);
   }
 
-  return `${new Intl.DateTimeFormat(undefined, {
+  const formatted = new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(date)} (local time)`;
+  }).format(date);
+
+  return options.showLocalSuffix ? `${formatted} (local time)` : formatted;
 }
 
 function formatRelativeTime(value) {
@@ -235,7 +237,7 @@ function decorateIgnoredFinding(finding) {
     key: finding?.key || `${finding?.issue_type || "issue"}:${finding?.public_id || "unknown"}`,
     issueType: finding?.issue_type || "missing_ready_asset",
     title: stringify(finding?.title || finding?.public_id || "Media item"),
-    subtitle: [finding?.public_id, finding?.ignored_by_username ? `ignored by ${finding.ignored_by_username}` : "", formatDateTime(finding?.ignored_at)]
+    subtitle: [finding?.public_id, finding?.ignored_by_username ? `ignored by ${finding.ignored_by_username}` : "", formatDateTime(finding?.ignored_at, { showLocalSuffix: true })]
       .filter(Boolean)
       .join(" • "),
     url: finding?.url || null,
@@ -280,7 +282,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   get generatedAtLabel() {
-    return formatDateTime(this.data?.generated_at);
+    return formatDateTime(this.data?.generated_at, { showLocalSuffix: true });
   }
 
   get generatedAtRelativeLabel() {
@@ -291,8 +293,8 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     const state = this.data?.alert_state || {};
     return [
       { label: "Notify group", value: stringify(state.group || "admins") },
-      { label: "Last sent", value: formatDateTime(state.sent_at) },
-      { label: "Last attempted", value: formatDateTime(state.attempted_at) },
+      { label: "Last sent", value: formatDateTime(state.sent_at, { showLocalSuffix: true }) },
+      { label: "Last attempted", value: formatDateTime(state.attempted_at, { showLocalSuffix: true }) },
       { label: "Last error", value: stringify(state.error) },
     ];
   }
@@ -324,16 +326,41 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   get reconciliationStatsRows() {
     const stats = this.reconciliation?.stats || {};
     const limits = this.reconciliation?.limits || {};
+    const truncatedProfiles = Array.isArray(stats.truncated_profiles)
+      ? stats.truncated_profiles.filter(Boolean)
+      : [];
+    const profileCount = Number(stats.profiles_checked || 0);
+    const objectLimit = Number(limits.object_limit || 0);
+
     return [
       { label: "Last run", value: formatDateTime(this.reconciliation?.generated_at) },
-      { label: "Relative", value: formatRelativeTime(this.reconciliation?.generated_at) || "—" },
+      {
+        label: "Since last run",
+        value: formatRelativeTime(this.reconciliation?.generated_at) || "—",
+        help: "Relative time since the latest storage reconciliation run.",
+      },
       { label: "Duration", value: formatDuration(this.reconciliation?.duration_ms) },
+      {
+        label: "Scan completeness",
+        value: truncatedProfiles.length ? "Partial" : "Complete",
+        help: truncatedProfiles.length
+          ? `One or more profiles reached the per-profile object limit: ${truncatedProfiles.join(", ")}. The scan is still read-only, but orphan detection may be incomplete for those profiles.`
+          : "No checked storage profile reached the per-profile object limit.",
+      },
       { label: "Active findings", value: this.reconciliationActiveFindingsCount },
       { label: "Ignored findings", value: this.reconciliationIgnoredFindingsCount },
       { label: "Items checked", value: formatNumber(stats.items_checked || 0) },
-      { label: "Profiles checked", value: formatNumber(stats.profiles_checked || 0) },
-      { label: "Objects scanned", value: formatNumber(stats.objects_scanned || 0) },
-      { label: "Object limit", value: formatNumber(limits.object_limit || 0) },
+      { label: "Profiles checked", value: formatNumber(profileCount) },
+      {
+        label: "Objects scanned",
+        value: formatNumber(stats.objects_scanned || 0),
+        help: "Total storage objects listed across all checked profiles. This can be higher than the object limit when more than one profile is checked.",
+      },
+      {
+        label: "Object limit / profile",
+        value: formatNumber(objectLimit),
+        help: "Maximum number of storage objects listed per profile during this read-only scan. Hitting this limit makes orphan-file detection partial for that profile.",
+      },
     ];
   }
 
