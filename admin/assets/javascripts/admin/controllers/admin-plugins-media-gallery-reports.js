@@ -86,23 +86,35 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   @tracked noticeMessage = "";
   @tracked noticeTone = "success";
   @tracked selectedReportId = "";
+  @tracked requestedReportId = "";
   @tracked isReviewing = false;
   @tracked reviewNote = "";
 
   abortController = null;
 
   resetState() {
-    this.statusFilter = "open";
-    this.searchQuery = "";
+    const deepLinkedReportId = this.reportIdFromUrl();
+    this.statusFilter = deepLinkedReportId ? "all" : "open";
+    this.searchQuery = deepLinkedReportId || "";
     this.limit = "50";
     this.reports = [];
     this.isLoading = false;
     this.loadError = "";
     this.noticeMessage = "";
     this.noticeTone = "success";
-    this.selectedReportId = "";
+    this.selectedReportId = deepLinkedReportId || "";
+    this.requestedReportId = deepLinkedReportId || "";
     this.isReviewing = false;
     this.reviewNote = "";
+  }
+
+  reportIdFromUrl() {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    const value = new URLSearchParams(window.location.search || "").get("report_id");
+    return String(value || "").match(/^[a-f0-9-]{20,80}$/i) ? String(value) : "";
   }
 
   async loadInitial() {
@@ -329,7 +341,9 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         signal: this.abortController.signal,
       });
       this.reports = Array.isArray(data?.reports) ? data.reports : [];
-      if (!this.reports.some((report) => report.id === this.selectedReportId)) {
+      if (this.requestedReportId && this.reports.some((report) => report.id === this.requestedReportId)) {
+        this.selectedReportId = this.requestedReportId;
+      } else if (!this.reports.some((report) => report.id === this.selectedReportId)) {
         this.selectedReportId = this.reports[0]?.id || "";
       }
     } catch (error) {
@@ -368,6 +382,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.statusFilter = "open";
     this.searchQuery = "";
     this.limit = "50";
+    this.requestedReportId = "";
     this.loadReports();
   }
 

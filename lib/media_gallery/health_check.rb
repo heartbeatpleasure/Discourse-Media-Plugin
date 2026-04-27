@@ -904,7 +904,7 @@ module ::MediaGallery
         ["media_gallery_quick_block_group", "Quick view block group", safe_setting(:media_gallery_quick_block_group), false],
         ["media_gallery_quick_upload_block_group", "Quick upload block group", safe_setting(:media_gallery_quick_upload_block_group), false],
         ["media_gallery_report_auto_hide_groups", "Report auto-hide groups", safe_setting(:media_gallery_report_auto_hide_groups), true],
-        ["media_gallery_report_notify_group", "Report notify group", safe_setting(:media_gallery_report_notify_group), false],
+        ["media_gallery_report_notify_group", "Report notify groups", safe_setting(:media_gallery_report_notify_group), false],
         ["media_gallery_health_notify_group", "Health notify group", safe_setting(:media_gallery_health_notify_group), false],
       ]
 

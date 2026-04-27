@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "cgi"
 require "digest/sha1"
 require "erb"
 require "fileutils"
@@ -1342,15 +1343,12 @@ end
     end
 
 def notify_media_report_group(item, report:, reason:, auto_hidden: false)
-  group_name = ::MediaGallery::TextSanitizer.plain_text(
-    SiteSetting.media_gallery_report_notify_group,
-    max_length: 100,
-    allow_newlines: false
-  ).to_s.strip
-  return if group_name.blank?
+  group_names = media_report_notify_group_names
+  return if group_names.blank?
 
   report_id = report[:id].to_s.presence || report["id"].to_s.presence
   admin_url = Discourse.base_url + "/admin/plugins/media-gallery-reports"
+  admin_url = "#{admin_url}?report_id=#{CGI.escape(report_id)}" if report_id.present?
   title = "Media report: #{item.title.to_s.presence || item.public_id}"
   raw = <<~MD
     A media item has been reported and needs staff review.
@@ -1367,13 +1365,21 @@ def notify_media_report_group(item, report:, reason:, auto_hidden: false)
 
   ::PostCreator.create!(
     Discourse.system_user,
-    target_group_names: [group_name],
+    target_group_names: group_names,
     archetype: Archetype.private_message,
     title: title.truncate(200),
     raw: raw
   )
 rescue => e
-  Rails.logger.warn("[media_gallery] report notification failed item_id=#{item&.id} group=#{group_name}: #{e.class}: #{e.message}")
+  Rails.logger.warn("[media_gallery] report notification failed item_id=#{item&.id} groups=#{defined?(group_names) ? group_names.inspect : 'unknown'}: #{e.class}: #{e.message}")
+end
+
+def media_report_notify_group_names
+  ::MediaGallery::Permissions
+    .list_setting(SiteSetting.media_gallery_report_notify_group)
+    .map { |name| ::MediaGallery::TextSanitizer.plain_text(name, max_length: 100, allow_newlines: false).to_s.strip }
+    .reject(&:blank?)
+    .uniq
 end
 
     def build_media_report_hash(item, reason:, message:, at:)

@@ -984,6 +984,7 @@ plugins:
 
   media_gallery_report_notify_group:
     default: "staff"
+    type: list
     client: false
 
   media_gallery_health_watchdog_enabled:
