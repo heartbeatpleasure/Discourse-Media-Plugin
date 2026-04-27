@@ -95,9 +95,13 @@ function decorateIssue(issue) {
   const examples = Array.isArray(issue?.examples)
     ? issue.examples.map(decorateExample)
     : [];
+  const sectionTitle =
+    issue?.section_title || issue?.metadata?.section_title || "Health issue";
 
   return {
     ...issue,
+    sectionTitle,
+
     severity,
     severityLabel: severityLabel(severity),
     badgeClass: badgeClass(severity),
@@ -147,6 +151,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked data = null;
   @tracked summaryCards = [];
   @tracked sections = [];
+  @tracked attentionIssues = [];
 
   resetState() {
     this.isLoading = false;
@@ -156,6 +161,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.data = null;
     this.summaryCards = [];
     this.sections = [];
+    this.attentionIssues = [];
   }
 
   get overallSeverity() {
@@ -184,6 +190,27 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     ];
   }
 
+  get hasAttentionIssues() {
+    return this.attentionIssues.length > 0;
+  }
+
+  flattenAttentionIssues(data) {
+    if (Array.isArray(data?.issues)) {
+      return data.issues
+        .map(decorateIssue)
+        .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+    }
+
+    return (Array.isArray(data?.sections) ? data.sections : [])
+      .flatMap((section) => {
+        const sectionTitle = section?.title || "Health issue";
+        return (Array.isArray(section?.items) ? section.items : [])
+          .filter((item) => item?.severity && item.severity !== "ok")
+          .map((item) => decorateIssue({ ...item, section_title: sectionTitle }));
+      })
+      .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+  }
+
   applyResponse(data) {
     this.data = data || {};
     this.summaryCards = Array.isArray(data?.summary_cards)
@@ -192,6 +219,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.sections = Array.isArray(data?.sections)
       ? data.sections.map(decorateSection)
       : [];
+    this.attentionIssues = this.flattenAttentionIssues(data);
   }
 
   errorMessage(error) {

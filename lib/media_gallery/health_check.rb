@@ -25,7 +25,7 @@ module ::MediaGallery
       sections << reports_section
 
       severity = highest_severity(sections.map { |section| section[:severity] })
-      issues = sections.flat_map { |section| Array(section[:items]).select { |item| item[:severity].to_s != "ok" } }
+      issues = attention_issues(sections)
 
       {
         ok: severity == "ok",
@@ -35,6 +35,7 @@ module ::MediaGallery
         full_storage: !!full_storage,
         summary_cards: summary_cards(sections, issues),
         sections: sections,
+        issues: issues,
         alert_state: last_alert_state,
       }
     rescue => e
@@ -62,6 +63,15 @@ module ::MediaGallery
               ),
             ],
           },
+        ],
+        issues: [
+          issue(
+            id: "health_summary_failed",
+            label: "Health summary failed",
+            severity: "critical",
+            message: "#{e.class}: #{e.message}".truncate(500),
+            metadata: { section_id: "health_internal_error", section_title: "Health check error" }
+          ),
         ],
         alert_state: last_alert_state,
       }
@@ -314,10 +324,10 @@ module ::MediaGallery
       items << issue(
         id: "blocked_policy",
         label: "Blocked media groups",
-        severity: blocked_groups.present? ? "warning" : "ok",
+        severity: "ok",
         count: blocked_groups.length,
-        message: blocked_groups.present? ? "#{blocked_groups.length} blocked group#{'s' if blocked_groups.length != 1} configured." : "No blocked media groups configured.",
-        detail: blocked_groups.present? ? "Members of these groups cannot view or upload media unless they are staff/admin." : "Use blocked groups for explicit exclusion."
+        message: blocked_groups.present? ? "#{blocked_groups.length} blocked group#{'s' if blocked_groups.length != 1} configured." : "No explicit blocked media groups configured.",
+        detail: blocked_groups.present? ? "Members of these groups cannot view or upload media unless they are staff/admin. This is informational and does not indicate a problem." : "This is allowed, but no explicit exclusion group is active."
       )
 
       section(
@@ -568,6 +578,19 @@ module ::MediaGallery
       }.compact
     end
 
+    def attention_issues(sections)
+      Array(sections).flat_map do |section|
+        Array(section[:items]).filter_map do |item|
+          next if item[:severity].to_s == "ok"
+
+          item.merge(
+            section_id: section[:id].to_s,
+            section_title: section[:title].to_s.presence || section[:id].to_s.titleize
+          )
+        end
+      end
+    end
+
     def summary_cards(sections, issues)
       processing = sections.find { |s| s[:id] == "processing" }
       storage = sections.find { |s| s[:id] == "storage" }
@@ -633,6 +656,20 @@ module ::MediaGallery
     end
 
     def normalized_alert_issues(result)
+      source_issues = Array(result[:issues]).presence
+      if source_issues.present?
+        return source_issues.map do |item|
+          {
+            section: item[:section_id].to_s.presence || item.dig(:metadata, :section_id).to_s,
+            id: item[:id].to_s,
+            label: item[:label].to_s,
+            severity: item[:severity].to_s,
+            count: item[:count].to_i,
+            message: item[:message].to_s,
+          }
+        end
+      end
+
       Array(result[:sections]).flat_map do |section|
         Array(section[:items]).filter_map do |item|
           next if item[:severity].to_s == "ok"

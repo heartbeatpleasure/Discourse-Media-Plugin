@@ -123,9 +123,9 @@ export default RouteTemplate(
 
       .mg-health__badge.is-warning,
       .mg-health__icon.is-warning {
-        background: var(--tertiary-very-low);
-        color: var(--tertiary);
-        border-color: var(--tertiary-low);
+        background: #fff3d6;
+        color: #9a5b00;
+        border-color: #ffc66d;
       }
 
       .mg-health__badge.is-danger,
@@ -317,6 +317,56 @@ export default RouteTemplate(
           </article>
         {{/each}}
       </section>
+
+      {{#if @controller.hasAttentionIssues}}
+        <section class="mg-health__panel">
+          <div class="mg-health__panel-header">
+            <div class="mg-health__panel-copy">
+              <h2>Issues requiring attention</h2>
+              <p class="mg-health__muted">These are the current warning or critical findings. Use the links and details below to investigate or fix them.</p>
+            </div>
+            <span class="mg-health__badge {{@controller.overallBadgeClass}}">{{@controller.overallSeverityLabel}}</span>
+          </div>
+
+          <div class="mg-health__issue-list" style="margin-top: 1rem;">
+            {{#each @controller.attentionIssues as |issue|}}
+              <article class="mg-health__issue">
+                <span class="mg-health__icon {{issue.iconClass}}">{{issue.icon}}</span>
+                <div>
+                  <div class="mg-health__issue-title">
+                    <span>{{issue.label}}</span>
+                    <span class="mg-health__badge">{{issue.sectionTitle}}</span>
+                    {{#if issue.countLabel}}
+                      <span class="mg-health__badge">{{issue.countLabel}}</span>
+                    {{/if}}
+                  </div>
+                  <p class="mg-health__issue-message">{{issue.message}}</p>
+                  {{#if issue.hasDetail}}
+                    <p class="mg-health__item-detail">{{issue.detail}}</p>
+                  {{/if}}
+                  {{#if issue.hasExamples}}
+                    <div class="mg-health__examples">
+                      {{#each issue.examples as |example|}}
+                        <div class="mg-health__example">
+                          {{#if example.url}}
+                            <a class="mg-health__example-title" href={{example.url}}>{{example.title}}</a>
+                          {{else}}
+                            <div class="mg-health__example-title">{{example.title}}</div>
+                          {{/if}}
+                          {{#if example.subtitle}}
+                            <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
+                          {{/if}}
+                        </div>
+                      {{/each}}
+                    </div>
+                  {{/if}}
+                </div>
+                <span class="mg-health__badge {{issue.badgeClass}}">{{issue.severityLabel}}</span>
+              </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
 
       <section class="mg-health__panel">
         <div class="mg-health__panel-header">
