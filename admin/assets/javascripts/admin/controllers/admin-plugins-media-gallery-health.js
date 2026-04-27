@@ -62,6 +62,22 @@ function formatNumber(value) {
   return new Intl.NumberFormat().format(number);
 }
 
+function formatDateTime(value) {
+  if (!value) {
+    return "—";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
 function decorateExample(example) {
   const title = stringify(example?.title || example?.public_id || example?.label);
   const subtitleParts = [];
@@ -84,9 +100,12 @@ function decorateExample(example) {
 
   return {
     ...example,
+    key: example?.key || `${example?.issue_type || "issue"}:${example?.public_id || title}`,
+    issueType: example?.issue_type || "missing_ready_asset",
     title,
     subtitle: subtitleParts.filter(Boolean).join(" • "),
     url: example?.url || null,
+    canIgnore: Boolean(example?.can_ignore && (example?.key || example?.public_id)),
   };
 }
 
@@ -101,7 +120,6 @@ function decorateIssue(issue) {
   return {
     ...issue,
     sectionTitle,
-
     severity,
     severityLabel: severityLabel(severity),
     badgeClass: badgeClass(severity),
@@ -143,6 +161,19 @@ function decorateCard(card) {
   };
 }
 
+function decorateIgnoredFinding(finding) {
+  return {
+    ...finding,
+    key: finding?.key || `${finding?.issue_type || "issue"}:${finding?.public_id || "unknown"}`,
+    issueType: finding?.issue_type || "missing_ready_asset",
+    title: stringify(finding?.title || finding?.public_id || "Media item"),
+    subtitle: [finding?.public_id, finding?.ignored_by_username ? `ignored by ${finding.ignored_by_username}` : "", formatDateTime(finding?.ignored_at)]
+      .filter(Boolean)
+      .join(" • "),
+    url: finding?.url || null,
+  };
+}
+
 export default class AdminPluginsMediaGalleryHealthController extends Controller {
   @tracked isLoading = false;
   @tracked isFullStorage = false;
@@ -152,6 +183,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked summaryCards = [];
   @tracked sections = [];
   @tracked attentionIssues = [];
+  @tracked ignoredFindings = [];
 
   resetState() {
     this.isLoading = false;
@@ -162,6 +194,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.summaryCards = [];
     this.sections = [];
     this.attentionIssues = [];
+    this.ignoredFindings = [];
   }
 
   get overallSeverity() {
@@ -184,14 +217,18 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     const state = this.data?.alert_state || {};
     return [
       { label: "Notify group", value: stringify(state.group || "admins") },
-      { label: "Last sent", value: stringify(state.sent_at) },
-      { label: "Last attempted", value: stringify(state.attempted_at) },
+      { label: "Last sent", value: formatDateTime(state.sent_at) },
+      { label: "Last attempted", value: formatDateTime(state.attempted_at) },
       { label: "Last error", value: stringify(state.error) },
     ];
   }
 
   get hasAttentionIssues() {
     return this.attentionIssues.length > 0;
+  }
+
+  get hasIgnoredFindings() {
+    return this.ignoredFindings.length > 0;
   }
 
   flattenAttentionIssues(data) {
@@ -220,6 +257,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       ? data.sections.map(decorateSection)
       : [];
     this.attentionIssues = this.flattenAttentionIssues(data);
+    this.ignoredFindings = Array.isArray(data?.ignored_findings)
+      ? data.ignored_findings.map(decorateIgnoredFinding)
+      : [];
   }
 
   errorMessage(error) {
@@ -252,7 +292,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       this.isFullStorage = Boolean(data?.full_storage);
       this.applyResponse(data);
       this.notice = fullStorage
-        ? "Full storage check completed."
+        ? "Full storage check completed. The result will remain visible until the next full check."
         : "Health summary refreshed.";
     } catch (error) {
       this.error = this.errorMessage(error);
@@ -271,5 +311,70 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   runFullStorage(event) {
     event?.preventDefault?.();
     return this.loadHealth({ fullStorage: true });
+  }
+
+  @action
+  async ignoreFinding(issue, example, event) {
+    event?.preventDefault?.();
+    if (!example?.canIgnore || this.isLoading) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Ignore this storage finding? It will no longer affect health status until you unignore it or a different issue is found."
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    this.isLoading = true;
+    this.error = "";
+    this.notice = "";
+    try {
+      const data = await ajax("/admin/plugins/media-gallery/health/ignore.json", {
+        type: "POST",
+        data: {
+          key: example.key,
+          public_id: example.public_id,
+          issue_type: example.issueType,
+          title: example.title,
+          reason: issue?.label || "Health finding ignored by admin",
+        },
+      });
+      this.applyResponse(data);
+      this.notice = "Health finding ignored.";
+    } catch (error) {
+      this.error = this.errorMessage(error);
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  @action
+  async unignoreFinding(finding, event) {
+    event?.preventDefault?.();
+    if (!finding?.key || this.isLoading) {
+      return;
+    }
+
+    this.isLoading = true;
+    this.error = "";
+    this.notice = "";
+    try {
+      const data = await ajax("/admin/plugins/media-gallery/health/ignore.json", {
+        type: "DELETE",
+        data: {
+          key: finding.key,
+          public_id: finding.public_id,
+          issue_type: finding.issueType,
+        },
+      });
+      this.applyResponse(data);
+      this.notice = "Health finding restored.";
+    } catch (error) {
+      this.error = this.errorMessage(error);
+    } finally {
+      this.isLoading = false;
+    }
   }
 }

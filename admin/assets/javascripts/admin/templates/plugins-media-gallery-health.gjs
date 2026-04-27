@@ -1,4 +1,5 @@
 import RouteTemplate from "ember-route-template";
+import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { i18n } from "discourse-i18n";
 
@@ -86,6 +87,17 @@ export default RouteTemplate(
         border-radius: 16px;
         padding: 0.9rem 1rem;
         min-width: 0;
+      }
+
+      .mg-health__summary-card {
+        position: relative;
+        padding-right: 5rem;
+      }
+
+      .mg-health__summary-card > .mg-health__badge {
+        position: absolute;
+        right: 1rem;
+        top: 0.9rem;
       }
 
       .mg-health__summary-label {
@@ -203,6 +215,19 @@ export default RouteTemplate(
         overflow-wrap: anywhere;
       }
 
+      .mg-health__example-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.55rem;
+      }
+
+      .mg-health__example-actions .btn {
+        font-size: var(--font-down-1);
+        min-height: 0;
+        padding: 0.35rem 0.6rem;
+      }
+
       .mg-health__info {
         position: relative;
         display: inline-flex;
@@ -313,7 +338,7 @@ export default RouteTemplate(
           <article class="mg-health__summary-card">
             <div class="mg-health__summary-label">{{card.label}}</div>
             <div class="mg-health__summary-value">{{card.value}}</div>
-            <div style="margin-top: 0.5rem;"><span class="mg-health__badge {{card.badgeClass}}">{{card.severity}}</span></div>
+            <span class="mg-health__badge {{card.badgeClass}}">{{card.severity}}</span>
           </article>
         {{/each}}
       </section>
@@ -349,13 +374,21 @@ export default RouteTemplate(
                       {{#each issue.examples as |example|}}
                         <div class="mg-health__example">
                           {{#if example.url}}
-                            <a class="mg-health__example-title" href={{example.url}}>{{example.title}}</a>
+                            <a class="mg-health__example-title" href={{example.url}} target="_blank" rel="noopener noreferrer">{{example.title}}</a>
                           {{else}}
                             <div class="mg-health__example-title">{{example.title}}</div>
                           {{/if}}
                           {{#if example.subtitle}}
                             <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
                           {{/if}}
+                          <div class="mg-health__example-actions">
+                            {{#if example.url}}
+                              <a class="btn" href={{example.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
+                            {{/if}}
+                            {{#if example.canIgnore}}
+                              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.ignoreFinding issue example)}}>Ignore finding</button>
+                            {{/if}}
+                          </div>
                         </div>
                       {{/each}}
                     </div>
@@ -363,6 +396,41 @@ export default RouteTemplate(
                 </div>
                 <span class="mg-health__badge {{issue.badgeClass}}">{{issue.severityLabel}}</span>
               </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
+
+      {{#if @controller.hasIgnoredFindings}}
+        <section class="mg-health__panel">
+          <div class="mg-health__panel-header">
+            <div class="mg-health__panel-copy">
+              <h2>Ignored findings</h2>
+              <p class="mg-health__muted">These findings no longer affect the health status. Restore them if they should be checked again.</p>
+            </div>
+            <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">Ignored storage findings are excluded from warning and critical status. They are not deleted; they are only suppressed for health reporting until an admin restores them.</span></span>
+          </div>
+          <div class="mg-health__examples" style="margin-top: 1rem;">
+            {{#each @controller.ignoredFindings as |finding|}}
+              <div class="mg-health__example">
+                {{#if finding.url}}
+                  <a class="mg-health__example-title" href={{finding.url}} target="_blank" rel="noopener noreferrer">{{finding.title}}</a>
+                {{else}}
+                  <div class="mg-health__example-title">{{finding.title}}</div>
+                {{/if}}
+                {{#if finding.subtitle}}
+                  <div class="mg-health__example-subtitle">{{finding.subtitle}}</div>
+                {{/if}}
+                {{#if finding.reason}}
+                  <div class="mg-health__example-subtitle">{{finding.reason}}</div>
+                {{/if}}
+                <div class="mg-health__example-actions">
+                  {{#if finding.url}}
+                    <a class="btn" href={{finding.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
+                  {{/if}}
+                  <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.unignoreFinding finding)}}>Unignore</button>
+                </div>
+              </div>
             {{/each}}
           </div>
         </section>
@@ -422,13 +490,21 @@ export default RouteTemplate(
                         {{#each issue.examples as |example|}}
                           <div class="mg-health__example">
                             {{#if example.url}}
-                              <a class="mg-health__example-title" href={{example.url}}>{{example.title}}</a>
+                              <a class="mg-health__example-title" href={{example.url}} target="_blank" rel="noopener noreferrer">{{example.title}}</a>
                             {{else}}
                               <div class="mg-health__example-title">{{example.title}}</div>
                             {{/if}}
                             {{#if example.subtitle}}
                               <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
                             {{/if}}
+                            <div class="mg-health__example-actions">
+                              {{#if example.url}}
+                                <a class="btn" href={{example.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
+                              {{/if}}
+                              {{#if example.canIgnore}}
+                                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.ignoreFinding issue example)}}>Ignore finding</button>
+                              {{/if}}
+                            </div>
                           </div>
                         {{/each}}
                       </div>

@@ -247,7 +247,24 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   async loadInitial() {
+    this.applyInitialQueryState();
     await this.search();
+    if (this.selectedPublicId) {
+      await this.refreshSelected();
+    }
+  }
+
+  applyInitialQueryState() {
+    const params = new URLSearchParams(window.location?.search || "");
+    const publicId = String(params.get("public_id") || "").trim();
+    const query = String(params.get("q") || publicId || "").trim();
+
+    if (query) {
+      this.searchQuery = query;
+    }
+    if (publicId) {
+      this.selectedPublicId = publicId;
+    }
   }
 
   willDestroy() {

@@ -11,6 +11,8 @@ module ::MediaGallery
 
     STORE_NAMESPACE = "media_gallery_health"
     LAST_ALERT_KEY = "last_alert"
+    LAST_FULL_STORAGE_CHECK_KEY = "last_full_storage_check"
+    IGNORED_FINDINGS_KEY = "ignored_findings"
     SEVERITY_ORDER = { "ok" => 0, "warning" => 1, "critical" => 2 }.freeze
     VALID_NOTIFY_SEVERITIES = %w[warning critical].freeze
 
@@ -37,6 +39,8 @@ module ::MediaGallery
         sections: sections,
         issues: issues,
         alert_state: last_alert_state,
+        ignored_findings: ignored_findings_for_ui,
+        last_full_storage_check: last_full_storage_check_summary,
       }
     rescue => e
       Rails.logger.error("[media_gallery] health summary failed: #{e.class}: #{e.message}")
@@ -74,6 +78,8 @@ module ::MediaGallery
           ),
         ],
         alert_state: last_alert_state,
+        ignored_findings: ignored_findings_for_ui,
+        last_full_storage_check: last_full_storage_check_summary,
       }
     end
 
@@ -246,15 +252,37 @@ module ::MediaGallery
       end
 
       if full_storage
-        missing = missing_asset_examples(limit: setting_int(:media_gallery_health_ready_asset_sample_limit, 40))
+        raw_missing = missing_asset_examples(limit: setting_int(:media_gallery_health_ready_asset_sample_limit, 40))
+        store_full_storage_check!(raw_missing)
+        active_missing = active_missing_rows(raw_missing)
+        ignored_count = ignored_matching_rows(raw_missing).length
+        checked_at = Time.zone.now.iso8601
+
         items << issue(
           id: "missing_ready_assets",
           label: "Ready item asset check",
-          severity: missing.present? ? "critical" : "ok",
-          count: missing.length,
-          message: missing.present? ? "Ready media items have missing or incomplete stored assets." : "Sampled ready media items have required assets.",
-          detail: "This full check verifies a bounded sample of ready items against their active storage profile.",
-          examples: missing.first(8)
+          severity: active_missing.present? ? "critical" : "ok",
+          count: active_missing.length,
+          message: active_missing.present? ? "#{active_missing.length} ready media item#{'s' if active_missing.length != 1} have missing required asset files." : "No missing required files found in the sampled ready items.",
+          detail: full_storage_detail(raw_missing.length, active_missing.length, ignored_count, checked_at: checked_at),
+          examples: active_missing.first(10),
+          metadata: { checked_at: checked_at, full_storage: true }
+        )
+      elsif (cached = last_full_storage_check).present?
+        raw_missing = Array(cached["missing_assets"])
+        active_missing = active_missing_rows(raw_missing)
+        ignored_count = ignored_matching_rows(raw_missing).length
+        checked_at = cached["checked_at"].to_s.presence
+
+        items << issue(
+          id: "missing_ready_assets_cached",
+          label: "Last full ready item asset check",
+          severity: active_missing.present? ? "critical" : "ok",
+          count: active_missing.length,
+          message: active_missing.present? ? "The last full storage check found #{active_missing.length} ready media item#{'s' if active_missing.length != 1} with missing required asset files." : "The last full storage check has no active missing-file findings.",
+          detail: full_storage_detail(raw_missing.length, active_missing.length, ignored_count, checked_at: checked_at, cached: true),
+          examples: active_missing.first(10),
+          metadata: { checked_at: checked_at, full_storage: false, cached: true }
         )
       else
         ready_count = safe_count(::MediaGallery::MediaItem.where(status: "ready"))
@@ -263,16 +291,28 @@ module ::MediaGallery
           label: "Ready item asset check",
           severity: "ok",
           count: ready_count,
-          message: "Full ready-asset verification was not run for this refresh.",
-          detail: "Use Run full storage check to verify a bounded sample of ready items. The scheduled watchdog keeps this light to avoid heavy S3/storage scans."
+          message: "Full ready-asset verification has not been run yet.",
+          detail: "Use Run full storage check to verify a bounded sample of ready items. The result is kept on this page until the next full check, so refreshes keep showing the latest storage findings."
+        )
+      end
+
+      ignored_count = ignored_findings_hash.length
+      if ignored_count.positive?
+        items << issue(
+          id: "ignored_storage_findings",
+          label: "Ignored storage findings",
+          severity: "ok",
+          count: ignored_count,
+          message: "#{ignored_count} storage finding#{'s' if ignored_count != 1} ignored by admins.",
+          detail: "Ignored findings are listed separately on this page and can be restored with Unignore."
         )
       end
 
       section(
         id: "storage",
         title: "Storage health",
-        description: "Check configured storage profiles and optional sampled asset availability.",
-        help: "The regular watchdog performs light storage checks. The full storage check may call S3/local exists checks for sampled items.",
+        description: "Check configured storage profiles and sampled asset availability.",
+        help: "The regular watchdog performs light storage checks and reuses the latest full storage result. Run full storage check to refresh the stored missing-file findings. Ignored findings are excluded from warning and critical status.",
         items: items
       )
     end
@@ -413,38 +453,57 @@ module ::MediaGallery
         missing = missing_roles_for(item)
         next if missing.blank?
 
-        rows << {
-          public_id: item.public_id,
-          title: item.title.to_s.presence || "Untitled media",
-          status: item.status,
-          missing: missing.join(", "),
-          updated_at: item.updated_at&.iso8601,
-          url: "/admin/plugins/media-gallery-management?public_id=#{CGI.escape(item.public_id.to_s)}",
-        }
+        rows << missing_asset_row(item, missing)
       rescue => e
         rows << {
+          key: ignore_key_for("missing_ready_asset", item.public_id),
+          issue_type: "missing_ready_asset",
           public_id: item.public_id,
           title: item.title.to_s.presence || "Untitled media",
           status: item.status,
           missing: "check failed",
           detail: "#{e.class}: #{e.message}".truncate(300),
           updated_at: item.updated_at&.iso8601,
-          url: "/admin/plugins/media-gallery-management?public_id=#{CGI.escape(item.public_id.to_s)}",
+          url: management_url_for(item.public_id),
+          can_ignore: true,
         }
       end
       rows
     end
 
+    def missing_asset_row(item, missing)
+      {
+        key: ignore_key_for("missing_ready_asset", item.public_id),
+        issue_type: "missing_ready_asset",
+        public_id: item.public_id,
+        title: item.title.to_s.presence || "Untitled media",
+        status: item.status,
+        missing: missing.join(", "),
+        updated_at: item.updated_at&.iso8601,
+        url: management_url_for(item.public_id),
+        can_ignore: true,
+      }
+    end
+
     def missing_roles_for(item)
       missing = []
-      missing << "main" unless role_available?(item, "main")
+
+      if item.media_type.to_s == "video" && ::MediaGallery::AssetManifest.role_for(item, "hls").present?
+        missing << "hls" unless role_available?(item, "hls")
+      else
+        missing << "main" unless role_available?(item, "main")
+      end
+
       if item.media_type.to_s != "audio"
         missing << "thumbnail" unless role_available?(item, "thumbnail")
       end
-      if item.media_type.to_s == "video" && ::MediaGallery::AssetManifest.role_for(item, "hls").present?
-        missing << "hls" unless role_available?(item, "hls")
-      end
+
       missing
+    end
+
+    def management_url_for(public_id)
+      encoded = CGI.escape(public_id.to_s)
+      "/admin/plugins/media-gallery-management?q=#{encoded}&public_id=#{encoded}"
     end
 
     def role_available?(item, role_name)
@@ -635,9 +694,140 @@ module ::MediaGallery
           updated_at: item.updated_at&.iso8601,
           age: human_age(base_time),
           error: item.error_message.to_s.presence,
-          url: "/admin/plugins/media-gallery-management?public_id=#{CGI.escape(item.public_id.to_s)}",
+          url: management_url_for(item.public_id),
         }.compact
       end
+    end
+
+    def ignore_finding!(params, user:)
+      key = params[:key].to_s.strip
+      public_id = params[:public_id].to_s.strip
+      issue_type = params[:issue_type].to_s.strip.presence || "missing_ready_asset"
+
+      if key.blank? && public_id.present?
+        key = ignore_key_for(issue_type, public_id)
+      end
+
+      raise Discourse::InvalidParameters.new(:key) unless valid_ignore_key?(key)
+
+      ignored = ignored_findings_hash
+      ignored[key] = {
+        "key" => key,
+        "issue_type" => issue_type,
+        "public_id" => public_id.presence || key.split(":").last,
+        "title" => params[:title].to_s.strip.truncate(200),
+        "reason" => ::MediaGallery::TextSanitizer.plain_text(params[:reason].to_s, max_length: 300, allow_newlines: false),
+        "ignored_at" => Time.zone.now.iso8601,
+        "ignored_by_user_id" => user&.id,
+        "ignored_by_username" => user&.username,
+      }.compact
+      ::PluginStore.set(STORE_NAMESPACE, IGNORED_FINDINGS_KEY, ignored)
+      true
+    end
+
+    def unignore_finding!(params)
+      key = params[:key].to_s.strip
+      public_id = params[:public_id].to_s.strip
+      issue_type = params[:issue_type].to_s.strip.presence || "missing_ready_asset"
+      key = ignore_key_for(issue_type, public_id) if key.blank? && public_id.present?
+      raise Discourse::InvalidParameters.new(:key) unless valid_ignore_key?(key)
+
+      ignored = ignored_findings_hash
+      ignored.delete(key)
+      ::PluginStore.set(STORE_NAMESPACE, IGNORED_FINDINGS_KEY, ignored)
+      true
+    end
+
+    def ignored_findings_for_ui
+      ignored_findings_hash.values.map do |entry|
+        public_id = entry["public_id"].to_s
+        item = public_id.present? ? ::MediaGallery::MediaItem.find_by(public_id: public_id) : nil
+        title = item&.title.to_s.presence || entry["title"].to_s.presence || "Media item"
+        {
+          key: entry["key"].to_s,
+          issue_type: entry["issue_type"].to_s.presence || "missing_ready_asset",
+          public_id: public_id,
+          title: title,
+          ignored_at: entry["ignored_at"],
+          ignored_by_username: entry["ignored_by_username"],
+          reason: entry["reason"].to_s.presence,
+          url: public_id.present? ? management_url_for(public_id) : nil,
+        }.compact
+      end.sort_by { |entry| entry[:ignored_at].to_s }.reverse
+    rescue
+      []
+    end
+
+    def ignored_findings_hash
+      value = ::PluginStore.get(STORE_NAMESPACE, IGNORED_FINDINGS_KEY)
+      value.is_a?(Hash) ? value.deep_stringify_keys : {}
+    rescue
+      {}
+    end
+
+    def store_full_storage_check!(missing_rows)
+      ::PluginStore.set(
+        STORE_NAMESPACE,
+        LAST_FULL_STORAGE_CHECK_KEY,
+        {
+          "checked_at" => Time.zone.now.iso8601,
+          "missing_assets" => Array(missing_rows).map { |row| row.deep_stringify_keys },
+        }
+      )
+    rescue => e
+      Rails.logger.warn("[media_gallery] storing full storage health result failed: #{e.class}: #{e.message}")
+    end
+
+    def last_full_storage_check
+      value = ::PluginStore.get(STORE_NAMESPACE, LAST_FULL_STORAGE_CHECK_KEY)
+      value.is_a?(Hash) ? value.deep_stringify_keys : {}
+    rescue
+      {}
+    end
+
+    def last_full_storage_check_summary
+      cached = last_full_storage_check
+      return nil if cached.blank?
+
+      raw_missing = Array(cached["missing_assets"])
+      {
+        checked_at: cached["checked_at"],
+        raw_missing_count: raw_missing.length,
+        active_missing_count: active_missing_rows(raw_missing).length,
+        ignored_missing_count: ignored_matching_rows(raw_missing).length,
+      }
+    end
+
+    def active_missing_rows(rows)
+      ignored = ignored_findings_hash
+      Array(rows).reject { |row| ignored.key?(row_key(row)) }
+    end
+
+    def ignored_matching_rows(rows)
+      ignored = ignored_findings_hash
+      Array(rows).select { |row| ignored.key?(row_key(row)) }
+    end
+
+    def row_key(row)
+      data = row.respond_to?(:deep_stringify_keys) ? row.deep_stringify_keys : row
+      data["key"].to_s.presence || ignore_key_for(data["issue_type"].presence || "missing_ready_asset", data["public_id"])
+    end
+
+    def ignore_key_for(issue_type, public_id)
+      safe_type = issue_type.to_s.gsub(/[^a-z0-9_:-]/i, "_").downcase.presence || "missing_ready_asset"
+      safe_public_id = public_id.to_s.gsub(/[^a-z0-9_-]/i, "")
+      "#{safe_type}:#{safe_public_id}"
+    end
+
+    def valid_ignore_key?(key)
+      key.to_s.match?(/\A[a-z0-9_:-]{8,180}\z/)
+    end
+
+    def full_storage_detail(raw_count, active_count, ignored_count, checked_at:, cached: false)
+      prefix = cached ? "This is the latest stored full storage result" : "This full storage check result"
+      checked = checked_at.present? ? " from #{checked_at}" : ""
+      ignored = ignored_count.positive? ? " #{ignored_count} finding#{'s' if ignored_count != 1} are ignored and excluded from health status." : ""
+      "#{prefix}#{checked}. It found #{raw_count} total missing-file finding#{'s' if raw_count != 1}; #{active_count} active.#{ignored} Run full storage check again after fixing files to refresh this result."
     end
 
     def build_alert_pm_body(result, issues)

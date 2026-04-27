@@ -12,6 +12,26 @@ module ::MediaGallery
       render_json_error("health_check_failed", status: 422, message: "Health check failed. Please check Rails logs and try again.")
     end
 
+    def ignore
+      ::MediaGallery::HealthCheck.ignore_finding!(params, user: current_user)
+      render_json_dump(::MediaGallery::HealthCheck.summary(full_storage: false))
+    rescue Discourse::InvalidParameters
+      render_json_error("invalid_ignore_key", status: 422, message: "This health finding cannot be ignored.")
+    rescue => e
+      Rails.logger.error("[media_gallery] health ignore failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      render_json_error("health_ignore_failed", status: 422, message: "Could not ignore this health finding. Please check Rails logs and try again.")
+    end
+
+    def unignore
+      ::MediaGallery::HealthCheck.unignore_finding!(params)
+      render_json_dump(::MediaGallery::HealthCheck.summary(full_storage: false))
+    rescue Discourse::InvalidParameters
+      render_json_error("invalid_ignore_key", status: 422, message: "This health finding cannot be restored.")
+    rescue => e
+      Rails.logger.error("[media_gallery] health unignore failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      render_json_error("health_unignore_failed", status: 422, message: "Could not restore this health finding. Please check Rails logs and try again.")
+    end
+
     def notify_test
       result = ::MediaGallery::HealthCheck.summary(full_storage: false)
       sent = ::MediaGallery::HealthCheck.maybe_notify!(result)
