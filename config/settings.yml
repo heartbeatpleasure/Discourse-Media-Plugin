@@ -926,3 +926,55 @@ plugins:
   media_gallery_report_notify_group:
     default: "staff"
     client: false
+
+  media_gallery_health_watchdog_enabled:
+    default: true
+    client: false
+
+  media_gallery_health_notify_group:
+    default: "admins"
+    type: string
+    client: false
+
+  media_gallery_health_notify_min_severity:
+    default: "warning"
+    type: enum
+    choices:
+      - warning
+      - critical
+    client: false
+
+  media_gallery_health_alert_cooldown_hours:
+    default: 24
+    type: integer
+    min: 1
+    max: 168
+    client: false
+
+  media_gallery_health_stuck_processing_minutes:
+    default: 240
+    type: integer
+    min: 15
+    max: 10080
+    client: false
+
+  media_gallery_health_stuck_queued_minutes:
+    default: 60
+    type: integer
+    min: 15
+    max: 10080
+    client: false
+
+  media_gallery_health_failed_items_critical_threshold:
+    default: 10
+    type: integer
+    min: 1
+    max: 1000
+    client: false
+
+  media_gallery_health_ready_asset_sample_limit:
+    default: 40
+    type: integer
+    min: 1
+    max: 500
+    client: false

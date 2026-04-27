@@ -56,6 +56,7 @@ after_initialize do
   require_relative "lib/media_gallery/forensics_identify"
   require_relative "lib/media_gallery/log_events"
   require_relative "lib/media_gallery/processing_notifications"
+  require_relative "lib/media_gallery/health_check"
 
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
@@ -70,6 +71,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_media_items_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_reports_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_health_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_logs_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_storage_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
@@ -84,6 +86,7 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_cleanup_source_after_switch.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
+  require_dependency File.expand_path("jobs/scheduled/media_gallery_health_watchdog.rb", __dir__)
 
   Discourse::Application.routes.append do
     # Admin UI page (served by the admin Ember app)
@@ -94,6 +97,7 @@ after_initialize do
     get "/admin/plugins/media-gallery-migrations" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-management" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-reports" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-health" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-logs" => "admin/plugins#index", constraints: AdminConstraint.new
 
     get "/media-library" => "media_gallery/library#index"
@@ -116,6 +120,7 @@ after_initialize do
     # Admin-only helper to find media items by public_id/title/id.
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
     get "/admin/plugins/media-gallery/reports" => "media_gallery/admin_reports#index", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/health" => "media_gallery/admin_health#index", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/review" => "media_gallery/admin_reports#review", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/block-owner" => "media_gallery/admin_reports#block_owner", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/unblock-owner" => "media_gallery/admin_reports#unblock_owner", defaults: { format: :json }

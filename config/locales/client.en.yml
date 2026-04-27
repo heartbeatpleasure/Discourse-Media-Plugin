@@ -155,6 +155,11 @@ en:
           short_title: "Reports"
           description: "Review user reports, hide media, delete reported asset files, or reject reports while keeping an audit trail."
 
+        health:
+          title: "Media Gallery Health"
+          short_title: "Health"
+          description: "Review processing, storage, settings, permissions, and moderation health from one admin page."
+
         logs:
           title: "Logs"
           short_title: "Logs"
