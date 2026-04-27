@@ -575,11 +575,17 @@ export default RouteTemplate(
               </div>
               <p class="mg-reports__muted" style="margin-top: 0.35rem;">{{@controller.ownerAccessSummary}}</p>
               <div class="mg-reports__actions" style="margin-top: 1rem;">
-                <button class="btn btn-danger" type="button" disabled={{@controller.ownerBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "block")}}>
-                  Block uploader from media section
+                <button class="btn btn-danger" type="button" disabled={{@controller.ownerViewBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "view-block")}}>
+                  Block view & upload
                 </button>
-                <button class="btn" type="button" disabled={{@controller.ownerUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "unblock")}}>
-                  Unblock
+                <button class="btn" type="button" disabled={{@controller.ownerViewUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "view-unblock")}}>
+                  Restore view
+                </button>
+                <button class="btn btn-danger" type="button" disabled={{@controller.ownerUploadBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "upload-block")}}>
+                  Block upload only
+                </button>
+                <button class="btn" type="button" disabled={{@controller.ownerUploadUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "upload-unblock")}}>
+                  Restore upload
                 </button>
               </div>
             </section>

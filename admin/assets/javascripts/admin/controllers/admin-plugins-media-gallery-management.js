@@ -90,7 +90,7 @@ function stringifyValue(value, key = "") {
     return value ? "Hidden" : "Visible";
   }
 
-  if (key === "owner_media_blocked") {
+  if (key === "owner_media_blocked" || key === "owner_media_view_blocked" || key === "owner_media_upload_blocked") {
     return value ? "Blocked" : "Allowed";
   }
 
@@ -121,9 +121,15 @@ function formatHistoryAction(action) {
     case "admin_note":
       return "Added admin note";
     case "block_owner":
-      return "Blocked uploader from media";
+    case "block_owner_view":
+      return "Blocked uploader from view and upload";
     case "unblock_owner":
-      return "Unblocked uploader from media";
+    case "unblock_owner_view":
+      return "Unblocked uploader from view and upload";
+    case "block_owner_upload":
+      return "Blocked uploader from upload only";
+    case "unblock_owner_upload":
+      return "Unblocked uploader from upload only";
     default:
       return titleize(action || "change");
   }
@@ -376,11 +382,11 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     if (!access.user_blockable) {
       return "Not blockable (staff/admin)";
     }
-    if (access.blocked_by_quick_group) {
-      return `Blocked by ${access.quick_block_group_name || "quick block group"}`;
+    if (access.view_blocked) {
+      return "View and upload blocked";
     }
-    if (access.blocked_by_media_groups) {
-      return "Blocked by media blocked groups";
+    if (access.upload_only_blocked || access.upload_blocked) {
+      return "Upload blocked, view allowed";
     }
     return "Allowed";
   }
@@ -390,25 +396,22 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     if (!access?.user_id) {
       return "The media uploader could not be found.";
     }
-    if (!access.quick_block_group_name) {
-      return "Configure the Media gallery quick block group setting to enable quick blocking.";
-    }
-    if (!access.quick_block_group_exists) {
-      return "The configured quick block group does not exist.";
-    }
-    if (!access.quick_block_group_usable) {
-      return "Use a regular custom group for quick blocking, not an automatic system group.";
+    if (!access.quick_block_group_name && !access.quick_upload_block_group_name) {
+      return "Configure the media quick view block group and/or quick upload block group settings to enable quick blocking.";
     }
     if (!access.user_blockable) {
       return "Staff and admin users cannot be blocked from the media section.";
     }
-    if (access.blocked_by_quick_group) {
-      return "This removes the uploader from the quick block group only.";
+    if (access.view_blocked) {
+      return "This uploader cannot view media and therefore cannot upload either. A view block always takes priority over upload permissions.";
     }
-    return "This adds the uploader to the configured quick block group, which blocks both viewing and uploading in the media section.";
+    if (access.upload_only_blocked || access.upload_blocked) {
+      return "This uploader can still view media if viewer rules allow it, but cannot upload to the media section.";
+    }
+    return "Use view block to deny both viewing and uploading, or upload-only block to keep viewing allowed while preventing uploads.";
   }
 
-  get ownerBlockActionDisabled() {
+  get ownerViewBlockDisabled() {
     const access = this.ownerMediaAccess;
     return !(
       this.hasSelectedItem &&
@@ -417,19 +420,67 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       access.quick_block_group_name &&
       access.quick_block_group_exists &&
       access.quick_block_group_usable &&
-      access.user_blockable
+      access.user_blockable &&
+      !access.blocked_by_quick_group
     );
+  }
+
+  get ownerViewUnblockDisabled() {
+    const access = this.ownerMediaAccess;
+    return !(
+      this.hasSelectedItem &&
+      !this.isBlockingOwner &&
+      access?.user_id &&
+      access.quick_block_group_name &&
+      access.quick_block_group_exists &&
+      access.quick_block_group_usable &&
+      access.user_blockable &&
+      access.blocked_by_quick_group
+    );
+  }
+
+  get ownerUploadBlockDisabled() {
+    const access = this.ownerMediaAccess;
+    return !(
+      this.hasSelectedItem &&
+      !this.isBlockingOwner &&
+      access?.user_id &&
+      access.quick_upload_block_group_name &&
+      access.quick_upload_block_group_exists &&
+      access.quick_upload_block_group_usable &&
+      access.user_blockable &&
+      !access.upload_blocked_by_quick_group &&
+      !access.view_blocked
+    );
+  }
+
+  get ownerUploadUnblockDisabled() {
+    const access = this.ownerMediaAccess;
+    return !(
+      this.hasSelectedItem &&
+      !this.isBlockingOwner &&
+      access?.user_id &&
+      access.quick_upload_block_group_name &&
+      access.quick_upload_block_group_exists &&
+      access.quick_upload_block_group_usable &&
+      access.user_blockable &&
+      access.upload_blocked_by_quick_group
+    );
+  }
+
+  get ownerBlockActionDisabled() {
+    return this.ownerViewBlockDisabled;
   }
 
   get ownerBlockButtonLabel() {
     if (this.isBlockingOwner) {
       return "Updating…";
     }
-    return this.ownerMediaAccess?.blocked_by_quick_group ? "Unblock" : "Block uploader from media section";
+    return "Block view & upload";
   }
 
   get ownerBlockButtonClass() {
-    return this.ownerMediaAccess?.blocked_by_quick_group ? "btn" : "btn btn-danger";
+    return "btn btn-danger";
   }
 
   get hiddenButtonLabel() {
@@ -1066,18 +1117,43 @@ This cannot be undone.`)) {
   }
 
   @action
-  async toggleOwnerMediaBlock() {
-    if (this.ownerBlockActionDisabled) {
+  async toggleOwnerMediaBlock(actionType = "view-block") {
+    if (this.isBlockingOwner || !this.hasSelectedItem) {
       return;
     }
 
     const access = this.ownerMediaAccess;
     const username = String(access?.username || this.selectedItem?.username || "this user").trim();
-    const isUnblock = !!access?.blocked_by_quick_group;
-    const endpoint = isUnblock ? "unblock-owner" : "block-owner";
-    const confirmText = isUnblock
-      ? `Remove ${username} from the media quick block group?`
-      : `Block ${username} from viewing and uploading media?`;
+
+    let endpoint = "block-owner";
+    let confirmText = `Block ${username} from viewing and uploading media?`;
+    let fallbackMessage = "Uploader access updated.";
+
+    switch (actionType) {
+      case "view-unblock":
+        if (this.ownerViewUnblockDisabled) return;
+        endpoint = "unblock-owner";
+        confirmText = `Remove ${username} from the media view block group?`;
+        fallbackMessage = "Uploader view access restored.";
+        break;
+      case "upload-block":
+        if (this.ownerUploadBlockDisabled) return;
+        endpoint = "block-owner-upload";
+        confirmText = `Block ${username} from uploading only? They will still be able to view media if viewer rules allow it.`;
+        fallbackMessage = "Uploader blocked from uploading.";
+        break;
+      case "upload-unblock":
+        if (this.ownerUploadUnblockDisabled) return;
+        endpoint = "unblock-owner-upload";
+        confirmText = `Remove ${username} from the media upload block group?`;
+        fallbackMessage = "Uploader upload access restored.";
+        break;
+      case "view-block":
+      default:
+        if (this.ownerViewBlockDisabled) return;
+        endpoint = "block-owner";
+        break;
+    }
 
     if (!window.confirm(confirmText)) {
       return;
@@ -1096,7 +1172,7 @@ This cannot be undone.`)) {
       this.selectedItem = json?.item || this.selectedItem;
       this._syncEditForm(this.selectedItem);
       this.noticeTone = "success";
-      this.noticeMessage = json?.message || (isUnblock ? "Uploader unblocked from media." : "Uploader blocked from media.");
+      this.noticeMessage = json?.message || fallbackMessage;
       this._syncSearchResult(this.selectedItem);
     } catch (e) {
       this.selectionError = e?.message || String(e);

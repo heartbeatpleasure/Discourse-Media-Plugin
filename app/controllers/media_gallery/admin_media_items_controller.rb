@@ -399,75 +399,19 @@ module ::MediaGallery
     end
 
     def block_owner
-      item = load_item!
-      owner = item.user
-      return render_json_error("media_owner_not_found", status: 422) if owner.blank?
-
-      group = quick_block_group
-      state = owner_media_access_payload(owner, group: group)
-      return render_owner_access_error(state[:reason]) unless state[:can_quick_block]
-
-      note = sanitized_admin_note
-      ::GroupUser.find_or_create_by!(group_id: group.id, user_id: owner.id)
-      owner.reload
-
-      append_owner_access_log!(
-        item,
-        owner: owner,
-        action: "block_owner",
-        note: note,
-        group: group,
-        from_blocked: false,
-        to_blocked: true
-      )
-
-      item.reload
-      ::MediaGallery::OperationLogger.warn(
-        "admin_media_owner_blocked",
-        item: item,
-        operation: "block_owner",
-        data: { owner_user_id: owner.id, owner_username: owner.username, group: group.name, requested_by: current_user.username, note_present: note.present? }
-      )
-
-      render_json_dump(ok: true, item: management_item_payload(item), message: "#{owner.username} has been blocked from the media library.")
-    rescue => e
-      render_operation_error(e, operation: "block_owner", item: item, status: 422)
+      update_owner_access_block(block_type: :view, block: true)
     end
 
     def unblock_owner
-      item = load_item!
-      owner = item.user
-      return render_json_error("media_owner_not_found", status: 422) if owner.blank?
+      update_owner_access_block(block_type: :view, block: false)
+    end
 
-      group = quick_block_group
-      state = owner_media_access_payload(owner, group: group)
-      return render_owner_access_error(state[:reason]) unless state[:can_quick_unblock]
+    def block_owner_upload
+      update_owner_access_block(block_type: :upload, block: true)
+    end
 
-      note = sanitized_admin_note
-      ::GroupUser.where(group_id: group.id, user_id: owner.id).destroy_all
-      owner.reload
-
-      append_owner_access_log!(
-        item,
-        owner: owner,
-        action: "unblock_owner",
-        note: note,
-        group: group,
-        from_blocked: true,
-        to_blocked: false
-      )
-
-      item.reload
-      ::MediaGallery::OperationLogger.info(
-        "admin_media_owner_unblocked",
-        item: item,
-        operation: "unblock_owner",
-        data: { owner_user_id: owner.id, owner_username: owner.username, group: group.name, requested_by: current_user.username, note_present: note.present? }
-      )
-
-      render_json_dump(ok: true, item: management_item_payload(item), message: "#{owner.username} has been removed from the media quick block group.")
-    rescue => e
-      render_operation_error(e, operation: "unblock_owner", item: item, status: 422)
+    def unblock_owner_upload
+      update_owner_access_block(block_type: :upload, block: false)
     end
 
     private
@@ -736,15 +680,36 @@ module ::MediaGallery
     end
 
     def quick_block_group_name
+      configured_group_name(:view)
+    end
+
+    def quick_upload_block_group_name
+      configured_group_name(:upload)
+    end
+
+    def configured_group_name(block_type)
+      setting =
+        block_type == :upload ?
+          SiteSetting.media_gallery_quick_upload_block_group :
+          SiteSetting.media_gallery_quick_block_group
+
       ::MediaGallery::TextSanitizer.plain_text(
-        SiteSetting.media_gallery_quick_block_group,
+        setting,
         max_length: 100,
         allow_newlines: false
       ).to_s.strip.presence
     end
 
     def quick_block_group
-      name = quick_block_group_name
+      configured_group(:view)
+    end
+
+    def quick_upload_block_group
+      configured_group(:upload)
+    end
+
+    def configured_group(block_type)
+      name = configured_group_name(block_type)
       return nil if name.blank?
 
       ::Group.where("LOWER(name) = ?", name.downcase).first
@@ -771,56 +736,108 @@ module ::MediaGallery
     end
 
     def owner_media_access_payload(user, group: nil)
-      configured_name = quick_block_group_name
-      group ||= quick_block_group
-      group_exists = group.present?
-      group_usable = quick_block_group_usable?(group)
+      view_group = group || quick_block_group
+      upload_group = quick_upload_block_group
+
+      view_configured_name = quick_block_group_name
+      upload_configured_name = quick_upload_block_group_name
+
+      view_group_exists = view_group.present?
+      upload_group_exists = upload_group.present?
+      view_group_usable = quick_block_group_usable?(view_group)
+      upload_group_usable = quick_block_group_usable?(upload_group)
 
       return {
         user_id: nil,
         username: nil,
-        quick_block_group_name: configured_name,
-        quick_block_group_exists: group_exists,
-        quick_block_group_usable: group_usable,
+        quick_block_group_name: view_configured_name,
+        quick_block_group_exists: view_group_exists,
+        quick_block_group_usable: view_group_usable,
+        quick_upload_block_group_name: upload_configured_name,
+        quick_upload_block_group_exists: upload_group_exists,
+        quick_upload_block_group_usable: upload_group_usable,
         user_blockable: false,
         blocked_by_quick_group: false,
         blocked_by_media_groups: false,
+        upload_blocked_by_quick_group: false,
+        upload_blocked_by_media_groups: false,
         blocked: false,
+        view_blocked: false,
+        upload_blocked: false,
+        upload_only_blocked: false,
         can_quick_block: false,
         can_quick_unblock: false,
+        can_quick_upload_block: false,
+        can_quick_upload_unblock: false,
         reason: "media_owner_not_found",
+        upload_reason: "media_owner_not_found",
       } if user.blank?
 
       user_blockable = !(user.admin? || user.staff?)
-      quick_member = group_exists ? user_member_of_group?(user, group) : false
-      media_blocked = user_blockable && user_member_of_named_groups?(user, ::MediaGallery::Permissions.blocked_groups)
 
+      view_quick_member = view_group_exists ? user_member_of_group?(user, view_group) : false
+      upload_quick_member = upload_group_exists ? user_member_of_group?(user, upload_group) : false
+
+      view_media_blocked = user_blockable && user_member_of_named_groups?(user, ::MediaGallery::Permissions.blocked_groups)
+      upload_media_blocked = user_blockable && user_member_of_named_groups?(user, ::MediaGallery::Permissions.upload_blocked_groups)
+
+      view_blocked = view_media_blocked
+      upload_only_blocked = upload_media_blocked
+      upload_blocked = view_blocked || upload_only_blocked
+
+      view_reason = owner_access_reason(
+        configured_name: view_configured_name,
+        group_exists: view_group_exists,
+        group_usable: view_group_usable,
+        user_blockable: user_blockable
+      )
+      upload_reason = owner_access_reason(
+        configured_name: upload_configured_name,
+        group_exists: upload_group_exists,
+        group_usable: upload_group_usable,
+        user_blockable: user_blockable
+      )
+
+      {
+        user_id: user.id,
+        username: user.username,
+        quick_block_group_name: view_configured_name,
+        quick_block_group_exists: view_group_exists,
+        quick_block_group_usable: view_group_usable,
+        quick_upload_block_group_name: upload_configured_name,
+        quick_upload_block_group_exists: upload_group_exists,
+        quick_upload_block_group_usable: upload_group_usable,
+        user_blockable: user_blockable,
+        blocked_by_quick_group: view_quick_member,
+        blocked_by_media_groups: view_media_blocked,
+        upload_blocked_by_quick_group: upload_quick_member,
+        upload_blocked_by_media_groups: upload_media_blocked,
+        blocked: view_blocked,
+        view_blocked: view_blocked,
+        upload_blocked: upload_blocked,
+        upload_only_blocked: upload_only_blocked,
+        can_quick_block: view_reason.blank? && !view_quick_member,
+        can_quick_unblock: view_reason.blank? && view_quick_member,
+        can_quick_upload_block: upload_reason.blank? && !upload_quick_member && !view_blocked,
+        can_quick_upload_unblock: upload_reason.blank? && upload_quick_member,
+        reason: view_reason,
+        upload_reason: upload_reason,
+      }
+    end
+
+    def owner_access_reason(configured_name:, group_exists:, group_usable:, user_blockable:)
       reason = nil
       reason ||= "media_gallery_quick_block_group_not_configured" if configured_name.blank?
       reason ||= "media_gallery_quick_block_group_not_found" if configured_name.present? && !group_exists
       reason ||= "media_gallery_quick_block_group_not_usable" if group_exists && !group_usable
       reason ||= "media_owner_is_staff" unless user_blockable
-
-      {
-        user_id: user.id,
-        username: user.username,
-        quick_block_group_name: configured_name,
-        quick_block_group_exists: group_exists,
-        quick_block_group_usable: group_usable,
-        user_blockable: user_blockable,
-        blocked_by_quick_group: quick_member,
-        blocked_by_media_groups: media_blocked,
-        blocked: media_blocked,
-        can_quick_block: reason.blank? && !quick_member,
-        can_quick_unblock: reason.blank? && quick_member,
-        reason: reason,
-      }
+      reason
     end
 
     def owner_access_error_message(code)
       case code.to_s
       when "media_gallery_quick_block_group_not_configured"
-        "Configure the Media gallery quick block group setting before using this action."
+        "Configure the relevant media quick block group setting before using this action."
       when "media_gallery_quick_block_group_not_found"
         "The configured media quick block group does not exist. Check the site setting and group name."
       when "media_gallery_quick_block_group_not_usable"
@@ -838,17 +855,88 @@ module ::MediaGallery
       render json: { error: owner_access_error_message(code), code: code.to_s }, status: 422
     end
 
-    def append_owner_access_log!(item, owner:, action:, note:, group:, from_blocked:, to_blocked:)
+    def update_owner_access_block(block_type:, block:)
+      item = load_item!
+      owner = item.user
+      return render_json_error("media_owner_not_found", status: 422) if owner.blank?
+
+      group = configured_group(block_type)
+      state = owner_media_access_payload(owner)
+      permission_key =
+        if block_type == :upload
+          block ? :can_quick_upload_block : :can_quick_upload_unblock
+        else
+          block ? :can_quick_block : :can_quick_unblock
+        end
+      reason_key = block_type == :upload ? :upload_reason : :reason
+      return render_owner_access_error(state[reason_key]) unless state[permission_key]
+
+      note = sanitized_admin_note
+      if block
+        ::GroupUser.find_or_create_by!(group_id: group.id, user_id: owner.id)
+      else
+        ::GroupUser.where(group_id: group.id, user_id: owner.id).destroy_all
+      end
+      owner.reload
+
+      action =
+        if block_type == :upload
+          block ? "block_owner_upload" : "unblock_owner_upload"
+        else
+          block ? "block_owner_view" : "unblock_owner_view"
+        end
+
+      append_owner_access_log!(
+        item,
+        owner: owner,
+        action: action,
+        note: note,
+        group: group,
+        block_type: block_type,
+        from_blocked: !block,
+        to_blocked: block
+      )
+
+      item.reload
+      operation =
+        if block_type == :upload
+          block ? "admin_media_owner_upload_blocked" : "admin_media_owner_upload_unblocked"
+        else
+          block ? "admin_media_owner_view_blocked" : "admin_media_owner_view_unblocked"
+        end
+
+      ::MediaGallery::OperationLogger.warn(
+        operation,
+        item: item,
+        operation: action,
+        data: { owner_user_id: owner.id, owner_username: owner.username, group: group.name, block_type: block_type, requested_by: current_user.username, note_present: note.present? }
+      )
+
+      message =
+        if block_type == :upload
+          block ? "#{owner.username} has been blocked from uploading to the media library." : "#{owner.username} has been removed from the media upload block group."
+        else
+          block ? "#{owner.username} has been blocked from viewing and uploading media." : "#{owner.username} has been removed from the media view block group."
+        end
+
+      render_json_dump(ok: true, item: management_item_payload(item), message: message)
+    rescue => e
+      render_operation_error(e, operation: "update_owner_access_block", item: item, status: 422)
+    end
+
+    def append_owner_access_log!(item, owner:, action:, note:, group:, block_type:, from_blocked:, to_blocked:)
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      change_key = block_type == :upload ? "owner_media_upload_blocked" : "owner_media_view_blocked"
+      group_key = block_type == :upload ? "quick_upload_block_group" : "quick_block_group"
       append_management_log!(
         meta,
         action: action,
         item: item,
         note: note,
         changes: {
-          "owner_media_blocked" => [from_blocked, to_blocked],
+          change_key => [from_blocked, to_blocked],
           "owner" => [owner.username, owner.username],
-          "quick_block_group" => [group.name, group.name],
+          group_key => [group.name, group.name],
         }
       )
       item.update_columns(extra_metadata: meta, updated_at: Time.now)

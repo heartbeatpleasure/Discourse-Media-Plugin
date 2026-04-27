@@ -129,6 +129,8 @@ after_initialize do
     post "/admin/plugins/media-gallery/reports/:report_id/review" => "media_gallery/admin_reports#review", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/block-owner" => "media_gallery/admin_reports#block_owner", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/unblock-owner" => "media_gallery/admin_reports#unblock_owner", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/reports/:report_id/block-owner-upload" => "media_gallery/admin_reports#block_owner_upload", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/reports/:report_id/unblock-owner-upload" => "media_gallery/admin_reports#unblock_owner_upload", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/profiles" => "media_gallery/admin_storage#profiles", defaults: { format: :json }
     get "/admin/plugins/media-gallery/storage/health" => "media_gallery/admin_storage#health", defaults: { format: :json }
     get "/admin/plugins/media-gallery/logs" => "media_gallery/admin_logs#index", defaults: { format: :json }
@@ -151,6 +153,8 @@ after_initialize do
     post "/admin/plugins/media-gallery/media-items/:public_id/retry-processing" => "media_gallery/admin_media_items#retry_processing", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/block-owner" => "media_gallery/admin_media_items#block_owner", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/unblock-owner" => "media_gallery/admin_media_items#unblock_owner", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/block-owner-upload" => "media_gallery/admin_media_items#block_owner_upload", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/unblock-owner-upload" => "media_gallery/admin_media_items#unblock_owner_upload", defaults: { format: :json }
 
     # Admin-only: generate temporary personalized remux/clip downloads for testing.
     post "/admin/plugins/media-gallery/test-downloads/:public_id" => "media_gallery/admin_test_downloads#create", defaults: { format: :json }

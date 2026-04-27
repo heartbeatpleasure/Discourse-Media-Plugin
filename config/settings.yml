@@ -15,16 +15,30 @@ plugins:
     type: list
     client: false
 
-  # Block rules. Members of these groups cannot view or upload media gallery items,
-  # even if they are also in an allowed viewer/uploader group.
+  # View block rules. Members of these groups cannot view media gallery items.
+  # A view block also prevents uploading, even if the user is in an uploader group.
   media_gallery_blocked_groups:
     default: ""
     type: list
     client: false
 
-  # Optional dedicated group used by the admin quick action "Block owner from media".
-  # Members of this group are treated as blocked in addition to media_gallery_blocked_groups.
+  # Upload-only block rules. Members of these groups cannot upload to the media gallery,
+  # but they can still view media if they are allowed by the viewer rules.
+  media_gallery_upload_blocked_groups:
+    default: ""
+    type: list
+    client: false
+
+  # Optional dedicated group used by the admin quick action "Block view & upload".
+  # Members of this group are treated as view-blocked in addition to media_gallery_blocked_groups.
   media_gallery_quick_block_group:
+    default: ""
+    type: string
+    client: false
+
+  # Optional dedicated group used by the admin quick action "Block upload only".
+  # Members of this group are treated as upload-blocked in addition to media_gallery_upload_blocked_groups.
+  media_gallery_quick_upload_block_group:
     default: ""
     type: string
     client: false

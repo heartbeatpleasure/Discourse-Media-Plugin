@@ -899,8 +899,10 @@ module ::MediaGallery
       definitions = [
         ["media_gallery_viewer_groups", "Viewer groups", safe_setting(:media_gallery_viewer_groups), true],
         ["media_gallery_allowed_uploader_groups", "Uploader groups", safe_setting(:media_gallery_allowed_uploader_groups), true],
-        ["media_gallery_blocked_groups", "Blocked groups", safe_setting(:media_gallery_blocked_groups), true],
-        ["media_gallery_quick_block_group", "Quick block group", safe_setting(:media_gallery_quick_block_group), false],
+        ["media_gallery_blocked_groups", "View blocked groups", safe_setting(:media_gallery_blocked_groups), true],
+        ["media_gallery_upload_blocked_groups", "Upload blocked groups", safe_setting(:media_gallery_upload_blocked_groups), true],
+        ["media_gallery_quick_block_group", "Quick view block group", safe_setting(:media_gallery_quick_block_group), false],
+        ["media_gallery_quick_upload_block_group", "Quick upload block group", safe_setting(:media_gallery_quick_upload_block_group), false],
         ["media_gallery_report_auto_hide_groups", "Report auto-hide groups", safe_setting(:media_gallery_report_auto_hide_groups), true],
         ["media_gallery_report_notify_group", "Report notify group", safe_setting(:media_gallery_report_notify_group), false],
         ["media_gallery_health_notify_group", "Health notify group", safe_setting(:media_gallery_health_notify_group), false],

@@ -135,15 +135,31 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   }
 
   get selectedOwnerBlocked() {
-    return !!this.selectedOwnerAccess?.blocked;
+    return !!this.selectedOwnerAccess?.view_blocked;
   }
 
-  get ownerBlockDisabled() {
+  get ownerViewBlockDisabled() {
     return !this.hasSelectedReport || this.isReviewing || !this.selectedOwnerAccess?.can_quick_block;
   }
 
-  get ownerUnblockDisabled() {
+  get ownerViewUnblockDisabled() {
     return !this.hasSelectedReport || this.isReviewing || !this.selectedOwnerAccess?.can_quick_unblock;
+  }
+
+  get ownerUploadBlockDisabled() {
+    return !this.hasSelectedReport || this.isReviewing || !this.selectedOwnerAccess?.can_quick_upload_block;
+  }
+
+  get ownerUploadUnblockDisabled() {
+    return !this.hasSelectedReport || this.isReviewing || !this.selectedOwnerAccess?.can_quick_upload_unblock;
+  }
+
+  get ownerBlockDisabled() {
+    return this.ownerViewBlockDisabled;
+  }
+
+  get ownerUnblockDisabled() {
+    return this.ownerViewUnblockDisabled;
   }
 
   get ownerAccessSummary() {
@@ -151,8 +167,11 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     if (!state?.username) {
       return "Uploader access status is unavailable.";
     }
-    if (state.blocked) {
-      return `${state.username} is blocked from the media section.`;
+    if (state.view_blocked) {
+      return `${state.username} is blocked from viewing and uploading media.`;
+    }
+    if (state.upload_only_blocked || state.upload_blocked) {
+      return `${state.username} can view media if allowed, but cannot upload.`;
     }
     return `${state.username} is not blocked from the media section.`;
   }
@@ -162,19 +181,22 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     if (!state?.username) {
       return "The media uploader could not be found.";
     }
-    if (state.blocked) {
-      return `${state.username} is currently blocked from viewing and uploading media.`;
+    if (state.view_blocked) {
+      return `${state.username} is currently blocked from viewing and uploading media. View blocks always take priority over upload permissions.`;
     }
-    if (state.can_quick_block) {
-      return `This action adds ${state.username} to the configured quick block group, which blocks viewing and uploading in the media section.`;
+    if (state.upload_only_blocked || state.upload_blocked) {
+      return `${state.username} can still view media if viewer rules allow it, but cannot upload to the media section.`;
     }
-    if (!state.quick_block_group_name) {
-      return "Configure the Media gallery quick block group setting before using this action.";
+    if (state.can_quick_block || state.can_quick_upload_block) {
+      return `Use view block to deny both viewing and uploading, or upload-only block to keep viewing allowed while preventing uploads.`;
     }
-    if (state.reason === "media_owner_is_staff") {
+    if (!state.quick_block_group_name && !state.quick_upload_block_group_name) {
+      return "Configure the media quick view block group and/or quick upload block group setting before using these actions.";
+    }
+    if (state.reason === "media_owner_is_staff" || state.upload_reason === "media_owner_is_staff") {
       return "Staff and admin users cannot be blocked from the media section.";
     }
-    return "The quick block action is not available for this uploader right now.";
+    return "The quick block actions are not available for this uploader right now.";
   }
 
   get actionHelpItems() {
@@ -408,12 +430,36 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       return;
     }
 
-    const isBlock = action === "block";
-    if (isBlock) {
-      const ok = window.confirm("Block this uploader from viewing and uploading media?");
-      if (!ok) {
-        return;
-      }
+    let endpoint = "block-owner";
+    let confirmText = "Block this uploader from viewing and uploading media?";
+
+    switch (action) {
+      case "view-unblock":
+        if (this.ownerViewUnblockDisabled) return;
+        endpoint = "unblock-owner";
+        confirmText = "Remove this uploader from the media view block group?";
+        break;
+      case "upload-block":
+        if (this.ownerUploadBlockDisabled) return;
+        endpoint = "block-owner-upload";
+        confirmText = "Block this uploader from uploading only? They can still view media if viewer rules allow it.";
+        break;
+      case "upload-unblock":
+        if (this.ownerUploadUnblockDisabled) return;
+        endpoint = "unblock-owner-upload";
+        confirmText = "Remove this uploader from the media upload block group?";
+        break;
+      case "view-block":
+      case "block":
+      default:
+        if (this.ownerViewBlockDisabled) return;
+        endpoint = "block-owner";
+        break;
+    }
+
+    const ok = window.confirm(confirmText);
+    if (!ok) {
+      return;
     }
 
     this.isReviewing = true;
@@ -421,12 +467,11 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.noticeTone = "success";
 
     try {
-      const endpoint = isBlock ? "block-owner" : "unblock-owner";
       const data = await this._fetchJson(`/admin/plugins/media-gallery/reports/${encodeURIComponent(report.id)}/${endpoint}`, {
         method: "POST",
         body: JSON.stringify({ admin_note: this.reviewNote }),
       });
-      this.noticeMessage = data?.message || "Owner access updated.";
+      this.noticeMessage = data?.message || "Uploader access updated.";
       this.noticeTone = "success";
       this.reviewNote = "";
       await this.loadReports();
@@ -434,10 +479,11 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         this.selectedReportId = data.report.id;
       }
     } catch (error) {
-      this.noticeMessage = error?.message || "Owner access update failed.";
+      this.noticeMessage = error?.message || "Uploader access update failed.";
       this.noticeTone = "danger";
     } finally {
       this.isReviewing = false;
     }
   }
+
 }

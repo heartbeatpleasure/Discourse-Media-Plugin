@@ -28,12 +28,22 @@ module ::MediaGallery
       list_setting(SiteSetting.media_gallery_allowed_uploader_groups).map(&:downcase)
     end
 
+    # View block groups deny both viewing and uploading.
     def quick_block_group
       list_setting(SiteSetting.media_gallery_quick_block_group).map(&:downcase)
     end
 
     def blocked_groups
       (list_setting(SiteSetting.media_gallery_blocked_groups) + quick_block_group).map(&:downcase).uniq
+    end
+
+    # Upload block groups deny uploading only. They do not deny viewing.
+    def quick_upload_block_group
+      list_setting(SiteSetting.media_gallery_quick_upload_block_group).map(&:downcase)
+    end
+
+    def upload_blocked_groups
+      (list_setting(SiteSetting.media_gallery_upload_blocked_groups) + quick_upload_block_group).map(&:downcase).uniq
     end
 
     def allowed_tags
@@ -50,7 +60,7 @@ module ::MediaGallery
       user.groups.where("lower(name) IN (?)", groups).exists?
     end
 
-    # A blocked group is an explicit staff/admin decision and takes precedence over
+    # A view block is an explicit staff/admin decision and takes precedence over
     # viewer/uploader groups for regular users. Staff/admin are kept unblocked so
     # they can always recover access and manage the setting.
     def access_blocked?(guardian)
@@ -60,6 +70,21 @@ module ::MediaGallery
       return false if user.admin? || user.staff?
 
       user_in_any_group?(user, blocked_groups)
+    end
+
+    # Upload-only blocks do not affect viewing. A view block always implies upload
+    # is denied too, but this helper only returns true for upload-specific groups.
+    def upload_access_blocked?(guardian)
+      return false unless enabled?
+      user = guardian&.user
+      return false if user.nil?
+      return false if user.admin? || user.staff?
+
+      user_in_any_group?(user, upload_blocked_groups)
+    end
+
+    def upload_denied_by_block?(guardian)
+      access_blocked?(guardian) || upload_access_blocked?(guardian)
     end
 
     # Members-only: always requires a logged-in user.
@@ -80,6 +105,7 @@ module ::MediaGallery
       user = guardian&.user
       return false if user.nil?
       return false if access_blocked?(guardian)
+      return false if upload_access_blocked?(guardian)
 
       # Avoid relying on Guardian internal helper methods that may change across Discourse versions.
       return true if user.admin? || user.staff?

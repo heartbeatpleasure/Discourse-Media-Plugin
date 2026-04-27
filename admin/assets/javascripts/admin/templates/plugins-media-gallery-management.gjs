@@ -805,7 +805,7 @@ export default RouteTemplate(
 
               <section class="mg-management__editor-section">
                 <h3>Actions</h3>
-                <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, add an admin note, toggle visibility, queue a retry for failed items, or remove the item.</p>
+                <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, add an admin note, toggle visibility, queue a retry for failed items, change uploader access, or remove the item.</p>
                 <div class="mg-management__summary-card" style="margin-top: 1rem;">
                   <div class="mg-management__section-title-row">
                     <div>
@@ -829,8 +829,17 @@ export default RouteTemplate(
                   <button class="btn" type="button" {{on "click" @controller.retryProcessing}} disabled={{@controller.retryDisabled}}>
                     {{if @controller.isRetrying "Queuing…" "Retry processing"}}
                   </button>
-                  <button class={{@controller.ownerBlockButtonClass}} type="button" {{on "click" @controller.toggleOwnerMediaBlock}} disabled={{@controller.ownerBlockActionDisabled}}>
-                    {{@controller.ownerBlockButtonLabel}}
+                  <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "view-block")}} disabled={{@controller.ownerViewBlockDisabled}}>
+                    Block view & upload
+                  </button>
+                  <button class="btn" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "view-unblock")}} disabled={{@controller.ownerViewUnblockDisabled}}>
+                    Restore view
+                  </button>
+                  <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "upload-block")}} disabled={{@controller.ownerUploadBlockDisabled}}>
+                    Block upload only
+                  </button>
+                  <button class="btn" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "upload-unblock")}} disabled={{@controller.ownerUploadUnblockDisabled}}>
+                    Restore upload
                   </button>
                   <button class="btn btn-danger" type="button" {{on "click" @controller.deleteItem}} disabled={{@controller.deleteDisabled}}>
                     {{if @controller.isDeleting "Deleting…" "Delete item"}}

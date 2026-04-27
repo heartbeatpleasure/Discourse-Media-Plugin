@@ -1590,10 +1590,16 @@ end
     end
 
     def media_gallery_permissions_payload
+      view_blocked = MediaGallery::Permissions.access_blocked?(guardian)
+      upload_only_blocked = MediaGallery::Permissions.upload_access_blocked?(guardian)
+
       {
         can_view: MediaGallery::Permissions.can_view?(guardian),
         can_upload: MediaGallery::Permissions.can_upload?(guardian),
-        access_blocked: MediaGallery::Permissions.access_blocked?(guardian),
+        access_blocked: view_blocked,
+        view_blocked: view_blocked,
+        upload_blocked: view_blocked || upload_only_blocked,
+        upload_only_blocked: upload_only_blocked,
         viewer_groups: access_group_names_for_client(MediaGallery::Permissions.viewer_groups),
         uploader_groups: access_group_names_for_client(MediaGallery::Permissions.uploader_groups)
       }
