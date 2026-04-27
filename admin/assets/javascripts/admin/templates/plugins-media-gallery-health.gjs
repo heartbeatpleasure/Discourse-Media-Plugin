@@ -92,19 +92,6 @@ export default RouteTemplate(
       .mg-health__summary-card {
         position: relative;
         padding-right: 2.5rem;
-        border-left: 4px solid transparent;
-      }
-
-      .mg-health__summary-card.is-success {
-        border-left-color: var(--success);
-      }
-
-      .mg-health__summary-card.is-warning {
-        border-left-color: #d98700;
-      }
-
-      .mg-health__summary-card.is-danger {
-        border-left-color: var(--danger);
       }
 
       .mg-health__summary-card > .mg-health__status-dot {
@@ -162,8 +149,8 @@ export default RouteTemplate(
 
       .mg-health__status-dot {
         display: inline-flex;
-        width: 0.82rem;
-        height: 0.82rem;
+        width: 0.8rem;
+        height: 0.8rem;
         border-radius: 999px;
         flex: 0 0 auto;
         border: 2px solid var(--secondary);
@@ -437,7 +424,7 @@ export default RouteTemplate(
 
       <section class="mg-health__summary-grid">
         {{#each @controller.summaryCards as |card|}}
-          <article class={{card.cardClass}}>
+          <article class="mg-health__summary-card">
             <div class="mg-health__summary-label">{{card.label}}</div>
             <div class="mg-health__summary-value">{{card.value}}</div>
             <span class={{card.dotClass}} title={{card.severityLabel}}></span>

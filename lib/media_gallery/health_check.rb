@@ -44,7 +44,6 @@ module ::MediaGallery
         ignored_findings: ignored_findings_for_ui,
         last_full_storage_check: last_full_storage_check_summary,
         reconciliation: last_reconciliation_summary,
-        storage_profiles: configured_profiles_for_ui,
       }
     rescue => e
       Rails.logger.error("[media_gallery] health summary failed: #{e.class}: #{e.message}")
@@ -85,7 +84,6 @@ module ::MediaGallery
         ignored_findings: ignored_findings_for_ui,
         last_full_storage_check: last_full_storage_check_summary,
         reconciliation: last_reconciliation_summary,
-        storage_profiles: configured_profiles_for_ui,
       }
     end
 
@@ -1069,20 +1067,6 @@ module ::MediaGallery
       )
     rescue => e
       Rails.logger.warn("[media_gallery] health alert state failed: #{e.class}: #{e.message}")
-    end
-
-    def configured_profiles_for_ui
-      ::MediaGallery::StorageSettingsResolver.configured_profiles_summary.map do |profile|
-        key = profile[:profile_key].to_s
-        {
-          profile_key: key,
-          label: profile[:label].to_s.presence || profile[:profile].to_s.presence || key,
-          backend: profile[:backend].to_s,
-        }
-      end
-    rescue => e
-      Rails.logger.warn("[media_gallery] configured profile UI summary failed: #{e.class}: #{e.message}")
-      []
     end
 
     def configured_profiles

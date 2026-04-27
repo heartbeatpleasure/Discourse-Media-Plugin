@@ -79,12 +79,12 @@ function formatDateTime(value) {
 }
 
 function formatRelativeTime(value) {
-  if (!value) {
+  if (!value || typeof Intl.RelativeTimeFormat !== "function") {
     return "";
   }
 
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime()) || typeof Intl.RelativeTimeFormat !== "function") {
+  if (Number.isNaN(date.getTime())) {
     return "";
   }
 
@@ -245,7 +245,6 @@ function decorateCard(card) {
     severity,
     severityLabel: severityLabel(severity),
     badgeClass: badge,
-    cardClass: `mg-health__summary-card ${badge}`,
     dotClass: `mg-health__status-dot ${badge}`,
     value: stringify(card?.value),
   };
@@ -346,23 +345,10 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   get storageProfiles() {
-    const profiles = new Map();
-    const addProfiles = (list) => {
-      if (!Array.isArray(list)) {
-        return;
-      }
-
-      list.forEach((profile) => {
-        const key = profile?.profile_key;
-        if (key) {
-          profiles.set(key, profile);
-        }
-      });
-    };
-
-    addProfiles(this.data?.storage_profiles);
-    addProfiles(this.reconciliation?.configured_profiles);
-    return Array.from(profiles.values());
+    const profiles = Array.isArray(this.reconciliation?.configured_profiles)
+      ? this.reconciliation.configured_profiles
+      : [];
+    return profiles.filter((profile) => profile?.profile_key);
   }
 
   get reconciliationProfileOptions() {
