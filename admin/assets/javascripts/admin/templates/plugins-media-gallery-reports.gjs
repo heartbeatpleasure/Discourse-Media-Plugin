@@ -70,6 +70,7 @@ export default RouteTemplate(
         align-items: center;
         gap: 0.65rem;
         min-height: 42px;
+        transform: translateY(-0.22rem);
       }
 
       .mg-reports__filter-actions .btn {
@@ -116,13 +117,18 @@ export default RouteTemplate(
 
       .mg-reports__report-card {
         display: grid;
-        grid-template-columns: 96px minmax(0, 1fr) auto;
-        gap: 0.8rem;
+        grid-template-columns: 112px minmax(0, 1fr) auto;
+        gap: 0.75rem 0.85rem;
         align-items: start;
         padding: 0.9rem;
         border: 1px solid var(--mg-border);
         border-radius: 16px;
         background: var(--mg-surface-alt);
+      }
+
+      .mg-reports__report-card .btn {
+        align-self: start;
+        white-space: nowrap;
       }
 
       .mg-reports__report-card.is-selected {
@@ -133,7 +139,7 @@ export default RouteTemplate(
 
       .mg-reports__thumb,
       .mg-reports__thumb-placeholder {
-        width: 96px;
+        width: 112px;
         aspect-ratio: 16 / 9;
         border-radius: 12px;
         border: 1px solid var(--mg-border);
@@ -158,8 +164,20 @@ export default RouteTemplate(
       .mg-reports__copy {
         display: flex;
         flex-direction: column;
-        gap: 0.35rem;
+        gap: 0.28rem;
         min-width: 0;
+      }
+
+      .mg-reports__report-meta,
+      .mg-reports__report-badges {
+        grid-column: 1 / -1;
+      }
+
+      .mg-reports__report-meta {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        overflow-wrap: anywhere;
+        margin-top: 0.1rem;
       }
 
       .mg-reports__title {
@@ -361,6 +379,10 @@ export default RouteTemplate(
         .mg-reports__filters {
           grid-template-columns: 1fr;
         }
+
+        .mg-reports__filter-actions {
+          transform: none;
+        }
       }
 
       @media (max-width: 760px) {
@@ -444,26 +466,24 @@ export default RouteTemplate(
 
                   <div class="mg-reports__copy">
                     <div class="mg-reports__title">{{report.mediaTitle}}</div>
-                    <div class="mg-reports__subtitle">{{report.mediaPublicId}} · reported {{report.createdAtLabel}}</div>
-                    <div class="mg-reports__subtitle">Reporter: {{report.reporterLabel}}</div>
-                    <div class="mg-reports__badge-row">
-                      <span class="mg-reports__badge {{report.statusBadgeClass}}">{{report.statusLabel}}</span>
-                      <span class="mg-reports__badge {{report.statusDetailBadgeClass}}">{{report.statusDetailLabel}}</span>
-                      <span class="mg-reports__badge">{{report.reason_label}}</span>
-                      <span class="mg-reports__badge {{report.hiddenBadgeClass}}">{{report.hiddenLabel}}</span>
-                      <span class="mg-reports__badge {{report.assetBadgeClass}}">{{report.assetLabel}}</span>
-                      {{#if report.auto_hidden}}
-                        <span class="mg-reports__badge is-warning">Auto-hidden</span>
-                      {{/if}}
-                    </div>
-                    {{#if report.message}}
-                      <div class="mg-reports__message">{{report.message}}</div>
-                    {{/if}}
+                    <div class="mg-reports__subtitle">{{report.mediaPublicId}}</div>
                   </div>
 
                   <button class="btn" type="button" {{on "click" (fn @controller.selectReport report)}}>
                     {{if report.isSelected "Selected" "Open"}}
                   </button>
+
+                  <div class="mg-reports__report-meta">Reported by {{report.reporterLabel}} on {{report.createdAtLabel}}</div>
+
+                  <div class="mg-reports__badge-row mg-reports__report-badges">
+                    <span class="mg-reports__badge {{report.statusBadgeClass}}">{{report.statusLabel}}</span>
+                    <span class="mg-reports__badge {{report.statusDetailBadgeClass}}">{{report.statusDetailLabel}}</span>
+                    <span class="mg-reports__badge {{report.hiddenBadgeClass}}">{{report.hiddenLabel}}</span>
+                    {{#if report.auto_hidden}}
+                      <span class="mg-reports__badge is-warning">Auto-hidden</span>
+                    {{/if}}
+                    <span class="mg-reports__badge {{report.assetBadgeClass}}">{{report.assetLabel}}</span>
+                  </div>
                 </article>
               {{/each}}
             </div>
@@ -490,16 +510,12 @@ export default RouteTemplate(
           {{#if @controller.hasSelectedReport}}
             <div class="mg-reports__summary-grid">
               <div class="mg-reports__summary-card is-wide">
-                <div class="mg-reports__summary-label">Public ID</div>
-                <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaPublicId}}</div>
-              </div>
-              <div class="mg-reports__summary-card">
-                <div class="mg-reports__summary-label">Media</div>
+                <div class="mg-reports__summary-label">Title</div>
                 <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaTitle}}</div>
               </div>
-              <div class="mg-reports__summary-card">
-                <div class="mg-reports__summary-label">Uploader</div>
-                <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaUploader}}</div>
+              <div class="mg-reports__summary-card is-wide">
+                <div class="mg-reports__summary-label">Public ID</div>
+                <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaPublicId}}</div>
               </div>
               <div class="mg-reports__summary-card">
                 <div class="mg-reports__summary-label">Reporter</div>
@@ -542,14 +558,22 @@ export default RouteTemplate(
 
 
             <section class="mg-reports__section" style="margin-top: 1rem;">
-              <h3>Owner access</h3>
-              <p class="mg-reports__muted" style="margin-top: 0.35rem;">{{@controller.ownerAccessHelp}}</p>
+              <div class="mg-reports__section-title-row">
+                <h3>Uploader access to media section</h3>
+                <div class="mg-reports__help-item">
+                  <span class="mg-reports__help-icon" tabindex="0" aria-label="Uploader access help">i</span>
+                  <div class="mg-reports__help-text">
+                    <p>{{@controller.ownerAccessHelp}}</p>
+                  </div>
+                </div>
+              </div>
+              <p class="mg-reports__muted" style="margin-top: 0.35rem;">{{@controller.ownerAccessSummary}}</p>
               <div class="mg-reports__actions" style="margin-top: 1rem;">
                 <button class="btn btn-danger" type="button" disabled={{@controller.ownerBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "block")}}>
-                  Block owner from media
+                  Block uploader from media section
                 </button>
                 <button class="btn" type="button" disabled={{@controller.ownerUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "unblock")}}>
-                  Unblock owner
+                  Unblock
                 </button>
               </div>
             </section>

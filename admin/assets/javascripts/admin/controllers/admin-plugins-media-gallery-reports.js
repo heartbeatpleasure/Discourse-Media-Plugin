@@ -127,24 +127,35 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     return !this.hasSelectedReport || this.isReviewing || !this.selectedOwnerAccess?.can_quick_unblock;
   }
 
+  get ownerAccessSummary() {
+    const state = this.selectedOwnerAccess;
+    if (!state?.username) {
+      return "Uploader access status is unavailable.";
+    }
+    if (state.blocked) {
+      return `${state.username} is blocked from the media section.`;
+    }
+    return `${state.username} is not blocked from the media section.`;
+  }
+
   get ownerAccessHelp() {
     const state = this.selectedOwnerAccess;
     if (!state?.username) {
-      return "The media owner could not be found.";
+      return "The media uploader could not be found.";
     }
     if (state.blocked) {
       return `${state.username} is currently blocked from viewing and uploading media.`;
     }
     if (state.can_quick_block) {
-      return `Block ${state.username} from viewing and uploading media by adding them to the configured quick block group.`;
+      return `This action adds ${state.username} to the configured quick block group, which blocks viewing and uploading in the media section.`;
     }
     if (!state.quick_block_group_name) {
       return "Configure the Media gallery quick block group setting before using this action.";
     }
     if (state.reason === "media_owner_is_staff") {
-      return "Staff and admin users cannot be blocked from media with this action.";
+      return "Staff and admin users cannot be blocked from the media section.";
     }
-    return "The quick block action is not available for this owner right now.";
+    return "The quick block action is not available for this uploader right now.";
   }
 
   get actionHelpItems() {
@@ -197,7 +208,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     const snapshot = this.selectedReport?.item_snapshot || {};
     return [
       { label: "Public ID", value: snapshot.public_id || "—", wide: true },
-      { label: "Title", value: snapshot.title || "—" },
+      { label: "Title", value: snapshot.title || "—", wide: true },
       { label: "Uploader", value: snapshot.uploader_username ? `${snapshot.uploader_username} (#${snapshot.uploader_user_id || "—"})` : "—" },
       { label: "Media type", value: titleize(snapshot.media_type) || "—" },
       { label: "File contains", value: titleize(snapshot.gender) || "—" },
@@ -372,7 +383,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
 
     const isBlock = action === "block";
     if (isBlock) {
-      const ok = window.confirm("Block this media owner from viewing and uploading media?");
+      const ok = window.confirm("Block this uploader from viewing and uploading media?");
       if (!ok) {
         return;
       }
