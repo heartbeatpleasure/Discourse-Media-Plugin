@@ -175,6 +175,11 @@ plugins:
     default: "This exact file appears to match an existing media item, and duplicate media items are currently blocked."
     type: string
     client: false
+  # Notify uploaders when asynchronous media processing is completed or fails.
+  media_gallery_processing_notifications_enabled:
+    default: true
+    client: false
+
   # Transcoding / policy
   media_gallery_video_max_duration_seconds:
     default: 600

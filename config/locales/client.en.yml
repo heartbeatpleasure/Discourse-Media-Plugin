@@ -67,6 +67,11 @@ en:
       report_duplicate: "You already reported this media item. Staff can review your existing report."
       report_failed: "Report failed. Please try again."
       report_cancel: "Cancel"
+      notifications:
+        upload_ready_title: "Media item ready"
+        upload_ready: "Your media item “%{title}” is ready and available in the media library."
+        upload_failed_title: "Media item processing failed"
+        upload_failed: "Your media item “%{title}” could not be processed. Open My uploads and use Retry, or contact staff if the issue continues."
       report_reasons:
         copyright: "Copyright or ownership issue"
         personal_info: "Personal or private information"

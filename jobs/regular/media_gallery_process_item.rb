@@ -96,6 +96,7 @@ module Jobs
       clear_current_run_state!(meta)
       assign_processing_meta!(item, meta)
       item.update!(status: "ready", error_message: nil)
+      notify_processing_status!(item, "ready")
     end
 
     def handle_processing_failure!(item, error)
@@ -129,9 +130,19 @@ module Jobs
         else
           item.save!
         end
+        notify_processing_status!(item, "failed")
       end
 
       raise error if SiteSetting.respond_to?(:media_gallery_processing_raise_to_sidekiq_retry) && SiteSetting.media_gallery_processing_raise_to_sidekiq_retry
+      nil
+    end
+
+    def notify_processing_status!(item, status)
+      return unless defined?(::MediaGallery::ProcessingNotifications)
+
+      ::MediaGallery::ProcessingNotifications.notify!(item, status)
+    rescue => e
+      Rails.logger.warn("[media_gallery] processing notification hook failed item_id=#{item&.id} status=#{status} error=#{e.class}: #{e.message}")
       nil
     end
 
@@ -191,6 +202,7 @@ module Jobs
       clear_current_run_state!(meta)
       assign_processing_meta!(item, meta)
       item.update!(status: "failed", error_message: "processing_attempt_limit_reached") unless item.status == "failed" && item.error_message == "processing_attempt_limit_reached"
+      notify_processing_status!(item, "failed")
     end
 
     def clear_current_run_state!(processing_meta)

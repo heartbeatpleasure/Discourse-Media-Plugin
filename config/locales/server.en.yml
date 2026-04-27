@@ -234,6 +234,8 @@ en:
     media_gallery_duplicate_upload_warning_message: "Plain text shown when an exact duplicate file is detected and users may confirm creating a separate media item. Supported placeholders: {filename}, {title}, {uploader}, {created_at}."
     media_gallery_duplicate_upload_block_message_title: "Media gallery duplicate block message"
     media_gallery_duplicate_upload_block_message: "Plain text shown when an exact duplicate file is detected and duplicate media items are blocked. Supported placeholders: {filename}, {title}, {uploader}, {created_at}."
+    media_gallery_processing_notifications_enabled_title: "Media gallery processing notifications"
+    media_gallery_processing_notifications_enabled: "Notify uploaders in Discourse when their media item finishes processing or fails. Notifications are sent only for the uploader's own items."
     media_gallery_default_storage_profile_key_title: "Media gallery default storage profile"
     media_gallery_default_storage_profile_key: "Choose which configured storage profile is used by default for managed media."
     media_gallery_processing_root_path_title: "Media gallery processing root path"

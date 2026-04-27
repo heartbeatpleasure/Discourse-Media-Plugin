@@ -55,6 +55,7 @@ after_initialize do
   require_relative "lib/media_gallery/playback_overlay"
   require_relative "lib/media_gallery/forensics_identify"
   require_relative "lib/media_gallery/log_events"
+  require_relative "lib/media_gallery/processing_notifications"
 
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
