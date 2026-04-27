@@ -137,6 +137,119 @@ export default RouteTemplate(
         font-size: var(--font-down-1);
       }
 
+      .mg-health__toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+        align-items: end;
+        margin-top: 1rem;
+      }
+
+      .mg-health__toolbar-field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        min-width: min(260px, 100%);
+      }
+
+      .mg-health__toolbar-field label {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+        font-weight: 700;
+      }
+
+      .mg-health__toolbar-field select,
+      .mg-health__modal textarea,
+      .mg-health__modal select {
+        border: 1px solid var(--primary-low);
+        border-radius: 10px;
+        background: var(--secondary);
+      }
+
+      .mg-health__history-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 0.75rem;
+        margin-top: 1rem;
+      }
+
+      .mg-health__history-card {
+        border: 1px solid var(--mg-health-border);
+        border-radius: 14px;
+        background: var(--mg-health-surface-alt);
+        padding: 0.75rem;
+        min-width: 0;
+      }
+
+      .mg-health__history-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-weight: 700;
+      }
+
+      .mg-health__history-grid-small {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.4rem 0.65rem;
+        margin-top: 0.65rem;
+      }
+
+      .mg-health__history-kv {
+        min-width: 0;
+      }
+
+      .mg-health__history-kv-label {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-health__history-kv-value {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        background: rgba(0, 0, 0, 0.42);
+      }
+
+      .mg-health__modal {
+        width: min(620px, 100%);
+        max-height: min(760px, calc(100vh - 2rem));
+        overflow: auto;
+        border-radius: 18px;
+        background: var(--secondary);
+        border: 1px solid var(--primary-low);
+        box-shadow: 0 18px 70px rgba(0, 0, 0, 0.28);
+        padding: 1rem;
+      }
+
+      .mg-health__modal-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+      }
+
+      .mg-health__modal-form {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .mg-health__modal-form textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+
       .mg-health__summary-card {
         position: relative;
         padding-right: 2.6rem;
@@ -476,10 +589,85 @@ export default RouteTemplate(
               <div class="mg-health__muted">{{@controller.reconciliationProfilesHelpText}}</div>
             </div>
           {{/if}}
+
+          <div class="mg-health__toolbar">
+            <div class="mg-health__toolbar-field">
+              <label>Export category</label>
+              <select value={{@controller.exportCategory}} disabled={{@controller.isLoading}} {{on "change" @controller.setExportCategory}}>
+                {{#each @controller.reconciliationExportCategories as |category|}}
+                  <option value={{category.id}}>{{category.title}}</option>
+                {{/each}}
+              </select>
+            </div>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
+              Export JSON
+            </button>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliationCsv}}>
+              Export CSV
+            </button>
+          </div>
         {{else}}
           <p class="mg-health__muted" style="margin-top: 1rem;">Storage reconciliation has not been run yet.</p>
         {{/if}}
       </section>
+
+      {{#if @controller.hasReconciliationHistory}}
+        <section class="mg-health__panel">
+          <div class="mg-health__panel-header">
+            <div class="mg-health__panel-copy">
+              <h2>Reconciliation history</h2>
+              <p class="mg-health__muted">Latest stored reconciliation runs. New and resolved counts compare each run with the previous run.</p>
+            </div>
+            <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">History is read-only and stored as lightweight summaries. It helps spot recurring or newly resolved storage issues without changing files.</span></span>
+          </div>
+
+          <div class="mg-health__history-grid">
+            {{#each @controller.decoratedReconciliationHistory as |run|}}
+              <article class="mg-health__history-card">
+                <div class="mg-health__history-title">
+                  <span>{{run.generatedAtLabel}}</span>
+                  <span class="mg-health__status-dot {{run.badgeClass}}" title={{run.severityLabel}}></span>
+                </div>
+                {{#if run.generatedAtRelativeLabel}}
+                  <div class="mg-health__muted" style="margin-top: 0.2rem;">{{run.generatedAtRelativeLabel}}</div>
+                {{/if}}
+                <div class="mg-health__history-grid-small">
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Active</div>
+                    <div class="mg-health__history-kv-value">{{run.activeFindingsLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Ignored</div>
+                    <div class="mg-health__history-kv-value">{{run.ignoredFindingsLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">New</div>
+                    <div class="mg-health__history-kv-value">{{run.newFindingsLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Resolved</div>
+                    <div class="mg-health__history-kv-value">{{run.resolvedFindingsLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Duration</div>
+                    <div class="mg-health__history-kv-value">{{run.durationLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Objects</div>
+                    <div class="mg-health__history-kv-value">{{run.objectsScannedLabel}}</div>
+                  </div>
+                </div>
+                {{#if run.profilesLabel}}
+                  <div class="mg-health__example-subtitle" style="margin-top: 0.65rem;">Profiles: {{run.profilesLabel}}</div>
+                {{/if}}
+                {{#if run.truncatedProfilesLabel}}
+                  <div class="mg-health__example-subtitle" style="margin-top: 0.25rem;">Partial: {{run.truncatedProfilesLabel}}</div>
+                {{/if}}
+              </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
 
       {{#if @controller.hasAttentionIssues}}
         <section class="mg-health__panel">
@@ -571,6 +759,7 @@ export default RouteTemplate(
                 {{#if finding.reason}}
                   <div class="mg-health__example-subtitle">{{finding.reason}}</div>
                 {{/if}}
+                <div class="mg-health__example-subtitle">Expires: {{finding.expiresAtLabel}}</div>
                 <div class="mg-health__example-actions">
                   {{#if finding.url}}
                     <a class="btn" href={{finding.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
@@ -600,6 +789,49 @@ export default RouteTemplate(
           {{/each}}
         </div>
       </section>
+
+      {{#if @controller.ignoreModalOpen}}
+        <div class="mg-health__modal-backdrop">
+          <div class="mg-health__modal" role="dialog" aria-modal="true">
+            <div class="mg-health__modal-header">
+              <div>
+                <h2>Ignore finding</h2>
+                <p class="mg-health__muted">Ignoring suppresses this finding from Health status. It does not delete or change any media files.</p>
+              </div>
+              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelIgnoreFinding}}>Cancel</button>
+            </div>
+
+            <div class="mg-health__modal-form">
+              <div>
+                <strong>{{@controller.ignoreTargetTitle}}</strong>
+              </div>
+
+              <label>
+                <span class="mg-health__alert-label">Reason</span>
+                <textarea value={{@controller.ignoreReason}} maxlength="500" {{on "input" @controller.setIgnoreReason}}></textarea>
+              </label>
+
+              <label>
+                <span class="mg-health__alert-label">Expires</span>
+                <select value={{@controller.ignoreExpiresInDays}} {{on "change" @controller.setIgnoreExpiry}}>
+                  <option value="0">Never</option>
+                  <option value="7">In 7 days</option>
+                  <option value="30">In 30 days</option>
+                  <option value="90">In 90 days</option>
+                  <option value="365">In 365 days</option>
+                </select>
+              </label>
+
+              <div class="mg-health__actions">
+                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelIgnoreFinding}}>Cancel</button>
+                <button class="btn btn-primary" type="button" disabled={{@controller.ignoreSubmitDisabled}} {{on "click" @controller.submitIgnoreFinding}}>
+                  Ignore finding
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      {{/if}}
 
       <div class="mg-health__sections">
         {{#each @controller.sections as |section|}}

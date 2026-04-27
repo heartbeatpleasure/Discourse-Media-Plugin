@@ -264,6 +264,7 @@ function decorateCard(card) {
 }
 
 function decorateIgnoredFinding(finding) {
+  const expiresAt = finding?.expires_at;
   return {
     ...finding,
     key: finding?.key || `${finding?.issue_type || "issue"}:${finding?.public_id || "unknown"}`,
@@ -272,7 +273,32 @@ function decorateIgnoredFinding(finding) {
     subtitle: [finding?.public_id, finding?.ignored_by_username ? `ignored by ${finding.ignored_by_username}` : "", formatDateTime(finding?.ignored_at, { showLocalSuffix: true })]
       .filter(Boolean)
       .join(" • "),
+    expiresAtLabel: expiresAt ? formatDateTime(expiresAt, { showLocalSuffix: true }) : "Never",
     url: finding?.url || null,
+  };
+}
+
+function decorateHistoryEntry(entry) {
+  const severity = entry?.severity || "ok";
+  const profiles = Array.isArray(entry?.profile_labels) ? entry.profile_labels.filter(Boolean) : [];
+  const truncated = Array.isArray(entry?.truncated_profile_labels) ? entry.truncated_profile_labels.filter(Boolean) : [];
+
+  return {
+    ...entry,
+    severity,
+    severityLabel: severityLabel(severity),
+    badgeClass: badgeClass(severity),
+    generatedAtLabel: formatDateTime(entry?.generated_at),
+    generatedAtRelativeLabel: formatRelativeTime(entry?.generated_at),
+    durationLabel: formatDuration(entry?.duration_ms),
+    activeFindingsLabel: formatNumber(entry?.active_findings_count || 0),
+    ignoredFindingsLabel: formatNumber(entry?.ignored_findings_count || 0),
+    newFindingsLabel: formatNumber(entry?.new_findings_count || 0),
+    resolvedFindingsLabel: formatNumber(entry?.resolved_findings_count || 0),
+    itemsCheckedLabel: formatNumber(entry?.items_checked || 0),
+    objectsScannedLabel: formatNumber(entry?.objects_scanned || 0),
+    profilesLabel: profiles.length ? profiles.join(", ") : "—",
+    truncatedProfilesLabel: truncated.length ? truncated.join(", ") : "",
   };
 }
 
@@ -287,6 +313,13 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked attentionIssues = [];
   @tracked ignoredFindings = [];
   @tracked reconciliation = null;
+  @tracked reconciliationHistory = [];
+  @tracked exportCategory = "all";
+  @tracked ignoreModalOpen = false;
+  @tracked ignoreIssue = null;
+  @tracked ignoreExample = null;
+  @tracked ignoreReason = "";
+  @tracked ignoreExpiresInDays = "0";
 
   resetState() {
     this.isLoading = false;
@@ -299,6 +332,13 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.attentionIssues = [];
     this.ignoredFindings = [];
     this.reconciliation = null;
+    this.reconciliationHistory = [];
+    this.exportCategory = "all";
+    this.ignoreModalOpen = false;
+    this.ignoreIssue = null;
+    this.ignoreExample = null;
+    this.ignoreReason = "";
+    this.ignoreExpiresInDays = "0";
   }
 
   get overallSeverity() {
@@ -343,6 +383,33 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     return !!this.reconciliation;
   }
 
+  get hasReconciliationHistory() {
+    return this.reconciliationHistory.length > 0;
+  }
+
+  get decoratedReconciliationHistory() {
+    return this.reconciliationHistory.map(decorateHistoryEntry);
+  }
+
+  get reconciliationExportCategories() {
+    const categories = Array.isArray(this.reconciliation?.categories) ? this.reconciliation.categories : [];
+    return [
+      { id: "all", title: "All categories" },
+      ...categories.map((category) => ({
+        id: category.id,
+        title: `${category.title || category.id} (${formatNumber(category.active_count || 0)} active)`,
+      })),
+    ];
+  }
+
+  get ignoreTargetTitle() {
+    return stringify(this.ignoreExample?.title || "this finding");
+  }
+
+  get ignoreSubmitDisabled() {
+    return this.isLoading || !this.ignoreExample?.key;
+  }
+
   get reconciliationGeneratedAtLabel() {
     return formatDateTime(this.reconciliation?.generated_at);
   }
@@ -382,6 +449,16 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       },
       { label: "Active findings", value: this.reconciliationActiveFindingsCount },
       { label: "Ignored findings", value: this.reconciliationIgnoredFindingsCount },
+      {
+        label: "New since previous",
+        value: formatNumber(this.reconciliation?.new_findings_count || 0),
+        help: "Number of active finding keys that were not present in the previous reconciliation run.",
+      },
+      {
+        label: "Resolved since previous",
+        value: formatNumber(this.reconciliation?.resolved_findings_count || 0),
+        help: "Number of active finding keys that were present in the previous run but are not present in the latest run.",
+      },
       {
         label: "Items checked",
         value: formatNumber(stats.items_checked || 0),
@@ -476,6 +553,13 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       ? data.ignored_findings.map(decorateIgnoredFinding)
       : [];
     this.reconciliation = data?.reconciliation || null;
+    this.reconciliationHistory = Array.isArray(data?.reconciliation_history)
+      ? data.reconciliation_history.map(decorateHistoryEntry)
+      : [];
+    const allowedCategories = new Set(this.reconciliationExportCategories.map((category) => category.id));
+    if (!allowedCategories.has(this.exportCategory)) {
+      this.exportCategory = "all";
+    }
   }
 
   errorMessage(error) {
@@ -562,6 +646,36 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   @action
+  setExportCategory(event) {
+    this.exportCategory = event?.target?.value || "all";
+  }
+
+  buildExportQuery(extra = {}) {
+    const params = new URLSearchParams();
+    if (this.exportCategory && this.exportCategory !== "all") {
+      params.set("category", this.exportCategory);
+    }
+    Object.entries(extra).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== "") {
+        params.set(key, value);
+      }
+    });
+    const query = params.toString();
+    return query ? `?${query}` : "";
+  }
+
+  downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  @action
   async exportReconciliation(event) {
     event?.preventDefault?.();
     if (this.isLoading) {
@@ -573,18 +687,12 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.notice = "";
 
     try {
-      const data = await ajax("/admin/plugins/media-gallery/health/reconciliation-export.json");
+      const data = await ajax(`/admin/plugins/media-gallery/health/reconciliation-export.json${this.buildExportQuery()}`);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      link.href = url;
-      link.download = `media-gallery-storage-reconciliation-${stamp}.json`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      this.notice = "Storage reconciliation report exported.";
+      const category = this.exportCategory && this.exportCategory !== "all" ? `-${this.exportCategory}` : "";
+      this.downloadBlob(blob, `media-gallery-storage-reconciliation${category}-${stamp}.json`);
+      this.notice = "Storage reconciliation JSON report exported.";
     } catch (error) {
       this.error = this.errorMessage(error);
     } finally {
@@ -593,16 +701,84 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   @action
-  async ignoreFinding(issue, example, event) {
+  async exportReconciliationCsv(event) {
+    event?.preventDefault?.();
+    if (this.isLoading) {
+      return;
+    }
+
+    this.isLoading = true;
+    this.error = "";
+    this.notice = "";
+
+    try {
+      const response = await fetch(`/admin/plugins/media-gallery/health/reconciliation-export.json${this.buildExportQuery({ export_format: "csv" })}`, {
+        credentials: "same-origin",
+        headers: {
+          Accept: "text/csv",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Export failed (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const category = this.exportCategory && this.exportCategory !== "all" ? `-${this.exportCategory}` : "";
+      this.downloadBlob(blob, `media-gallery-storage-reconciliation${category}-${stamp}.csv`);
+      this.notice = "Storage reconciliation CSV report exported.";
+    } catch (error) {
+      this.error = this.errorMessage(error);
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  @action
+  ignoreFinding(issue, example, event) {
     event?.preventDefault?.();
     if (!example?.canIgnore || this.isLoading) {
       return;
     }
 
-    const confirmed = window.confirm(
-      "Ignore this storage finding? It will no longer affect health status until you unignore it or a different issue is found."
-    );
-    if (!confirmed) {
+    this.ignoreIssue = issue || null;
+    this.ignoreExample = example || null;
+    this.ignoreReason = issue?.label || "Health finding ignored after admin review.";
+    this.ignoreExpiresInDays = "0";
+    this.ignoreModalOpen = true;
+  }
+
+  @action
+  cancelIgnoreFinding(event) {
+    event?.preventDefault?.();
+    if (this.isLoading) {
+      return;
+    }
+
+    this.ignoreModalOpen = false;
+    this.ignoreIssue = null;
+    this.ignoreExample = null;
+    this.ignoreReason = "";
+    this.ignoreExpiresInDays = "0";
+  }
+
+  @action
+  setIgnoreReason(event) {
+    this.ignoreReason = String(event?.target?.value || "").slice(0, 500);
+  }
+
+  @action
+  setIgnoreExpiry(event) {
+    this.ignoreExpiresInDays = event?.target?.value || "0";
+  }
+
+  @action
+  async submitIgnoreFinding(event) {
+    event?.preventDefault?.();
+    const example = this.ignoreExample;
+    if (!example?.key || this.isLoading) {
       return;
     }
 
@@ -617,11 +793,17 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           public_id: example.public_id,
           issue_type: example.issueType,
           title: example.title,
-          reason: issue?.label || "Health finding ignored by admin",
+          reason: this.ignoreReason || "Health finding ignored after admin review.",
+          expires_in_days: this.ignoreExpiresInDays,
         },
       });
       this.applyResponse(data);
       this.notice = "Health finding ignored.";
+      this.ignoreModalOpen = false;
+      this.ignoreIssue = null;
+      this.ignoreExample = null;
+      this.ignoreReason = "";
+      this.ignoreExpiresInDays = "0";
     } catch (error) {
       this.error = this.errorMessage(error);
     } finally {

@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
 require "cgi"
+require "csv"
 require "digest/sha1"
 require "time"
+require "set"
 require "uri"
 
 module ::MediaGallery
@@ -13,6 +15,7 @@ module ::MediaGallery
     LAST_ALERT_KEY = "last_alert"
     LAST_FULL_STORAGE_CHECK_KEY = "last_full_storage_check"
     LAST_RECONCILIATION_KEY = "last_storage_reconciliation"
+    RECONCILIATION_HISTORY_KEY = "storage_reconciliation_history"
     IGNORED_FINDINGS_KEY = "ignored_findings"
     SEVERITY_ORDER = { "ok" => 0, "warning" => 1, "critical" => 2 }.freeze
     VALID_NOTIFY_SEVERITIES = %w[warning critical].freeze
@@ -44,6 +47,7 @@ module ::MediaGallery
         ignored_findings: ignored_findings_for_ui,
         last_full_storage_check: last_full_storage_check_summary,
         reconciliation: last_reconciliation_summary,
+        reconciliation_history: reconciliation_history,
       }
     rescue => e
       Rails.logger.error("[media_gallery] health summary failed: #{e.class}: #{e.message}")
@@ -412,7 +416,15 @@ module ::MediaGallery
     end
 
     def store_reconciliation!(report)
-      ::PluginStore.set(STORE_NAMESPACE, LAST_RECONCILIATION_KEY, report.deep_stringify_keys)
+      previous = last_reconciliation
+      stored = report.deep_stringify_keys
+      current_keys = active_reconciliation_keys(stored)
+      previous_keys = active_reconciliation_keys(previous)
+      diff = reconciliation_diff_payload(current_keys: current_keys, previous_keys: previous_keys)
+      stored["diff"] = diff
+
+      ::PluginStore.set(STORE_NAMESPACE, LAST_RECONCILIATION_KEY, stored)
+      store_reconciliation_history_entry!(stored, diff)
       true
     rescue => e
       Rails.logger.warn("[media_gallery] storing storage reconciliation result failed: #{e.class}: #{e.message}")
@@ -441,16 +453,201 @@ module ::MediaGallery
         cleanup_available: false,
         active_findings_count: active_count,
         ignored_findings_count: ignored_count,
+        new_findings_count: cached.dig("diff", "new_findings_count").to_i,
+        resolved_findings_count: cached.dig("diff", "resolved_findings_count").to_i,
         duration_ms: cached["duration_ms"],
         stats: cached["stats"] || {},
         profiles: cached["profiles"] || {},
         limits: cached["limits"] || {},
+        categories: reconciliation_category_summaries(categories),
       }
+    end
+
+    def reconciliation_category_summaries(categories)
+      Array(categories).map do |category|
+        findings = Array(category["findings"])
+        active_rows = active_reconciliation_rows(findings)
+        ignored_rows = ignored_matching_rows(findings)
+        {
+          id: category["id"].to_s,
+          title: category["title"].to_s.presence || category["id"].to_s.titleize,
+          severity: category["severity"].to_s.presence || "ok",
+          count: findings.length,
+          active_count: active_rows.length,
+          ignored_count: ignored_rows.length,
+        }
+      end
     end
 
     def active_reconciliation_rows(rows)
       ignored = ignored_findings_hash
       Array(rows).reject { |row| ignored.key?(row_key(row)) }
+    end
+
+    def active_reconciliation_keys(report)
+      Array(report&.dig("categories")).flat_map do |category|
+        active_reconciliation_rows(Array(category["findings"])).map { |row| row_key(row) }
+      end.compact.uniq.sort
+    rescue
+      []
+    end
+
+    def reconciliation_diff_payload(current_keys:, previous_keys:)
+      current = Array(current_keys).to_set
+      previous = Array(previous_keys).to_set
+      new_keys = (current - previous).to_a.sort
+      resolved_keys = (previous - current).to_a.sort
+      {
+        "new_findings_count" => new_keys.length,
+        "resolved_findings_count" => resolved_keys.length,
+        "new_finding_keys" => new_keys.first(50),
+        "resolved_finding_keys" => resolved_keys.first(50),
+      }
+    end
+
+    def store_reconciliation_history_entry!(report, diff)
+      history = reconciliation_history_raw
+      entry = reconciliation_history_entry(report, diff)
+      history.unshift(entry)
+      compacted = history.uniq { |row| row["generated_at"].to_s }.first(10)
+      ::PluginStore.set(STORE_NAMESPACE, RECONCILIATION_HISTORY_KEY, compacted)
+    rescue => e
+      Rails.logger.warn("[media_gallery] storing storage reconciliation history failed: #{e.class}: #{e.message}")
+    end
+
+    def reconciliation_history_entry(report, diff)
+      categories = Array(report["categories"])
+      active_count = categories.sum { |category| active_reconciliation_rows(Array(category["findings"])).length }
+      ignored_count = categories.sum { |category| ignored_matching_rows(Array(category["findings"])).length }
+      {
+        "generated_at" => report["generated_at"].to_s,
+        "finished_at" => report["finished_at"].to_s,
+        "severity" => report["severity"].to_s.presence || "ok",
+        "duration_ms" => report["duration_ms"].to_i,
+        "active_findings_count" => active_count,
+        "ignored_findings_count" => ignored_count,
+        "new_findings_count" => diff["new_findings_count"].to_i,
+        "resolved_findings_count" => diff["resolved_findings_count"].to_i,
+        "items_checked" => report.dig("stats", "items_checked").to_i,
+        "objects_scanned" => report.dig("stats", "objects_scanned").to_i,
+        "profile_labels" => checked_profile_labels(report).first(8),
+        "truncated_profile_labels" => Array(report.dig("stats", "truncated_profile_labels")).map(&:to_s).reject(&:blank?).first(8),
+      }.compact
+    end
+
+    def reconciliation_history
+      reconciliation_history_raw.map do |entry|
+        entry.slice(
+          "generated_at",
+          "finished_at",
+          "severity",
+          "duration_ms",
+          "active_findings_count",
+          "ignored_findings_count",
+          "new_findings_count",
+          "resolved_findings_count",
+          "items_checked",
+          "objects_scanned",
+          "profile_labels",
+          "truncated_profile_labels"
+        )
+      end
+    rescue
+      []
+    end
+
+    def reconciliation_history_raw
+      value = ::PluginStore.get(STORE_NAMESPACE, RECONCILIATION_HISTORY_KEY)
+      value.is_a?(Array) ? value.map { |row| row.is_a?(Hash) ? row.deep_stringify_keys : {} }.reject(&:blank?) : []
+    rescue
+      []
+    end
+
+    def checked_profile_labels(report)
+      profiles = report["profiles"].is_a?(Hash) ? report["profiles"] : {}
+      checked = Array(profiles["checked"]) + Array(profiles[:checked])
+      checked.filter_map do |profile|
+        next unless profile.is_a?(Hash)
+        profile["label"].to_s.presence || profile[:label].to_s.presence || profile["name"].to_s.presence || profile[:name].to_s.presence
+      end.uniq
+    rescue
+      []
+    end
+
+    def reconciliation_export_payload(category: nil, include_ignored: false)
+      cached = last_reconciliation
+      return {} if cached.blank?
+
+      report = cached.deep_dup
+      report["categories"] = filtered_reconciliation_categories(
+        Array(report["categories"]),
+        category: category,
+        include_ignored: include_ignored
+      )
+      report["export_filter"] = {
+        "category" => category.to_s.presence || "all",
+        "include_ignored" => !!include_ignored,
+      }
+      report
+    end
+
+    def filtered_reconciliation_categories(categories, category:, include_ignored:)
+      requested = category.to_s.strip
+      Array(categories).filter_map do |entry|
+        next if requested.present? && requested != "all" && entry["id"].to_s != requested
+
+        copy = entry.deep_dup
+        rows = Array(copy["findings"])
+        copy["findings"] = include_ignored ? rows : active_reconciliation_rows(rows)
+        copy["count"] = copy["findings"].length
+        copy
+      end
+    end
+
+    def reconciliation_export_csv(category: nil, include_ignored: false)
+      report = reconciliation_export_payload(category: category, include_ignored: include_ignored)
+      CSV.generate(headers: true) do |csv|
+        csv << [
+          "category",
+          "severity",
+          "issue_type",
+          "label",
+          "public_id",
+          "title",
+          "status",
+          "profile",
+          "backend",
+          "role",
+          "storage_key",
+          "missing",
+          "detail",
+          "suggestion",
+          "url",
+          "key",
+        ]
+        Array(report["categories"]).each do |category_row|
+          Array(category_row["findings"]).each do |finding|
+            csv << [
+              category_row["title"].to_s.presence || category_row["id"].to_s,
+              finding["severity"],
+              finding["issue_type"],
+              finding["label"],
+              finding["public_id"],
+              finding["title"],
+              finding["status"],
+              finding["profile_label"].to_s.presence || finding["profile_display_label"].to_s.presence || finding["profile_key"],
+              finding["backend"],
+              finding["role"],
+              finding["storage_key"],
+              finding["missing"],
+              finding["detail"],
+              finding["suggestion"],
+              finding["url"],
+              finding["key"],
+            ]
+          end
+        end
+      end
     end
 
     def truncated_profile_names(cached)
@@ -880,15 +1077,17 @@ module ::MediaGallery
       raise Discourse::InvalidParameters.new(:key) unless valid_ignore_key?(key)
 
       ignored = ignored_findings_hash
+      expires_at = ignore_expires_at(params[:expires_in_days])
       ignored[key] = {
         "key" => key,
         "issue_type" => issue_type,
         "public_id" => public_id.presence || key.split(":").last,
         "title" => params[:title].to_s.strip.truncate(200),
-        "reason" => ::MediaGallery::TextSanitizer.plain_text(params[:reason].to_s, max_length: 300, allow_newlines: false),
+        "reason" => ::MediaGallery::TextSanitizer.plain_text(params[:reason].to_s, max_length: 500, allow_newlines: true).presence,
         "ignored_at" => Time.zone.now.iso8601,
         "ignored_by_user_id" => user&.id,
         "ignored_by_username" => user&.username,
+        "expires_at" => expires_at&.iso8601,
       }.compact
       ::PluginStore.set(STORE_NAMESPACE, IGNORED_FINDINGS_KEY, ignored)
       true
@@ -919,6 +1118,7 @@ module ::MediaGallery
           title: title,
           ignored_at: entry["ignored_at"],
           ignored_by_username: entry["ignored_by_username"],
+          expires_at: entry["expires_at"].to_s.presence,
           reason: entry["reason"].to_s.presence,
           url: public_id.present? ? management_url_for(public_id) : nil,
         }.compact
@@ -929,9 +1129,33 @@ module ::MediaGallery
 
     def ignored_findings_hash
       value = ::PluginStore.get(STORE_NAMESPACE, IGNORED_FINDINGS_KEY)
-      value.is_a?(Hash) ? value.deep_stringify_keys : {}
+      ignored = value.is_a?(Hash) ? value.deep_stringify_keys : {}
+      active = ignored.reject { |_key, entry| ignored_entry_expired?(entry) }
+      if active.length != ignored.length
+        ::PluginStore.set(STORE_NAMESPACE, IGNORED_FINDINGS_KEY, active)
+      end
+      active
     rescue
       {}
+    end
+
+    def ignored_entry_expired?(entry)
+      expires_at = entry.is_a?(Hash) ? entry["expires_at"].to_s.presence : nil
+      return false if expires_at.blank?
+
+      Time.zone.parse(expires_at) < Time.zone.now
+    rescue
+      false
+    end
+
+    def ignore_expires_at(value)
+      days = value.to_i
+      return nil unless days.positive?
+
+      days = [days, 365].min
+      Time.zone.now + days.days
+    rescue
+      nil
     end
 
     def store_full_storage_check!(missing_rows)
