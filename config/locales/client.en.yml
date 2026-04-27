@@ -142,6 +142,16 @@ en:
         title: "Media gallery"
         description: "Admin tools for the Media Gallery plugin."
         open_settings: "Open settings"
+        overview_title: "Admin tools"
+        overview_description: "Choose a media gallery admin area. Each tool opens the same page as before, but with a short description to make navigation easier."
+        settings_description: "Configure plugin settings, access groups, notices, reports, storage, processing, and security options."
+        open_tool: "Open tool"
+        category_configuration: "Configuration"
+        category_content: "Content"
+        category_moderation: "Moderation"
+        category_monitoring: "Monitoring"
+        category_forensics: "Forensics"
+        category_operations: "Operations"
 
 
 
