@@ -34,6 +34,10 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
+      .mg-reports__panel.is-review-panel {
+        overflow: visible;
+      }
+
       .mg-reports__grid {
         display: grid;
         grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
@@ -56,9 +60,22 @@ export default RouteTemplate(
 
       .mg-reports__filters {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 180px 140px auto auto;
+        grid-template-columns: minmax(260px, 1fr) 180px 140px auto;
         gap: 0.75rem;
         align-items: end;
+      }
+
+      .mg-reports__filter-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        min-height: 42px;
+      }
+
+      .mg-reports__filter-actions .btn {
+        min-height: 42px;
+        display: inline-flex;
+        align-items: center;
       }
 
       .mg-reports__field {
@@ -263,55 +280,80 @@ export default RouteTemplate(
         grid-column: 1 / -1;
       }
 
-      .mg-reports__help-list {
-        display: grid;
-        gap: 0.5rem;
-        margin-top: 0.75rem;
+      .mg-reports__section-title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.65rem;
+        position: relative;
       }
 
       .mg-reports__help-item {
         position: relative;
         display: inline-flex;
         align-items: center;
-        gap: 0.35rem;
-        width: fit-content;
-        max-width: 100%;
+        justify-content: center;
+        flex-shrink: 0;
       }
 
       .mg-reports__help-icon {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        border: 1px solid var(--primary-low-mid);
-        color: var(--primary-medium);
-        font-size: var(--font-down-2);
+        width: 1.35rem;
+        height: 1.35rem;
+        border-radius: 999px;
+        border: 1px solid var(--tertiary);
+        background: var(--tertiary);
+        color: var(--secondary);
+        font-size: 0.76rem;
+        font-weight: 700;
+        line-height: 1;
         cursor: help;
+        user-select: none;
       }
 
       .mg-reports__help-text {
         position: absolute;
-        left: 0;
-        top: calc(100% + 0.35rem);
-        z-index: 20;
-        width: min(420px, calc(100vw - 3rem));
+        right: 0;
+        bottom: calc(100% + 0.5rem);
+        z-index: 3000;
+        width: min(28rem, calc(100vw - 3rem));
         max-width: 80vw;
-        padding: 0.65rem 0.75rem;
-        border-radius: 10px;
-        border: 1px solid var(--primary-low);
+        padding: 0.75rem 0.85rem;
+        border-radius: 12px;
+        border: 1px solid var(--mg-border);
         background: var(--secondary);
-        color: var(--primary);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+        color: var(--primary-high);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
         white-space: normal;
         overflow-wrap: anywhere;
-        display: none;
+        font-size: var(--font-down-1);
+        font-weight: 400;
+        line-height: 1.4;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(0.15rem);
+        transition: opacity 0.14s ease, transform 0.14s ease;
       }
 
       .mg-reports__help-item:hover .mg-reports__help-text,
       .mg-reports__help-item:focus-within .mg-reports__help-text {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .mg-reports__help-text strong {
         display: block;
+        margin-bottom: 0.18rem;
+      }
+
+      .mg-reports__help-text p {
+        margin: 0 0 0.65rem;
+      }
+
+      .mg-reports__help-text p:last-child {
+        margin-bottom: 0;
       }
 
       @media (max-width: 1100px) {
@@ -368,10 +410,12 @@ export default RouteTemplate(
             </select>
           </div>
 
-          <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isLoading}}>
-            {{if @controller.isLoading "Loading…" "Search"}}
-          </button>
-          <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isLoading}}>Reset</button>
+          <div class="mg-reports__filter-actions">
+            <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isLoading}}>
+              {{if @controller.isLoading "Loading…" "Search"}}
+            </button>
+            <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isLoading}}>Reset</button>
+          </div>
         </div>
 
         {{#if @controller.loadError}}
@@ -431,7 +475,7 @@ export default RouteTemplate(
           {{/if}}
         </section>
 
-        <section class="mg-reports__panel">
+        <section class="mg-reports__panel is-review-panel">
           <div class="mg-reports__panel-header">
             <div>
               <h2>Selected report</h2>
@@ -445,29 +489,29 @@ export default RouteTemplate(
 
           {{#if @controller.hasSelectedReport}}
             <div class="mg-reports__summary-grid">
-              <div class="mg-reports__summary-card">
-                <div class="mg-reports__summary-label">Media</div>
-                <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaTitle}}</div>
-              </div>
-              <div class="mg-reports__summary-card">
+              <div class="mg-reports__summary-card is-wide">
                 <div class="mg-reports__summary-label">Public ID</div>
                 <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaPublicId}}</div>
               </div>
               <div class="mg-reports__summary-card">
-                <div class="mg-reports__summary-label">Reporter</div>
-                <div class="mg-reports__summary-value">{{@controller.selectedReport.reporterLabel}}</div>
+                <div class="mg-reports__summary-label">Media</div>
+                <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaTitle}}</div>
               </div>
               <div class="mg-reports__summary-card">
                 <div class="mg-reports__summary-label">Uploader</div>
                 <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaUploader}}</div>
               </div>
               <div class="mg-reports__summary-card">
-                <div class="mg-reports__summary-label">Reason</div>
-                <div class="mg-reports__summary-value">{{@controller.selectedReport.reason_label}}</div>
+                <div class="mg-reports__summary-label">Reporter</div>
+                <div class="mg-reports__summary-value">{{@controller.selectedReport.reporterLabel}}</div>
               </div>
               <div class="mg-reports__summary-card">
                 <div class="mg-reports__summary-label">Status</div>
                 <div class="mg-reports__summary-value">{{@controller.selectedReport.statusLabel}}</div>
+              </div>
+              <div class="mg-reports__summary-card is-wide">
+                <div class="mg-reports__summary-label">Reason</div>
+                <div class="mg-reports__summary-value">{{@controller.selectedReport.reason_label}}</div>
               </div>
               <div class="mg-reports__summary-card">
                 <div class="mg-reports__summary-label">Decision</div>
@@ -512,20 +556,20 @@ export default RouteTemplate(
 
             {{#if @controller.selectedIsOpen}}
               <section class="mg-reports__section" style="margin-top: 1rem;">
-                <h3>Review action</h3>
+                <div class="mg-reports__section-title-row">
+                  <h3>Review action</h3>
+                  <div class="mg-reports__help-item">
+                    <span class="mg-reports__help-icon" tabindex="0" aria-label="Review action help">i</span>
+                    <div class="mg-reports__help-text">
+                      {{#each @controller.actionHelpItems as |help|}}
+                        <p><strong>{{help.label}}</strong>{{help.text}}</p>
+                      {{/each}}
+                    </div>
+                  </div>
+                </div>
                 <div class="mg-reports__field" style="margin-top: 0.75rem;">
                   <label>Staff note</label>
                   <textarea value={{@controller.reviewNote}} placeholder="Optional note for the audit trail" {{on "input" @controller.onReviewNote}}></textarea>
-                </div>
-
-                <div class="mg-reports__help-list">
-                  {{#each @controller.actionHelpItems as |help|}}
-                    <div class="mg-reports__help-item">
-                      <span>{{help.label}}</span>
-                      <span class="mg-reports__help-icon" tabindex="0">i</span>
-                      <span class="mg-reports__help-text">{{help.text}}</span>
-                    </div>
-                  {{/each}}
                 </div>
 
                 <div class="mg-reports__actions" style="margin-top: 1rem;">
