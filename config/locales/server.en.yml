@@ -190,7 +190,7 @@ en:
     media_gallery_reports_enabled_title: "Media gallery reports enabled"
     media_gallery_reports_enabled: "Allow users with media view access to report media items for staff review."
     media_gallery_report_auto_hide_groups_title: "Media gallery report auto-hide groups"
-    media_gallery_report_auto_hide_groups: "Groups or trust levels whose reports immediately hide the media item until staff review. Use names separated by |, comma, or new lines. Supports staff and trust_level_4. Instant auto-hide always takes priority over the scored threshold."
+    media_gallery_report_auto_hide_groups: "Entries whose reports immediately hide the media item until staff review. Add one entry per line. Instant auto-hide always takes priority over the scored threshold."
     media_gallery_report_auto_hide_score_threshold_title: "Media gallery report score threshold"
     media_gallery_report_auto_hide_score_threshold: "Optional total report score required to auto-hide a media item when reports do not match the instant auto-hide groups. Set to 0 to disable scored auto-hide."
     media_gallery_report_auto_hide_tl0_points_title: "Media gallery report points for trust level 0"

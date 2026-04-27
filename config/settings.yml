@@ -921,6 +921,7 @@ plugins:
 
   media_gallery_report_auto_hide_groups:
     default: "staff|trust_level_4"
+    type: list
     client: false
 
   # Optional scored auto-hide for reports from users who are not matched by media_gallery_report_auto_hide_groups.

@@ -70,11 +70,45 @@ module ::MediaGallery
           apply_visibility!(meta, item, hidden: true, reason: "Report accepted by staff; asset deleted.", at: now)
           append_management_log!(meta, action: "report_accept_delete_asset", item: item, note: note, changes: { "hidden" => [item.admin_hidden?, true], "asset_deleted" => [false, true], "report_id" => [nil, report_id] })
         when "reject"
-          restore_auto_hidden_media_if_needed!(meta, item, report, at: now, reason: "Report rejected by staff.")
-          append_management_log!(meta, action: "report_reject", item: item, note: note, changes: { "report_id" => [nil, report_id], "auto_hidden_restored" => [nil, auto_hidden_restored?(report)] })
+          auto_hide_review = reconcile_report_auto_hide_after_review!(
+            meta,
+            item,
+            reports,
+            report,
+            at: now,
+            reason: "Report rejected by staff."
+          )
+          append_management_log!(
+            meta,
+            action: "report_reject",
+            item: item,
+            note: note,
+            changes: {
+              "report_id" => [nil, report_id],
+              "auto_hidden_restored" => [nil, auto_hide_review["restored"]],
+              "remaining_report_score" => [nil, auto_hide_review["score"]],
+            }.compact
+          )
         when "resolve"
-          restore_auto_hidden_media_if_needed!(meta, item, report, at: now, reason: "Report resolved without action by staff.")
-          append_management_log!(meta, action: "report_resolve", item: item, note: note, changes: { "report_id" => [nil, report_id], "auto_hidden_restored" => [nil, auto_hidden_restored?(report)] })
+          auto_hide_review = reconcile_report_auto_hide_after_review!(
+            meta,
+            item,
+            reports,
+            report,
+            at: now,
+            reason: "Report resolved without action by staff."
+          )
+          append_management_log!(
+            meta,
+            action: "report_resolve",
+            item: item,
+            note: note,
+            changes: {
+              "report_id" => [nil, report_id],
+              "auto_hidden_restored" => [nil, auto_hide_review["restored"]],
+              "remaining_report_score" => [nil, auto_hide_review["score"]],
+            }.compact
+          )
         end
 
         meta[REPORTS_KEY] = reports
@@ -554,19 +588,112 @@ def auto_hidden_restored?(report)
   ActiveModel::Type::Boolean.new.cast(report["auto_hidden_restored"])
 end
 
-def restore_auto_hidden_media_if_needed!(meta, item, report, at:, reason:)
-  return false unless ActiveModel::Type::Boolean.new.cast(report["auto_hidden"])
-  return false if asset_deletion_state_from_meta(meta).present?
+def reconcile_report_auto_hide_after_review!(meta, item, reports, reviewed_report, at:, reason:)
+  score_result = media_report_score_for_reports(reports)
+  threshold_met = media_report_score_threshold_met?(score_result)
+  active_instant = active_instant_auto_hide_report?(reports)
+
+  if score_result["enabled"]
+    meta["media_report_score_auto_hide"] = score_result.merge(
+      "active" => threshold_met,
+      "updated_at" => at
+    )
+  else
+    meta.delete("media_report_score_auto_hide")
+  end
+
+  result = {
+    "restored" => false,
+    "kept_hidden" => false,
+    "active_auto_hide" => active_instant || threshold_met,
+    "active_mode" => active_instant ? "instant" : (threshold_met ? "score_threshold" : nil),
+    "score" => score_result["score"],
+    "threshold" => score_result["threshold"],
+  }.compact
+
+  return result if asset_deletion_state_from_meta(meta).present?
 
   visibility = meta[VISIBILITY_KEY].is_a?(Hash) ? meta[VISIBILITY_KEY].deep_dup : {}
-  return false unless ActiveModel::Type::Boolean.new.cast(visibility["hidden"])
-  return false unless visibility["updated_by"].to_s == "media_report_auto_hide" || visibility["reason"].to_s.include?("Auto-hidden")
+  return result unless ActiveModel::Type::Boolean.new.cast(visibility["hidden"])
+  return result unless visibility["updated_by"].to_s == "media_report_auto_hide" || visibility["reason"].to_s.include?("Auto-hidden")
+
+  if result["active_auto_hide"]
+    result["kept_hidden"] = true
+    return result
+  end
 
   apply_visibility!(meta, item, hidden: false, reason: reason, at: at)
-  report["auto_hidden_restored"] = true
-  report["auto_hidden_restored_at"] = at
-  report["auto_hidden_restored_by_username"] = current_user.username
-  true
+  reviewed_report["auto_hidden_restored"] = true
+  reviewed_report["auto_hidden_restored_at"] = at
+  reviewed_report["auto_hidden_restored_by_username"] = current_user.username
+  result["restored"] = true
+  result
+end
+
+def active_instant_auto_hide_report?(reports)
+  Array(reports).any? do |report|
+    report.is_a?(Hash) &&
+      report["status"].to_s == "open" &&
+      ActiveModel::Type::Boolean.new.cast(report["auto_hidden"]) &&
+      report["auto_hide_mode"].to_s == "instant"
+  end
+end
+
+def media_report_score_threshold
+  SiteSetting.media_gallery_report_auto_hide_score_threshold.to_i
+end
+
+def media_report_points_by_trust_level
+  {
+    0 => SiteSetting.media_gallery_report_auto_hide_tl0_points.to_i,
+    1 => SiteSetting.media_gallery_report_auto_hide_tl1_points.to_i,
+    2 => SiteSetting.media_gallery_report_auto_hide_tl2_points.to_i,
+    3 => SiteSetting.media_gallery_report_auto_hide_tl3_points.to_i,
+    4 => SiteSetting.media_gallery_report_auto_hide_tl4_points.to_i,
+  }
+end
+
+def media_report_score_for_reports(reports)
+  threshold = media_report_score_threshold
+  points_by_tl = media_report_points_by_trust_level
+  result = {
+    "enabled" => threshold.positive?,
+    "threshold" => threshold,
+    "score" => 0,
+    "contributors" => 0,
+    "points_by_trust_level" => points_by_tl.transform_keys(&:to_s),
+    "score_by_trust_level" => Hash.new(0),
+  }
+  return result unless result["enabled"]
+
+  seen_reporters = {}
+  Array(reports).each do |report|
+    next unless report.is_a?(Hash)
+    next unless report["status"].to_s.blank? || report["status"].to_s == "open"
+
+    reporter_id = report["reporter_user_id"].to_i
+    next if reporter_id <= 0 || seen_reporters[reporter_id]
+
+    seen_reporters[reporter_id] = true
+    trust_level = [[report["reporter_trust_level"].to_i, 0].max, 4].min
+    points = [points_by_tl[trust_level].to_i, 0].max
+    next if points <= 0
+
+    result["score"] += points
+    result["contributors"] += 1
+    result["score_by_trust_level"][trust_level.to_s] += points
+  end
+
+  result["score_by_trust_level"] = result["score_by_trust_level"].to_h
+  result["threshold_met"] = result["score"] >= threshold
+  result
+end
+
+def media_report_score_threshold_met?(score_result)
+  score_result.is_a?(Hash) &&
+    score_result["enabled"] &&
+    score_result["threshold"].to_i.positive? &&
+    score_result["score"].to_i >= score_result["threshold"].to_i
 end
 
 def asset_deletion_state_from_meta(meta)

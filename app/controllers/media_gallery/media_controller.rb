@@ -1549,8 +1549,15 @@ end
     end
 
     def media_report_auto_hide_groups
-      SiteSetting.media_gallery_report_auto_hide_groups.to_s
-        .split(REPORT_AUTO_HIDE_GROUP_SETTING_SEPARATOR)
+      raw = SiteSetting.media_gallery_report_auto_hide_groups
+      values =
+        if raw.respond_to?(:to_a) && !raw.is_a?(String)
+          raw.to_a
+        else
+          raw.to_s.split(REPORT_AUTO_HIDE_GROUP_SETTING_SEPARATOR)
+        end
+
+      values
         .map { |value| ::MediaGallery::TextSanitizer.plain_text(value, max_length: 80, allow_newlines: false).to_s.strip.downcase }
         .reject(&:blank?)
         .uniq
