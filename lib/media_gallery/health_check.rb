@@ -367,7 +367,7 @@ module ::MediaGallery
           severity: "warning",
           count: Array(cached.dig("stats", "truncated_profiles")).length,
           message: "One or more storage profiles reached the scan limit.",
-          detail: "Profiles: #{(Array(cached.dig("stats", "truncated_profile_labels")).presence || Array(cached.dig("stats", "truncated_profiles"))).join(', ')}. Increase the reconciliation object limit only after considering performance impact.",
+          detail: "Profiles: #{Array(cached.dig("stats", "truncated_profiles")).join(', ')}. Increase the reconciliation object limit only after considering performance impact.",
           metadata: { checked_at: cached["generated_at"], read_only: true }
         )
       end
@@ -390,12 +390,11 @@ module ::MediaGallery
       )
     end
 
-    def run_reconciliation!(profile_scope: "all_configured")
+    def run_reconciliation!
       report = ::MediaGallery::StorageReconciler.run(
         item_limit: setting_int(:media_gallery_health_reconciliation_item_limit, 500),
         object_limit: setting_int(:media_gallery_health_reconciliation_object_limit, 2000),
-        orphan_sample_limit: setting_int(:media_gallery_health_reconciliation_orphan_sample_limit, 50),
-        profile_scope: profile_scope
+        orphan_sample_limit: setting_int(:media_gallery_health_reconciliation_orphan_sample_limit, 50)
       )
       store_reconciliation!(report)
       record_log_event(
@@ -405,10 +404,6 @@ module ::MediaGallery
         details: {
           severity: report[:severity],
           duration_ms: report[:duration_ms],
-          profile_scope: report[:profile_scope],
-          checked_profiles: report[:checked_profiles],
-          skipped_profiles: report[:skipped_profiles],
-          scan_completeness: report[:scan_completeness],
           stats: report[:stats],
           counts: Array(report[:categories]).to_h { |category| [category[:id], category[:count]] },
         }
@@ -447,11 +442,6 @@ module ::MediaGallery
         active_findings_count: active_count,
         ignored_findings_count: ignored_count,
         duration_ms: cached["duration_ms"],
-        profile_scope: cached["profile_scope"] || "all_configured",
-        scan_completeness: cached["scan_completeness"] || "unknown",
-        configured_profiles: cached["configured_profiles"] || [],
-        checked_profiles: cached["checked_profiles"] || [],
-        skipped_profiles: cached["skipped_profiles"] || [],
         stats: cached["stats"] || {},
         limits: cached["limits"] || {},
       }

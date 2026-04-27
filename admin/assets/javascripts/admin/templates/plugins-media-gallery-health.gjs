@@ -91,13 +91,45 @@ export default RouteTemplate(
 
       .mg-health__summary-card {
         position: relative;
-        padding-right: 2.5rem;
+        padding-right: 2.6rem;
       }
 
       .mg-health__summary-card > .mg-health__status-dot {
         position: absolute;
         right: 1rem;
         top: 1rem;
+      }
+
+      .mg-health__status-dot {
+        display: inline-flex;
+        width: 0.8rem;
+        height: 0.8rem;
+        border-radius: 999px;
+        flex: 0 0 auto;
+        border: 2px solid var(--secondary);
+        box-shadow: 0 0 0 1px var(--primary-low);
+        background: var(--primary-low-mid);
+      }
+
+      .mg-health__status-dot.is-success {
+        background: var(--success);
+        box-shadow: 0 0 0 1px var(--success-low-mid);
+      }
+
+      .mg-health__status-dot.is-warning {
+        background: #d98700;
+        box-shadow: 0 0 0 1px #ffc66d;
+      }
+
+      .mg-health__status-dot.is-danger {
+        background: var(--danger);
+        box-shadow: 0 0 0 1px var(--danger-low-mid);
+      }
+
+      .mg-health__status-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
       }
 
       .mg-health__summary-label {
@@ -145,84 +177,6 @@ export default RouteTemplate(
         background: var(--danger-low);
         color: var(--danger);
         border-color: var(--danger-low-mid);
-      }
-
-      .mg-health__status-dot {
-        display: inline-flex;
-        width: 0.8rem;
-        height: 0.8rem;
-        border-radius: 999px;
-        flex: 0 0 auto;
-        border: 2px solid var(--secondary);
-        box-shadow: 0 0 0 1px var(--primary-low);
-        background: var(--primary-low-mid);
-      }
-
-      .mg-health__status-dot.is-success {
-        background: var(--success);
-        box-shadow: 0 0 0 1px var(--success-low-mid);
-      }
-
-      .mg-health__status-dot.is-warning {
-        background: #d98700;
-        box-shadow: 0 0 0 1px #ffc66d;
-      }
-
-      .mg-health__status-dot.is-danger {
-        background: var(--danger);
-        box-shadow: 0 0 0 1px var(--danger-low-mid);
-      }
-
-      .mg-health__status-dot.is-muted {
-        background: var(--primary-low-mid);
-        box-shadow: 0 0 0 1px var(--primary-low);
-      }
-
-      .mg-health__status-row {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.45rem;
-      }
-
-      .mg-health__scope-row {
-        display: grid;
-        grid-template-columns: minmax(220px, 320px) auto auto;
-        gap: 0.75rem;
-        align-items: end;
-        margin-top: 1rem;
-      }
-
-      .mg-health__scope-row select {
-        width: 100%;
-        min-height: 40px;
-      }
-
-      .mg-health__profile-list {
-        display: grid;
-        gap: 0.55rem;
-        margin-top: 0.85rem;
-      }
-
-      .mg-health__profile-row {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
-        gap: 0.55rem;
-        align-items: center;
-        border: 1px solid var(--mg-health-border);
-        border-radius: 12px;
-        background: var(--primary-very-low);
-        padding: 0.55rem 0.65rem;
-      }
-
-      .mg-health__profile-title {
-        font-weight: 700;
-        overflow-wrap: anywhere;
-      }
-
-      .mg-health__profile-subtitle {
-        color: var(--mg-health-muted);
-        font-size: var(--font-down-1);
-        overflow-wrap: anywhere;
       }
 
       .mg-health__issue {
@@ -346,10 +300,8 @@ export default RouteTemplate(
       }
 
       .mg-health__notice {
-        width: fit-content;
-        max-width: 100%;
         border-radius: 12px;
-        padding: 0.55rem 0.75rem;
+        padding: 0.65rem 0.75rem;
         border: 1px solid var(--success-low-mid);
         background: var(--secondary);
         color: var(--success);
@@ -373,14 +325,8 @@ export default RouteTemplate(
           justify-content: flex-start;
         }
 
-        .mg-health__issue,
-        .mg-health__scope-row {
+        .mg-health__issue {
           grid-template-columns: auto minmax(0, 1fr);
-        }
-
-        .mg-health__scope-row .btn {
-          grid-column: 1 / -1;
-          justify-self: start;
         }
 
         .mg-health__issue > .mg-health__badge {
@@ -409,6 +355,12 @@ export default RouteTemplate(
             <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runFullStorage}}>
               Run full storage check
             </button>
+            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runReconciliation}}>
+              Run storage reconciliation
+            </button>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
+              Export reconciliation
+            </button>
             <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
           </div>
         </div>
@@ -427,7 +379,7 @@ export default RouteTemplate(
           <article class="mg-health__summary-card">
             <div class="mg-health__summary-label">{{card.label}}</div>
             <div class="mg-health__summary-value">{{card.value}}</div>
-            <span class={{card.dotClass}} title={{card.severityLabel}}></span>
+            <span class="mg-health__status-dot {{card.badgeClass}}" title={{card.severityLabel}}></span>
           </article>
         {{/each}}
       </section>
@@ -441,23 +393,6 @@ export default RouteTemplate(
           <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">Run reconciliation manually when you want to review missing assets, orphan candidates, deleted media leftovers, and invalid storage references. Export downloads the latest stored report as JSON.</span></span>
         </div>
 
-        <div class="mg-health__scope-row">
-          <div>
-            <label class="mg-health__alert-label">Reconciliation scope</label>
-            <select value={{@controller.reconciliationProfileScope}} {{on "change" @controller.onReconciliationProfileScopeChange}}>
-              {{#each @controller.reconciliationProfileOptions as |option|}}
-                <option value={{option.id}}>{{option.label}}</option>
-              {{/each}}
-            </select>
-          </div>
-          <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runReconciliation}}>
-            Run reconciliation
-          </button>
-          <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
-            Export latest report
-          </button>
-        </div>
-
         {{#if @controller.hasReconciliation}}
           <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 1rem;">
             {{#each @controller.reconciliationStatsRows as |row|}}
@@ -467,40 +402,8 @@ export default RouteTemplate(
               </div>
             {{/each}}
           </div>
-
-          {{#if @controller.hasCheckedProfiles}}
-            <h3 style="margin-top: 1rem;">Checked profiles</h3>
-            <div class="mg-health__profile-list">
-              {{#each @controller.checkedProfiles as |profile|}}
-                <div class="mg-health__profile-row">
-                  <span class={{profile.dotClass}} title={{profile.statusText}}></span>
-                  <div>
-                    <div class="mg-health__profile-title">{{profile.label}}</div>
-                    <div class="mg-health__profile-subtitle">{{profile.backend}} - {{profile.profile_key}}</div>
-                  </div>
-                  <span class="mg-health__badge">{{profile.statusText}}</span>
-                </div>
-              {{/each}}
-            </div>
-          {{/if}}
-
-          {{#if @controller.hasSkippedProfiles}}
-            <h3 style="margin-top: 1rem;">Configured but not scanned</h3>
-            <div class="mg-health__profile-list">
-              {{#each @controller.skippedProfiles as |profile|}}
-                <div class="mg-health__profile-row">
-                  <span class={{profile.dotClass}} title={{profile.statusText}}></span>
-                  <div>
-                    <div class="mg-health__profile-title">{{profile.label}}</div>
-                    <div class="mg-health__profile-subtitle">{{profile.backend}} - {{profile.profile_key}}</div>
-                  </div>
-                  <span class="mg-health__badge">{{profile.statusText}}</span>
-                </div>
-              {{/each}}
-            </div>
-          {{/if}}
         {{else}}
-          <p class="mg-health__muted" style="margin-top: 1rem;">Storage reconciliation has not been run yet. Choose a scope and run a read-only scan.</p>
+          <p class="mg-health__muted" style="margin-top: 1rem;">Storage reconciliation has not been run yet.</p>
         {{/if}}
       </section>
 

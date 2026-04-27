@@ -29,30 +29,21 @@ module ::MediaGallery
 
     STORAGE_BACKENDS = %w[local s3].freeze
 
-    def run(item_limit: 500, object_limit: 2000, orphan_sample_limit: 50, profile_scope: "all_configured")
+    def run(item_limit: 500, object_limit: 2000, orphan_sample_limit: 50)
       started_at = Time.zone.now
       item_limit = bounded_int(item_limit, min: 25, max: 5000, default: 500)
       object_limit = bounded_int(object_limit, min: 50, max: 20_000, default: 2000)
       orphan_sample_limit = bounded_int(orphan_sample_limit, min: 5, max: 500, default: 50)
-      configured_profiles = configured_profile_summaries
-      profile_scope = normalize_profile_scope(profile_scope, configured_profiles)
 
       context = {
         expected_keys: Hash.new { |h, k| h[k] = Set.new },
         expected_prefixes: Hash.new { |h, k| h[k] = Set.new },
         findings: CATEGORIES.keys.index_with { [] },
-        configured_profiles: configured_profiles,
-        profile_scope: profile_scope,
-        profile_lookup: configured_profiles.to_h { |profile| [profile[:profile_key].to_s, profile] },
-        referenced_profile_keys: Set.new,
         stats: {
           items_checked: 0,
-          items_skipped_by_scope: 0,
-          profiles_configured: configured_profiles.length,
           profiles_checked: 0,
           objects_scanned: 0,
           truncated_profiles: [],
-          truncated_profile_labels: [],
         },
       }
 
@@ -96,11 +87,6 @@ module ::MediaGallery
         duration_ms: ((finished_at - started_at) * 1000).round,
         read_only: true,
         cleanup_available: false,
-        profile_scope: profile_scope,
-        scan_completeness: scan_completeness(context),
-        configured_profiles: configured_profiles,
-        checked_profiles: checked_profiles_payload(context),
-        skipped_profiles: skipped_profiles_payload(context),
         limits: {
           item_limit: item_limit,
           object_limit: object_limit,
@@ -118,11 +104,6 @@ module ::MediaGallery
         generated_at_label: Time.zone.now.strftime("%Y-%m-%d %H:%M:%S"),
         read_only: true,
         cleanup_available: false,
-        profile_scope: profile_scope.to_s.presence || "all_configured",
-        scan_completeness: "failed",
-        configured_profiles: [],
-        checked_profiles: [],
-        skipped_profiles: [],
         stats: {},
         limits: { item_limit: item_limit, object_limit: object_limit, orphan_sample_limit: orphan_sample_limit },
         categories: [
@@ -149,13 +130,6 @@ module ::MediaGallery
 
     def inspect_item!(item, context)
       profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
-      context[:referenced_profile_keys] << profile_key.to_s if profile_key.present?
-
-      if profile_out_of_scope?(context, profile_key)
-        context[:stats][:items_skipped_by_scope] += 1
-        return
-      end
-
       backend = ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(profile_key)
       store = profile_key.present? ? ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key) : nil
 
@@ -262,7 +236,6 @@ module ::MediaGallery
         severity: missing.include?("main") || missing.include?("hls") ? "critical" : "warning",
         item: item,
         profile_key: profile_key,
-        profile_label: profile_label_for_key(context, profile_key),
         backend: backend,
         label: "Ready item has missing assets",
         missing: missing.join(", "),
@@ -296,7 +269,6 @@ module ::MediaGallery
         severity: "warning",
         item: item,
         profile_key: profile_key,
-        profile_label: profile_label_for_key(context, profile_key),
         backend: backend,
         label: "Deleted media still has storage files",
         detail: "This item is marked as asset-deleted, but storage objects still appear to exist: #{leftovers.first(5).join(', ')}.",
@@ -305,96 +277,8 @@ module ::MediaGallery
       )
     end
 
-    def configured_profile_summaries
-      profiles = ::MediaGallery::StorageSettingsResolver.configured_profiles_summary.map do |profile|
-        key = profile[:profile_key].to_s
-        {
-          profile_key: key,
-          label: profile[:label].to_s.presence || profile[:profile].to_s.presence || key,
-          backend: profile[:backend].to_s,
-        }
-      end
-      profiles.presence || fallback_configured_profile_summaries
-    rescue => e
-      Rails.logger.warn("[media_gallery] configured profile summary failed: #{e.class}: #{e.message}")
-      fallback_configured_profile_summaries
-    end
-
-    def fallback_configured_profile_summaries
-      key = ::MediaGallery::StorageSettingsResolver.active_profile_key.to_s.presence || "local"
-      [
-        {
-          profile_key: key,
-          label: profile_label_for_key(nil, key).presence || key,
-          backend: ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(key).to_s.presence || "local",
-        }
-      ]
-    rescue
-      [{ profile_key: "local", label: "Local storage", backend: "local" }]
-    end
-
-    def normalize_profile_scope(raw, configured_profiles)
-      value = raw.to_s.strip
-      keys = Array(configured_profiles).map { |profile| profile[:profile_key].to_s }
-      return "referenced" if value == "referenced" || value == "referenced_profiles"
-      return value if keys.include?(value)
-
-      "all_configured"
-    end
-
-    def profile_out_of_scope?(context, profile_key)
-      scope = context[:profile_scope].to_s
-      return false if scope == "all_configured" || scope == "referenced"
-
-      profile_key.to_s != scope
-    end
-
-    def profiles_to_scan(context)
-      profiles = Array(context[:configured_profiles])
-      case context[:profile_scope].to_s
-      when "referenced"
-        referenced = context[:referenced_profile_keys].to_a
-        profiles.select { |profile| referenced.include?(profile[:profile_key].to_s) }
-      when "all_configured"
-        profiles
-      else
-        profiles.select { |profile| profile[:profile_key].to_s == context[:profile_scope].to_s }
-      end
-    end
-
-    def checked_profiles_payload(context)
-      scan_keys = profiles_to_scan(context).map { |profile| profile[:profile_key].to_s }
-      Array(context[:configured_profiles]).select { |profile| scan_keys.include?(profile[:profile_key].to_s) }.map do |profile|
-        {
-          profile_key: profile[:profile_key],
-          label: profile[:label],
-          backend: profile[:backend],
-          referenced: context[:referenced_profile_keys].include?(profile[:profile_key].to_s),
-          truncated: Array(context.dig(:stats, :truncated_profiles)).include?(profile[:profile_key].to_s),
-        }
-      end
-    end
-
-    def skipped_profiles_payload(context)
-      scan_keys = profiles_to_scan(context).map { |profile| profile[:profile_key].to_s }
-      Array(context[:configured_profiles]).reject { |profile| scan_keys.include?(profile[:profile_key].to_s) }.map do |profile|
-        reason = context[:profile_scope].to_s == "referenced" ? "No sampled media item referenced this profile." : "Outside selected scope."
-        {
-          profile_key: profile[:profile_key],
-          label: profile[:label],
-          backend: profile[:backend],
-          referenced: context[:referenced_profile_keys].include?(profile[:profile_key].to_s),
-          reason: reason,
-        }
-      end
-    end
-
-    def scan_completeness(context)
-      Array(context.dig(:stats, :truncated_profiles)).present? ? "partial" : "complete"
-    end
-
     def scan_storage_profiles!(context, object_limit:, orphan_sample_limit:)
-      profiles = profiles_to_scan(context)
+      profiles = ::MediaGallery::StorageSettingsResolver.configured_profiles_summary
       profiles.each do |profile|
         profile_key = profile[:profile_key].to_s
         backend = profile[:backend].to_s
@@ -423,10 +307,7 @@ module ::MediaGallery
           truncated = listed.length > object_limit
           keys = truncated ? listed.first(object_limit) : listed
           context[:stats][:objects_scanned] += keys.length
-          if truncated
-            context[:stats][:truncated_profiles] << profile_key
-            context[:stats][:truncated_profile_labels] << profile_label_for_key(context, profile_key)
-          end
+          context[:stats][:truncated_profiles] << profile_key if truncated
 
           orphan_count = 0
           keys.each do |key|
@@ -557,7 +438,7 @@ module ::MediaGallery
       context[:findings][category] << finding_payload(category: category, **attrs)
     end
 
-    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, backend: nil, role: nil, storage_key: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
+    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, backend: nil, role: nil, storage_key: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
       public_id ||= item&.public_id
       title ||= item&.title.to_s.presence || (public_id.present? ? "Untitled media" : label)
       status ||= item&.status
@@ -580,7 +461,6 @@ module ::MediaGallery
         title: title,
         status: status,
         profile_key: profile_key,
-        profile_label: profile_label.presence || profile_label_for_key(nil, profile_key),
         backend: backend,
         role: role,
         storage_key: safe_storage_key,
@@ -590,24 +470,6 @@ module ::MediaGallery
         url: public_id.present? ? management_url_for(public_id) : nil,
         can_ignore: can_ignore,
       }.compact
-    end
-
-    def profile_label_for_key(context, profile_key)
-      key = profile_key.to_s
-      return nil if key.blank?
-
-      if context.is_a?(Hash)
-        profile = context.dig(:profile_lookup, key)
-        return profile[:label] if profile.is_a?(Hash) && profile[:label].present?
-      end
-
-      if ::MediaGallery::StorageSettingsResolver.respond_to?(:profile_label_for_key)
-        ::MediaGallery::StorageSettingsResolver.profile_label_for_key(key)
-      else
-        key
-      end
-    rescue
-      key
     end
 
     def management_url_for(public_id)

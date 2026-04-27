@@ -127,27 +127,6 @@ function formatDuration(value) {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
 }
 
-function profileLabel(profile) {
-  const label = String(profile?.label || profile?.profile_key || "Unknown profile");
-  const backend = profile?.backend ? ` (${profile.backend})` : "";
-  return `${label}${backend}`;
-}
-
-function decorateProfile(profile, fallbackStatus = "Checked") {
-  const statusText = profile?.reason || (profile?.truncated ? "Partial" : fallbackStatus);
-  const statusClass = profile?.truncated ? "is-warning" : (profile?.reason ? "is-muted" : "is-success");
-  return {
-    ...profile,
-    key: profile?.profile_key || profile?.label || "unknown-profile",
-    label: profile?.label || profile?.profile_key || "Unknown profile",
-    backend: profile?.backend || "unknown",
-    displayLabel: profileLabel(profile),
-    statusText,
-    statusClass,
-    dotClass: `mg-health__status-dot ${statusClass}`,
-  };
-}
-
 function decorateExample(example) {
   const title = stringify(example?.title || example?.public_id || example?.label);
   const subtitleParts = [];
@@ -164,8 +143,8 @@ function decorateExample(example) {
   if (example?.missing) {
     subtitleParts.push(`missing: ${example.missing}`);
   }
-  if (example?.profile_label || example?.profile_key) {
-    subtitleParts.push(`profile: ${example.profile_label || example.profile_key}`);
+  if (example?.profile_key) {
+    subtitleParts.push(`profile: ${example.profile_key}`);
   }
   if (example?.backend) {
     subtitleParts.push(`backend: ${example.backend}`);
@@ -274,7 +253,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked attentionIssues = [];
   @tracked ignoredFindings = [];
   @tracked reconciliation = null;
-  @tracked reconciliationProfileScope = "all_configured";
 
   resetState() {
     this.isLoading = false;
@@ -287,7 +265,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.attentionIssues = [];
     this.ignoredFindings = [];
     this.reconciliation = null;
-    this.reconciliationProfileScope = "all_configured";
   }
 
   get overallSeverity() {
@@ -336,75 +313,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     return formatDateTime(this.reconciliation?.generated_at);
   }
 
-  get reconciliationGeneratedAtRelativeLabel() {
-    return formatRelativeTime(this.reconciliation?.generated_at);
-  }
-
-  get reconciliationDurationLabel() {
-    return formatDuration(this.reconciliation?.duration_ms);
-  }
-
-  get storageProfiles() {
-    const profiles = Array.isArray(this.reconciliation?.configured_profiles)
-      ? this.reconciliation.configured_profiles
-      : [];
-    return profiles.filter((profile) => profile?.profile_key);
-  }
-
-  get reconciliationProfileOptions() {
-    return [
-      { id: "all_configured", label: "All configured profiles" },
-      { id: "referenced", label: "Referenced profiles only" },
-      ...this.storageProfiles.map((profile) => ({ id: profile.profile_key, label: profileLabel(profile) })),
-    ];
-  }
-
-  get reconciliationScopeLabel() {
-    const scope = this.reconciliation?.profile_scope || this.reconciliationProfileScope || "all_configured";
-    if (scope === "all_configured") {
-      return "All configured profiles";
-    }
-    if (scope === "referenced") {
-      return "Referenced profiles only";
-    }
-
-    const profile = this.storageProfiles.find((item) => item.profile_key === scope);
-    return profile ? profileLabel(profile) : String(scope);
-  }
-
-  get reconciliationCompletenessLabel() {
-    switch (String(this.reconciliation?.scan_completeness || "unknown")) {
-      case "complete":
-        return "Complete";
-      case "partial":
-        return "Partial";
-      case "failed":
-        return "Failed";
-      default:
-        return "Unknown";
-    }
-  }
-
-  get checkedProfiles() {
-    return Array.isArray(this.reconciliation?.checked_profiles)
-      ? this.reconciliation.checked_profiles.map((profile) => decorateProfile(profile))
-      : [];
-  }
-
-  get skippedProfiles() {
-    return Array.isArray(this.reconciliation?.skipped_profiles)
-      ? this.reconciliation.skipped_profiles.map((profile) => decorateProfile(profile, "Skipped"))
-      : [];
-  }
-
-  get hasCheckedProfiles() {
-    return this.checkedProfiles.length > 0;
-  }
-
-  get hasSkippedProfiles() {
-    return this.skippedProfiles.length > 0;
-  }
-
   get reconciliationActiveFindingsCount() {
     return formatNumber(this.reconciliation?.active_findings_count || 0);
   }
@@ -417,15 +325,12 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     const stats = this.reconciliation?.stats || {};
     const limits = this.reconciliation?.limits || {};
     return [
-      { label: "Last run", value: this.reconciliationGeneratedAtLabel },
-      { label: "Relative", value: this.reconciliationGeneratedAtRelativeLabel || "—" },
-      { label: "Duration", value: this.reconciliationDurationLabel },
-      { label: "Scope", value: this.reconciliationScopeLabel },
-      { label: "Completeness", value: this.reconciliationCompletenessLabel },
+      { label: "Last run", value: formatDateTime(this.reconciliation?.generated_at) },
+      { label: "Relative", value: formatRelativeTime(this.reconciliation?.generated_at) || "—" },
+      { label: "Duration", value: formatDuration(this.reconciliation?.duration_ms) },
       { label: "Active findings", value: this.reconciliationActiveFindingsCount },
       { label: "Ignored findings", value: this.reconciliationIgnoredFindingsCount },
       { label: "Items checked", value: formatNumber(stats.items_checked || 0) },
-      { label: "Items skipped by scope", value: formatNumber(stats.items_skipped_by_scope || 0) },
       { label: "Profiles checked", value: formatNumber(stats.profiles_checked || 0) },
       { label: "Objects scanned", value: formatNumber(stats.objects_scanned || 0) },
       { label: "Object limit", value: formatNumber(limits.object_limit || 0) },
@@ -516,11 +421,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   @action
-  onReconciliationProfileScopeChange(event) {
-    this.reconciliationProfileScope = event?.target?.value || "all_configured";
-  }
-
-  @action
   async runReconciliation(event) {
     event?.preventDefault?.();
     if (this.isLoading) {
@@ -541,7 +441,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     try {
       const data = await ajax("/admin/plugins/media-gallery/health/reconcile.json", {
         type: "POST",
-        data: { profile_scope: this.reconciliationProfileScope },
       });
       this.isFullStorage = false;
       this.applyResponse(data);
