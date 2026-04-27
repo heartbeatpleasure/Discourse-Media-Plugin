@@ -264,14 +264,22 @@ export default RouteTemplate(
 
       .mg-health__modal-row {
         display: grid;
-        grid-template-columns: 92px minmax(0, 1fr);
-        gap: 0.85rem;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 1rem;
         align-items: start;
       }
 
+      .mg-health__modal-row--compact {
+        align-items: center;
+      }
+
       .mg-health__modal-row .mg-health__alert-label {
-        padding-top: 0.6rem;
+        padding-top: 0.65rem;
         font-weight: 700;
+      }
+
+      .mg-health__modal-row--compact .mg-health__alert-label {
+        padding-top: 0;
       }
 
       .mg-health__modal-field {
@@ -281,10 +289,13 @@ export default RouteTemplate(
       .mg-health__modal-form textarea {
         min-height: 150px;
         resize: vertical;
+        padding: 0.75rem 0.85rem;
       }
 
       .mg-health__modal-form select {
-        max-width: 360px;
+        max-width: 460px;
+        min-height: 42px;
+        padding: 0.55rem 0.7rem;
       }
 
       .mg-health__summary-card {
@@ -847,7 +858,6 @@ export default RouteTemplate(
                 <h2>Ignore finding</h2>
                 <p class="mg-health__muted">Ignoring suppresses this finding from Health status. It does not delete or change any media files.</p>
               </div>
-              <button class="btn mg-health__modal-close" type="button" aria-label="Close" title="Close" disabled={{@controller.isLoading}} {{on "click" @controller.cancelIgnoreFinding}}>×</button>
             </div>
 
             <div class="mg-health__modal-form">
@@ -862,7 +872,7 @@ export default RouteTemplate(
                 </div>
               </div>
 
-              <div class="mg-health__modal-row">
+              <div class="mg-health__modal-row mg-health__modal-row--compact">
                 <label class="mg-health__alert-label" for="media-gallery-health-ignore-expiry">Expires</label>
                 <div class="mg-health__modal-field">
                   <select id="media-gallery-health-ignore-expiry" value={{@controller.ignoreExpiresInDays}} {{on "change" @controller.setIgnoreExpiry}}>
