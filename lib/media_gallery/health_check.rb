@@ -367,7 +367,7 @@ module ::MediaGallery
           severity: "warning",
           count: Array(cached.dig("stats", "truncated_profiles")).length,
           message: "One or more storage profiles reached the scan limit.",
-          detail: "Profiles: #{Array(cached.dig("stats", "truncated_profiles")).join(', ')}. Increase the reconciliation object limit only after considering performance impact.",
+          detail: "Profiles: #{truncated_profile_names(cached).join(', ')}. Increase the reconciliation object limit only after considering performance impact.",
           metadata: { checked_at: cached["generated_at"], read_only: true }
         )
       end
@@ -443,6 +443,7 @@ module ::MediaGallery
         ignored_findings_count: ignored_count,
         duration_ms: cached["duration_ms"],
         stats: cached["stats"] || {},
+        profiles: cached["profiles"] || {},
         limits: cached["limits"] || {},
       }
     end
@@ -450,6 +451,13 @@ module ::MediaGallery
     def active_reconciliation_rows(rows)
       ignored = ignored_findings_hash
       Array(rows).reject { |row| ignored.key?(row_key(row)) }
+    end
+
+    def truncated_profile_names(cached)
+      names = Array(cached.dig("stats", "truncated_profile_labels")).map(&:to_s).reject(&:blank?)
+      return names if names.present?
+
+      Array(cached.dig("stats", "truncated_profiles")).map(&:to_s).reject(&:blank?)
     end
 
     def reconciliation_category_message(category, active_count, ignored_count)

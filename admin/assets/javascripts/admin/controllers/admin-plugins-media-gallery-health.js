@@ -129,6 +129,37 @@ function formatDuration(value) {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
 }
 
+function profileLabel(profile) {
+  return String(profile?.display_label || profile?.label || "").trim();
+}
+
+function profileTechnicalLabel(profile) {
+  return String(profile?.profile_key || profile?.backend || "profile").trim();
+}
+
+function profileStatusLabel(profile) {
+  switch (String(profile?.status || "checked")) {
+    case "unavailable":
+      return "Unavailable";
+    case "failed":
+      return "Scan failed";
+    case "pending":
+      return "Pending";
+    default:
+      return "Checked";
+  }
+}
+
+function profileStatusClass(profile) {
+  switch (String(profile?.status || "checked")) {
+    case "unavailable":
+    case "failed":
+      return "is-warning";
+    default:
+      return "is-success";
+  }
+}
+
 function decorateExample(example) {
   const title = stringify(example?.title || example?.public_id || example?.label);
   const subtitleParts = [];
@@ -145,8 +176,9 @@ function decorateExample(example) {
   if (example?.missing) {
     subtitleParts.push(`missing: ${example.missing}`);
   }
-  if (example?.profile_key) {
-    subtitleParts.push(`profile: ${example.profile_key}`);
+  const profileLabel = example?.profile_display_label || example?.profile_label || example?.profile_key;
+  if (profileLabel) {
+    subtitleParts.push(`profile: ${profileLabel}`);
   }
   if (example?.backend) {
     subtitleParts.push(`backend: ${example.backend}`);
@@ -326,11 +358,12 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   get reconciliationStatsRows() {
     const stats = this.reconciliation?.stats || {};
     const limits = this.reconciliation?.limits || {};
-    const truncatedProfiles = Array.isArray(stats.truncated_profiles)
-      ? stats.truncated_profiles.filter(Boolean)
-      : [];
+    const truncatedProfiles = Array.isArray(stats.truncated_profile_labels) && stats.truncated_profile_labels.length
+      ? stats.truncated_profile_labels.filter(Boolean)
+      : (Array.isArray(stats.truncated_profiles) ? stats.truncated_profiles.filter(Boolean) : []);
     const profileCount = Number(stats.profiles_checked || 0);
     const objectLimit = Number(limits.object_limit || 0);
+    const itemLimit = Number(limits.item_limit || 0);
 
     return [
       { label: "Last run", value: formatDateTime(this.reconciliation?.generated_at) },
@@ -349,8 +382,18 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       },
       { label: "Active findings", value: this.reconciliationActiveFindingsCount },
       { label: "Ignored findings", value: this.reconciliationIgnoredFindingsCount },
-      { label: "Items checked", value: formatNumber(stats.items_checked || 0) },
-      { label: "Profiles checked", value: formatNumber(profileCount) },
+      {
+        label: "Items checked",
+        value: formatNumber(stats.items_checked || 0),
+        help: itemLimit
+          ? `Media records are checked up to the item limit for each run. Current item limit: ${formatNumber(itemLimit)}.`
+          : "Media records checked during this reconciliation run.",
+      },
+      {
+        label: "Profiles checked",
+        value: formatNumber(profileCount),
+        help: "All configured storage profiles are checked. Named profiles are listed below when a custom storage name is configured.",
+      },
       {
         label: "Objects scanned",
         value: formatNumber(stats.objects_scanned || 0),
@@ -379,6 +422,45 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           .map((item) => decorateIssue({ ...item, section_title: sectionTitle }));
       })
       .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+  }
+
+  get reconciliationProfiles() {
+    const profiles = this.reconciliation?.profiles || {};
+    return Array.isArray(profiles.checked) ? profiles.checked : [];
+  }
+
+  get hasReconciliationProfiles() {
+    return this.reconciliationProfiles.length > 0;
+  }
+
+  get reconciliationNamedProfiles() {
+    return this.reconciliationProfiles
+      .map((profile) => ({
+        ...profile,
+        displayName: profileLabel(profile),
+        technicalName: profileTechnicalLabel(profile),
+        statusLabel: profileStatusLabel(profile),
+        statusClass: profileStatusClass(profile),
+        objectsScannedLabel: formatNumber(profile?.objects_scanned || 0),
+        truncatedLabel: profile?.truncated ? "Limit reached" : "Complete",
+      }))
+      .filter((profile) => profile.displayName);
+  }
+
+  get reconciliationUnnamedProfilesCount() {
+    return Math.max(this.reconciliationProfiles.length - this.reconciliationNamedProfiles.length, 0);
+  }
+
+  get hasReconciliationNamedProfiles() {
+    return this.reconciliationNamedProfiles.length > 0;
+  }
+
+  get reconciliationProfilesHelpText() {
+    const unnamed = this.reconciliationUnnamedProfilesCount;
+    if (unnamed > 0) {
+      return `${unnamed} checked profile${unnamed === 1 ? "" : "s"} had no custom display name configured and is not shown by name.`;
+    }
+    return "Only storage profiles with a configured display name are listed here. The scan still checks every configured profile.";
   }
 
   applyResponse(data) {

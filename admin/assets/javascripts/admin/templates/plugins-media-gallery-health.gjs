@@ -103,6 +103,40 @@ export default RouteTemplate(
         padding-right: 2.75rem;
       }
 
+      .mg-health__profile-list {
+        display: grid;
+        gap: 0.65rem;
+        margin-top: 1rem;
+      }
+
+      .mg-health__profile-chips {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .mg-health__profile-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        border: 1px solid var(--mg-health-border);
+        border-radius: 999px;
+        padding: 0.32rem 0.65rem;
+        background: var(--mg-health-surface-alt);
+        max-width: 100%;
+      }
+
+      .mg-health__profile-chip-name {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__profile-chip-meta {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+      }
+
       .mg-health__summary-card {
         position: relative;
         padding-right: 2.6rem;
@@ -419,6 +453,29 @@ export default RouteTemplate(
               </div>
             {{/each}}
           </div>
+
+          {{#if @controller.hasReconciliationProfiles}}
+            <div class="mg-health__profile-list">
+              <div class="mg-health__alert-label">Checked storage profiles</div>
+
+              {{#if @controller.hasReconciliationNamedProfiles}}
+                <div class="mg-health__profile-chips">
+                  {{#each @controller.reconciliationNamedProfiles as |profile|}}
+                    <span class="mg-health__profile-chip">
+                      <span class="mg-health__status-dot {{profile.statusClass}}" title={{profile.statusLabel}}></span>
+                      <span class="mg-health__profile-chip-name">{{profile.displayName}}</span>
+                      <span class="mg-health__profile-chip-meta">{{profile.objectsScannedLabel}} objects</span>
+                      {{#if profile.truncated}}
+                        <span class="mg-health__profile-chip-meta">limit reached</span>
+                      {{/if}}
+                    </span>
+                  {{/each}}
+                </div>
+              {{/if}}
+
+              <div class="mg-health__muted">{{@controller.reconciliationProfilesHelpText}}</div>
+            </div>
+          {{/if}}
         {{else}}
           <p class="mg-health__muted" style="margin-top: 1rem;">Storage reconciliation has not been run yet.</p>
         {{/if}}

@@ -44,6 +44,11 @@ module ::MediaGallery
           profiles_checked: 0,
           objects_scanned: 0,
           truncated_profiles: [],
+          truncated_profile_labels: [],
+        },
+        profiles: {
+          configured: [],
+          checked: [],
         },
       }
 
@@ -93,6 +98,7 @@ module ::MediaGallery
           orphan_sample_limit: orphan_sample_limit,
         },
         stats: context[:stats],
+        profiles: context[:profiles],
         categories: categories,
       }
     rescue => e
@@ -236,6 +242,8 @@ module ::MediaGallery
         severity: missing.include?("main") || missing.include?("hls") ? "critical" : "warning",
         item: item,
         profile_key: profile_key,
+        profile_label: profile_label_for_key(profile_key),
+        profile_display_label: profile_display_label_for_key(profile_key),
         backend: backend,
         label: "Ready item has missing assets",
         missing: missing.join(", "),
@@ -279,14 +287,24 @@ module ::MediaGallery
 
     def scan_storage_profiles!(context, object_limit:, orphan_sample_limit:)
       profiles = ::MediaGallery::StorageSettingsResolver.configured_profiles_summary
+      context[:profiles][:configured] = profiles.map { |profile| profile_summary_payload(profile) }
+
       profiles.each do |profile|
         profile_key = profile[:profile_key].to_s
         backend = profile[:backend].to_s
         next if profile_key.blank? || backend.blank?
 
+        profile_payload = profile_summary_payload(profile).merge(
+          status: "pending",
+          objects_scanned: 0,
+          truncated: false
+        )
+        context[:profiles][:checked] << profile_payload
         context[:stats][:profiles_checked] += 1
+
         store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
         if store.blank?
+          profile_payload[:status] = "unavailable"
           add_finding(
             context,
             "invalid_storage_references",
@@ -295,7 +313,7 @@ module ::MediaGallery
             profile_key: profile_key,
             backend: backend,
             label: "Storage profile could not be opened",
-            detail: "Profile #{profile_key} is configured but could not build a storage store.",
+            detail: "Storage profile #{profile_label_for_key(profile_key)} is configured but could not build a storage store.",
             suggestion: "Check storage settings for this profile."
           )
           next
@@ -306,8 +324,15 @@ module ::MediaGallery
           listed = Array(store.list_prefix("", limit: object_limit + 1)).map(&:to_s)
           truncated = listed.length > object_limit
           keys = truncated ? listed.first(object_limit) : listed
+          profile_payload[:status] = "checked"
+          profile_payload[:objects_scanned] = keys.length
+          profile_payload[:truncated] = truncated
           context[:stats][:objects_scanned] += keys.length
-          context[:stats][:truncated_profiles] << profile_key if truncated
+          if truncated
+            context[:stats][:truncated_profiles] << profile_key
+            label = profile_display_label_for_key(profile_key)
+            context[:stats][:truncated_profile_labels] << label if label.present?
+          end
 
           orphan_count = 0
           keys.each do |key|
@@ -347,6 +372,8 @@ module ::MediaGallery
             )
           end
         rescue => e
+          profile_payload[:status] = "failed"
+          profile_payload[:error] = "#{e.class}: #{e.message}".truncate(300)
           add_finding(
             context,
             "invalid_storage_references",
@@ -436,6 +463,47 @@ module ::MediaGallery
 
     def add_finding(context, category, **attrs)
       context[:findings][category] << finding_payload(category: category, **attrs)
+    end
+
+    def profile_summary_payload(profile)
+      profile_key = profile[:profile_key].to_s
+      label = profile_label_for_key(profile_key)
+      {
+        profile_key: profile_key,
+        backend: profile[:backend].to_s,
+        label: label,
+        display_label: profile_display_label_for_key(profile_key),
+      }.compact
+    end
+
+    def profile_label_for_key(profile_key)
+      summary = ::MediaGallery::StorageSettingsResolver.profile_summary(profile_key)
+      summary[:label].to_s.presence || profile_key.to_s
+    rescue
+      profile_key.to_s
+    end
+
+    def profile_display_label_for_key(profile_key)
+      key = profile_key.to_s
+      label = profile_label_for_key(key).to_s.strip
+      default = case key
+      when "local"
+        "Local storage"
+      when "s3_1"
+        "S3 profile 1"
+      when "s3_2"
+        "S3 profile 2"
+      when "s3_3"
+        "S3 profile 3"
+      else
+        key
+      end
+
+      return nil if label.blank?
+      return nil if label == default
+      return nil if label == key
+
+      label
     end
 
     def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, backend: nil, role: nil, storage_key: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
