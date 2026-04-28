@@ -95,8 +95,13 @@ module ::MediaGallery
       item = ::MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
       raise Discourse::NotFound if item.blank?
 
-      meta = ::MediaGallery::TestDownloads.read_meta!(item.public_id, params[:artifact_id].to_s)
-      path = meta["file_path"].to_s
+      begin
+        artifact_id = ::MediaGallery::TestDownloads.safe_artifact_id(params[:artifact_id].to_s)
+      rescue ArgumentError
+        raise Discourse::NotFound
+      end
+      meta = ::MediaGallery::TestDownloads.read_meta!(item.public_id, artifact_id)
+      path = ::MediaGallery::TestDownloads.artifact_file_path(item.public_id, artifact_id, "mp4")
       raise Discourse::NotFound if path.blank? || !File.exist?(path)
 
       username = meta["username"].presence || ::User.find_by(id: meta["user_id"].to_i)&.username || "user#{meta['user_id']}"
@@ -113,7 +118,7 @@ module ::MediaGallery
 
       if ActiveModel::Type::Boolean.new.cast(params[:meta]) || request.format.json?
         return send_data(
-          JSON.pretty_generate(meta),
+          JSON.pretty_generate(meta.except("file_path")),
           filename: "#{basename}.json",
           type: "application/json",
           disposition: "attachment",

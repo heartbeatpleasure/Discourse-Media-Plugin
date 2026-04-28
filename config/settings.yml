@@ -575,16 +575,17 @@ plugins:
     client: false
 
   # Optional: rate limit HLS endpoints (playlists/segments). 0 = disabled.
-  # Note: normal playback can request many segments on seeks; start with high values.
+  # Defaults are intentionally generous: normal playback uses ~10 segments/min
+  # at 6s segments, but seeks and browser retries can burst above that.
   media_gallery_hls_playlist_requests_per_token_per_minute:
-    default: 0
+    default: 120
     type: integer
     min: 0
     max: 20000
     client: false
 
   media_gallery_hls_segment_requests_per_token_per_minute:
-    default: 0
+    default: 720
     type: integer
     min: 0
     max: 20000
@@ -755,7 +756,7 @@ plugins:
   # (streaming uses multiple Range requests, so we do NOT rate limit /media/stream).
   # 0 = disabled.
   media_gallery_play_tokens_per_ip_per_minute:
-    default: 0
+    default: 120
     type: integer
     min: 0
     max: 10000

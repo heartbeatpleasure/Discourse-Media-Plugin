@@ -23,7 +23,10 @@ module ::MediaGallery
     def root_path
       p = SiteSetting.media_gallery_forensics_test_downloads_root_path.to_s.strip
       p = DEFAULT_ROOT if p.blank?
-      p
+      expanded = File.expand_path(p)
+      raise "test_downloads_root_path_unsafe" if expanded == File::SEPARATOR
+
+      expanded
     end
 
     def retention_hours
@@ -46,7 +49,7 @@ module ::MediaGallery
 
     def ensure_root!
       FileUtils.mkdir_p(root_path)
-      test = File.join(root_path, ".writable_test_#{SecureRandom.hex(4)}")
+      test = ::MediaGallery::PathSecurity.safe_join!(root_path, ".writable_test_#{SecureRandom.hex(4)}")
       File.write(test, "ok")
       FileUtils.rm_f(test)
       true
@@ -59,7 +62,7 @@ module ::MediaGallery
       Dir.glob(File.join(root_path, "*", "*", ".complete")).each do |marker|
         begin
           next if File.mtime(marker) > cutoff
-          FileUtils.rm_rf(File.dirname(marker))
+          ::MediaGallery::PathSecurity.remove_tree_under!(File.dirname(marker), root_path)
         rescue
           nil
         end
@@ -123,34 +126,58 @@ module ::MediaGallery
     end
 
     def item_dir(public_id)
-      File.join(root_path, public_id.to_s)
+      ::MediaGallery::PathSecurity.safe_join!(root_path, safe_public_id(public_id))
     end
 
     def artifact_dir(public_id, artifact_id)
-      File.join(item_dir(public_id), artifact_id.to_s)
+      ::MediaGallery::PathSecurity.safe_join!(item_dir(public_id), safe_artifact_id(artifact_id))
     end
 
     def artifact_meta_path(public_id, artifact_id)
-      File.join(artifact_dir(public_id, artifact_id), "meta.json")
+      ::MediaGallery::PathSecurity.safe_join!(artifact_dir(public_id, artifact_id), "meta.json")
     end
 
     def artifact_file_path(public_id, artifact_id, ext = "mp4")
-      File.join(artifact_dir(public_id, artifact_id), "artifact.#{ext}")
+      safe_ext = ::MediaGallery::PathSecurity.normalize_path_component!(ext.to_s.presence || "mp4", name: "extension")
+      ::MediaGallery::PathSecurity.safe_join!(artifact_dir(public_id, artifact_id), "artifact.#{safe_ext}")
     end
 
     def metadata_url_for(public_id, artifact_id)
-      "/admin/plugins/media-gallery/test-downloads/#{public_id}/#{artifact_id}?meta=1"
+      "/admin/plugins/media-gallery/test-downloads/#{safe_public_id(public_id)}/#{safe_artifact_id(artifact_id)}?meta=1"
     end
 
     def download_url_for(public_id, artifact_id)
-      "/admin/plugins/media-gallery/test-downloads/#{public_id}/#{artifact_id}"
+      "/admin/plugins/media-gallery/test-downloads/#{safe_public_id(public_id)}/#{safe_artifact_id(artifact_id)}"
+    end
+
+    def safe_public_id(public_id)
+      ::MediaGallery::PathSecurity.normalize_path_component!(public_id, name: "public_id")
+    end
+
+    def safe_artifact_id(artifact_id)
+      id = ::MediaGallery::PathSecurity.normalize_path_component!(artifact_id, name: "artifact_id")
+      raise ArgumentError, "unsafe_artifact_id" unless id.match?(/\A[0-9a-f]{24}\z/i)
+
+      id
+    end
+
+    def safe_segment_filename(filename)
+      name = ::MediaGallery::PathSecurity.normalize_path_component!(File.basename(filename.to_s), name: "segment")
+      raise ArgumentError, "unsafe_segment" unless name.match?(/\A[\w.-]+\.(ts|m4s)\z/i)
+
+      name
     end
 
     def recent_artifacts_for(public_id, limit: 10)
       root = item_dir(public_id)
       return [] unless Dir.exist?(root)
 
-      entries = Dir.children(root).sort_by do |artifact_id|
+      entries = Dir.children(root).select do |artifact_id|
+        safe_artifact_id(artifact_id)
+        true
+      rescue
+        false
+      end.sort_by do |artifact_id|
         dir = artifact_dir(public_id, artifact_id)
         begin
           -File.mtime(File.join(dir, ".complete")).to_f
@@ -202,8 +229,9 @@ module ::MediaGallery
 
         next if l.start_with?("#")
 
+        filename = safe_segment_filename(File.basename(l))
         entries << {
-          filename: File.basename(l),
+          filename: filename,
           duration: last_extinf.to_f > 0.0 ? last_extinf.to_f : nil,
         }
         last_extinf = nil
@@ -406,16 +434,16 @@ module ::MediaGallery
         "provenance" => provenance,
         "verification" => verification,
         "created_at" => Time.now.utc.iso8601,
-        "file_path" => output_path,
+        "file_name" => "artifact.mp4",
         "file_size_bytes" => File.size?(output_path).to_i,
       }
 
-      File.write(artifact_meta_path(item.public_id, artifact_id), JSON.pretty_generate(meta))
+      File.write(artifact_meta_path(item.public_id, artifact_id), JSON.pretty_generate(meta.except("file_path")))
       File.write(File.join(dir, ".complete"), Time.now.utc.iso8601)
       meta
     rescue => e
       begin
-        FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+        ::MediaGallery::PathSecurity.remove_tree_under!(dir, root_path) if dir.present? && Dir.exist?(dir)
       rescue
         nil
       end
@@ -425,6 +453,8 @@ module ::MediaGallery
     def read_meta!(public_id, artifact_id)
       path = artifact_meta_path(public_id, artifact_id)
       raise Discourse::NotFound unless File.exist?(path)
+      ::MediaGallery::PathSecurity.assert_realpath_under!(path, root_path)
+
       JSON.parse(File.read(path))
     end
 
@@ -596,9 +626,11 @@ module ::MediaGallery
       access = managed_hls_access_for(item)
 
       Array(selection[:segment_entries]).map.with_index do |entry, idx|
-        filename = entry[:filename].to_s
-        ab = entry[:ab].to_s
-        dest = File.join(stage_dir, format("%05d_%s", idx, filename))
+        filename = safe_segment_filename(entry[:filename])
+        ab = ::MediaGallery::PathSecurity.normalize_path_component!(entry[:ab].to_s, name: "variant_ab")
+        raise "invalid_ab_variant" unless %w[a b].include?(ab)
+
+        dest = ::MediaGallery::PathSecurity.safe_join!(stage_dir, format("%05d_%s", idx, filename))
         source_locator = nil
 
         if access.present?
@@ -613,8 +645,9 @@ module ::MediaGallery
           source_locator = "managed:#{key}"
         else
           base = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-          relative = File.join(ab, selection[:variant].to_s, filename)
-          source = File.join(base, relative)
+          variant = ::MediaGallery::PathSecurity.normalize_path_component!(selection[:variant].to_s, name: "variant")
+          relative = File.join(ab, variant, filename)
+          source = ::MediaGallery::PathSecurity.safe_join!(base, relative)
           raise "missing_segment_file: #{source}" unless File.exist?(source)
           FileUtils.cp(source, dest)
           source_locator = "local:#{relative}"

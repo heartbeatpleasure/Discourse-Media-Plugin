@@ -65,11 +65,11 @@ module ::MediaGallery
     # --- Per-item paths -------------------------------------------------------
 
     def item_private_dir(public_id)
-      File.join(private_root, public_id.to_s)
+      safe_join_root(private_root, safe_path_component(public_id, name: "public_id"))
     end
 
     def item_original_dir(public_id)
-      File.join(original_export_root, public_id.to_s)
+      safe_join_root(original_export_root, safe_path_component(public_id, name: "public_id"))
     end
 
     # --- Helpers --------------------------------------------------------------
@@ -77,6 +77,22 @@ module ::MediaGallery
     # Creates the dir if missing.
     def ensure_dir!(path)
       FileUtils.mkdir_p(path)
+    end
+
+    def safe_path_component(value, name: "path_component")
+      ::MediaGallery::PathSecurity.normalize_path_component!(value, name: name)
+    end
+
+    def safe_relative_path(value)
+      ::MediaGallery::PathSecurity.normalize_relative_key!(value)
+    end
+
+    def safe_join_root(root, *parts, allow_root: false)
+      ::MediaGallery::PathSecurity.safe_join!(root, *parts, allow_root: allow_root)
+    end
+
+    def remove_tree_under!(path, root:)
+      ::MediaGallery::PathSecurity.remove_tree_under!(path, root)
     end
 
     # Creates the dir if missing AND verifies the process can write into it.
@@ -99,29 +115,29 @@ module ::MediaGallery
 
     def processed_rel_path(item)
       ext = processed_ext_for_type(item.media_type)
-      File.join(item.public_id.to_s, "main.#{ext}")
+      File.join(safe_path_component(item.public_id, name: "public_id"), "main.#{ext}")
     end
 
     def thumbnail_rel_path(item)
-      File.join(item.public_id.to_s, "thumb.jpg")
+      File.join(safe_path_component(item.public_id, name: "public_id"), "thumb.jpg")
     end
 
     def processed_abs_path(item)
-      File.join(private_root, processed_rel_path(item))
+      safe_join_root(private_root, processed_rel_path(item))
     end
 
     def thumbnail_abs_path(item)
-      File.join(private_root, thumbnail_rel_path(item))
+      safe_join_root(private_root, thumbnail_rel_path(item))
     end
 
     # --- HLS (milestone 1) ---------------------------------------------------
 
     def hls_root_rel_dir(public_id)
-      File.join(public_id.to_s, "hls")
+      File.join(safe_path_component(public_id, name: "public_id"), "hls")
     end
 
     def hls_root_abs_dir(public_id)
-      File.join(private_root, hls_root_rel_dir(public_id))
+      safe_join_root(private_root, hls_root_rel_dir(public_id))
     end
 
     def hls_master_rel_path(item)
@@ -129,7 +145,7 @@ module ::MediaGallery
     end
 
     def hls_master_abs_path(item)
-      File.join(private_root, hls_master_rel_path(item))
+      safe_join_root(private_root, hls_master_rel_path(item))
     end
 
     def hls_complete_abs_path(public_id)
@@ -137,11 +153,11 @@ module ::MediaGallery
     end
 
     def hls_variant_rel_dir(public_id, variant)
-      File.join(hls_root_rel_dir(public_id), variant.to_s)
+      File.join(hls_root_rel_dir(public_id), safe_path_component(variant, name: "variant"))
     end
 
     def hls_variant_abs_dir(public_id, variant)
-      File.join(private_root, hls_variant_rel_dir(public_id, variant))
+      safe_join_root(private_root, hls_variant_rel_dir(public_id, variant))
     end
 
     def hls_variant_playlist_abs_path(public_id, variant)
@@ -149,11 +165,11 @@ module ::MediaGallery
     end
 
     def hls_segment_rel_path(public_id, variant, segment)
-      File.join(hls_variant_rel_dir(public_id, variant), segment.to_s)
+      File.join(hls_variant_rel_dir(public_id, variant), safe_path_component(segment, name: "segment"))
     end
 
     def hls_segment_abs_path(public_id, variant, segment)
-      File.join(private_root, hls_segment_rel_path(public_id, variant, segment))
+      safe_join_root(private_root, hls_segment_rel_path(public_id, variant, segment))
     end
 
     # --- Original export / retention -----------------------------------------
@@ -207,7 +223,7 @@ module ::MediaGallery
         end
 
         next if age > cutoff
-        FileUtils.rm_rf(dir)
+        remove_tree_under!(dir, root: root)
       end
     end
   end

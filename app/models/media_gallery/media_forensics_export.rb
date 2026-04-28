@@ -12,7 +12,7 @@ module ::MediaGallery
     validate :has_export_payload
 
     def file_exists?
-      file_path.present? && ::File.exist?(file_path)
+      file_path.present? && file_path_allowed? && ::File.exist?(file_path)
     end
 
     def csv_bytes
@@ -21,6 +21,7 @@ module ::MediaGallery
       end
 
       raise Discourse::NotFound if file_path.blank?
+      ensure_file_path_allowed!
 
       bytes = ::File.binread(file_path)
       if file_path.end_with?(".gz")
@@ -35,6 +36,39 @@ module ::MediaGallery
     end
 
     private
+
+    def ensure_file_path_allowed!
+      raise Discourse::NotFound unless file_path_allowed?
+    end
+
+    def file_path_allowed?
+      return false if file_path.blank?
+
+      allowed_export_roots.any? do |root|
+        root.present? && ::MediaGallery::PathSecurity.realpath_under?(file_path, root)
+      end
+    rescue
+      false
+    end
+
+    def allowed_export_roots
+      roots = []
+      if SiteSetting.respond_to?(:media_gallery_forensics_export_root_path)
+        explicit = SiteSetting.media_gallery_forensics_export_root_path.to_s.strip
+        roots << explicit if explicit.present?
+      end
+      if SiteSetting.respond_to?(:media_gallery_original_export_root_path) && SiteSetting.media_gallery_original_export_root_path.present?
+        roots << File.join(SiteSetting.media_gallery_original_export_root_path, "forensics_exports")
+        roots << SiteSetting.media_gallery_original_export_root_path
+      end
+      if SiteSetting.respond_to?(:media_gallery_private_root_path) && SiteSetting.media_gallery_private_root_path.present?
+        roots << File.join(SiteSetting.media_gallery_private_root_path, "forensics_exports")
+        roots << SiteSetting.media_gallery_private_root_path
+      end
+      roots << "/shared/media_gallery/forensics_exports"
+
+      roots.compact.uniq
+    end
 
     def has_export_payload
       if csv_gzip.blank? && file_path.blank?

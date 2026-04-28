@@ -1232,14 +1232,15 @@ module ::MediaGallery
       end
 
       [
-        { label: "private_dir", path: ::MediaGallery::PrivateStorage.item_private_dir(public_id) },
-        { label: "original_export_dir", path: ::MediaGallery::PrivateStorage.item_original_dir(public_id) },
+        { label: "private_dir", path: ::MediaGallery::PrivateStorage.item_private_dir(public_id), root: ::MediaGallery::PrivateStorage.private_root },
+        { label: "original_export_dir", path: ::MediaGallery::PrivateStorage.item_original_dir(public_id), root: ::MediaGallery::PrivateStorage.original_export_root },
       ].each do |entry|
         removed = false
         warning = nil
         begin
           if entry[:path].present? && Dir.exist?(entry[:path])
-            FileUtils.rm_rf(entry[:path])
+            root = entry[:root].to_s
+            ::MediaGallery::PathSecurity.remove_tree_under!(entry[:path], root)
             removed = !Dir.exist?(entry[:path])
             warning = "filesystem_remove_failed" unless removed
           else

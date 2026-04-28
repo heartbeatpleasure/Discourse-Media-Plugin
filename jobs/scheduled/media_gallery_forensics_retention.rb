@@ -190,13 +190,43 @@ module ::Jobs
 
       delete_scope.find_each do |e|
         if e.csv_gzip.blank? && e.file_path.present?
-          ::File.delete(e.file_path) if ::File.exist?(e.file_path)
+          delete_export_file_safely!(e.file_path)
         end
       rescue => err
-        Rails.logger.warn("[media_gallery] failed to delete export file #{e.file_path}: #{err.class}: #{err.message}")
+        Rails.logger.warn("[media_gallery] failed to delete export file #{safe_log_path(e.file_path)}: #{err.class}: #{err.message}")
       ensure
         e.destroy!
       end
+    end
+
+    def delete_export_file_safely!(path)
+      return false if path.blank? || !::File.exist?(path)
+
+      root = allowed_export_roots.find do |candidate|
+        candidate.present? && ::MediaGallery::PathSecurity.realpath_under?(path, candidate)
+      end
+      raise "export_file_path_outside_allowed_roots" if root.blank?
+
+      ::File.delete(path)
+      true
+    end
+
+    def allowed_export_roots
+      roots = [export_root_path]
+      if SiteSetting.respond_to?(:media_gallery_private_root_path) && SiteSetting.media_gallery_private_root_path.present?
+        roots << SiteSetting.media_gallery_private_root_path
+      end
+      if SiteSetting.respond_to?(:media_gallery_original_export_root_path) && SiteSetting.media_gallery_original_export_root_path.present?
+        roots << SiteSetting.media_gallery_original_export_root_path
+      end
+
+      roots.compact.uniq
+    end
+
+    def safe_log_path(path)
+      path.to_s
+    rescue
+      "[unavailable]"
     end
   end
 end

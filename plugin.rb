@@ -16,6 +16,7 @@ end
 
 after_initialize do
   require_relative "lib/media_gallery/token"
+  require_relative "lib/media_gallery/path_security"
   require_relative "lib/media_gallery/storage_settings_resolver"
   require_relative "lib/media_gallery/request_security"
   require_relative "lib/media_gallery/security_review"

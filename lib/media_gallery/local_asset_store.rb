@@ -20,8 +20,8 @@ module ::MediaGallery
       return true if defined?(@available) && @available
       raise "local_asset_root_path_missing" if @root_path.blank?
 
-      FileUtils.mkdir_p(@root_path)
-      test_path = File.join(@root_path, ".write_test_#{SecureRandom.hex(6)}")
+      FileUtils.mkdir_p(safe_root_path)
+      test_path = File.join(safe_root_path, ".write_test_#{SecureRandom.hex(6)}")
       File.write(test_path, "ok")
       FileUtils.rm_f(test_path)
       @available = true
@@ -144,14 +144,14 @@ module ::MediaGallery
 
     def delete_prefix(prefix)
       dir = absolute_path_for(prefix)
-      FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+      ::MediaGallery::PathSecurity.remove_tree_under!(dir, safe_root_path) if dir.present? && Dir.exist?(dir)
       true
     rescue
       false
     end
 
     def list_prefix(prefix, limit: nil)
-      dir = absolute_path_for(prefix)
+      dir = absolute_path_for(prefix, allow_blank: true)
       return [] unless Dir.exist?(dir)
 
       entries = []
@@ -190,7 +190,7 @@ module ::MediaGallery
     def purge_prefix!(prefix)
       dir = absolute_path_for(prefix)
       existing_files = Dir.exist?(dir) ? Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).count { |p| File.file?(p) } : 0
-      FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+      ::MediaGallery::PathSecurity.remove_tree_under!(dir, safe_root_path) if dir.present? && Dir.exist?(dir)
       cleanup_empty_parents(File.dirname(dir)) if dir.present?
 
       {
@@ -220,12 +220,22 @@ module ::MediaGallery
       nil
     end
 
-    def absolute_path_for(key)
-      rel = key.to_s.sub(%r{\A/+}, "")
-      File.join(@root_path, rel)
+    def absolute_path_for(key, allow_blank: false)
+      rel = ::MediaGallery::PathSecurity.normalize_relative_key!(key, allow_blank: allow_blank)
+      ::MediaGallery::PathSecurity.safe_join!(safe_root_path, rel, allow_root: allow_blank)
     end
 
     private
+
+    def safe_root_path
+      root = @root_path.to_s
+      raise "local_asset_root_path_missing" if root.blank?
+
+      expanded = File.expand_path(root)
+      raise "local_asset_root_path_unsafe" if expanded == File::SEPARATOR
+
+      expanded
+    end
 
     def build_result(path, content_type:, metadata: nil)
       {
@@ -239,11 +249,11 @@ module ::MediaGallery
     end
 
     def relative_key_for(path)
-      path.to_s.sub(%r{\A#{Regexp.escape(@root_path.to_s.chomp('/'))}/?}, "")
+      path.to_s.sub(%r{\A#{Regexp.escape(safe_root_path.chomp('/'))}/?}, "")
     end
 
     def cleanup_empty_parents(path)
-      root = @root_path.to_s.chomp("/")
+      root = safe_root_path.chomp("/")
       current = path.to_s
       while current.present? && current.start_with?(root) && current != root
         break unless Dir.exist?(current)

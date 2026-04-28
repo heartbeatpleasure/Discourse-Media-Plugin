@@ -231,9 +231,11 @@ module ::MediaGallery
         allowed: MediaGallery::Permissions.allowed_tags
       )
 
-      extra_metadata = params[:extra_metadata]
-      extra_metadata = {} if extra_metadata.blank?
-      extra_metadata = extra_metadata.is_a?(Hash) ? extra_metadata.deep_dup : { "raw" => extra_metadata.to_s }
+      begin
+        extra_metadata = sanitized_client_extra_metadata(params[:extra_metadata])
+      rescue Discourse::InvalidParameters
+        return render_json_error("invalid_extra_metadata", status: 422, message: "Invalid extra metadata payload.")
+      end
       extra_metadata["upload_terms_acceptance"] = upload_terms_acceptance_payload
       extra_metadata["duplicate_detection"] = duplicate_detection_metadata(upload, duplicate_match, duplicate_action, ActiveModel::Type::Boolean.new.cast(params[:duplicate_override]))
 
@@ -1055,6 +1057,105 @@ module ::MediaGallery
         .first(50)
     end
 
+    CLIENT_METADATA_KEY = "client_metadata"
+    RESERVED_EXTRA_METADATA_KEYS = %w[
+      admin_management_log
+      admin_visibility
+      duplicate_detection
+      hls
+      media_report_score_auto_hide
+      media_reports
+      migration_cleanup
+      migration_copy
+      migration_finalize
+      migration_history
+      migration_rollback
+      migration_switch
+      migration_verify
+      processing
+      processed_rel_path
+      reported_asset_deletion
+      storage
+      storage_manifest
+      thumbnail_rel_path
+      upload_terms_acceptance
+    ].freeze
+    MAX_CLIENT_METADATA_KEYS = 50
+    MAX_CLIENT_METADATA_DEPTH = 4
+    MAX_CLIENT_METADATA_ARRAY_ITEMS = 50
+    MAX_CLIENT_METADATA_STRING_LENGTH = 1_000
+    MAX_CLIENT_METADATA_JSON_BYTES = 8_192
+
+    def sanitized_client_extra_metadata(value)
+      return {} if value.blank?
+
+      state = { keys: 0 }
+      sanitized = sanitize_client_metadata_value(value, depth: 0, state: state)
+      client_metadata =
+        if sanitized.is_a?(Hash)
+          sanitized.each_with_object({}) do |(key, val), memo|
+            safe_key = sanitize_client_metadata_key(key)
+            next if safe_key.blank? || RESERVED_EXTRA_METADATA_KEYS.include?(safe_key)
+
+            memo[safe_key] = val
+          end
+        else
+          { "raw" => sanitized.to_s }
+        end
+
+      return {} if client_metadata.blank?
+
+      encoded = JSON.generate(client_metadata)
+      if encoded.bytesize > MAX_CLIENT_METADATA_JSON_BYTES
+        raise Discourse::InvalidParameters.new(:extra_metadata)
+      end
+
+      { CLIENT_METADATA_KEY => client_metadata }
+    rescue Discourse::InvalidParameters
+      raise
+    rescue => e
+      Rails.logger.warn("[media_gallery] rejected extra_metadata request_id=#{request.request_id} error=#{e.class}: #{e.message}")
+      raise Discourse::InvalidParameters.new(:extra_metadata)
+    end
+
+    def sanitize_client_metadata_key(key)
+      clean = ::MediaGallery::TextSanitizer.plain_text(key, max_length: 80, allow_newlines: false).to_s.strip
+      return nil unless clean.match?(/\A[a-zA-Z0-9_.-]{1,80}\z/)
+
+      clean
+    end
+
+    def sanitize_client_metadata_value(value, depth:, state:)
+      raise Discourse::InvalidParameters.new(:extra_metadata) if depth > MAX_CLIENT_METADATA_DEPTH
+
+      case value
+      when ActionController::Parameters
+        sanitize_client_metadata_value(value.to_unsafe_h, depth: depth, state: state)
+      when Hash
+        value.each_with_object({}) do |(key, val), memo|
+          state[:keys] += 1
+          raise Discourse::InvalidParameters.new(:extra_metadata) if state[:keys] > MAX_CLIENT_METADATA_KEYS
+
+          safe_key = sanitize_client_metadata_key(key)
+          next if safe_key.blank?
+
+          memo[safe_key] = sanitize_client_metadata_value(val, depth: depth + 1, state: state)
+        end
+      when Array
+        value.first(MAX_CLIENT_METADATA_ARRAY_ITEMS).map do |entry|
+          sanitize_client_metadata_value(entry, depth: depth + 1, state: state)
+        end
+      when TrueClass, FalseClass
+        value
+      when Numeric
+        value
+      when NilClass
+        nil
+      else
+        ::MediaGallery::TextSanitizer.plain_text(value, max_length: MAX_CLIENT_METADATA_STRING_LENGTH, allow_newlines: true).to_s
+      end
+    end
+
     def upload_terms_acceptance_payload
       {
         "accepted" => true,
@@ -1794,14 +1895,14 @@ end
 
       begin
         dir = MediaGallery::PrivateStorage.item_private_dir(public_id)
-        FileUtils.rm_rf(dir) if dir.present? && Dir.exist?(dir)
+        MediaGallery::PrivateStorage.remove_tree_under!(dir, root: MediaGallery::PrivateStorage.private_root) if dir.present? && Dir.exist?(dir)
       rescue => e
         Rails.logger.warn("[media_gallery] failed to delete private dir public_id=#{public_id}: #{e.class}: #{e.message}")
       end
 
       begin
         odir = MediaGallery::PrivateStorage.item_original_dir(public_id)
-        FileUtils.rm_rf(odir) if odir.present? && Dir.exist?(odir)
+        MediaGallery::PrivateStorage.remove_tree_under!(odir, root: MediaGallery::PrivateStorage.original_export_root) if odir.present? && Dir.exist?(odir)
       rescue => e
         Rails.logger.warn("[media_gallery] failed to delete original export dir public_id=#{public_id}: #{e.class}: #{e.message}")
       end
