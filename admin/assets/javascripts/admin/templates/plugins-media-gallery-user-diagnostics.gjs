@@ -82,7 +82,7 @@ export default RouteTemplate(
       .mg-userdiag__toolbar .btn {
         align-self: flex-end;
         margin-bottom: 0;
-        transform: translateY(-10px);
+        transform: translateY(-15px);
       }
 
       .mg-userdiag__field {
@@ -155,6 +155,12 @@ export default RouteTemplate(
         margin-top: 0.45rem;
       }
 
+      .mg-userdiag__card-scope {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        margin-top: 0.35rem;
+      }
+
       .mg-userdiag__card-label {
         color: var(--mg-muted);
         font-size: var(--font-down-1);
@@ -172,6 +178,73 @@ export default RouteTemplate(
         font-size: var(--font-down-1);
         line-height: 1.35;
         margin-top: 0.35rem;
+      }
+
+      .mg-userdiag__card-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.5rem;
+      }
+
+      .mg-userdiag__info {
+        position: relative;
+        display: inline-flex;
+        flex-shrink: 0;
+      }
+
+      .mg-userdiag__info-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.35rem;
+        height: 1.35rem;
+        border: 1px solid var(--tertiary);
+        border-radius: 999px;
+        background: var(--secondary);
+        color: var(--tertiary);
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1;
+        cursor: help;
+        user-select: none;
+      }
+
+      .mg-userdiag__info-tooltip {
+        position: absolute;
+        top: calc(100% + 0.45rem);
+        right: 0;
+        width: min(24rem, calc(100vw - 4rem));
+        min-width: min(16rem, calc(100vw - 4rem));
+        padding: 0.7rem 0.8rem;
+        border-radius: 12px;
+        border: 1px solid var(--mg-border);
+        background: var(--secondary);
+        color: var(--primary-high);
+        font-size: var(--font-down-1);
+        font-weight: 400;
+        line-height: 1.38;
+        white-space: normal;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-0.15rem);
+        transition: opacity 0.14s ease, transform 0.14s ease;
+        z-index: 3000;
+      }
+
+      .mg-userdiag__info:hover .mg-userdiag__info-tooltip,
+      .mg-userdiag__info:focus-within .mg-userdiag__info-tooltip {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .mg-userdiag__info-row + .mg-userdiag__info-row {
+        margin-top: 0.35rem;
+      }
+
+      .mg-userdiag__info-label {
+        font-weight: 700;
       }
 
       .mg-userdiag__badge {
@@ -340,6 +413,33 @@ export default RouteTemplate(
         color: var(--primary-high);
       }
 
+      .mg-userdiag__report-involvement-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .mg-userdiag__report-counts {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 0.65rem;
+        margin-top: 0.85rem;
+      }
+
+      .mg-userdiag__report-count-card {
+        border: 1px solid var(--mg-border);
+        border-radius: 14px;
+        background: var(--mg-surface-alt);
+        padding: 0.75rem;
+      }
+
+      .mg-userdiag__filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+
       .mg-userdiag__activity-sections {
         display: grid;
         gap: 1rem;
@@ -376,6 +476,7 @@ export default RouteTemplate(
 
       @media (max-width: 1100px) {
         .mg-userdiag__main-grid,
+        .mg-userdiag__report-involvement-grid,
         .mg-userdiag__setting-row,
         .mg-userdiag__activity-row,
         .mg-userdiag__media-row,
@@ -503,7 +604,22 @@ export default RouteTemplate(
               <div class="mg-userdiag__grid mg-userdiag__access-grid" style="margin-top: 0.85rem;">
                 {{#each @controller.mediaAccessCards as |card|}}
                   <div class="mg-userdiag__card {{card.className}}">
-                    <div class="mg-userdiag__card-label">{{card.label}}</div>
+                    <div class="mg-userdiag__card-top">
+                      <div class="mg-userdiag__card-label">{{card.label}}</div>
+                      {{#if card.details.length}}
+                        <span class="mg-userdiag__info">
+                          <span class="mg-userdiag__info-button" tabindex="0" aria-label="Details">i</span>
+                          <span class="mg-userdiag__info-tooltip">
+                            {{#each card.details as |detail|}}
+                              <div class="mg-userdiag__info-row">
+                                <span class="mg-userdiag__info-label">{{detail.label}}:</span>
+                                <span>{{detail.value}}</span>
+                              </div>
+                            {{/each}}
+                          </span>
+                        </span>
+                      {{/if}}
+                    </div>
                     <div class="mg-userdiag__card-value">{{card.value}}</div>
                     <div class="mg-userdiag__card-reason">{{card.reason}}</div>
                   </div>
@@ -545,7 +661,7 @@ export default RouteTemplate(
           <div class="mg-userdiag__panel-header">
             <div class="mg-userdiag__copy">
               <h2>Media activity stats</h2>
-              <p class="mg-userdiag__muted">Bounded read-only counters for this user's media activity.</p>
+              <p class="mg-userdiag__muted">Read-only counters. Each card states whether it is an exact total or time-limited.</p>
             </div>
           </div>
           <div class="mg-userdiag__grid">
@@ -554,13 +670,40 @@ export default RouteTemplate(
                 <a class="mg-userdiag__card" href={{stat.url}} target="_blank" rel="noopener noreferrer">
                   <div class="mg-userdiag__card-label">{{stat.label}}</div>
                   <div class="mg-userdiag__card-value">{{stat.value}}</div>
+                  <div class="mg-userdiag__card-scope">{{stat.scope}}</div>
                 </a>
               {{else}}
                 <div class="mg-userdiag__card">
                   <div class="mg-userdiag__card-label">{{stat.label}}</div>
                   <div class="mg-userdiag__card-value">{{stat.value}}</div>
+                  <div class="mg-userdiag__card-scope">{{stat.scope}}</div>
                 </div>
               {{/if}}
+            {{/each}}
+          </div>
+        </section>
+
+        <section class="mg-userdiag__panel">
+          <div class="mg-userdiag__panel-header">
+            <div class="mg-userdiag__copy">
+              <h2>Report involvement</h2>
+              <p class="mg-userdiag__muted">Exact report counters split between reports submitted by this user and reports on this user's media.</p>
+            </div>
+          </div>
+
+          <div class="mg-userdiag__report-involvement-grid">
+            {{#each @controller.reportInvolvementSections as |section|}}
+              <section class="mg-userdiag__section">
+                <h3>{{section.title}}</h3>
+                <div class="mg-userdiag__report-counts">
+                  {{#each section.rows as |row|}}
+                    <div class="mg-userdiag__report-count-card">
+                      <div class="mg-userdiag__card-label">{{row.label}}</div>
+                      <div class="mg-userdiag__card-value">{{row.value}}</div>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
             {{/each}}
           </div>
         </section>
@@ -573,7 +716,14 @@ export default RouteTemplate(
             </div>
           </div>
 
+          <div class="mg-userdiag__filter-row">
+            {{#each @controller.recentActivityButtons as |button|}}
+              <button class={{button.className}} type="button" {{on "click" (fn @controller.setRecentActivityFilter button.key)}}>{{button.label}}</button>
+            {{/each}}
+          </div>
+
           <div class="mg-userdiag__activity-sections">
+            {{#if @controller.showRecentUploads}}
             <section class="mg-userdiag__section">
               <h3>Recent uploads</h3>
               <div class="mg-userdiag__list" style="margin-top: 0.85rem;">
@@ -611,7 +761,9 @@ export default RouteTemplate(
                 {{/if}}
               </div>
             </section>
+            {{/if}}
 
+            {{#if @controller.showRecentReports}}
             <section class="mg-userdiag__section">
               <h3>Recent reports by user</h3>
               <div class="mg-userdiag__list" style="margin-top: 0.85rem;">
@@ -623,7 +775,10 @@ export default RouteTemplate(
                         <div class="mg-userdiag__row-meta">{{report.media_title}}</div>
                       </div>
                       <div class="mg-userdiag__row-help">{{report.createdAtLabel}} · {{report.media_public_id}}</div>
-                      <span class="mg-userdiag__badge {{report.statusClass}}">{{report.statusLabel}}</span>
+                      <div class="mg-userdiag__actions">
+                        <span class="mg-userdiag__badge {{report.statusClass}}">{{report.statusLabel}}</span>
+                        <a class="btn" href={{report.reportUrl}} target="_blank" rel="noopener noreferrer">Open</a>
+                      </div>
                     </article>
                   {{/each}}
                 {{else}}
@@ -631,8 +786,10 @@ export default RouteTemplate(
                 {{/if}}
               </div>
             </section>
+            {{/if}}
           </div>
 
+          {{#if @controller.showRecentLogs}}
           <section class="mg-userdiag__section" style="margin-top: 1rem;">
             <h3>Recent log events</h3>
             <div class="mg-userdiag__list" style="margin-top: 0.85rem;">
@@ -646,7 +803,10 @@ export default RouteTemplate(
                     <div class="mg-userdiag__row-help">
                       {{#if event.media_title}}{{event.media_title}} · {{/if}}{{event.message}}
                     </div>
-                    <span class="mg-userdiag__badge {{event.severityClass}}">{{event.severityLabel}}</span>
+                    <div class="mg-userdiag__actions">
+                      <span class="mg-userdiag__badge {{event.severityClass}}">{{event.severityLabel}}</span>
+                      <a class="btn" href={{event.logUrl}} target="_blank" rel="noopener noreferrer">Open</a>
+                    </div>
                   </article>
                 {{/each}}
               {{else}}
@@ -654,6 +814,7 @@ export default RouteTemplate(
               {{/if}}
             </div>
           </section>
+          {{/if}}
         </section>
       {{else}}
         <section class="mg-userdiag__panel">

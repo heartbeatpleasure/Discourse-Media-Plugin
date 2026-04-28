@@ -141,10 +141,13 @@ module ::MediaGallery
       {
         can_view: can_view,
         view_reason: view_access_reason(user, view_block_matches, viewer_matches),
+        view_details: view_access_details(view_block_matches, viewer_matches),
         can_upload: can_upload,
         upload_reason: upload_access_reason(user, view_block_matches, upload_block_matches, uploader_matches),
+        upload_details: upload_access_details(user, view_block_matches, upload_block_matches, uploader_matches),
         can_report: can_report,
         report_reason: can_report ? "Allowed because the user can view media and reports are enabled." : report_access_reason(can_view),
+        report_details: report_access_details(can_view),
         view_blocked: view_block_matches.any?,
         view_block_groups: view_block_matches,
         upload_blocked: upload_block_matches.any? || view_block_matches.any?,
@@ -154,8 +157,10 @@ module ::MediaGallery
         uploader_group_matches: uploader_matches,
         report_auto_hide_instant: instant_report_hide,
         report_auto_hide_instant_reason: instant_report_hide ? "User matches an instant auto-hide reporter group or rule." : "User does not match an instant auto-hide reporter rule.",
+        report_auto_hide_details: report_auto_hide_details(user),
         report_score_points: report_points,
         report_score_threshold: SiteSetting.media_gallery_report_auto_hide_score_threshold.to_i,
+        report_score_details: report_score_details(user, report_points),
       }
     end
 
@@ -198,6 +203,59 @@ module ::MediaGallery
       "Denied."
     end
 
+    def view_access_details(view_block_matches, viewer_matches)
+      [
+        detail_row("Media gallery", SiteSetting.media_gallery_enabled ? "enabled" : "disabled"),
+        detail_row("Viewer groups", viewer_groups.present? ? viewer_groups.join(", ") : "empty; all logged-in users may view"),
+        detail_row("Viewer match", viewer_matches.present? ? viewer_matches.join(", ") : (viewer_groups.blank? ? "not required" : "no match")),
+        detail_row("View-block groups", view_block_groups.present? ? view_block_groups.join(", ") : "none configured"),
+        detail_row("View-block match", view_block_matches.present? ? view_block_matches.join(", ") : "no match"),
+      ]
+    end
+
+    def upload_access_details(user, view_block_matches, upload_block_matches, uploader_matches)
+      [
+        detail_row("Media gallery", SiteSetting.media_gallery_enabled ? "enabled" : "disabled"),
+        detail_row("Uploader groups", uploader_groups.present? ? uploader_groups.join(", ") : "empty; all logged-in users may upload unless blocked"),
+        detail_row("Uploader match", uploader_matches.present? ? uploader_matches.join(", ") : (uploader_groups.blank? ? "not required" : "no match")),
+        detail_row("View-block match", view_block_matches.present? ? view_block_matches.join(", ") : "no match"),
+        detail_row("Upload-block groups", upload_block_groups.present? ? upload_block_groups.join(", ") : "none configured"),
+        detail_row("Upload-block match", upload_block_matches.present? ? upload_block_matches.join(", ") : "no match"),
+        detail_row("Staff/admin", user.staff? || user.admin? ? "yes; may upload unless blocked" : "no"),
+      ]
+    end
+
+    def report_access_details(can_view)
+      [
+        detail_row("Reports setting", SiteSetting.media_gallery_reports_enabled ? "enabled" : "disabled"),
+        detail_row("Can view media", can_view ? "yes" : "no"),
+        detail_row("Result", SiteSetting.media_gallery_reports_enabled && can_view ? "allowed" : "denied"),
+      ]
+    end
+
+    def report_auto_hide_details(user)
+      matches = matching_report_auto_hide_rules(user)
+      [
+        detail_row("Configured rules", report_auto_hide_groups.present? ? report_auto_hide_groups.join(", ") : "none configured"),
+        detail_row("User match", matches.present? ? matches.join(", ") : "no match"),
+        detail_row("Trust level", "TL#{user.trust_level}"),
+      ]
+    end
+
+    def report_score_details(user, report_points)
+      threshold = SiteSetting.media_gallery_report_auto_hide_score_threshold.to_i
+      [
+        detail_row("User trust level", "TL#{user.trust_level}"),
+        detail_row("Point weight", "#{report_points} per open report"),
+        detail_row("Threshold", threshold.positive? ? threshold.to_s : "disabled"),
+        detail_row("Scope", "per media item; only open reports on the same media item count"),
+      ]
+    end
+
+    def detail_row(label, value)
+      { label: label, value: value }
+    end
+
     def settings_payload(user)
       user_groups = normalized_group_names(user)
       rows = []
@@ -230,14 +288,16 @@ module ::MediaGallery
 
     def stats_payload(user)
       item_scope = ::MediaGallery::MediaItem.where(user_id: user.id)
+      report_involvement = report_involvement_payload(user)
       {
         uploads_total: safe_count(item_scope),
         uploads_ready: safe_count(item_scope.where(status: "ready")),
         uploads_failed: safe_count(item_scope.where(status: "failed")),
         uploads_processing: safe_count(item_scope.where(status: %w[queued processing])),
         uploads_hidden: safe_count(item_scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = true")),
-        reports_submitted: reports_submitted_count(user),
-        reports_against_media: reports_against_user_media_count(user),
+        reports_submitted: report_involvement.dig(:submitted, :total).to_i,
+        reports_against_media: report_involvement.dig(:on_user_media, :total).to_i,
+        report_involvement: report_involvement,
         likes_given: table_count(::MediaGallery::MediaLike, user_id: user.id),
         playback_sessions: table_count(::MediaGallery::MediaPlaybackSession, user_id: user.id),
         log_events_30d: log_events_count(user, 30.days.ago),
@@ -306,6 +366,7 @@ module ::MediaGallery
               reason_label: report["reason_label"].presence || report["reason"],
               media_public_id: item.public_id,
               media_title: item.title,
+              report_url: report["id"].present? ? "/admin/plugins/media-gallery-reports?report_id=#{report["id"]}" : "/admin/plugins/media-gallery-reports?status=all&reporter_user_id=#{user.id}",
             }
           end
         end
@@ -328,6 +389,77 @@ module ::MediaGallery
         thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
         management_url: "/admin/plugins/media-gallery-management?public_id=#{item.public_id}",
       }
+    end
+
+    def report_involvement_payload(user)
+      {
+        submitted: report_counts_by_reporter(user),
+        on_user_media: report_counts_on_user_media(user),
+      }
+    end
+
+    def empty_report_counts
+      {
+        total: 0,
+        open: 0,
+        accepted: 0,
+        rejected: 0,
+        resolved: 0,
+        auto_hidden: 0,
+      }
+    end
+
+    def report_counts_by_reporter(user)
+      sql = ActiveRecord::Base.sanitize_sql_array([
+        <<~SQL,
+          SELECT COALESCE(report ->> 'status', 'open') AS status,
+                 COALESCE(report ->> 'auto_hidden', 'false') AS auto_hidden,
+                 COUNT(*) AS count
+          FROM media_gallery_media_items
+          CROSS JOIN LATERAL jsonb_array_elements(extra_metadata -> 'media_reports') AS report
+          WHERE jsonb_typeof(extra_metadata -> 'media_reports') = 'array'
+            AND report ->> 'reporter_user_id' = ?
+          GROUP BY status, auto_hidden
+        SQL
+        user.id.to_s,
+      ])
+      report_counts_from_sql(sql)
+    rescue
+      empty_report_counts
+    end
+
+    def report_counts_on_user_media(user)
+      sql = ActiveRecord::Base.sanitize_sql_array([
+        <<~SQL,
+          SELECT COALESCE(report ->> 'status', 'open') AS status,
+                 COALESCE(report ->> 'auto_hidden', 'false') AS auto_hidden,
+                 COUNT(*) AS count
+          FROM media_gallery_media_items
+          CROSS JOIN LATERAL jsonb_array_elements(extra_metadata -> 'media_reports') AS report
+          WHERE jsonb_typeof(extra_metadata -> 'media_reports') = 'array'
+            AND user_id = ?
+          GROUP BY status, auto_hidden
+        SQL
+        user.id,
+      ])
+      report_counts_from_sql(sql)
+    rescue
+      empty_report_counts
+    end
+
+    def report_counts_from_sql(sql)
+      counts = empty_report_counts
+      ActiveRecord::Base.connection.select_all(sql).each do |row|
+        count = row["count"].to_i
+        status = row["status"].to_s.presence || "open"
+        status = "open" unless %w[open accepted rejected resolved].include?(status)
+        counts[:total] += count
+        counts[status.to_sym] += count
+        counts[:auto_hidden] += count if ActiveModel::Type::Boolean.new.cast(row["auto_hidden"])
+      end
+      counts
+    rescue
+      empty_report_counts
     end
 
     def reports_submitted_count(user)

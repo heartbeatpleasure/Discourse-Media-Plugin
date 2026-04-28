@@ -58,6 +58,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   @tracked settingsRows = [];
   @tracked stats = null;
   @tracked recent = { uploads: [], logs: [], reports: [] };
+  @tracked recentActivityFilter = "all";
   @tracked isSearching = false;
   @tracked isLoadingUser = false;
   @tracked searchError = "";
@@ -72,6 +73,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     this.settingsRows = [];
     this.stats = null;
     this.recent = { uploads: [], logs: [], reports: [] };
+    this.recentActivityFilter = "all";
     this.isSearching = false;
     this.isLoadingUser = false;
     this.searchError = "";
@@ -139,11 +141,11 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     const threshold = access.report_score_threshold || "disabled";
     const weight = access.report_score_points ?? 0;
     return [
-      { label: "Can view", value: boolLabel(access.can_view), className: statusClass(access.can_view), reason: access.view_reason },
-      { label: "Can upload", value: boolLabel(access.can_upload), className: statusClass(access.can_upload), reason: access.upload_reason },
-      { label: "Can report", value: boolLabel(access.can_report), className: statusClass(access.can_report), reason: access.report_reason },
-      { label: "Instant auto-hide reporter", value: boolLabel(access.report_auto_hide_instant), className: access.report_auto_hide_instant ? "is-warning" : "", reason: access.report_auto_hide_instant_reason },
-      { label: "Report point weight", value: `${weight} per report`, className: weight > 0 ? "is-info" : "", reason: `Per media item threshold: ${threshold}. Only open reports on the same media item count.` },
+      { label: "Can view", value: boolLabel(access.can_view), className: statusClass(access.can_view), reason: access.view_reason, details: access.view_details || [] },
+      { label: "Can upload", value: boolLabel(access.can_upload), className: statusClass(access.can_upload), reason: access.upload_reason, details: access.upload_details || [] },
+      { label: "Can report", value: boolLabel(access.can_report), className: statusClass(access.can_report), reason: access.report_reason, details: access.report_details || [] },
+      { label: "Instant auto-hide reporter", value: boolLabel(access.report_auto_hide_instant), className: access.report_auto_hide_instant ? "is-warning" : "", reason: access.report_auto_hide_instant_reason, details: access.report_auto_hide_details || [] },
+      { label: "Report point weight", value: `${weight} per report`, className: weight > 0 ? "is-info" : "", reason: `Per media item threshold: ${threshold}. Only open reports on the same media item count.`, details: access.report_score_details || [] },
     ];
   }
 
@@ -157,17 +159,62 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     const logsUrl = username ? `/admin/plugins/media-gallery-logs?q=${encodeParam(username)}&hours=720` : "";
 
     return [
-      { label: "Uploads", value: stats.uploads_total ?? 0, url: managementUrl },
-      { label: "Ready", value: stats.uploads_ready ?? 0, url: managementUrl },
-      { label: "Failed", value: stats.uploads_failed ?? 0, url: managementUrl },
-      { label: "Queued / processing", value: stats.uploads_processing ?? 0, url: managementUrl },
-      { label: "Hidden uploads", value: stats.uploads_hidden ?? 0, url: managementUrl },
-      { label: "Reports submitted", value: stats.reports_submitted ?? 0, url: reportsByUserUrl },
-      { label: "Reports on user's media", value: stats.reports_against_media ?? 0, url: reportsOnUserMediaUrl },
-      { label: "Likes given", value: stats.likes_given ?? 0 },
-      { label: "Playback sessions", value: stats.playback_sessions ?? 0 },
-      { label: "Log events 30d", value: stats.log_events_30d ?? 0, url: logsUrl },
+      { label: "Uploads", value: stats.uploads_total ?? 0, url: managementUrl, scope: "Exact total" },
+      { label: "Ready", value: stats.uploads_ready ?? 0, url: managementUrl, scope: "Exact total" },
+      { label: "Failed", value: stats.uploads_failed ?? 0, url: managementUrl, scope: "Exact total" },
+      { label: "Queued / processing", value: stats.uploads_processing ?? 0, url: managementUrl, scope: "Exact total" },
+      { label: "Hidden uploads", value: stats.uploads_hidden ?? 0, url: managementUrl, scope: "Exact total" },
+      { label: "Reports submitted", value: stats.reports_submitted ?? 0, url: reportsByUserUrl, scope: "Exact total" },
+      { label: "Reports on user's media", value: stats.reports_against_media ?? 0, url: reportsOnUserMediaUrl, scope: "Exact total" },
+      { label: "Likes given", value: stats.likes_given ?? 0, scope: "Exact total" },
+      { label: "Playback sessions", value: stats.playback_sessions ?? 0, scope: "Exact total" },
+      { label: "Log events 30d", value: stats.log_events_30d ?? 0, url: logsUrl, scope: "Last 30 days" },
     ];
+  }
+
+  get reportInvolvementSections() {
+    const involvement = this.stats?.report_involvement || {};
+    return [
+      { title: "Reports submitted by user", rows: this.reportInvolvementRows(involvement.submitted || {}) },
+      { title: "Reports on user's media", rows: this.reportInvolvementRows(involvement.on_user_media || {}) },
+    ];
+  }
+
+  reportInvolvementRows(counts) {
+    return [
+      { label: "Total", value: counts.total ?? 0, tone: "" },
+      { label: "Open", value: counts.open ?? 0, tone: "is-warning" },
+      { label: "Accepted", value: counts.accepted ?? 0, tone: "is-danger" },
+      { label: "Rejected", value: counts.rejected ?? 0, tone: "" },
+      { label: "Resolved", value: counts.resolved ?? 0, tone: "is-success" },
+      { label: "Auto-hidden", value: counts.auto_hidden ?? 0, tone: "is-warning" },
+    ];
+  }
+
+  get recentActivityButtons() {
+    const filters = [
+      ["all", "All"],
+      ["uploads", "Uploads"],
+      ["reports", "Reports"],
+      ["logs", "Logs"],
+    ];
+    return filters.map(([key, label]) => ({
+      key,
+      label,
+      className: this.recentActivityFilter === key ? "btn btn-primary" : "btn",
+    }));
+  }
+
+  get showRecentUploads() {
+    return ["all", "uploads"].includes(this.recentActivityFilter);
+  }
+
+  get showRecentReports() {
+    return ["all", "reports"].includes(this.recentActivityFilter);
+  }
+
+  get showRecentLogs() {
+    return ["all", "logs"].includes(this.recentActivityFilter);
   }
 
   get groupNames() {
@@ -194,6 +241,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       eventLabel: titleize(event.event_type),
       severityLabel: titleize(event.severity || "info"),
       severityClass: severityClass(event.severity),
+      logUrl: `/admin/plugins/media-gallery-logs?q=${encodeParam(event.media_public_id || event.event_type || event.message)}&hours=720`,
     }));
   }
 
@@ -203,6 +251,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       createdAtLabel: formatDateTime(report.created_at),
       statusLabel: titleize(report.status),
       statusClass: report.status === "open" ? "is-warning" : report.status === "accepted" ? "is-danger" : report.status === "resolved" ? "is-success" : "",
+      reportUrl: report.report_url || (report.id ? `/admin/plugins/media-gallery-reports?report_id=${encodeParam(report.id)}` : `/admin/plugins/media-gallery-reports?status=all&reporter_user_id=${encodeParam(this.selectedUser?.id)}`),
     }));
   }
 
@@ -294,6 +343,12 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     } finally {
       this.isLoadingUser = false;
     }
+  }
+
+  @action
+  setRecentActivityFilter(filter) {
+    const value = String(filter || "all");
+    this.recentActivityFilter = ["all", "uploads", "reports", "logs"].includes(value) ? value : "all";
   }
 
   formatDate(value) {
