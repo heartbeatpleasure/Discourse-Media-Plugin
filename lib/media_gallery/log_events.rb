@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "digest/sha1"
+require "digest"
 require "json"
 
 module ::MediaGallery
@@ -19,6 +19,21 @@ module ::MediaGallery
     MAX_METHOD = 12
     MAX_MEDIA_PUBLIC_ID = 64
     MAX_UA_HASH = 40
+
+    SENSITIVE_QUERY_PARAM_NAMES = %w[
+      token
+      stream_token
+      hls_token
+      access_token
+      auth_token
+      sig
+      signature
+      x-amz-signature
+    ].freeze
+    SENSITIVE_QUERY_PARAM_PATTERN = /([?&;](?:#{SENSITIVE_QUERY_PARAM_NAMES.map { |name| Regexp.escape(name) }.join("|")})=)[^&#;]*/i
+    STREAM_TOKEN_PATH_PATTERN = %r{(/media/stream/)[^/?#]+}i
+    TOKEN_VALUE_KEY_PATTERN = /\A(?:token|stream_token|hls_token|access_token|auth_token|bearer_token)\z/i
+    SECRET_VALUE_KEY_PATTERN = /\A(?:authorization|cookie|set_cookie|sig|signature|secret|password|api_key)\z/i
 
     def record(event_type:, severity: "info", category: "general", request: nil, user: nil, media_item: nil, overlay_code: nil, fingerprint_id: nil, message: nil, details: nil)
       return unless table_present?
@@ -343,13 +358,55 @@ module ::MediaGallery
       hash.each_with_object({}) do |(key, raw), result|
         next if raw.nil?
 
-        sanitized = sanitize_detail_value(raw)
-        result[truncate(key, 80)] = sanitized unless sanitized.nil?
+        key_text = key.to_s
+        sanitized =
+          if token_value_key?(key_text)
+            sanitize_token_detail_value(raw)
+          elsif secret_value_key?(key_text)
+            "[REDACTED]"
+          else
+            sanitize_detail_value(raw)
+          end
+
+        result[truncate(key_text, 80)] = sanitized unless sanitized.nil?
       end
     rescue
       {}
     end
     private_class_method :sanitize_details
+
+    def token_value_key?(key)
+      key.to_s.match?(TOKEN_VALUE_KEY_PATTERN)
+    rescue
+      false
+    end
+    private_class_method :token_value_key?
+
+    def secret_value_key?(key)
+      key.to_s.match?(SECRET_VALUE_KEY_PATTERN)
+    rescue
+      false
+    end
+    private_class_method :secret_value_key?
+
+    def sanitize_token_detail_value(value)
+      case value
+      when String
+        text = value.to_s
+        return nil if text.blank?
+
+        "sha256:#{Digest::SHA256.hexdigest(text)}"
+      when Array
+        value.first(20).map { |entry| sanitize_token_detail_value(entry) }.compact
+      when Hash
+        sanitize_details(value)
+      else
+        "[REDACTED]"
+      end
+    rescue
+      "[REDACTED]"
+    end
+    private_class_method :sanitize_token_detail_value
 
     def sanitize_detail_value(value)
       case value
@@ -370,11 +427,23 @@ module ::MediaGallery
     def request_path(request)
       return nil if request.blank?
 
-      request.fullpath.to_s.presence || request.path.to_s.presence
+      raw = request.fullpath.to_s.presence || request.path.to_s.presence
+      redact_sensitive_path(raw)
     rescue
       nil
     end
     private_class_method :request_path
+
+    def redact_sensitive_path(value)
+      text = value.to_s
+      return nil if text.blank?
+
+      text = text.gsub(STREAM_TOKEN_PATH_PATTERN, "\\1[REDACTED_TOKEN]")
+      text.gsub(SENSITIVE_QUERY_PARAM_PATTERN, "\\1[REDACTED]")
+    rescue
+      nil
+    end
+    private_class_method :redact_sensitive_path
 
     def user_agent_hash(value)
       text = value.to_s.strip

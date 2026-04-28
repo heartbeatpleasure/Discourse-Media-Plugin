@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "digest/sha1"
+require "digest"
 require "json"
 
 module ::MediaGallery
@@ -194,8 +194,8 @@ module ::MediaGallery
       return true if per_min <= 0
 
       ip = request.remote_ip.to_s
-      digest = Digest::SHA1.hexdigest("#{token}|#{ip}")
-      key = "media_gallery:hls:#{kind}:#{digest}"
+      digest = Digest::SHA256.hexdigest("#{token}|#{ip}")
+      key = "media_gallery:hls:#{kind}:sha256:#{digest}"
 
       RateLimiter.new(nil, key, per_min, 1.minute).performed!
       true
@@ -217,15 +217,17 @@ module ::MediaGallery
       SiteSetting.respond_to?(:media_gallery_log_hls_denials) && SiteSetting.media_gallery_log_hls_denials
     end
 
-    def token_fingerprint(token)
+    def token_sha256_label(token)
       return "-" if token.blank?
-      Digest::SHA1.hexdigest(token.to_s)[0, 12]
+      "sha256:#{Digest::SHA256.hexdigest(token.to_s)}"
+    rescue
+      "-"
     end
 
     def log_denial!(reason, token: nil)
       return unless denial_logging_enabled?
       Rails.logger.warn(
-        "[media_gallery] HLS denied reason=#{reason} token=#{token_fingerprint(token)} ip=#{request.remote_ip} user_id=#{current_user&.id} request_id=#{request.request_id}"
+        "[media_gallery] HLS denied reason=#{reason} token_sha256=#{token_sha256_label(token)} ip=#{request.remote_ip} user_id=#{current_user&.id} request_id=#{request.request_id}"
       )
       ::MediaGallery::LogEvents.record(
         event_type: "hls_denied",
@@ -240,6 +242,7 @@ module ::MediaGallery
           variant: params[:variant].to_s.presence,
           segment: params[:segment].to_s.presence,
           token_present: token.present?,
+          token_sha256: token_sha256_label(token),
         },
       )
     rescue

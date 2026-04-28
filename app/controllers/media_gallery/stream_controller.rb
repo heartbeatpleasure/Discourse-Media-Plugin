@@ -111,6 +111,7 @@ module ::MediaGallery
           media_item_id: payload.is_a?(Hash) ? payload["media_item_id"] : nil,
           media_public_id: item&.public_id,
           token_present: token.present?,
+          token_sha256: ::MediaGallery::Security.token_sha256_label(token),
         },
       )
       raise Discourse::NotFound

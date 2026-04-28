@@ -642,7 +642,7 @@ module ::MediaGallery
           # - Avoids exposing ".mp4" etc in the DOM.
           # - Keeps the URL less obviously "downloadable".
           # - StreamController sets the correct Content-Type based on the token payload.
-          stream_url: "/media/stream/#{token}",
+          stream_url: "/media/stream?token=#{token}",
           expires_at: expires_at,
           playable: true,
           security: {
@@ -792,7 +792,7 @@ module ::MediaGallery
     # Optional per-IP rate limit for issuing play tokens.
     #
     # IMPORTANT: We intentionally rate limit the token issuance endpoint (/media/:id/play)
-    # and not the streaming endpoint (/media/stream/:token), because video playback uses
+    # and not the streaming endpoint (/media/stream?token=...; legacy /media/stream/:token still supported), because video playback uses
     # multiple range requests and seeks.
     def enforce_play_rate_limits!
       per_min = SiteSetting.media_gallery_play_tokens_per_ip_per_minute.to_i

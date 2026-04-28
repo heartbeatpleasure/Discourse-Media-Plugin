@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+
 # Best-effort playback hardening helpers.
 #
 # Notes:
@@ -63,16 +65,47 @@ module ::MediaGallery
     # Redis keys
     # -----------------
 
+    TOKEN_KEY_PREFIX = "media_gallery:token:sha256:"
+    REVOKED_KEY_PREFIX = "media_gallery:revoked:sha256:"
+    SESSION_KEY_PREFIX = "media_gallery:session:sha256:"
+
+    def token_sha256(token)
+      value = token.to_s
+      return nil if value.blank?
+
+      Digest::SHA256.hexdigest(value)
+    rescue
+      nil
+    end
+
+    def token_sha256_label(token)
+      digest = token_sha256(token)
+      digest.present? ? "sha256:#{digest}" : nil
+    end
+
     def token_key(token)
-      "media_gallery:token:#{token}"
+      digest = token_sha256(token)
+      digest.present? ? "#{TOKEN_KEY_PREFIX}#{digest}" : nil
     end
 
     def revoked_key(token)
-      "media_gallery:revoked:#{token}"
+      digest = token_sha256(token)
+      digest.present? ? "#{REVOKED_KEY_PREFIX}#{digest}" : nil
     end
 
     def session_key(token)
-      "media_gallery:session:#{token}"
+      digest = token_sha256(token)
+      digest.present? ? "#{SESSION_KEY_PREFIX}#{digest}" : nil
+    end
+
+    def legacy_raw_token_tracking_key?(value)
+      text = value.to_s
+      return false if text.blank?
+      return false if text.include?(":sha256:")
+
+      text.start_with?("media_gallery:token:", "media_gallery:session:")
+    rescue
+      false
     end
 
     def user_tokens_set(user_id)
@@ -99,9 +132,16 @@ module ::MediaGallery
       members = redis.smembers(set_key)
       return 0 if members.blank?
 
-      # Remove members whose referenced key expired.
+      # Remove members whose referenced key expired. Legacy pre-part-3 set members
+      # contained raw bearer tokens inside Redis key names; drop them from the
+      # aggregate sets instead of keeping them visible in active-count tracking.
       members.each do |member_key|
-        next if redis.exists?(member_key)
+        if legacy_raw_token_tracking_key?(member_key)
+          redis.srem(set_key, member_key)
+          next
+        end
+
+        next if member_key.present? && redis.exists?(member_key)
         redis.srem(set_key, member_key)
       end
 
@@ -128,6 +168,8 @@ module ::MediaGallery
       ttl = 1 if ttl <= 0
 
       tk = token_key(token)
+      return if tk.blank?
+
       redis.setex(tk, ttl, exp.to_i)
 
       if user_id.present?
@@ -157,6 +199,8 @@ module ::MediaGallery
       return if token.blank?
 
       sk = session_key(token)
+      return if sk.blank?
+
       ttl = heartbeat_ttl_seconds
 
       # Store a small payload for debugging.
@@ -191,7 +235,10 @@ module ::MediaGallery
 
     def revoked?(token)
       return false if token.blank?
-      redis.exists?(revoked_key(token))
+      key = revoked_key(token)
+      return false if key.blank?
+
+      redis.exists?(key)
     rescue
       false
     end
@@ -205,7 +252,10 @@ module ::MediaGallery
       ttl ||= SiteSetting.media_gallery_stream_token_ttl_minutes.to_i * 60
       ttl = 1 if ttl <= 0
 
-      redis.setex(revoked_key(token), ttl, "1")
+      rk = revoked_key(token)
+      return if rk.blank?
+
+      redis.setex(rk, ttl, "1")
 
       # Best effort cleanup of tracking keys.
       begin

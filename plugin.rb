@@ -15,6 +15,22 @@ module ::MediaGallery
 end
 
 after_initialize do
+  begin
+    Rails.application.config.filter_parameters |= [
+      :token,
+      :stream_token,
+      :hls_token,
+      :access_token,
+      :auth_token,
+      :sig,
+      :signature,
+      :authorization,
+      :cookie,
+    ]
+  rescue
+    # Keep plugin boot resilient if Rails filter configuration is unavailable.
+  end
+
   require_relative "lib/media_gallery/token"
   require_relative "lib/media_gallery/path_security"
   require_relative "lib/media_gallery/storage_settings_resolver"
@@ -165,6 +181,9 @@ after_initialize do
     post "/admin/plugins/media-gallery/test-downloads/:public_id" => "media_gallery/admin_test_downloads#create", defaults: { format: :json }
     get "/admin/plugins/media-gallery/test-downloads/status/:task_id" => "media_gallery/admin_test_downloads#status", defaults: { format: :json }
     get "/admin/plugins/media-gallery/test-downloads/:public_id/:artifact_id" => "media_gallery/admin_test_downloads#download"
+
+    get "/media/stream" => "media_gallery/stream#show",
+        defaults: { format: :json }
 
     get "/media/stream/:token(.:ext)" => "media_gallery/stream#show",
         defaults: { format: :json },
