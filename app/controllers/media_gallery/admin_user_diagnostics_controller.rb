@@ -412,13 +412,13 @@ module ::MediaGallery
     def report_counts_by_reporter(user)
       sql = ActiveRecord::Base.sanitize_sql_array([
         <<~SQL,
-          SELECT COALESCE(report ->> 'status', 'open') AS status,
-                 COALESCE(report ->> 'auto_hidden', 'false') AS auto_hidden,
+          SELECT COALESCE(report.value ->> 'status', 'open') AS status,
+                 COALESCE(report.value ->> 'auto_hidden', 'false') AS auto_hidden,
                  COUNT(*) AS count
           FROM media_gallery_media_items
-          CROSS JOIN LATERAL jsonb_array_elements(extra_metadata -> 'media_reports') AS report
+          CROSS JOIN LATERAL jsonb_array_elements(extra_metadata -> 'media_reports') AS report(value)
           WHERE jsonb_typeof(extra_metadata -> 'media_reports') = 'array'
-            AND report ->> 'reporter_user_id' = ?
+            AND report.value ->> 'reporter_user_id' = ?
           GROUP BY status, auto_hidden
         SQL
         user.id.to_s,
@@ -431,11 +431,11 @@ module ::MediaGallery
     def report_counts_on_user_media(user)
       sql = ActiveRecord::Base.sanitize_sql_array([
         <<~SQL,
-          SELECT COALESCE(report ->> 'status', 'open') AS status,
-                 COALESCE(report ->> 'auto_hidden', 'false') AS auto_hidden,
+          SELECT COALESCE(report.value ->> 'status', 'open') AS status,
+                 COALESCE(report.value ->> 'auto_hidden', 'false') AS auto_hidden,
                  COUNT(*) AS count
           FROM media_gallery_media_items
-          CROSS JOIN LATERAL jsonb_array_elements(extra_metadata -> 'media_reports') AS report
+          CROSS JOIN LATERAL jsonb_array_elements(extra_metadata -> 'media_reports') AS report(value)
           WHERE jsonb_typeof(extra_metadata -> 'media_reports') = 'array'
             AND user_id = ?
           GROUP BY status, auto_hidden
