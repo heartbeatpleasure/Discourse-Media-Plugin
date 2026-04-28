@@ -255,6 +255,23 @@ export default RouteTemplate(
           </span>
         </a>
 
+        <a class="mg-landing__card" href="/admin/plugins/media-gallery-user-diagnostics">
+          <div class="mg-landing__card-header">
+            <div class="mg-landing__card-title">
+              <span class="mg-landing__card-badge">
+                {{i18n "admin.media_gallery.category_monitoring"}}
+              </span>
+              <h3>{{i18n "admin.media_gallery.user_diagnostics.short_title"}}</h3>
+            </div>
+          </div>
+          <p class="mg-landing__card-description">
+            {{i18n "admin.media_gallery.user_diagnostics.description"}}
+          </p>
+          <span class="mg-landing__card-action">
+            {{i18n "admin.media_gallery.open_tool"}}
+          </span>
+        </a>
+
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-logs">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">

@@ -170,6 +170,11 @@ en:
           short_title: "Health"
           description: "Review processing, storage, settings, permissions, and moderation health from one admin page."
 
+        user_diagnostics:
+          title: "User diagnostics"
+          short_title: "User diagnostics"
+          description: "Search users and review account status, media permissions, matching settings, and recent media activity in one read-only overview."
+
         logs:
           title: "Logs"
           short_title: "Logs"
