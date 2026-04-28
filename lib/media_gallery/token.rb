@@ -102,7 +102,7 @@ module ::MediaGallery
       raw = read_session_binding_cookie(cookies)
       if raw.blank?
         raw = "v#{SESSION_BINDING_VERSION}:#{SecureRandom.hex(24)}"
-        write_session_binding_cookie!(request: request, cookies: cookies, value: raw)
+        return nil unless write_session_binding_cookie!(request: request, cookies: cookies, value: raw)
       end
 
       digest_session_binding(raw)
@@ -142,17 +142,21 @@ module ::MediaGallery
     end
 
     def read_session_binding_cookie(cookies)
-      if cookies.respond_to?(:signed)
-        cookies.signed[SESSION_BINDING_COOKIE].presence || cookies[SESSION_BINDING_COOKIE].presence
-      elsif cookies.respond_to?(:[])
-        cookies[SESSION_BINDING_COOKIE].presence
-      end
+      return nil unless cookies.respond_to?(:signed)
+
+      raw = cookies.signed[SESSION_BINDING_COOKIE].presence
+      return nil unless valid_session_binding_cookie_value?(raw)
+
+      raw
     rescue
       nil
     end
     private_class_method :read_session_binding_cookie
 
     def write_session_binding_cookie!(request:, cookies:, value:)
+      return false unless cookies.respond_to?(:signed)
+      return false unless valid_session_binding_cookie_value?(value)
+
       options = {
         value: value,
         httponly: true,
@@ -165,15 +169,19 @@ module ::MediaGallery
       secure_cookie ||= SiteSetting.respond_to?(:force_https) && SiteSetting.force_https
       options[:secure] = true if secure_cookie
 
-      if cookies.respond_to?(:signed)
-        cookies.signed[SESSION_BINDING_COOKIE] = options
-      else
-        cookies[SESSION_BINDING_COOKIE] = options[:value]
-      end
+      cookies.signed[SESSION_BINDING_COOKIE] = options
+      true
     rescue
-      nil
+      false
     end
     private_class_method :write_session_binding_cookie!
+
+    def valid_session_binding_cookie_value?(value)
+      value.to_s.match?(/\Av#{SESSION_BINDING_VERSION}:[0-9a-f]{48}\z/)
+    rescue
+      false
+    end
+    private_class_method :valid_session_binding_cookie_value?
 
     def digest_session_binding(raw)
       return nil if raw.blank?
