@@ -79,11 +79,16 @@ export default RouteTemplate(
         align-items: flex-end;
       }
 
+      .mg-userdiag__toolbar .btn {
+        align-self: flex-end;
+        margin-bottom: 0.35rem;
+      }
+
       .mg-userdiag__field {
         display: flex;
         flex-direction: column;
         gap: 0.35rem;
-        min-width: min(100%, 420px);
+        min-width: min(100%, 520px);
       }
 
       .mg-userdiag__field label {
@@ -117,6 +122,23 @@ export default RouteTemplate(
       .mg-userdiag__card,
       .mg-userdiag__section {
         padding: 0.95rem;
+      }
+
+      a.mg-userdiag__card {
+        display: block;
+        color: var(--primary);
+        text-decoration: none;
+      }
+
+      a.mg-userdiag__card:hover {
+        border-color: var(--tertiary);
+        box-shadow: inset 0 0 0 1px var(--tertiary-low);
+      }
+
+      .mg-userdiag__card-linkhint {
+        color: var(--tertiary);
+        font-size: var(--font-down-1);
+        margin-top: 0.45rem;
       }
 
       .mg-userdiag__card-label {
@@ -159,7 +181,11 @@ export default RouteTemplate(
       }
 
       .mg-userdiag__badge.is-warning,
-      .mg-userdiag__card.is-warning,
+      .mg-userdiag__card.is-warning {
+        border-color: var(--highlight-medium);
+        background: var(--highlight-low);
+      }
+
       .mg-userdiag__badge.is-info,
       .mg-userdiag__card.is-info {
         border-color: var(--tertiary-low);
@@ -207,7 +233,41 @@ export default RouteTemplate(
       }
 
       .mg-userdiag__activity-row {
-        grid-template-columns: minmax(170px, 0.7fr) minmax(0, 1fr) auto;
+        grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.4fr) auto;
+      }
+
+      .mg-userdiag__media-row {
+        grid-template-columns: 132px minmax(0, 1fr) auto;
+      }
+
+      .mg-userdiag__log-row {
+        grid-template-columns: minmax(240px, 0.9fr) minmax(0, 1.6fr) auto;
+      }
+
+      .mg-userdiag__media-thumb,
+      .mg-userdiag__media-thumb-placeholder {
+        width: 132px;
+        aspect-ratio: 16 / 9;
+        border-radius: 12px;
+        border: 1px solid var(--mg-border);
+        background: var(--secondary);
+      }
+
+      .mg-userdiag__media-thumb {
+        object-fit: cover;
+      }
+
+      .mg-userdiag__media-thumb-placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-userdiag__activity-sections {
+        display: grid;
+        gap: 1rem;
       }
 
       .mg-userdiag__row-title {
@@ -242,7 +302,9 @@ export default RouteTemplate(
       @media (max-width: 1100px) {
         .mg-userdiag__main-grid,
         .mg-userdiag__setting-row,
-        .mg-userdiag__activity-row {
+        .mg-userdiag__activity-row,
+        .mg-userdiag__media-row,
+        .mg-userdiag__log-row {
           grid-template-columns: 1fr;
         }
       }
@@ -269,7 +331,7 @@ export default RouteTemplate(
         <div class="mg-userdiag__panel-header">
           <div class="mg-userdiag__copy">
             <h2>Find user</h2>
-            <p class="mg-userdiag__muted">Search by username, display name, email address, or numeric user ID.</p>
+            <p class="mg-userdiag__muted">Search by username, display name, or numeric user ID.</p>
           </div>
         </div>
 
@@ -279,7 +341,7 @@ export default RouteTemplate(
             <input
               type="text"
               value={{@controller.searchQuery}}
-              placeholder="username, email, name, or user ID…"
+              placeholder="username, display name, or user ID…"
               {{on "input" @controller.updateSearchQuery}}
             />
           </div>
@@ -300,7 +362,6 @@ export default RouteTemplate(
                   <div class="mg-userdiag__result-title">{{user.username}}</div>
                   <div class="mg-userdiag__row-meta">
                     {{#if user.name}}{{user.name}} · {{/if}}#{{user.id}} · TL{{user.trust_level}}
-                    {{#if user.email}} · {{user.email}}{{/if}}
                   </div>
                 </div>
                 <button class="btn" type="button" {{on "click" (fn @controller.selectUser user)}}>
@@ -402,10 +463,18 @@ export default RouteTemplate(
           </div>
           <div class="mg-userdiag__grid">
             {{#each @controller.statCards as |stat|}}
-              <div class="mg-userdiag__card">
-                <div class="mg-userdiag__card-label">{{stat.label}}</div>
-                <div class="mg-userdiag__card-value">{{stat.value}}</div>
-              </div>
+              {{#if stat.url}}
+                <a class="mg-userdiag__card" href={{stat.url}} target="_blank" rel="noopener noreferrer">
+                  <div class="mg-userdiag__card-label">{{stat.label}}</div>
+                  <div class="mg-userdiag__card-value">{{stat.value}}</div>
+                  <div class="mg-userdiag__card-linkhint">Open in new tab</div>
+                </a>
+              {{else}}
+                <div class="mg-userdiag__card">
+                  <div class="mg-userdiag__card-label">{{stat.label}}</div>
+                  <div class="mg-userdiag__card-value">{{stat.value}}</div>
+                </div>
+              {{/if}}
             {{/each}}
           </div>
         </section>
@@ -418,19 +487,30 @@ export default RouteTemplate(
             </div>
           </div>
 
-          <div class="mg-userdiag__main-grid">
+          <div class="mg-userdiag__activity-sections">
             <section class="mg-userdiag__section">
               <h3>Recent uploads</h3>
               <div class="mg-userdiag__list" style="margin-top: 0.85rem;">
                 {{#if @controller.recentUploads.length}}
                   {{#each @controller.recentUploads as |item|}}
-                    <article class="mg-userdiag__activity-row">
+                    <article class="mg-userdiag__activity-row mg-userdiag__media-row">
+                      {{#if item.thumbnail_url}}
+                        <img class="mg-userdiag__media-thumb" loading="lazy" src={{item.thumbnail_url}} alt="thumbnail" />
+                      {{else}}
+                        <div class="mg-userdiag__media-thumb-placeholder">No thumbnail</div>
+                      {{/if}}
+
                       <div>
                         <div class="mg-userdiag__row-title">{{item.title}}</div>
                         <div class="mg-userdiag__row-meta">{{item.public_id}}</div>
+                        <div class="mg-userdiag__row-help">{{item.createdAtLabel}} · {{item.typeLabel}} · {{item.containsLabel}}</div>
+                        <div class="mg-userdiag__row-help">Tags: {{item.tagsLabel}}</div>
                       </div>
-                      <div class="mg-userdiag__row-help">{{item.createdAtLabel}} · {{item.typeLabel}}</div>
-                      <span class="mg-userdiag__badge {{item.visibilityClass}}">{{item.statusLabel}} / {{item.visibilityLabel}}</span>
+
+                      <div class="mg-userdiag__badge-row">
+                        <span class="mg-userdiag__badge {{item.visibilityClass}}">{{item.statusLabel}} / {{item.visibilityLabel}}</span>
+                        <a class="btn" href={{item.management_url}} target="_blank" rel="noopener noreferrer">Open</a>
+                      </div>
                     </article>
                   {{/each}}
                 {{else}}
@@ -465,7 +545,7 @@ export default RouteTemplate(
             <div class="mg-userdiag__list" style="margin-top: 0.85rem;">
               {{#if @controller.recentLogs.length}}
                 {{#each @controller.recentLogs as |event|}}
-                  <article class="mg-userdiag__activity-row">
+                  <article class="mg-userdiag__activity-row mg-userdiag__log-row">
                     <div>
                       <div class="mg-userdiag__row-title">{{event.eventLabel}}</div>
                       <div class="mg-userdiag__row-meta">{{event.createdAtLabel}} · {{event.category}}</div>
@@ -473,7 +553,7 @@ export default RouteTemplate(
                     <div class="mg-userdiag__row-help">
                       {{#if event.media_title}}{{event.media_title}} · {{/if}}{{event.message}}
                     </div>
-                    <span class="mg-userdiag__badge {{event.severityClass}}">{{event.severity}}</span>
+                    <span class="mg-userdiag__badge {{event.severityClass}}">{{event.severityLabel}}</span>
                   </article>
                 {{/each}}
               {{else}}

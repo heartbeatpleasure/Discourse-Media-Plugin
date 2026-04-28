@@ -17,6 +17,33 @@ function statusClass(value) {
   return value ? "is-success" : "is-danger";
 }
 
+function severityClass(value) {
+  switch (String(value || "").toLowerCase()) {
+    case "success":
+    case "ok":
+      return "is-success";
+    case "warning":
+    case "warn":
+      return "is-warning";
+    case "danger":
+    case "error":
+    case "critical":
+    case "failed":
+    case "failure":
+      return "is-danger";
+    case "info":
+    case "notice":
+    case "debug":
+      return "is-info";
+    default:
+      return "";
+  }
+}
+
+function encodeParam(value) {
+  return encodeURIComponent(String(value || "").trim());
+}
+
 function titleize(value) {
   return String(value || "")
     .replace(/_/g, " ")
@@ -83,10 +110,9 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     const user = this.selectedUser || {};
     return [
       { label: "User ID", value: user.id || "-" },
+      { label: "Trust level", value: user.trust_level == null ? "-" : `TL${user.trust_level}` },
       { label: "Username", value: user.username || "-" },
       { label: "Name", value: user.name || "-" },
-      { label: "Email", value: user.email || "-" },
-      { label: "Trust level", value: user.trust_level == null ? "-" : `TL${user.trust_level}` },
       { label: "Created", value: formatDateTime(user.created_at) },
       { label: "Last seen", value: formatDateTime(user.last_seen_at) },
       { label: "Suspended", value: user.suspended ? `Yes${user.suspended_till ? ` until ${formatDateTime(user.suspended_till)}` : ""}` : "No" },
@@ -110,33 +136,42 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
 
   get mediaAccessCards() {
     const access = this.access || {};
+    const threshold = access.report_score_threshold || "disabled";
+    const weight = access.report_score_points ?? 0;
     return [
       { label: "Can view", value: boolLabel(access.can_view), className: statusClass(access.can_view), reason: access.view_reason },
       { label: "Can upload", value: boolLabel(access.can_upload), className: statusClass(access.can_upload), reason: access.upload_reason },
       { label: "Can report", value: boolLabel(access.can_report), className: statusClass(access.can_report), reason: access.report_reason },
       { label: "Instant auto-hide reporter", value: boolLabel(access.report_auto_hide_instant), className: access.report_auto_hide_instant ? "is-warning" : "", reason: access.report_auto_hide_instant_reason },
-      { label: "Report score points", value: String(access.report_score_points ?? "0"), className: access.report_score_points > 0 ? "is-info" : "", reason: `Threshold: ${access.report_score_threshold || "disabled"}` },
+      { label: "Report point weight", value: `${weight} per report`, className: weight > 0 ? "is-info" : "", reason: `Per media item threshold: ${threshold}. Only open reports on the same media item count.` },
     ];
   }
 
   get statCards() {
     const stats = this.stats || {};
+    const userId = this.selectedUser?.id;
+    const username = this.selectedUser?.username || "";
+    const managementUrl = userId ? `/admin/plugins/media-gallery-management?user_id=${encodeParam(userId)}` : "";
+    const reportsByUserUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&reporter_user_id=${encodeParam(userId)}` : "";
+    const reportsOnUserMediaUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&media_owner_user_id=${encodeParam(userId)}` : "";
+    const logsUrl = username ? `/admin/plugins/media-gallery-logs?q=${encodeParam(username)}&hours=720` : "";
+
     return [
-      { label: "Uploads", value: stats.uploads_total ?? 0 },
-      { label: "Ready", value: stats.uploads_ready ?? 0 },
-      { label: "Failed", value: stats.uploads_failed ?? 0 },
-      { label: "Queued / processing", value: stats.uploads_processing ?? 0 },
-      { label: "Hidden uploads", value: stats.uploads_hidden ?? 0 },
-      { label: "Reports submitted", value: stats.reports_submitted ?? 0 },
-      { label: "Reports on user's media", value: stats.reports_against_media ?? 0 },
+      { label: "Uploads", value: stats.uploads_total ?? 0, url: managementUrl },
+      { label: "Ready", value: stats.uploads_ready ?? 0, url: managementUrl },
+      { label: "Failed", value: stats.uploads_failed ?? 0, url: managementUrl },
+      { label: "Queued / processing", value: stats.uploads_processing ?? 0, url: managementUrl },
+      { label: "Hidden uploads", value: stats.uploads_hidden ?? 0, url: managementUrl },
+      { label: "Reports submitted", value: stats.reports_submitted ?? 0, url: reportsByUserUrl },
+      { label: "Reports on user's media", value: stats.reports_against_media ?? 0, url: reportsOnUserMediaUrl },
       { label: "Likes given", value: stats.likes_given ?? 0 },
       { label: "Playback sessions", value: stats.playback_sessions ?? 0 },
-      { label: "Log events 30d", value: stats.log_events_30d ?? 0 },
+      { label: "Log events 30d", value: stats.log_events_30d ?? 0, url: logsUrl },
     ];
   }
 
   get groupNames() {
-    return (this.selectedUser?.groups || []).map((group) => group.name).join(", ") || "No groups found";
+    return (this.selectedUser?.groups || []).map((group) => group.name).join(", ") || "No displayable groups found";
   }
 
   get recentUploads() {
@@ -145,6 +180,8 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       createdAtLabel: formatDateTime(item.created_at),
       statusLabel: titleize(item.status),
       typeLabel: titleize(item.media_type),
+      containsLabel: titleize(item.gender),
+      tagsLabel: Array.isArray(item.tags) && item.tags.length ? item.tags.join(", ") : "No tags",
       visibilityLabel: item.hidden ? "Hidden" : "Visible",
       visibilityClass: item.hidden ? "is-danger" : "is-success",
     }));
@@ -155,7 +192,8 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       ...event,
       createdAtLabel: formatDateTime(event.created_at),
       eventLabel: titleize(event.event_type),
-      severityClass: event.severity === "danger" ? "is-danger" : event.severity === "warning" ? "is-warning" : event.severity === "success" ? "is-success" : "",
+      severityLabel: titleize(event.severity || "info"),
+      severityClass: severityClass(event.severity),
     }));
   }
 
@@ -209,7 +247,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     const q = String(this.searchQuery || "").trim();
     if (!q) {
       this.searchResults = [];
-      this.searchError = "Enter a username, email, name, or user ID.";
+      this.searchError = "Enter a username, display name, or user ID.";
       return;
     }
 

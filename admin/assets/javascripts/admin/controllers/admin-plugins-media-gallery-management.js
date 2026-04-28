@@ -179,6 +179,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked statusFilter = "all";
   @tracked mediaTypeFilter = "all";
   @tracked hiddenFilter = "all";
+  @tracked userIdFilter = "";
   @tracked duplicateFilter = "all";
   @tracked genderFilter = "all";
   @tracked limit = "50";
@@ -220,6 +221,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.statusFilter = "all";
     this.mediaTypeFilter = "all";
     this.hiddenFilter = "all";
+    this.userIdFilter = "";
     this.duplicateFilter = "all";
     this.genderFilter = "all";
     this.limit = "50";
@@ -270,6 +272,11 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     }
     if (publicId) {
       this.selectedPublicId = publicId;
+    }
+
+    const userId = String(params.get("user_id") || "").replace(/\D/g, "").slice(0, 20);
+    if (userId) {
+      this.userIdFilter = userId;
     }
   }
 
@@ -927,6 +934,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       }
       if (this.hiddenFilter !== "all") {
         params.set("hidden", this.hiddenFilter);
+      }
+      if ((this.userIdFilter || "").trim()) {
+        params.set("user_id", this.userIdFilter.trim());
       }
       if (this.duplicateFilter !== "all") {
         params.set("duplicate", this.duplicateFilter);

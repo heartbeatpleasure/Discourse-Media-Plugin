@@ -57,13 +57,6 @@ module ::MediaGallery
         .limit(SEARCH_LIMIT)
       users.concat(user_scope.to_a)
 
-      if term.include?("@") && defined?(::UserEmail)
-        email_user_ids = ::UserEmail
-          .where("LOWER(email) LIKE ?", "%#{::ActiveRecord::Base.sanitize_sql_like(term)}%")
-          .limit(SEARCH_LIMIT)
-          .pluck(:user_id)
-        users.concat(::User.where(id: email_user_ids).to_a) if email_user_ids.present?
-      end
 
       users.compact.uniq(&:id).first(SEARCH_LIMIT)
     end
@@ -77,7 +70,6 @@ module ::MediaGallery
         admin: user.admin?,
         moderator: user.moderator?,
         staff: user.staff?,
-        email: safe_user_email(user),
         last_seen_at: user.last_seen_at&.iso8601,
         created_at: user.created_at&.iso8601,
       }
@@ -88,7 +80,6 @@ module ::MediaGallery
         id: user.id,
         username: user.username,
         name: user.name,
-        email: safe_user_email(user),
         trust_level: user.trust_level,
         admin: user.admin?,
         moderator: user.moderator?,
@@ -108,20 +99,29 @@ module ::MediaGallery
       }
     end
 
-    def safe_user_email(user)
-      user.respond_to?(:email) ? user.email : nil
-    rescue
-      nil
-    end
-
     def user_group_payloads(user)
-      user.groups.order(:name).limit(100).map do |group|
+      groups = user.groups.order(:name).limit(100).to_a
+      tl_groups = groups.select { |group| trust_level_group_name?(group.name) }
+      highest_tl = tl_groups.max_by { |group| trust_level_from_group_name(group.name) }
+
+      display_groups = groups.reject { |group| trust_level_group_name?(group.name) }
+      display_groups.unshift(highest_tl) if highest_tl.present?
+
+      display_groups.compact.map do |group|
         {
           id: group.id,
           name: group.name,
           automatic: group.respond_to?(:automatic) ? group.automatic : false,
         }
       end
+    end
+
+    def trust_level_group_name?(name)
+      name.to_s.match?(/\Atrust_level_\d+\z/)
+    end
+
+    def trust_level_from_group_name(name)
+      name.to_s[/\Atrust_level_(\d+)\z/, 1].to_i
     end
 
     def access_payload(user)
@@ -162,8 +162,14 @@ module ::MediaGallery
     def view_access_reason(user, view_block_matches, viewer_matches)
       return "Media gallery is disabled." unless SiteSetting.media_gallery_enabled
       return "Denied because the user is in view-block group: #{view_block_matches.join(', ')}." if view_block_matches.any?
-      return "Allowed because viewer groups are empty; all logged-in users may view." if viewer_groups.blank?
-      return "Allowed because the user matches viewer group: #{viewer_matches.join(', ')}." if viewer_matches.any?
+
+      if viewer_groups.blank?
+        return view_block_groups.blank? ?
+          "Allowed because no viewer groups or view-block groups are configured." :
+          "Allowed because viewer groups are empty and the user is not in any configured view-block group."
+      end
+
+      return "Allowed because the user matches viewer group: #{viewer_matches.join(', ')} and is not in a view-block group." if viewer_matches.any?
 
       "Denied because the user does not match any configured viewer group."
     end
@@ -172,9 +178,15 @@ module ::MediaGallery
       return "Media gallery is disabled." unless SiteSetting.media_gallery_enabled
       return "Denied because view-block also denies upload: #{view_block_matches.join(', ')}." if view_block_matches.any?
       return "Denied because the user is in upload-block group: #{upload_block_matches.join(', ')}." if upload_block_matches.any?
-      return "Allowed because the user is staff/admin." if user.staff? || user.admin?
-      return "Allowed because uploader groups are empty; all logged-in users may upload." if uploader_groups.blank?
-      return "Allowed because the user matches uploader group: #{uploader_matches.join(', ')}." if uploader_matches.any?
+      return "Allowed because the user is staff/admin and is not view-blocked or upload-blocked." if user.staff? || user.admin?
+
+      if uploader_groups.blank?
+        return upload_block_groups.blank? ?
+          "Allowed because no uploader groups or upload-block groups are configured." :
+          "Allowed because uploader groups are empty and the user is not in any configured upload-block group."
+      end
+
+      return "Allowed because the user matches uploader group: #{uploader_matches.join(', ')} and is not view-blocked or upload-blocked." if uploader_matches.any?
 
       "Denied because the user does not match any configured uploader group."
     end
@@ -309,8 +321,11 @@ module ::MediaGallery
         title: item.title,
         status: item.status,
         media_type: item.media_type,
+        gender: item.gender,
+        tags: Array(item.tags).map(&:to_s),
         hidden: item.admin_hidden?,
         created_at: item.created_at&.iso8601,
+        thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
         management_url: "/admin/plugins/media-gallery-management?public_id=#{item.public_id}",
       }
     end

@@ -481,6 +481,9 @@ module ::MediaGallery
         )
       end
 
+      owner_user_id = params[:user_id].to_i
+      scope = scope.where(user_id: owner_user_id) if owner_user_id.positive?
+
       profile = params[:profile].to_s.strip
       if profile.present? && profile != "all"
         scope = scope.where(managed_storage_profile: profile)

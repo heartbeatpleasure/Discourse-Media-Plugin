@@ -15,6 +15,7 @@ module ::MediaGallery
     def index
       reports = report_scope.flat_map { |item| report_payloads_for_item(item) }
       reports = apply_status_filter(reports)
+      reports = apply_user_filter(reports)
       reports = apply_report_search_filter(reports)
       reports.sort_by! { |report| report[:created_at].to_s }
       reports.reverse!
@@ -294,6 +295,21 @@ end
       return reports.reject { |report| report[:status].to_s == "open" } if status == "closed"
 
       reports.select { |report| report[:status].to_s == status }
+    end
+
+    def apply_user_filter(reports)
+      reporter_user_id = params[:reporter_user_id].to_i
+      media_owner_user_id = params[:media_owner_user_id].to_i
+
+      if reporter_user_id.positive?
+        reports = reports.select { |report| report[:reporter_user_id].to_i == reporter_user_id }
+      end
+
+      if media_owner_user_id.positive?
+        reports = reports.select { |report| report.dig(:media, :uploader_user_id).to_i == media_owner_user_id }
+      end
+
+      reports
     end
 
     def apply_report_search_filter(reports)

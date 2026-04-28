@@ -87,6 +87,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   @tracked noticeTone = "success";
   @tracked selectedReportId = "";
   @tracked requestedReportId = "";
+  @tracked reporterUserIdFilter = "";
+  @tracked mediaOwnerUserIdFilter = "";
   @tracked isReviewing = false;
   @tracked reviewNote = "";
 
@@ -94,8 +96,18 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
 
   resetState() {
     const deepLinkedReportId = this.reportIdFromUrl();
-    this.statusFilter = deepLinkedReportId ? "all" : "open";
-    this.searchQuery = deepLinkedReportId || "";
+    const initialParams = new URLSearchParams(window.location?.search || "");
+    const initialQuery = String(initialParams.get("q") || "").trim().slice(0, 160);
+    const initialStatus = String(initialParams.get("status") || "").trim();
+    const reporterUserId = String(initialParams.get("reporter_user_id") || "").replace(/\D/g, "").slice(0, 20);
+    const mediaOwnerUserId = String(initialParams.get("media_owner_user_id") || "").replace(/\D/g, "").slice(0, 20);
+
+    this.statusFilter = ["open", "accepted", "rejected", "resolved", "all"].includes(initialStatus)
+      ? initialStatus
+      : deepLinkedReportId
+        ? "all"
+        : "open";
+    this.searchQuery = initialQuery || deepLinkedReportId || "";
     this.limit = "50";
     this.reports = [];
     this.isLoading = false;
@@ -104,6 +116,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.noticeTone = "success";
     this.selectedReportId = deepLinkedReportId || "";
     this.requestedReportId = deepLinkedReportId || "";
+    this.reporterUserIdFilter = reporterUserId;
+    this.mediaOwnerUserIdFilter = mediaOwnerUserId;
     this.isReviewing = false;
     this.reviewNote = "";
   }
@@ -334,6 +348,12 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     if (String(this.searchQuery || "").trim()) {
       params.set("q", String(this.searchQuery || "").trim());
     }
+    if (String(this.reporterUserIdFilter || "").trim()) {
+      params.set("reporter_user_id", String(this.reporterUserIdFilter || "").trim());
+    }
+    if (String(this.mediaOwnerUserIdFilter || "").trim()) {
+      params.set("media_owner_user_id", String(this.mediaOwnerUserIdFilter || "").trim());
+    }
 
     try {
       const data = await this._fetchJson(`/admin/plugins/media-gallery/reports?${params.toString()}`, {
@@ -383,6 +403,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.searchQuery = "";
     this.limit = "50";
     this.requestedReportId = "";
+    this.reporterUserIdFilter = "";
+    this.mediaOwnerUserIdFilter = "";
     this.loadReports();
   }
 
