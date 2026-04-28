@@ -141,11 +141,11 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     const threshold = access.report_score_threshold || "disabled";
     const weight = access.report_score_points ?? 0;
     return [
-      { label: "Can view", value: boolLabel(access.can_view), className: statusClass(access.can_view), reason: access.view_reason, details: access.view_details || [] },
-      { label: "Can upload", value: boolLabel(access.can_upload), className: statusClass(access.can_upload), reason: access.upload_reason, details: access.upload_details || [] },
-      { label: "Can report", value: boolLabel(access.can_report), className: statusClass(access.can_report), reason: access.report_reason, details: access.report_details || [] },
-      { label: "Instant auto-hide reporter", value: boolLabel(access.report_auto_hide_instant), className: access.report_auto_hide_instant ? "is-warning" : "", reason: access.report_auto_hide_instant_reason, details: access.report_auto_hide_details || [] },
-      { label: "Report point weight", value: `${weight} per report`, className: weight > 0 ? "is-info" : "", reason: `Per media item threshold: ${threshold}. Only open reports on the same media item count.`, details: access.report_score_details || [] },
+      { label: "Can view", value: boolLabel(access.can_view), className: statusClass(access.can_view), reason: access.view_reason, details: Array.isArray(access.view_details) ? access.view_details : [] },
+      { label: "Can upload", value: boolLabel(access.can_upload), className: statusClass(access.can_upload), reason: access.upload_reason, details: Array.isArray(access.upload_details) ? access.upload_details : [] },
+      { label: "Can report", value: boolLabel(access.can_report), className: statusClass(access.can_report), reason: access.report_reason, details: Array.isArray(access.report_details) ? access.report_details : [] },
+      { label: "Instant auto-hide reporter", value: boolLabel(access.report_auto_hide_instant), className: access.report_auto_hide_instant ? "is-warning" : "", reason: access.report_auto_hide_instant_reason, details: Array.isArray(access.report_auto_hide_details) ? access.report_auto_hide_details : [] },
+      { label: "Report point weight", value: `${weight} per report`, className: weight > 0 ? "is-info" : "", reason: `Per media item threshold: ${threshold}. Only open reports on the same media item count.`, details: Array.isArray(access.report_score_details) ? access.report_score_details : [] },
     ];
   }
 
@@ -159,16 +159,16 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     const logsUrl = username ? `/admin/plugins/media-gallery-logs?q=${encodeParam(username)}&hours=720` : "";
 
     return [
-      { label: "Uploads", value: stats.uploads_total ?? 0, url: managementUrl, scope: "Exact total" },
-      { label: "Ready", value: stats.uploads_ready ?? 0, url: managementUrl, scope: "Exact total" },
-      { label: "Failed", value: stats.uploads_failed ?? 0, url: managementUrl, scope: "Exact total" },
-      { label: "Queued / processing", value: stats.uploads_processing ?? 0, url: managementUrl, scope: "Exact total" },
-      { label: "Hidden uploads", value: stats.uploads_hidden ?? 0, url: managementUrl, scope: "Exact total" },
-      { label: "Reports submitted", value: stats.reports_submitted ?? 0, url: reportsByUserUrl, scope: "Exact total" },
-      { label: "Reports on user's media", value: stats.reports_against_media ?? 0, url: reportsOnUserMediaUrl, scope: "Exact total" },
-      { label: "Likes given", value: stats.likes_given ?? 0, scope: "Exact total" },
-      { label: "Playback sessions", value: stats.playback_sessions ?? 0, scope: "Exact total" },
-      { label: "Log events 30d", value: stats.log_events_30d ?? 0, url: logsUrl, scope: "Last 30 days" },
+      { label: "Uploads", value: stats.uploads_total ?? 0, url: managementUrl },
+      { label: "Ready", value: stats.uploads_ready ?? 0, url: managementUrl },
+      { label: "Failed", value: stats.uploads_failed ?? 0, url: managementUrl },
+      { label: "Queued / processing", value: stats.uploads_processing ?? 0, url: managementUrl },
+      { label: "Hidden uploads", value: stats.uploads_hidden ?? 0, url: managementUrl },
+      { label: "Reports submitted", value: stats.reports_submitted ?? 0, url: reportsByUserUrl },
+      { label: "Reports on user's media", value: stats.reports_against_media ?? 0, url: reportsOnUserMediaUrl },
+      { label: "Likes given", value: stats.likes_given ?? 0 },
+      { label: "Playback sessions", value: stats.playback_sessions ?? 0 },
+      { label: "Log events 30d", value: stats.log_events_30d ?? 0, url: logsUrl },
     ];
   }
 

@@ -155,12 +155,6 @@ export default RouteTemplate(
         margin-top: 0.45rem;
       }
 
-      .mg-userdiag__card-scope {
-        color: var(--mg-muted);
-        font-size: var(--font-down-1);
-        margin-top: 0.35rem;
-      }
-
       .mg-userdiag__card-label {
         color: var(--mg-muted);
         font-size: var(--font-down-1);
@@ -661,7 +655,7 @@ export default RouteTemplate(
           <div class="mg-userdiag__panel-header">
             <div class="mg-userdiag__copy">
               <h2>Media activity stats</h2>
-              <p class="mg-userdiag__muted">Read-only counters. Each card states whether it is an exact total or time-limited.</p>
+              <p class="mg-userdiag__muted">Read-only counters for this user's media activity.</p>
             </div>
           </div>
           <div class="mg-userdiag__grid">
@@ -670,13 +664,11 @@ export default RouteTemplate(
                 <a class="mg-userdiag__card" href={{stat.url}} target="_blank" rel="noopener noreferrer">
                   <div class="mg-userdiag__card-label">{{stat.label}}</div>
                   <div class="mg-userdiag__card-value">{{stat.value}}</div>
-                  <div class="mg-userdiag__card-scope">{{stat.scope}}</div>
                 </a>
               {{else}}
                 <div class="mg-userdiag__card">
                   <div class="mg-userdiag__card-label">{{stat.label}}</div>
                   <div class="mg-userdiag__card-value">{{stat.value}}</div>
-                  <div class="mg-userdiag__card-scope">{{stat.scope}}</div>
                 </div>
               {{/if}}
             {{/each}}
@@ -692,11 +684,11 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-userdiag__report-involvement-grid">
-            {{#each @controller.reportInvolvementSections as |section|}}
+            {{#each @controller.reportInvolvementSections as |reportSection|}}
               <section class="mg-userdiag__section">
-                <h3>{{section.title}}</h3>
+                <h3>{{reportSection.title}}</h3>
                 <div class="mg-userdiag__report-counts">
-                  {{#each section.rows as |row|}}
+                  {{#each reportSection.rows as |row|}}
                     <div class="mg-userdiag__report-count-card">
                       <div class="mg-userdiag__card-label">{{row.label}}</div>
                       <div class="mg-userdiag__card-value">{{row.value}}</div>
@@ -717,8 +709,8 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-userdiag__filter-row">
-            {{#each @controller.recentActivityButtons as |button|}}
-              <button class={{button.className}} type="button" {{on "click" (fn @controller.setRecentActivityFilter button.key)}}>{{button.label}}</button>
+            {{#each @controller.recentActivityButtons as |filterButton|}}
+              <button class={{filterButton.className}} type="button" {{on "click" (fn @controller.setRecentActivityFilter filterButton.key)}}>{{filterButton.label}}</button>
             {{/each}}
           </div>
 
