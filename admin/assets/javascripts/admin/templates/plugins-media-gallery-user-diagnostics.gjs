@@ -82,7 +82,7 @@ export default RouteTemplate(
       .mg-userdiag__toolbar .btn {
         align-self: flex-end;
         margin-bottom: 0;
-        transform: translateY(-5px);
+        transform: translateY(-10px);
       }
 
       .mg-userdiag__field {
@@ -116,6 +116,10 @@ export default RouteTemplate(
       .mg-userdiag__account-grid,
       .mg-userdiag__access-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mg-userdiag__account-grid .mg-userdiag__card:nth-child(n+3):nth-child(-n+6) {
+        grid-column: 1 / -1;
       }
 
       .mg-userdiag__access-grid .mg-userdiag__card {
@@ -206,6 +210,14 @@ export default RouteTemplate(
       .mg-userdiag__card.is-danger {
         border-color: var(--danger-low-mid);
         background: var(--danger-low);
+      }
+
+      .mg-userdiag__access-grid .mg-userdiag__card,
+      .mg-userdiag__access-grid .mg-userdiag__card.is-success,
+      .mg-userdiag__access-grid .mg-userdiag__card.is-warning,
+      .mg-userdiag__access-grid .mg-userdiag__card.is-info,
+      .mg-userdiag__access-grid .mg-userdiag__card.is-danger {
+        border-color: var(--mg-border);
       }
 
       .mg-userdiag__results,
