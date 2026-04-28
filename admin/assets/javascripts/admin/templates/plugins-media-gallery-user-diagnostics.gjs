@@ -81,7 +81,8 @@ export default RouteTemplate(
 
       .mg-userdiag__toolbar .btn {
         align-self: flex-end;
-        margin-bottom: 0.35rem;
+        margin-bottom: 0;
+        transform: translateY(-5px);
       }
 
       .mg-userdiag__field {
@@ -110,6 +111,15 @@ export default RouteTemplate(
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
         gap: 0.85rem;
+      }
+
+      .mg-userdiag__account-grid,
+      .mg-userdiag__access-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mg-userdiag__access-grid .mg-userdiag__card {
+        border-color: var(--mg-border);
       }
 
       .mg-userdiag__main-grid {
@@ -241,7 +251,8 @@ export default RouteTemplate(
       }
 
       .mg-userdiag__log-row {
-        grid-template-columns: minmax(240px, 0.9fr) minmax(0, 1.6fr) auto;
+        grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr) auto;
+        align-items: center;
       }
 
       .mg-userdiag__media-thumb,
@@ -263,6 +274,58 @@ export default RouteTemplate(
         justify-content: center;
         color: var(--mg-muted);
         font-size: var(--font-down-1);
+      }
+
+      .mg-userdiag__upload-card {
+        display: grid;
+        grid-template-columns: 128px minmax(0, 1fr) auto;
+        grid-template-areas:
+          "thumb main action"
+          "badges badges badges";
+        gap: 0.85rem 1rem;
+        align-items: start;
+        padding: 0.9rem;
+        border: 1px solid var(--mg-border);
+        border-radius: 16px;
+        background: var(--mg-surface-alt);
+      }
+
+      .mg-userdiag__upload-card .mg-userdiag__media-thumb,
+      .mg-userdiag__upload-card .mg-userdiag__media-thumb-placeholder {
+        grid-area: thumb;
+        width: 128px;
+        border-radius: 14px;
+      }
+
+      .mg-userdiag__upload-main {
+        grid-area: main;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 0;
+      }
+
+      .mg-userdiag__upload-action {
+        grid-area: action;
+        align-self: start;
+      }
+
+      .mg-userdiag__upload-badges {
+        grid-area: badges;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }
+
+      .mg-userdiag__tag-chip {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.2rem 0.52rem;
+        font-size: var(--font-down-1);
+        background: var(--secondary);
+        border: 1px solid var(--mg-border);
+        color: var(--primary-high);
       }
 
       .mg-userdiag__activity-sections {
@@ -304,8 +367,20 @@ export default RouteTemplate(
         .mg-userdiag__setting-row,
         .mg-userdiag__activity-row,
         .mg-userdiag__media-row,
-        .mg-userdiag__log-row {
+        .mg-userdiag__log-row,
+        .mg-userdiag__upload-card {
           grid-template-columns: 1fr;
+          grid-template-areas:
+            "thumb"
+            "main"
+            "badges"
+            "action";
+        }
+
+        .mg-userdiag__upload-card .mg-userdiag__media-thumb,
+        .mg-userdiag__upload-card .mg-userdiag__media-thumb-placeholder {
+          width: 100%;
+          max-width: 180px;
         }
       }
 
@@ -397,7 +472,7 @@ export default RouteTemplate(
           <div class="mg-userdiag__main-grid">
             <section class="mg-userdiag__section">
               <h3>Account</h3>
-              <div class="mg-userdiag__grid" style="margin-top: 0.85rem;">
+              <div class="mg-userdiag__grid mg-userdiag__account-grid" style="margin-top: 0.85rem;">
                 {{#each @controller.accountRows as |row|}}
                   <div class="mg-userdiag__card">
                     <div class="mg-userdiag__card-label">{{row.label}}</div>
@@ -413,7 +488,7 @@ export default RouteTemplate(
 
             <section class="mg-userdiag__section">
               <h3>Media access summary</h3>
-              <div class="mg-userdiag__grid" style="margin-top: 0.85rem;">
+              <div class="mg-userdiag__grid mg-userdiag__access-grid" style="margin-top: 0.85rem;">
                 {{#each @controller.mediaAccessCards as |card|}}
                   <div class="mg-userdiag__card {{card.className}}">
                     <div class="mg-userdiag__card-label">{{card.label}}</div>
@@ -467,7 +542,6 @@ export default RouteTemplate(
                 <a class="mg-userdiag__card" href={{stat.url}} target="_blank" rel="noopener noreferrer">
                   <div class="mg-userdiag__card-label">{{stat.label}}</div>
                   <div class="mg-userdiag__card-value">{{stat.value}}</div>
-                  <div class="mg-userdiag__card-linkhint">Open in new tab</div>
                 </a>
               {{else}}
                 <div class="mg-userdiag__card">
@@ -493,23 +567,30 @@ export default RouteTemplate(
               <div class="mg-userdiag__list" style="margin-top: 0.85rem;">
                 {{#if @controller.recentUploads.length}}
                   {{#each @controller.recentUploads as |item|}}
-                    <article class="mg-userdiag__activity-row mg-userdiag__media-row">
+                    <article class="mg-userdiag__upload-card">
                       {{#if item.thumbnail_url}}
                         <img class="mg-userdiag__media-thumb" loading="lazy" src={{item.thumbnail_url}} alt="thumbnail" />
                       {{else}}
                         <div class="mg-userdiag__media-thumb-placeholder">No thumbnail</div>
                       {{/if}}
 
-                      <div>
+                      <div class="mg-userdiag__upload-main">
                         <div class="mg-userdiag__row-title">{{item.title}}</div>
                         <div class="mg-userdiag__row-meta">{{item.public_id}}</div>
                         <div class="mg-userdiag__row-help">{{item.createdAtLabel}} · {{item.typeLabel}} · {{item.containsLabel}}</div>
-                        <div class="mg-userdiag__row-help">Tags: {{item.tagsLabel}}</div>
                       </div>
 
-                      <div class="mg-userdiag__badge-row">
+                      <a class="btn mg-userdiag__upload-action" href={{item.management_url}} target="_blank" rel="noopener noreferrer">Open</a>
+
+                      <div class="mg-userdiag__upload-badges">
                         <span class="mg-userdiag__badge {{item.visibilityClass}}">{{item.statusLabel}} / {{item.visibilityLabel}}</span>
-                        <a class="btn" href={{item.management_url}} target="_blank" rel="noopener noreferrer">Open</a>
+                        {{#if item.tags.length}}
+                          {{#each item.tags as |tag|}}
+                            <span class="mg-userdiag__tag-chip">{{tag}}</span>
+                          {{/each}}
+                        {{else}}
+                          <span class="mg-userdiag__tag-chip">No tags</span>
+                        {{/if}}
                       </div>
                     </article>
                   {{/each}}
