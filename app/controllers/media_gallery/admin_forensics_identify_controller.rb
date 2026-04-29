@@ -1763,32 +1763,67 @@ module ::MediaGallery
       [top, second]
     end
 
-    def source_url_allowed_host_and_port?(uri)
-      allowed = [safe_base_uri, safe_request_base_uri].compact
-      return false if allowed.blank?
+    DISCOURSE_SOURCE_URL_PATH_PREFIXES = ["/media/hls/", "/media/stream/", "/uploads/", "/secure-uploads/"].freeze
+    S3_SOURCE_URL_PROFILE_KEYS = %w[s3_1 s3_2 s3_3].freeze
 
-      allowed.any? do |base_uri|
-        uri.host.to_s == base_uri.host.to_s && normalized_port(uri) == normalized_port(base_uri)
-      end
+    def source_url_allowed_host_and_port?(uri)
+      source_url_allowed_origin?(uri)
     end
 
     def source_url_allowed_path?(uri)
-      path = uri.path.to_s
-      path.start_with?("/media/hls/", "/media/stream/", "/uploads/", "/secure-uploads/")
+      classification = classify_source_url_origin(uri)
+      return false if classification.blank?
+
+      case classification[:kind]
+      when :discourse
+        discourse_source_url_path_allowed?(uri)
+      when :s3
+        s3_source_url_path_allowed?(uri, classification[:profile])
+      else
+        false
+      end
+    end
+
+    def source_url_allowed_origin?(uri)
+      classify_source_url_origin(uri).present?
+    end
+
+    def classify_source_url_origin(uri)
+      return nil unless uri.is_a?(URI::HTTP)
+      return nil unless %w[http https].include?(uri.scheme.to_s)
+      return nil if uri.host.blank?
+
+      canonical_discourse_source_uris.each do |base_uri|
+        next unless same_origin_for_source_url?(uri, base_uri)
+        return { kind: :discourse, profile: nil }
+      end
+
+      configured_s3_source_url_origins.each do |entry|
+        next unless same_origin_for_source_url?(uri, entry[:uri])
+        return { kind: :s3, profile: entry[:profile_key] }
+      end
+
+      nil
+    rescue
+      nil
+    end
+
+    def canonical_discourse_source_uris
+      [safe_base_uri].compact
     end
 
     def safe_base_uri
-      URI.parse(Discourse.base_url)
+      URI.parse(Discourse.base_url.to_s)
     rescue
       nil
     end
 
-    def safe_request_base_uri
-      base = request&.base_url.to_s
-      return nil if base.blank?
-      URI.parse(base)
-    rescue
-      nil
+    def same_origin_for_source_url?(uri, base_uri)
+      return false if uri.blank? || base_uri.blank?
+
+      uri.scheme.to_s.downcase == base_uri.scheme.to_s.downcase &&
+        uri.host.to_s.downcase == base_uri.host.to_s.downcase &&
+        normalized_port(uri) == normalized_port(base_uri)
     end
 
     def normalized_port(uri)
@@ -1796,8 +1831,92 @@ module ::MediaGallery
       uri.scheme.to_s == "https" ? 443 : 80
     end
 
+    def discourse_source_url_path_allowed?(uri)
+      path = uri.path.to_s
+      return true if path == "/media/stream"
+
+      DISCOURSE_SOURCE_URL_PATH_PREFIXES.any? { |prefix| path.start_with?(prefix) }
+    end
+
+    def configured_s3_source_url_origins
+      S3_SOURCE_URL_PROFILE_KEYS.flat_map do |profile_key|
+        s3_source_url_origins_for_profile(profile_key)
+      end.compact.uniq { |entry| [entry[:profile_key], entry[:uri]&.scheme, entry[:uri]&.host, normalized_port(entry[:uri]), entry[:style]] }
+    rescue
+      []
+    end
+
+    def s3_source_url_origins_for_profile(profile_key)
+      opts = ::MediaGallery::StorageSettingsResolver.s3_options_for_profile_key(profile_key) rescue nil
+      return [] if opts.blank? || opts[:endpoint].to_s.blank? || opts[:bucket].to_s.blank?
+
+      endpoint = URI.parse(opts[:endpoint].to_s.sub(%r{/+\z}, "")) rescue nil
+      return [] if endpoint.blank? || endpoint.host.blank? || !%w[http https].include?(endpoint.scheme.to_s)
+
+      entries = [{ profile_key: profile_key.to_s, uri: endpoint, style: :path }]
+
+      unless opts[:force_path_style]
+        virtual_uri = endpoint.dup
+        virtual_uri.host = "#{opts[:bucket]}.#{endpoint.host}"
+        entries << { profile_key: profile_key.to_s, uri: virtual_uri, style: :virtual }
+      end
+
+      entries
+    rescue
+      []
+    end
+
+    def s3_profile_options(profile_key)
+      ::MediaGallery::StorageSettingsResolver.s3_options_for_profile_key(profile_key)
+    rescue
+      {}
+    end
+
+    def s3_source_url_path_allowed?(uri, profile_key)
+      opts = s3_profile_options(profile_key)
+      return false if opts.blank?
+
+      endpoint = URI.parse(opts[:endpoint].to_s.sub(%r{/+\z}, "")) rescue nil
+      return false if endpoint.blank?
+
+      bucket = opts[:bucket].to_s
+      prefix = opts[:prefix].to_s.sub(%r{\A/+}, "").sub(%r{/+\z}, "")
+      path = uri.path.to_s
+
+      # Path-style S3 URLs: https://endpoint/bucket/prefix/key
+      if same_origin_for_source_url?(uri, endpoint)
+        required = "/#{bucket}"
+        required << "/#{prefix}" if prefix.present?
+        return path == required || path.start_with?("#{required}/")
+      end
+
+      # Virtual-hosted S3 URLs: https://bucket.endpoint/prefix/key
+      unless opts[:force_path_style]
+        required = prefix.present? ? "/#{prefix}" : "/"
+        return path == required || path.start_with?(required.end_with?("/") ? required : "#{required}/")
+      end
+
+      false
+    rescue
+      false
+    end
+
+    def ensure_source_url_allowed!(uri, context: "source_url")
+      raise "#{context} must be an http(s) URL" if uri.blank? || uri.host.blank? || !%w[http https].include?(uri.scheme.to_s)
+      raise "#{context} credentials are not allowed" if uri.user.present? || uri.password.present?
+      raise "#{context} host is not allowed" unless source_url_allowed_host_and_port?(uri)
+      raise "#{context} path is not allowed" unless source_url_allowed_path?(uri)
+      true
+    end
+
+    def source_url_validation_message(message)
+      text = message.to_s
+      return "Only canonical site media/upload URLs or configured S3 object URLs are allowed." if text.include?("host is not allowed") || text.include?("path is not allowed")
+      text.presence || "source_url is not allowed"
+    end
+
     def forward_cookie_for_source_url?(uri)
-      uri.path.to_s.start_with?("/media/hls/", "/media/stream/")
+      classify_source_url_origin(uri).try(:[], :kind) == :discourse && uri.path.to_s.start_with?("/media/hls/", "/media/stream/")
     end
 
     def download_source_url_to_tempfile!(source_url, max_samples:, segment_seconds:, media_item:)
@@ -1806,11 +1925,11 @@ module ::MediaGallery
       raise "source_url is too long" if url.length > setting_max_source_url_length
 
       uri = URI.parse(url) rescue nil
-      raise "source_url is not a valid http(s) URL" if uri.blank? || uri.host.blank? || !%w[http https].include?(uri.scheme)
-
-      raise "source_url credentials are not allowed" if uri.user.present? || uri.password.present?
-      raise "Only URLs on this site and port are allowed." unless source_url_allowed_host_and_port?(uri)
-      raise "Only media playback or upload URLs on this site are allowed." unless source_url_allowed_path?(uri)
+      begin
+        ensure_source_url_allowed!(uri, context: "source_url")
+      rescue => e
+        raise source_url_validation_message(e.message)
+      end
 
       seg = segment_seconds.to_i
       seg = 6 if seg <= 0
@@ -2078,6 +2197,7 @@ module ::MediaGallery
 
     def rewrite_uri_line(value, base_uri, token)
       abs = absolutize_uri(value, base_uri)
+      ensure_playlist_reference_allowed!(abs)
       add_token(abs, token)
     end
 
@@ -2086,6 +2206,7 @@ module ::MediaGallery
       line.gsub(/URI="([^"]+)"/) do
         original = Regexp.last_match(1)
         abs = absolutize_uri(original, base_uri)
+        ensure_playlist_reference_allowed!(abs)
         rewritten = add_token(abs, token)
         "URI=\"#{rewritten}\""
       end
@@ -2093,16 +2214,20 @@ module ::MediaGallery
 
     def absolutize_uri(value, base_uri)
       v = value.to_s
-      begin
-        u = URI.parse(v)
-        if u.scheme.present? && u.host.present?
-          u
-        else
-          URI.join(base_uri.to_s, v)
-        end
-      rescue
-        URI.join(base_uri.to_s, v)
-      end
+      raise "playlist reference is blank" if v.blank?
+
+      u = URI.parse(v) rescue nil
+      return u if u&.scheme.present? && u&.host.present?
+
+      URI.join(base_uri.to_s, v)
+    rescue => e
+      raise "invalid playlist reference: #{e.message}"
+    end
+
+    def ensure_playlist_reference_allowed!(uri)
+      ensure_source_url_allowed!(uri, context: "playlist_reference")
+    rescue => e
+      raise source_url_validation_message(e.message)
     end
 
     def add_token(uri, token)
