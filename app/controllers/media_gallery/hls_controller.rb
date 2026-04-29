@@ -251,8 +251,11 @@ module ::MediaGallery
     def hls_role_for(item)
       role = ::MediaGallery::Hls.managed_role_for(item)
       return nil unless role.present?
-      return nil unless ::MediaGallery::Hls.managed_role_ready?(item, role)
-      role.deep_stringify_keys
+
+      role = role.deep_stringify_keys
+      return nil unless managed_hls_role_ready_cached?(item, role)
+
+      role
     rescue
       nil
     end
@@ -267,32 +270,28 @@ module ::MediaGallery
       if role.present?
         store = hls_store_for(item, role)
         raise Discourse::NotFound if store.blank?
-        begin
-          return store.read(::MediaGallery::Hls.master_key_for(item, role: role))
-        rescue
-          raise Discourse::NotFound
-        end
+
+        key = ::MediaGallery::Hls.master_key_for(item, role: role)
+        return read_hls_store_object!(store, key, item: item, role: role, cache_kind: "master")
       end
 
       path = MediaGallery::PrivateStorage.hls_master_abs_path(item)
       raise Discourse::NotFound unless path.present? && File.exist?(path)
-      File.read(path)
+      read_local_playlist!(path, cache_kind: "master")
     end
 
     def read_variant_playlist!(item, variant:, role: nil)
       if role.present?
         store = hls_store_for(item, role)
         raise Discourse::NotFound if store.blank?
-        begin
-          return store.read(::MediaGallery::Hls.variant_playlist_key_for(item, variant, role: role))
-        rescue
-          raise Discourse::NotFound
-        end
+
+        key = ::MediaGallery::Hls.variant_playlist_key_for(item, variant, role: role)
+        return read_hls_store_object!(store, key, item: item, role: role, cache_kind: "variant:#{variant}")
       end
 
       path = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
       raise Discourse::NotFound unless path.present? && File.exist?(path)
-      File.read(path)
+      read_local_playlist!(path, cache_kind: "variant:#{variant}")
     end
 
     def resolve_segment_delivery(item, variant:, segment:, ab:, role: nil)
@@ -305,15 +304,18 @@ module ::MediaGallery
 
         if role["backend"].to_s == "s3"
           if s3_redirect_delivery_enabled?
-            ttl = ::MediaGallery::StorageSettingsResolver.presign_ttl_for_profile_key(item.managed_storage_profile)
-            ttl = 300 if ttl <= 0
+            ttl = hls_s3_presign_ttl_for_item(item)
+            content_type = segment_content_type(segment)
 
             return {
               mode: :redirect,
-              redirect_url: store.presigned_get_url(
+              redirect_url: presigned_hls_segment_url(
+                store,
                 key,
+                item: item,
+                role: role,
                 expires_in: ttl,
-                response_content_type: segment_content_type(segment),
+                response_content_type: content_type,
                 response_content_disposition: "inline"
               )
             }
@@ -344,7 +346,7 @@ module ::MediaGallery
 
       if request.head?
         bytes = delivery[:bytes].to_i
-        if bytes <= 0
+        if bytes <= 0 && store.respond_to?(:object_info)
           info = store.object_info(key)
           bytes = info[:bytes].to_i if info.is_a?(Hash)
         end
@@ -352,9 +354,20 @@ module ::MediaGallery
         return head :ok
       end
 
+      content_type = delivery[:content_type].presence || segment_content_type(segment)
+      if hls_proxy_stream_remote_segments? && store.respond_to?(:stream)
+        response.headers["Content-Type"] = content_type
+        self.response_body = Enumerator.new do |yielder|
+          store.stream(key) do |chunk|
+            yielder << chunk
+          end
+        end
+        return
+      end
+
       data = store.read(key)
       response.headers["Content-Length"] = data.to_s.b.bytesize.to_s
-      send_data(data, type: delivery[:content_type].presence || segment_content_type(segment), disposition: "inline")
+      send_data(data, type: content_type, disposition: "inline")
     end
 
     def s3_redirect_delivery_enabled?
@@ -400,6 +413,143 @@ module ::MediaGallery
         ::MediaGallery::Fingerprinting.codebook_scheme_for(layout: meta["layout"].to_s)
     rescue
       nil
+    end
+
+    def managed_hls_role_ready_cached?(item, role)
+      ttl = hls_managed_readiness_cache_seconds
+      return ::MediaGallery::Hls.managed_role_ready?(item, role) if ttl <= 0
+
+      key = hls_cache_key("ready", item: item, role: role)
+      return true if Rails.cache.read(key) == true
+
+      ready = ::MediaGallery::Hls.managed_role_ready?(item, role)
+      Rails.cache.write(key, true, expires_in: ttl.seconds) if ready
+      ready
+    rescue
+      ::MediaGallery::Hls.managed_role_ready?(item, role)
+    end
+
+    def read_hls_store_object!(store, key, item:, role:, cache_kind:)
+      raise Discourse::NotFound if key.blank?
+
+      ttl = hls_playlist_cache_seconds
+      return store.read(key) if ttl <= 0
+
+      Rails.cache.fetch(hls_cache_key("playlist", item: item, role: role, parts: [cache_kind, key]), expires_in: ttl.seconds) do
+        store.read(key)
+      end
+    rescue
+      raise Discourse::NotFound
+    end
+
+    def read_local_playlist!(path, cache_kind:)
+      ttl = hls_playlist_cache_seconds
+      return File.read(path) if ttl <= 0
+
+      stat = File.stat(path)
+      key = "media_gallery:hls:playlist:local:#{Digest::SHA256.hexdigest([path.to_s, stat.mtime.to_i, stat.size.to_i, cache_kind].join('|'))}"
+      Rails.cache.fetch(key, expires_in: ttl.seconds) { File.read(path) }
+    rescue
+      raise Discourse::NotFound
+    end
+
+    def presigned_hls_segment_url(store, key, item:, role:, expires_in:, response_content_type:, response_content_disposition:)
+      ttl = hls_s3_presign_cache_seconds(expires_in: expires_in)
+      if ttl <= 0
+        return store.presigned_get_url(
+          key,
+          expires_in: expires_in,
+          response_content_type: response_content_type,
+          response_content_disposition: response_content_disposition
+        )
+      end
+
+      Rails.cache.fetch(
+        hls_cache_key("presigned", item: item, role: role, parts: [key, response_content_type, response_content_disposition, expires_in]),
+        expires_in: ttl.seconds
+      ) do
+        store.presigned_get_url(
+          key,
+          expires_in: expires_in,
+          response_content_type: response_content_type,
+          response_content_disposition: response_content_disposition
+        )
+      end
+    rescue
+      store.presigned_get_url(
+        key,
+        expires_in: expires_in,
+        response_content_type: response_content_type,
+        response_content_disposition: response_content_disposition
+      )
+    end
+
+    def hls_cache_key(kind, item:, role: nil, parts: [])
+      role ||= {}
+      profile_key = item.respond_to?(:managed_storage_profile) ? item.managed_storage_profile.to_s : ""
+      location = ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(profile_key) rescue nil
+      payload = [
+        kind,
+        item&.id,
+        item&.public_id,
+        item&.updated_at&.to_i,
+        profile_key,
+        location,
+        role.is_a?(Hash) ? role["backend"] : nil,
+        role.is_a?(Hash) ? role["generated_at"] : nil,
+        role.is_a?(Hash) ? role["master_key"] : nil,
+        role.is_a?(Hash) ? role["complete_key"] : nil,
+        Array(parts).join("|")
+      ].join("|")
+
+      "media_gallery:hls:#{kind}:#{Digest::SHA256.hexdigest(payload)}"
+    end
+
+    def hls_managed_readiness_cache_seconds
+      site_setting_integer(:media_gallery_hls_managed_readiness_cache_seconds, default: 30, min: 0, max: 300)
+    end
+
+    def hls_playlist_cache_seconds
+      site_setting_integer(:media_gallery_hls_playlist_cache_seconds, default: 15, min: 0, max: 300)
+    end
+
+    def hls_s3_presign_ttl_for_item(item)
+      profile_ttl = ::MediaGallery::StorageSettingsResolver.presign_ttl_for_profile_key(item.respond_to?(:managed_storage_profile) ? item.managed_storage_profile : nil).to_i
+      profile_ttl = 300 if profile_ttl <= 0
+      hls_ttl = site_setting_integer(:media_gallery_hls_s3_presign_ttl_seconds, default: 60, min: 0, max: 3600)
+      ttl = hls_ttl.positive? ? hls_ttl : profile_ttl
+      ttl = 15 if ttl < 15
+      [ttl, profile_ttl].min
+    rescue
+      60
+    end
+
+    def hls_s3_presign_cache_seconds(expires_in:)
+      configured = site_setting_integer(:media_gallery_hls_s3_presign_cache_seconds, default: 15, min: 0, max: 300)
+      return 0 if configured <= 0
+
+      ttl_cap = expires_in.to_i - 5
+      return 0 if ttl_cap <= 0
+
+      [configured, ttl_cap].min
+    end
+
+    def hls_proxy_stream_remote_segments?
+      return true unless SiteSetting.respond_to?(:media_gallery_hls_proxy_stream_remote_segments)
+
+      !!SiteSetting.media_gallery_hls_proxy_stream_remote_segments
+    rescue
+      true
+    end
+
+    def site_setting_integer(name, default:, min:, max:)
+      value = SiteSetting.respond_to?(name) ? SiteSetting.public_send(name).to_i : default.to_i
+      value = default.to_i if value.nil?
+      value = min.to_i if value < min.to_i
+      value = max.to_i if value > max.to_i
+      value
+    rescue
+      default.to_i
     end
 
     def set_playlist_headers!

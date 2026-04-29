@@ -606,6 +606,50 @@ plugins:
   media_gallery_hls_x_accel_internal_location:
     default: "/internal/media-hls/"
     client: false
+
+  # HLS performance tuning for managed/local storage. These are server-side only
+  # and do not bypass token, session or rate-limit checks.
+  # 0 disables this readiness cache. Caches only positive managed HLS readiness checks.
+  media_gallery_hls_managed_readiness_cache_seconds:
+    default: 30
+    type: integer
+    min: 0
+    max: 300
+    client: false
+
+  # 0 disables raw playlist caching. Cache contains only raw master/index playlists,
+  # never tokenized playlist responses and never presigned URLs.
+  media_gallery_hls_playlist_cache_seconds:
+    default: 15
+    type: integer
+    min: 0
+    max: 300
+    client: false
+
+  # HLS-specific S3/R2/B2 presigned URL TTL for redirect delivery. 0 = use the
+  # storage profile TTL. Keep short for protected content.
+  media_gallery_hls_s3_presign_ttl_seconds:
+    default: 60
+    type: integer
+    min: 0
+    max: 3600
+    client: false
+
+  # 0 disables presigned segment URL caching. This cache is used only after all
+  # token/session/rate-limit checks pass, and is capped below the presign TTL.
+  media_gallery_hls_s3_presign_cache_seconds:
+    default: 15
+    type: integer
+    min: 0
+    max: 300
+    client: false
+
+  # In proxy/stream delivery, stream remote HLS segments through Rails instead of
+  # buffering the whole S3 object before responding. Security checks remain unchanged.
+  media_gallery_hls_proxy_stream_remote_segments:
+    default: true
+    client: false
+
   # HLS A/B fingerprinting (segment-level) - scaffold
   # When enabled, variant playlists are assembled per user token and point to /seg/.../(a|b)/... paths.
   # Note: A and B segments may still be identical until the transcoding pipeline generates real A/B media.
