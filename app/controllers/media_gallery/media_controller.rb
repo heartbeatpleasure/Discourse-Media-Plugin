@@ -469,14 +469,54 @@ module ::MediaGallery
           %w[1 true yes on].include?(params[:force_stream].to_s.downcase)
         end
 
-      use_hls =
-        item.media_type.to_s == "video" &&
+      video_media = item.media_type.to_s == "video"
+      hls_capable =
+        video_media &&
           SiteSetting.respond_to?(:media_gallery_hls_enabled) &&
           SiteSetting.media_gallery_hls_enabled &&
           MediaGallery::PrivateStorage.enabled? &&
-          MediaGallery::Hls.ready?(item) &&
-          !force_stream
+          MediaGallery::Hls.ready?(item)
 
+      hls_only_required =
+        video_media &&
+          SiteSetting.respond_to?(:media_gallery_protected_video_hls_only) &&
+          SiteSetting.media_gallery_protected_video_hls_only
+
+      if hls_only_required && force_stream
+        log_security_event(
+          event_type: "hls_only_force_stream_blocked",
+          severity: "warning",
+          category: "playback",
+          user: current_user,
+          media_item: item,
+          message: "force_stream_blocked",
+          details: { ip: ip, media_public_id: item.public_id }
+        )
+        return render_json_error(
+          "hls_required",
+          status: 403,
+          message: "Protected video playback requires HLS; direct stream fallback is disabled."
+        )
+      end
+
+      if hls_only_required && !hls_capable
+        log_security_event(
+          event_type: "hls_only_not_ready",
+          severity: "warning",
+          category: "playback",
+          user: current_user,
+          media_item: item,
+          message: "hls_not_ready",
+          details: { ip: ip, media_public_id: item.public_id, hls_enabled: SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled }
+        )
+        return render_json_error(
+          "hls_not_ready",
+          status: 409,
+          message: "Protected video playback requires HLS, but HLS is not ready for this video."
+        )
+      end
+
+      use_hls = hls_capable && !force_stream
       fingerprint_id = nil
       if use_hls && MediaGallery::Fingerprinting.enabled?
         # Deterministic fingerprint id per user+media (cannot be re-rolled by requesting new tokens).
@@ -628,7 +668,9 @@ module ::MediaGallery
             revoke_enabled: MediaGallery::Security.revoke_enabled?,
             heartbeat_enabled: heartbeat_enabled,
             heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
-            heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds
+            heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds,
+            hls_only: hls_only_required,
+            stream_fallback_allowed: !hls_only_required
           },
           overlay: overlay_payload
         )
@@ -649,7 +691,9 @@ module ::MediaGallery
             revoke_enabled: MediaGallery::Security.revoke_enabled?,
             heartbeat_enabled: heartbeat_enabled,
             heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
-            heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds
+            heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds,
+            hls_only: hls_only_required,
+            stream_fallback_allowed: !hls_only_required
           },
           overlay: overlay_payload
         )

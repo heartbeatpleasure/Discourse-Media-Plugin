@@ -566,6 +566,13 @@ plugins:
     default: false
     client: false
 
+  # Download prevention: when enabled, ready video items that have HLS must play through HLS only.
+  # This disables direct stream fallback/force_stream for videos, improving protection for
+  # watermarked/fingerprinted HLS workflows at the cost of compatibility fallback.
+  media_gallery_protected_video_hls_only:
+    default: false
+    client: false
+
   # Segment duration in seconds. Shorter = faster stop after revoke, more requests.
   media_gallery_hls_segment_duration_seconds:
     default: 6
