@@ -2260,6 +2260,7 @@ module ::MediaGallery
 
     def managed_hls_segment_key_for_identify(media_item:, role:, store:, variant:, segment:, fingerprint_id:, seg_counter:, codebook_scheme:, map_uri: false)
       seg = safe_hls_reference_filename!(segment, allowed_extensions: map_uri ? %w[mp4 m4s] : %w[ts m4s])
+      candidates = []
 
       if !map_uri && MediaGallery::Fingerprinting.enabled? && fingerprint_id.present? && media_item&.id.present?
         idx = MediaGallery::Fingerprinting.segment_index_from_filename(seg)
@@ -2274,30 +2275,96 @@ module ::MediaGallery
 
           if ab.present?
             ab_key = MediaGallery::Hls.segment_key_for(media_item, variant, seg, ab: ab, role: role)
-            return ab_key if ab_key.present? && store.exists?(ab_key)
+            candidates << ab_key if ab_key.present?
           end
         end
       end
 
-      key = MediaGallery::Hls.segment_key_for(media_item, variant, seg, role: role)
-      raise "hls_segment_key_missing" if key.blank?
-      key
+      fallback_key = MediaGallery::Hls.segment_key_for(media_item, variant, seg, role: role)
+      candidates << fallback_key if fallback_key.present?
+      candidates = candidates.compact.map(&:to_s).reject(&:blank?).uniq
+
+      raise "hls_segment_key_missing" if candidates.blank?
+
+      # Return ordered candidates instead of doing a HEAD/exists? probe here.
+      # Some S3-compatible providers, including certain Backblaze/B2 setups,
+      # can return provider-specific 403/ServiceError responses for HEAD on
+      # a missing candidate while GET for the fallback object is valid. Trying
+      # GET candidates in order keeps Cloudflare/R2, Backblaze and local managed
+      # storage consistent and avoids surfacing a provider HEAD quirk as HTTP 500.
+      candidates
     end
 
     def localize_managed_hls_object!(store:, key:, temp_dir:, cache:, suggested_name:)
-      raise "managed_hls_object_key_missing" if key.blank?
-      return cache[key] if cache[key].present? && File.exist?(cache[key])
+      candidate_keys = Array(key).flatten.compact.map(&:to_s).reject(&:blank?).uniq
+      raise "managed_hls_object_key_missing" if candidate_keys.blank?
+
+      candidate_keys.each do |candidate_key|
+        cached = cache[candidate_key]
+        return cached if cached.present? && File.exist?(cached) && File.size?(cached).to_i > 0
+      end
 
       safe_name = safe_hls_reference_filename!(suggested_name, allowed_extensions: %w[ts m4s mp4])
       objects_dir = File.join(temp_dir, "objects")
       FileUtils.mkdir_p(objects_dir)
-      local = File.join(objects_dir, "#{Digest::SHA256.hexdigest(key.to_s)[0, 16]}_#{safe_name}")
 
-      store.download_to_file!(key, local)
-      raise "managed_hls_object_missing" unless File.exist?(local) && File.size?(local).to_i > 0
+      last_error = nil
+      candidate_keys.each do |candidate_key|
+        local = File.join(objects_dir, "#{Digest::SHA256.hexdigest(candidate_key.to_s)[0, 16]}_#{safe_name}")
 
-      cache[key] = local
-      local
+        begin
+          download_managed_hls_object_to_file!(store: store, key: candidate_key, destination_path: local)
+          raise "managed_hls_object_empty" unless File.exist?(local) && File.size?(local).to_i > 0
+
+          cache[candidate_key] = local
+          return local
+        rescue => e
+          last_error = e
+          FileUtils.rm_f(local)
+          next
+        end
+      end
+
+      raise "managed_hls_object_download_failed: #{last_error.class}: #{last_error.message.to_s.truncate(180)}"
+    end
+
+    def download_managed_hls_object_to_file!(store:, key:, destination_path:)
+      FileUtils.mkdir_p(File.dirname(destination_path.to_s))
+
+      primary_error = nil
+      begin
+        store.download_to_file!(key, destination_path)
+        return destination_path if File.exist?(destination_path) && File.size?(destination_path).to_i > 0
+      rescue => e
+        primary_error = e
+        FileUtils.rm_f(destination_path)
+      end
+
+      # Fallback for S3-compatible providers where the SDK response_target path
+      # behaves differently than a plain get_object/read or streamed download.
+      begin
+        if store.respond_to?(:stream)
+          wrote = false
+          File.open(destination_path, "wb") do |file|
+            store.stream(key) do |chunk|
+              file.write(chunk)
+              wrote = true
+            end
+          end
+          return destination_path if wrote && File.exist?(destination_path) && File.size?(destination_path).to_i > 0
+          FileUtils.rm_f(destination_path)
+        end
+
+        File.open(destination_path, "wb") do |file|
+          file.write(store.read(key))
+        end
+        return destination_path if File.exist?(destination_path) && File.size?(destination_path).to_i > 0
+      rescue => fallback_error
+        FileUtils.rm_f(destination_path)
+        raise primary_error || fallback_error
+      end
+
+      raise primary_error || "managed_hls_object_empty"
     end
 
     def attach_tempdir_cleanup!(tmp, dir)
