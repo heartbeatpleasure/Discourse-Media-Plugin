@@ -706,7 +706,7 @@ plugins:
   # Playback session logs can grow quickly and contain IP/User-Agent. Retain only as long as needed.
   # Set to 0 to disable automatic purging.
   media_gallery_forensics_playback_session_retention_days:
-    default: 0
+    default: 90
     type: integer
     min: 0
     max: 3650
@@ -729,6 +729,21 @@ plugins:
     type: text
     client: false
 
+  # If enabled, keep an additional private on-disk archive copy of each export.
+  # Archive copies are still subject to media_gallery_forensics_export_retention_days.
+  media_gallery_forensics_export_archive_enabled:
+    default: true
+    client: false
+
+  # Where to store private archive copies. Leave blank to use:
+  #   <media_gallery_private_root_path>/forensics_export_archive
+  # Last resort fallback:
+  #   /shared/media_gallery/private/forensics_export_archive
+  media_gallery_forensics_export_archive_root_path:
+    default: ""
+    type: text
+    client: false
+
   # Store exports in the database as well (gzipped). Not recommended: this can grow the DB quickly.
   media_gallery_forensics_export_store_in_db:
     default: false
@@ -736,7 +751,7 @@ plugins:
 
   # Optional: automatically delete stored exports older than N days. 0 = keep forever.
   media_gallery_forensics_export_retention_days:
-    default: 0
+    default: 90
     type: integer
     min: 0
     max: 3650

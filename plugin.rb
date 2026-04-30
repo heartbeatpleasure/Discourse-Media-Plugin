@@ -128,6 +128,7 @@ after_initialize do
     # Download (admin-only). Support both /:id and /:id.csv.
     get "/admin/plugins/media-gallery/forensics-exports/:id" => "media_gallery/admin_forensics_exports#download", constraints: { id: /\d+/ }
     get "/admin/plugins/media-gallery/forensics-exports/:id.csv" => "media_gallery/admin_forensics_exports#download", constraints: { id: /\d+/ }
+    delete "/admin/plugins/media-gallery/forensics-exports/:id" => "media_gallery/admin_forensics_exports#destroy", defaults: { format: :json }, constraints: { id: /\d+/ }
 
     get "/admin/plugins/media-gallery/forensics-identify/overlay-lookup" => "media_gallery/admin_forensics_identify#overlay_lookup", defaults: { format: :json }
 

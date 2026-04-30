@@ -286,6 +286,14 @@ export default RouteTemplate(
                     >
                       {{i18n "admin.media_gallery.forensics_exports.download_gzip"}}
                     </button>
+
+                    <button
+                      type="button"
+                      class="btn btn-danger"
+                      {{on "click" (fn @controller.deleteExport exp)}}
+                    >
+                      {{i18n "admin.media_gallery.forensics_exports.delete_export"}}
+                    </button>
                   </div>
                 </div>
 
@@ -318,6 +326,16 @@ export default RouteTemplate(
                   <div class="mg-exports__meta-card">
                     <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.gzip_size"}}</div>
                     <div class="mg-exports__meta-value">{{exp.gzipSizeLabel}}</div>
+                  </div>
+
+                  <div class="mg-exports__meta-card">
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.archive_status"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.archiveLabel}}</div>
+                  </div>
+
+                  <div class="mg-exports__meta-card">
+                    <div class="mg-exports__meta-label">{{i18n "admin.media_gallery.forensics_exports.archive_size"}}</div>
+                    <div class="mg-exports__meta-value">{{exp.archiveSizeLabel}}</div>
                   </div>
 
                   <div class="mg-exports__meta-card is-wide">

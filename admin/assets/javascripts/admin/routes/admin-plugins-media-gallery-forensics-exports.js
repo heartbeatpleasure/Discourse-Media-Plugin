@@ -26,6 +26,12 @@ function titleizeStorageLocation(value) {
   switch (String(value || "").toLowerCase()) {
     case "local":
       return "Local";
+    case "local+archive":
+      return "Local + archive";
+    case "archive":
+      return "Archive";
+    case "database+archive":
+      return "Database + archive";
     case "database":
     case "db":
       return "Database";
@@ -65,6 +71,10 @@ function decorateExport(exp) {
     gzipSizeLabel: formatNumber(exp?.gzip_bytes),
     csvShaLabel: exp?.csv_sha256 || "—",
     gzipShaLabel: exp?.gzip_sha256 || "—",
+    archiveLabel: exp?.archive_exists ? "Archived" : "Not archived",
+    archiveClass: exp?.archive_exists ? "is-success" : "is-info",
+    archivedLabel: formatAdminDateTime(exp?.archived_at),
+    archiveSizeLabel: formatNumber(exp?.archive_bytes),
   };
 }
 

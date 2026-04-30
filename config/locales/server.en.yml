@@ -122,6 +122,9 @@ en:
           description: "Download the generated playback-session export files."
           rows: "rows"
           download_gz: "download .gz"
+          delete_export: "Delete export"
+          archive_status: "Archive"
+          archive_size: "Archive size"
           none: "No exports found."
 
 

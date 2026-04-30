@@ -50,6 +50,44 @@ export default class AdminPluginsMediaGalleryForensicsExportsController extends 
   }
 
   @action
+  async deleteExport(exp) {
+    const base = this.downloadBase || "/admin/plugins/media-gallery/forensics-exports";
+    const id = exp?.id;
+    if (!id) {
+      return;
+    }
+
+    const label = String(exp?.displayName || exp?.filename || `export ${id}`);
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(`Delete forensic export "${label}"? This removes the database record and stored export/archive files.`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${base}/${encodeURIComponent(String(id))}`, {
+        method: "DELETE",
+        headers: {
+          Accept: "application/json",
+          "X-CSRF-Token": this._csrfToken(),
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        const err = await this._extractError(response);
+        throw new Error(`Delete failed (${response.status}): ${err}`);
+      }
+
+      this.set("exports", (this.exports || []).filter((item) => String(item.id) !== String(id)));
+    } catch (e) {
+      const message = e?.message || String(e);
+      // eslint-disable-next-line no-alert
+      window.alert(message);
+    }
+  }
+
+  @action
   async downloadExport(exp, gz = false) {
     const base = this.downloadBase || "/admin/plugins/media-gallery/forensics-exports";
     const id = exp?.id;
