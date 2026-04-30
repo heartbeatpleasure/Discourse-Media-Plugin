@@ -255,6 +255,23 @@ export default RouteTemplate(
           </span>
         </a>
 
+
+        <a class="mg-landing__card" href="/admin/plugins/media-gallery-security">
+          <div class="mg-landing__card-header">
+            <div class="mg-landing__card-title">
+              <span class="mg-landing__card-badge">
+                {{i18n "admin.media_gallery.category_monitoring"}}
+              </span>
+              <h3>Security status</h3>
+            </div>
+          </div>
+          <p class="mg-landing__card-description">
+            Review security, privacy, download-prevention and storage hardening controls in one read-only overview.
+          </p>
+          <span class="mg-landing__card-action">
+            {{i18n "admin.media_gallery.open_tool"}}
+          </span>
+        </a>
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-user-diagnostics">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">

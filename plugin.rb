@@ -92,6 +92,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_health_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_logs_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_storage_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_security_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_user_diagnostics_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
@@ -119,6 +120,7 @@ after_initialize do
     get "/admin/plugins/media-gallery-health" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-logs" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-user-diagnostics" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-security" => "admin/plugins#index", constraints: AdminConstraint.new
 
     get "/media-library" => "media_gallery/library#index"
 
@@ -142,6 +144,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/search" => "media_gallery/admin_media_items#search", defaults: { format: :json }
     get "/admin/plugins/media-gallery/reports" => "media_gallery/admin_reports#index", defaults: { format: :json }
     get "/admin/plugins/media-gallery/health" => "media_gallery/admin_health#index", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/security" => "media_gallery/admin_security#index", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/reconcile" => "media_gallery/admin_health#reconcile", defaults: { format: :json }
     get "/admin/plugins/media-gallery/health/reconciliation-export" => "media_gallery/admin_health#reconciliation_export", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/ignore" => "media_gallery/admin_health#ignore", defaults: { format: :json }
