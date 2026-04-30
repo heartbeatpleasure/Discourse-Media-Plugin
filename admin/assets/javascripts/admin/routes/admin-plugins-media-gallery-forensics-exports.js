@@ -19,7 +19,16 @@ function formatAdminDateTime(value) {
 }
 
 function trimCsvExtension(filename) {
-  return String(filename || "").replace(/\.csv$/i, "") || "—";
+  return String(filename || "").replace(/\.csv(?:\.gz)?$/i, "") || "—";
+}
+
+function displayExportName(filename) {
+  const base = trimCsvExtension(filename);
+  if (base === "—") {
+    return base;
+  }
+
+  return base.replace(/^media_gallery_playback_sessions_/i, "");
 }
 
 function titleizeStorageLocation(value) {
@@ -59,7 +68,7 @@ function decorateExport(exp) {
 
   return {
     ...exp,
-    displayName: trimCsvExtension(exp?.filename),
+    displayName: displayExportName(exp?.filename),
     rowsLabel: formatNumber(rowsCount),
     availabilityLabel: isReady ? "Ready" : "Missing file",
     availabilityClass: isReady ? "is-success" : "is-warning",

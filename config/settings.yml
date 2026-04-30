@@ -730,9 +730,18 @@ plugins:
     client: false
 
   # If enabled, keep an additional private on-disk archive copy of each export.
-  # Archive copies are still subject to media_gallery_forensics_export_retention_days.
+  # Archive copies are subject to media_gallery_forensics_export_archive_retention_days.
   media_gallery_forensics_export_archive_enabled:
     default: true
+    client: false
+
+  # Optional: automatically delete archive copies older than N days. 0 = keep archives until manual deletion.
+  # Default is 90 days after the export was created.
+  media_gallery_forensics_export_archive_retention_days:
+    default: 90
+    type: integer
+    min: 0
+    max: 3650
     client: false
 
   # Where to store private archive copies. Leave blank to use:

@@ -62,29 +62,54 @@ module ::MediaGallery
 
     def owasp_focus_areas
       [
-        finding("Broken Access Control", "implemented", "Admin endpoints use admin-only controllers; owner/staff checks protect update/delete/retry; hidden items are denied on public media endpoints."),
-        finding("Cryptographic Failures", "implemented", "Playback tokens are signed with Rails MessageVerifier and can be bound to the current asset generation."),
-        finding("Injection", "implemented_with_framework_controls", "Search/filter inputs use constrained allow-lists or parameterized queries; user-editable text fields are normalized to plain text before storage."),
-        finding("Insecure Design", "implemented", "Copy/verify/switch/cleanup/rollback/finalize remain explicit steps with admin-only access and diagnostics."),
-        finding("Security Misconfiguration", "manual_validation_required", "Validate bucket privacy, CORS, proxy timeouts, and production-only secrets outside plugin code."),
-        finding("Identification and Authentication Failures", "implemented", "Logged-in access, group-based viewing, token TTL, optional user/IP binding, revoke, and heartbeat/session limits are available."),
+        finding("Broken Access Control", "partial", "Admin endpoints are restricted and hidden items are denied on public media endpoints. A full per-item owner/group/private visibility model is still a product/security design decision."),
+        finding("Cryptographic Failures", "implemented", "Playback tokens are signed with Rails MessageVerifier, can be bound to the current asset generation, and session-binding uses signed cookies only."),
+        finding("Injection", "implemented_with_framework_controls", "Search/filter inputs use constrained allow-lists or parameterized queries; user-editable text fields are normalized to plain text; forensic CSV exports are formula-injection hardened."),
+        finding("Insecure Design", "partial", "Copy/verify/switch/cleanup/rollback remain explicit admin-only steps. Optional HLS-only video protection and watermark/fingerprint controls depend on site settings and operational validation."),
+        finding("Security Misconfiguration", "manual_validation_required", "Validate bucket privacy, CORS, proxy timeouts, canonical domain, production secrets, and HLS-only/watermark/fingerprint settings outside plugin code."),
+        finding("Identification and Authentication Failures", "implemented", "Logged-in access, group-based viewing gates, token TTL, optional user/IP/session binding, revoke, and heartbeat/session limits are available."),
         finding("Software and Data Integrity Failures", "manual_validation_required", "Confirm deployment process, plugin provenance, and dependency/update hygiene in your operations workflow."),
-        finding("Security Logging and Monitoring Failures", "implemented", "Structured operation logging and admin diagnostics are available; production log routing still needs operator setup."),
-        finding("SSRF", "implemented_with_admin_only_restrictions", "Forensics source URL mode is admin-only and restricted to same-site media or upload paths rather than arbitrary remote destinations."),
-        finding("CSRF", "implemented", "Sensitive write/token-issuing media endpoints require a verified CSRF request or same-origin browser context."),
+        finding("Security Logging and Monitoring Failures", "partial", "Structured operation logging, security reports, and forensic export retention are available; production log routing and alerting still need operator setup."),
+        finding("SSRF", "partial", "Admin forensics source URL mode is restricted to canonical site media/upload paths and configured S3/R2 origins. Future CDN/custom-domain sources require explicit review/allowlisting."),
+        finding("CSRF", "partial", "Custom request security now uses canonical Discourse.base_url for same-origin checks, but full Rails-native CSRF restoration is still not complete."),
       ]
     end
     private_class_method :owasp_focus_areas
 
     def endpoint_controls
       {
-        media_mutations_require_same_origin_or_csrf: true,
-        admin_controllers_require_admin: true,
-        stream_requires_logged_in_and_valid_token: true,
-        hls_requires_logged_in_and_valid_token: true,
+        media_mutations_require_same_origin_or_csrf: "partial_custom_control",
+        full_rails_native_csrf_restoration: "open",
+        admin_controllers_require_admin: "implemented",
+        stream_requires_logged_in_and_valid_token: "implemented",
+        hls_requires_logged_in_and_valid_token: "implemented",
+        hls_only_video_download_prevention: hls_only_video_status,
+        watermark_and_fingerprint_controls: watermark_fingerprint_status,
       }
     end
     private_class_method :endpoint_controls
+
+    def hls_only_video_status
+      SiteSetting.respond_to?(:media_gallery_protected_video_hls_only) && SiteSetting.media_gallery_protected_video_hls_only ? "enabled" : "available_but_disabled"
+    rescue
+      "unknown"
+    end
+    private_class_method :hls_only_video_status
+
+    def watermark_fingerprint_status
+      watermark = SiteSetting.respond_to?(:media_gallery_watermark_enabled) && SiteSetting.media_gallery_watermark_enabled
+      fingerprint = SiteSetting.respond_to?(:media_gallery_fingerprint_enabled) && SiteSetting.media_gallery_fingerprint_enabled
+      if watermark && fingerprint
+        "enabled"
+      elsif watermark || fingerprint
+        "partial"
+      else
+        "available_but_disabled"
+      end
+    rescue
+      "unknown"
+    end
+    private_class_method :watermark_fingerprint_status
 
     def token_policy
       {

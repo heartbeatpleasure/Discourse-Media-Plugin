@@ -62,7 +62,9 @@ module ::Jobs
         sha256 = Digest::SHA256.hexdigest(csv)
 
         now = Time.zone.now
-        base = "media_gallery_playback_sessions_#{now.strftime("%Y%m%d_%H%M%S")}_cutoff_#{cutoff_at.strftime("%Y%m%d")}".freeze
+        range_start_at = scope.minimum(:played_at) || cutoff_at
+        range_end_at = cutoff_at
+        base = "media_gallery_playback_sessions_#{export_ts(range_start_at)}_to_#{export_ts(range_end_at)}".freeze
         download_filename = "#{base}.csv"
 
         store_in_db =
@@ -114,6 +116,12 @@ module ::Jobs
           csv_gzip: store_in_db ? gzip_bytes : nil
         )
       end
+    end
+
+    def export_ts(value)
+      (value || Time.zone.now).in_time_zone.utc.strftime("%Y%m%d_%H%M%S")
+    rescue
+      Time.now.utc.strftime("%Y%m%d_%H%M%S")
     end
 
     def atomic_write(path, bytes)
@@ -246,7 +254,7 @@ module ::Jobs
       return if ids.blank?
 
       ::MediaGallery::MediaForensicsExport.where(id: ids).find_each do |e|
-        delete_export_files_for!(e)
+        delete_export_files_for!(e, delete_archive: archive_expired_for_export?(e))
       rescue => err
         Rails.logger.warn("[media_gallery] failed to delete export files for export_id=#{e.id}: #{err.class}: #{err.message}")
       ensure
@@ -255,9 +263,7 @@ module ::Jobs
     end
 
     def prune_orphan_archive_files_if_needed!
-      keep_days =
-        SiteSetting.respond_to?(:media_gallery_forensics_export_retention_days) ?
-          SiteSetting.media_gallery_forensics_export_retention_days.to_i : 90
+      keep_days = archive_retention_days
       return if keep_days <= 0
 
       root = archive_root_path
@@ -278,13 +284,33 @@ module ::Jobs
       Rails.logger.warn("[media_gallery] prune orphan forensics archives failed: #{e.class}: #{e.message}")
     end
 
-    def delete_export_files_for!(export)
-      [export.file_path, export.respond_to?(:archive_path) ? export.archive_path : nil]
+    def delete_export_files_for!(export, delete_archive: true)
+      paths = [export.file_path]
+      paths << export.archive_path if delete_archive && export.respond_to?(:archive_path)
+      paths
         .compact
         .map(&:to_s)
         .reject(&:blank?)
         .uniq
         .each { |path| delete_export_file_safely!(path) }
+    end
+
+    def archive_retention_days
+      SiteSetting.respond_to?(:media_gallery_forensics_export_archive_retention_days) ?
+        SiteSetting.media_gallery_forensics_export_archive_retention_days.to_i : 90
+    rescue
+      90
+    end
+
+    def archive_expired_for_export?(export)
+      days = archive_retention_days
+      return false if days <= 0
+
+      timestamp = export.respond_to?(:archived_at) && export.archived_at.present? ? export.archived_at : export.created_at
+      return true if timestamp.blank?
+      timestamp < Time.zone.now - days.days
+    rescue
+      true
     end
 
     def delete_export_file_safely!(path)
