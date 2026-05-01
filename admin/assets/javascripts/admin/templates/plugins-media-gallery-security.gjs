@@ -192,6 +192,27 @@ export default RouteTemplate(
         margin-top: 0.2rem;
       }
 
+      .mg-security__fact-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.55rem;
+      }
+
+      .mg-security__fact-detail {
+        color: var(--mg-security-muted);
+        font-size: var(--font-down-1);
+        margin-top: 0.45rem;
+      }
+
+      .mg-security__empty {
+        color: var(--mg-security-muted);
+        border: 1px dashed var(--mg-security-border);
+        border-radius: 14px;
+        padding: 0.85rem 1rem;
+        background: var(--mg-security-surface-alt);
+      }
+
       .mg-security__top-list {
         display: grid;
         gap: 0.55rem;
@@ -235,43 +256,31 @@ export default RouteTemplate(
           <p class="mg-security__muted">
             Read-only overview of active Media Gallery security, privacy and download-prevention controls. This page avoids listing internal open issues.
           </p>
-          <p class="mg-security__muted">Last checked: {{this.generatedAtLabel}}</p>
+          <p class="mg-security__muted">Last checked: {{@controller.generatedAtLabel}}</p>
         </div>
         <div class="mg-security__actions">
-          <button class="btn btn-primary" type="button" {{on "click" this.loadSecurityStatus}} disabled={{this.isLoading}}>
-            {{#if this.isLoading}}Refreshing…{{else}}Refresh{{/if}}
+          <button class="btn btn-primary" type="button" {{on "click" @controller.loadSecurityStatus}} disabled={{@controller.isLoading}}>
+            {{#if @controller.isLoading}}Refreshing…{{else}}Refresh{{/if}}
           </button>
           <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
         </div>
       </section>
 
-      {{#if this.error}}
-        <div class="mg-security__error">{{this.error}}</div>
+      {{#if @controller.error}}
+        <div class="mg-security__error">{{@controller.error}}</div>
       {{/if}}
 
       <section class="mg-security__summary-grid" aria-label="Security summary">
-        <div class="mg-security__summary-card">
-          <div class="mg-security__muted">Overall posture</div>
-          <div class="mg-security__summary-value">{{this.summary.posture}}</div>
-          <span class={{this.postureBadgeClass}}>{{this.summary.posture}}</span>
-        </div>
-        <div class="mg-security__summary-card">
-          <div class="mg-security__muted">Download prevention</div>
-          <div class="mg-security__summary-value">{{this.summary.download_prevention_level}}</div>
-          <span class={{this.downloadBadgeClass}}>{{this.summary.download_prevention_level}}</span>
-        </div>
-        <div class="mg-security__summary-card">
-          <div class="mg-security__muted">Controls</div>
-          <div class="mg-security__summary-value">{{this.summary.controls_total}}</div>
-          <p class="mg-security__muted">
-            OK {{this.summary.ok_count}} · Partial {{this.summary.partial_count}} · Attention {{this.summary.attention_count}}
-          </p>
-        </div>
-        <div class="mg-security__summary-card">
-          <div class="mg-security__muted">Events last 7 days</div>
-          <div class="mg-security__summary-value">{{this.recentEvents.total_7d}}</div>
-          <p class="mg-security__muted">Warnings/danger: {{this.recentEvents.warning_or_danger_7d}}</p>
-        </div>
+        {{#each @controller.summaryCards as |card|}}
+          <div class="mg-security__summary-card">
+            <div class="mg-security__muted">{{card.label}}</div>
+            <div class="mg-security__summary-value">{{card.value}}</div>
+            <div class="mg-security__badge-row">
+              <span class={{card.badgeClass}}>{{card.badgeLabel}}</span>
+            </div>
+            <p class="mg-security__muted">{{card.detail}}</p>
+          </div>
+        {{/each}}
       </section>
 
       <section class="mg-security__panel">
@@ -282,7 +291,7 @@ export default RouteTemplate(
           </div>
         </div>
         <div class="mg-security__controls">
-          {{#each this.controls as |control|}}
+          {{#each @controller.controls as |control|}}
             <article class="mg-security__control">
               <div class="mg-security__control-header">
                 <div class="mg-security__control-copy">
@@ -305,12 +314,18 @@ export default RouteTemplate(
           </div>
         </div>
         <div class="mg-security__facts">
-          <div class="mg-security__fact"><div class="mg-security__fact-label">HLS enabled</div><div class="mg-security__fact-value">{{this.download.hls_enabled}}</div></div>
-          <div class="mg-security__fact"><div class="mg-security__fact-label">HLS-only video</div><div class="mg-security__fact-value">{{this.download.hls_only_enabled}}</div></div>
-          <div class="mg-security__fact"><div class="mg-security__fact-label">Fingerprinting</div><div class="mg-security__fact-value">{{this.download.fingerprint_enabled}}</div></div>
-          <div class="mg-security__fact"><div class="mg-security__fact-label">Watermarking</div><div class="mg-security__fact-value">{{this.download.watermark_enabled}}</div></div>
-          <div class="mg-security__fact"><div class="mg-security__fact-label">Stream token TTL</div><div class="mg-security__fact-value">{{this.download.stream_token_ttl_minutes}} min</div></div>
-          <div class="mg-security__fact"><div class="mg-security__fact-label">Token binding</div><div class="mg-security__fact-value">User {{this.download.bind_to_user}} · Session {{this.download.bind_to_session}} · IP {{this.download.bind_to_ip}}</div></div>
+          {{#each @controller.downloadFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__fact-head">
+                <div>
+                  <div class="mg-security__fact-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.badgeClass}}>{{fact.badgeLabel}}</span>
+              </div>
+              <p class="mg-security__fact-detail">{{fact.detail}}</p>
+            </article>
+          {{/each}}
         </div>
       </section>
 
@@ -323,7 +338,7 @@ export default RouteTemplate(
           <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery">Open settings</a>
         </div>
         <div class="mg-security__settings-grid">
-          {{#each this.settings as |setting|}}
+          {{#each @controller.settings as |setting|}}
             <article class="mg-security__setting">
               <div class="mg-security__setting-header">
                 <div>
@@ -347,7 +362,7 @@ export default RouteTemplate(
           <a class="btn" href="/admin/plugins/media-gallery-migrations">Open storage tools</a>
         </div>
         <div class="mg-security__storage-grid">
-          {{#each this.profiles as |profile|}}
+          {{#each @controller.profiles as |profile|}}
             <article class="mg-security__profile">
               <div class="mg-security__profile-header">
                 <div>
@@ -372,10 +387,18 @@ export default RouteTemplate(
           <a class="btn" href="/admin/plugins/media-gallery-forensics-exports">Open exports</a>
         </div>
         <div class="mg-security__facts">
-          <div class="mg-security__fact"><div class="mg-security__fact-label">Export count</div><div class="mg-security__fact-value">{{this.forensics.export_count}}</div></div>
-          <div class="mg-security__fact"><div class="mg-security__fact-label">Expired pending cleanup</div><div class="mg-security__fact-value">{{this.forensics.expired_exports}}</div></div>
-          <div class="mg-security__fact"><div class="mg-security__fact-label">Latest export</div><div class="mg-security__fact-value">{{this.forensicsLatestExportLabel}}</div></div>
-          <div class="mg-security__fact"><div class="mg-security__fact-label">Manual delete</div><div class="mg-security__fact-value">{{this.forensics.delete_action_available}}</div></div>
+          {{#each @controller.forensicsFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__fact-head">
+                <div>
+                  <div class="mg-security__fact-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.badgeClass}}>{{fact.badgeLabel}}</span>
+              </div>
+              <p class="mg-security__fact-detail">{{fact.detail}}</p>
+            </article>
+          {{/each}}
         </div>
       </section>
 
@@ -388,7 +411,7 @@ export default RouteTemplate(
           <a class="btn" href="/admin/plugins/media-gallery-logs">Open logs</a>
         </div>
         <div class="mg-security__top-list">
-          {{#each this.topEventTypes as |event|}}
+          {{#each @controller.topEventTypes as |event|}}
             <div class="mg-security__top-item">
               <span>{{event.label}}</span>
               <strong>{{event.count}}</strong>
@@ -407,7 +430,7 @@ export default RouteTemplate(
           </div>
         </div>
         <div class="mg-security__link-row">
-          {{#each this.links as |link|}}
+          {{#each @controller.links as |link|}}
             <a class="btn" href={{link.url}}>{{link.label}}</a>
           {{/each}}
         </div>
