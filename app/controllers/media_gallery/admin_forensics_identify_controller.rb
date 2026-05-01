@@ -1918,26 +1918,32 @@ module ::MediaGallery
 
     def source_url_scheme_allowed?(uri)
       return true unless uri&.scheme.to_s == "http"
-      return true unless setting_forensics_require_https_source_urls?
 
-      setting_forensics_allow_http_canonical_source_urls? &&
+      case setting_forensics_http_source_url_policy
+      when "allow_all"
+        true
+      when "canonical_only"
         classify_source_url_origin(uri).try(:[], :kind) == :discourse
+      else
+        false
+      end
     rescue
       false
     end
 
-    def setting_forensics_require_https_source_urls?
-      SiteSetting.respond_to?(:media_gallery_forensics_require_https_source_urls) &&
-        SiteSetting.media_gallery_forensics_require_https_source_urls
-    rescue
-      false
-    end
 
-    def setting_forensics_allow_http_canonical_source_urls?
-      return true unless SiteSetting.respond_to?(:media_gallery_forensics_allow_http_canonical_source_urls)
-      SiteSetting.media_gallery_forensics_allow_http_canonical_source_urls
+
+    def setting_forensics_http_source_url_policy
+      value =
+        if SiteSetting.respond_to?(:media_gallery_forensics_http_source_url_policy)
+          SiteSetting.media_gallery_forensics_http_source_url_policy.to_s
+        else
+          "deny_all"
+        end
+
+      %w[allow_all canonical_only deny_all].include?(value) ? value : "deny_all"
     rescue
-      true
+      "deny_all"
     end
 
     def setting_forensics_allow_remote_hls_playlist_fetch?

@@ -883,19 +883,22 @@ plugins:
 
   # Optional residual source_url hardening for the admin forensic identify URL-mode.
   # Keep disabled on HTTP-only test sites; enable on production HTTPS sites.
-  media_gallery_forensics_require_https_source_urls:
-    default: false
-    client: false
 
   # When HTTPS-only source URLs are required, allow the canonical Discourse URL
   # to remain http:// for local/dev/test installs that have not enabled HTTPS yet.
-  media_gallery_forensics_allow_http_canonical_source_urls:
-    default: true
-    client: false
 
   # Allows URL-mode to fetch and rewrite remote .m3u8 playlists that are not one of
   # the plugin's own /media/hls endpoints. Managed HLS localization is safer; keep this
   # off unless admins explicitly need direct S3/CDN playlist URL identify.
+  media_gallery_forensics_http_source_url_policy:
+    default: deny_all
+    type: enum
+    choices:
+      - allow_all
+      - canonical_only
+      - deny_all
+    client: false
+
   media_gallery_forensics_allow_remote_hls_playlist_fetch:
     default: false
     client: false
