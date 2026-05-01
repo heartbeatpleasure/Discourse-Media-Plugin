@@ -1910,14 +1910,48 @@ module ::MediaGallery
     def ensure_source_url_allowed!(uri, context: "source_url")
       raise "#{context} must be an http(s) URL" if uri.blank? || uri.host.blank? || !%w[http https].include?(uri.scheme.to_s)
       raise "#{context} credentials are not allowed" if uri.user.present? || uri.password.present?
+      raise "#{context} must use HTTPS" unless source_url_scheme_allowed?(uri)
       raise "#{context} host is not allowed" unless source_url_allowed_host_and_port?(uri)
       raise "#{context} path is not allowed" unless source_url_allowed_path?(uri)
       true
     end
 
+    def source_url_scheme_allowed?(uri)
+      return true unless uri&.scheme.to_s == "http"
+      return true unless setting_forensics_require_https_source_urls?
+
+      setting_forensics_allow_http_canonical_source_urls? &&
+        classify_source_url_origin(uri).try(:[], :kind) == :discourse
+    rescue
+      false
+    end
+
+    def setting_forensics_require_https_source_urls?
+      SiteSetting.respond_to?(:media_gallery_forensics_require_https_source_urls) &&
+        SiteSetting.media_gallery_forensics_require_https_source_urls
+    rescue
+      false
+    end
+
+    def setting_forensics_allow_http_canonical_source_urls?
+      return true unless SiteSetting.respond_to?(:media_gallery_forensics_allow_http_canonical_source_urls)
+      SiteSetting.media_gallery_forensics_allow_http_canonical_source_urls
+    rescue
+      true
+    end
+
+    def setting_forensics_allow_remote_hls_playlist_fetch?
+      SiteSetting.respond_to?(:media_gallery_forensics_allow_remote_hls_playlist_fetch) &&
+        SiteSetting.media_gallery_forensics_allow_remote_hls_playlist_fetch
+    rescue
+      false
+    end
+
     def source_url_validation_message(message)
       text = message.to_s
       return "Only canonical site media/upload URLs or configured S3 object URLs are allowed." if text.include?("host is not allowed") || text.include?("path is not allowed")
+      return "HTTPS source URLs are required by the current forensic identify settings." if text.include?("must use HTTPS")
+      return "Remote HLS playlist fetching is disabled. Use the plugin's /media/hls URL or enable the remote playlist setting." if text.include?("remote_hls_playlist_fetch_disabled")
       text.presence || "source_url is not allowed"
     end
 
@@ -1965,6 +1999,10 @@ module ::MediaGallery
           playlist_tmp = localize_hls_playlist_to_tempfile!(uri, media_item: media_item)
         rescue => e
           if e.message.to_s == "unsupported_hls_url"
+            unless setting_forensics_allow_remote_hls_playlist_fetch?
+              raise source_url_validation_message("remote_hls_playlist_fetch_disabled")
+            end
+
             playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri)
           else
             raise e
@@ -1976,12 +2014,15 @@ module ::MediaGallery
       tmp = Tempfile.new(["media_gallery_identify_", ".mp4"])
       tmp.binmode
 
+      remote_ffmpeg_input = input.to_s == url && %w[http https].include?(uri.scheme.to_s)
+      protocol_whitelist = remote_ffmpeg_input ? "file,http,https,tcp,tls,crypto" : "file,crypto"
+
       cmd = [
         ::MediaGallery::Ffmpeg.ffmpeg_path,
         *::MediaGallery::Ffmpeg.ffmpeg_common_args,
         "-y",
         "-protocol_whitelist",
-        "file,http,https,tcp,tls,crypto",
+        protocol_whitelist,
         "-allowed_extensions",
         "ALL",
         "-i",

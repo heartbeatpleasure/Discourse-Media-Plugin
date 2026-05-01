@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+
 module ::MediaGallery
   class StreamController < ::ApplicationController
     requires_plugin "Discourse-Media-Plugin"
@@ -45,6 +47,8 @@ module ::MediaGallery
       end
 
       kind = "main" if kind.blank?
+
+      return unless enforce_stream_scraping_controls!(token: token, payload: payload, item: item)
 
       delivery = resolve_file(item, payload, kind)
       raise Discourse::NotFound if delivery.blank?
@@ -115,6 +119,139 @@ module ::MediaGallery
         },
       )
       raise Discourse::NotFound
+    end
+
+    def enforce_stream_scraping_controls!(token:, payload:, item:)
+      record_stream_anomaly_signals!(token: token, payload: payload, item: item)
+      enforce_stream_rate_limit!(token: token, payload: payload, item: item, range_request: extract_range_header.present?)
+    end
+
+    def enforce_stream_rate_limit!(token:, payload:, item:, range_request:)
+      total_limit = stream_setting_integer(:media_gallery_stream_requests_per_token_per_minute)
+      range_limit = range_request ? stream_setting_integer(:media_gallery_stream_range_requests_per_token_per_minute) : 0
+
+      return true if total_limit <= 0 && range_limit <= 0
+
+      token_ip_digest = stream_token_ip_digest(token)
+
+      if total_limit.positive?
+        RateLimiter.new(nil, "media_gallery:stream:req:sha256:#{token_ip_digest}", total_limit, 1.minute).performed!
+      end
+
+      if range_limit.positive?
+        RateLimiter.new(nil, "media_gallery:stream:range:sha256:#{token_ip_digest}", range_limit, 1.minute).performed!
+      end
+
+      true
+    rescue RateLimiter::LimitExceeded
+      MediaGallery::LogEvents.record(
+        event_type: "stream_rate_limited",
+        severity: "warning",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+        fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+        message: range_request ? "range_rate_limited" : "request_rate_limited",
+        details: {
+          reason: range_request ? "range_rate_limited" : "request_rate_limited",
+          range_request: range_request,
+          token_kind: payload.is_a?(Hash) ? payload["kind"] : nil,
+          media_public_id: item&.public_id,
+          token_sha256: ::MediaGallery::Security.token_sha256_label(token),
+          total_limit_per_minute: total_limit,
+          range_limit_per_minute: range_limit,
+        },
+      )
+      response.headers["Cache-Control"] = "no-store"
+      response.headers["X-Content-Type-Options"] = "nosniff"
+      response.headers["Retry-After"] = "60"
+      render plain: "rate_limited", status: 429
+      false
+    end
+
+    def record_stream_anomaly_signals!(token:, payload:, item:)
+      return unless SiteSetting.respond_to?(:media_gallery_log_stream_anomalies) && SiteSetting.media_gallery_log_stream_anomalies
+
+      range_request = extract_range_header.present?
+      token_ip_digest = stream_token_ip_digest(token)
+
+      record_stream_anomaly_counter!(
+        metric: "requests_per_token_per_minute",
+        threshold: stream_setting_integer(:media_gallery_stream_anomaly_requests_per_token_per_minute),
+        token_ip_digest: token_ip_digest,
+        token: token,
+        payload: payload,
+        item: item,
+        range_request: range_request
+      )
+
+      if range_request
+        record_stream_anomaly_counter!(
+          metric: "range_requests_per_token_per_minute",
+          threshold: stream_setting_integer(:media_gallery_stream_anomaly_range_requests_per_token_per_minute),
+          token_ip_digest: token_ip_digest,
+          token: token,
+          payload: payload,
+          item: item,
+          range_request: true
+        )
+      end
+    rescue => e
+      Rails.logger.debug("[media_gallery] stream anomaly tracking failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def record_stream_anomaly_counter!(metric:, threshold:, token_ip_digest:, token:, payload:, item:, range_request:)
+      threshold = threshold.to_i
+      return if threshold <= 0
+
+      redis = Discourse.redis
+      minute = Time.now.utc.strftime("%Y%m%d%H%M")
+      key = "media_gallery:stream:anomaly:#{metric}:#{minute}:sha256:#{token_ip_digest}"
+      count = redis.incr(key).to_i
+      redis.expire(key, 2.minutes.to_i)
+
+      # Log once per token/IP/minute when the threshold is crossed; avoid log spam.
+      return unless count == threshold + 1
+
+      MediaGallery::LogEvents.record(
+        event_type: "stream_scrape_anomaly",
+        severity: "warning",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+        fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+        message: metric.to_s,
+        details: {
+          metric: metric.to_s,
+          count: count,
+          threshold: threshold,
+          range_request: range_request,
+          token_kind: payload.is_a?(Hash) ? payload["kind"] : nil,
+          media_public_id: item&.public_id,
+          token_sha256: ::MediaGallery::Security.token_sha256_label(token),
+        },
+      )
+    rescue => e
+      Rails.logger.debug("[media_gallery] stream anomaly counter failed metric=#{metric} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def stream_token_ip_digest(token)
+      Digest::SHA256.hexdigest("#{token}|#{request.remote_ip}")
+    rescue
+      Digest::SHA256.hexdigest(token.to_s)
+    end
+
+    def stream_setting_integer(name, default: 0)
+      return default unless SiteSetting.respond_to?(name)
+      SiteSetting.public_send(name).to_i
+    rescue
+      default
     end
 
     def apply_private_stream_headers!
