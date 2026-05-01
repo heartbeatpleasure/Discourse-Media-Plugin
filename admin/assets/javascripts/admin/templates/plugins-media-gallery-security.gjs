@@ -10,9 +10,21 @@ export default RouteTemplate(
         --mg-security-border: var(--primary-low);
         --mg-security-muted: var(--primary-medium);
         --mg-security-radius: 18px;
+        --mg-security-ok-bg: #ebf9ef;
+        --mg-security-ok-fg: #0b7a2a;
+        --mg-security-ok-border: #92d2a2;
+        --mg-security-warn-bg: #fff4e5;
+        --mg-security-warn-fg: #b45309;
+        --mg-security-warn-border: #fdba74;
+        --mg-security-danger-bg: #fee2e2;
+        --mg-security-danger-fg: #b91c1c;
+        --mg-security-danger-border: #fca5a5;
+        --mg-security-info-bg: #eef2ff;
+        --mg-security-info-fg: #4338ca;
+        --mg-security-info-border: #c7d2fe;
         display: flex;
         flex-direction: column;
-        gap: 1rem;
+        gap: 1.2rem;
       }
 
       .media-gallery-security h1,
@@ -26,14 +38,17 @@ export default RouteTemplate(
         background: var(--mg-security-surface);
         border: 1px solid var(--mg-security-border);
         border-radius: var(--mg-security-radius);
-        padding: 1rem 1.125rem;
+        padding: 1.1rem 1.2rem;
         min-width: 0;
         overflow: hidden;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
       .mg-security__header,
-      .mg-security__panel-header {
+      .mg-security__panel-header,
+      .mg-security__summary-head,
+      .mg-security__item-head,
+      .mg-security__profile-head {
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
@@ -42,125 +57,179 @@ export default RouteTemplate(
 
       .mg-security__copy,
       .mg-security__panel-copy,
-      .mg-security__control-copy {
+      .mg-security__item-copy {
         display: flex;
         flex-direction: column;
-        gap: 0.25rem;
+        gap: 0.4rem;
         min-width: 0;
       }
 
-      .mg-security__muted,
-      .mg-security__meta,
-      .mg-security__setting-recommended {
-        color: var(--mg-security-muted);
-        font-size: var(--font-down-1);
+      .mg-security__panel-copy {
+        gap: 0.35rem;
       }
 
       .mg-security__actions,
-      .mg-security__badge-row,
       .mg-security__link-row {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
+        justify-content: flex-end;
         gap: 0.65rem;
       }
 
+      .mg-security__muted {
+        color: var(--mg-security-muted);
+      }
+
       .mg-security__summary-grid,
-      .mg-security__metrics-grid,
-      .mg-security__storage-grid,
+      .mg-security__controls,
+      .mg-security__facts,
       .mg-security__settings-grid,
-      .mg-security__controls {
+      .mg-security__top-list,
+      .mg-security__storage-list {
         display: grid;
         gap: 1rem;
       }
 
       .mg-security__summary-grid {
-        grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
       }
 
-      .mg-security__metrics-grid {
-        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      .mg-security__controls {
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       }
 
-      .mg-security__storage-grid {
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      .mg-security__facts {
+        grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
       }
 
       .mg-security__settings-grid {
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mg-security__section-body {
+        margin-top: 1rem;
       }
 
       .mg-security__summary-card,
-      .mg-security__metric,
-      .mg-security__profile,
+      .mg-security__control,
+      .mg-security__fact,
       .mg-security__setting,
-      .mg-security__control {
+      .mg-security__profile,
+      .mg-security__top-item {
         background: var(--mg-security-surface-alt);
         border: 1px solid var(--mg-security-border);
         border-radius: 16px;
-        padding: 0.9rem 1rem;
         min-width: 0;
       }
 
-      .mg-security__summary-value,
-      .mg-security__metric-value {
-        font-size: 1.35rem;
-        font-weight: 700;
-        line-height: 1.15;
-        margin-top: 0.25rem;
+      .mg-security__summary-card,
+      .mg-security__control,
+      .mg-security__fact,
+      .mg-security__setting,
+      .mg-security__profile {
+        padding: 1rem 1.05rem;
       }
 
-      .mg-security__control {
-        display: grid;
+      .mg-security__summary-card,
+      .mg-security__control,
+      .mg-security__fact,
+      .mg-security__setting,
+      .mg-security__profile {
+        display: flex;
+        flex-direction: column;
         gap: 0.65rem;
       }
 
-      .mg-security__control-header,
-      .mg-security__setting-header,
-      .mg-security__profile-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.75rem;
+      .mg-security__eyebrow,
+      .mg-security__item-label,
+      .mg-security__meta-label {
+        color: var(--mg-security-muted);
+        font-size: var(--font-down-1);
       }
 
-      .mg-security__badge {
+      .mg-security__summary-value {
+        font-size: 1.45rem;
+        line-height: 1.15;
+        font-weight: 700;
+      }
+
+      .mg-security__summary-secondary,
+      .mg-security__item-note,
+      .mg-security__setting-note,
+      .mg-security__setting-recommended,
+      .mg-security__meta-value,
+      .mg-security__top-empty {
+        color: var(--mg-security-muted);
+      }
+
+      .mg-security__status-chip {
         display: inline-flex;
         align-items: center;
-        justify-content: center;
+        gap: 0.45rem;
+        white-space: nowrap;
         border-radius: 999px;
-        padding: 0.28rem 0.65rem;
+        border: 1px solid var(--mg-security-border);
+        padding: 0.3rem 0.7rem;
         font-size: var(--font-down-1);
         font-weight: 700;
-        line-height: 1.2;
-        white-space: nowrap;
-        border: 1px solid var(--primary-low);
-        background: var(--primary-very-low);
-        color: var(--primary-high);
       }
 
-      .mg-security__badge.is-success {
-        background: var(--success-low);
-        color: var(--success);
-        border-color: var(--success-low-mid);
+      .mg-security__status-dot {
+        display: inline-flex;
+        flex: 0 0 auto;
+        width: 0.7rem;
+        height: 0.7rem;
+        border-radius: 999px;
+        border: 1px solid transparent;
       }
 
-      .mg-security__badge.is-warning {
-        background: var(--tertiary-very-low);
-        color: var(--tertiary);
-        border-color: var(--tertiary-low);
+      .mg-security__status-chip .mg-security__status-dot {
+        width: 0.55rem;
+        height: 0.55rem;
       }
 
-      .mg-security__badge.is-danger {
-        background: var(--danger-low);
-        color: var(--danger);
-        border-color: var(--danger-low-mid);
+      .mg-security__status-chip.is-success,
+      .mg-security__status-dot.is-success {
+        background: var(--mg-security-ok-bg);
+        border-color: var(--mg-security-ok-border);
+        color: var(--mg-security-ok-fg);
       }
 
-      .mg-security__badge.is-info {
-        background: var(--tertiary-very-low);
-        color: var(--tertiary);
-        border-color: var(--tertiary-low);
+      .mg-security__status-chip.is-warning,
+      .mg-security__status-dot.is-warning {
+        background: var(--mg-security-warn-bg);
+        border-color: var(--mg-security-warn-border);
+        color: var(--mg-security-warn-fg);
+      }
+
+      .mg-security__status-chip.is-danger,
+      .mg-security__status-dot.is-danger {
+        background: var(--mg-security-danger-bg);
+        border-color: var(--mg-security-danger-border);
+        color: var(--mg-security-danger-fg);
+      }
+
+      .mg-security__status-chip.is-info,
+      .mg-security__status-dot.is-info {
+        background: var(--mg-security-info-bg);
+        border-color: var(--mg-security-info-border);
+        color: var(--mg-security-info-fg);
+      }
+
+      .mg-security__control-copy h3,
+      .mg-security__setting-title,
+      .mg-security__profile-title,
+      .mg-security__fact-value,
+      .mg-security__setting-value,
+      .mg-security__meta-value strong {
+        font-weight: 700;
+      }
+
+      .mg-security__fact-value,
+      .mg-security__setting-value {
+        font-size: 1.05rem;
+        line-height: 1.3;
       }
 
       .mg-security__setting-value,
@@ -169,53 +238,21 @@ export default RouteTemplate(
         overflow-wrap: anywhere;
       }
 
-      .mg-security__facts {
+      .mg-security__profile-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
-        gap: 0.65rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.85rem;
       }
 
-      .mg-security__fact {
-        border: 1px solid var(--mg-security-border);
-        border-radius: 14px;
-        background: var(--mg-security-surface-alt);
-        padding: 0.75rem 0.85rem;
-      }
-
-      .mg-security__fact-label {
-        color: var(--mg-security-muted);
-        font-size: var(--font-down-1);
-      }
-
-      .mg-security__fact-value {
-        font-weight: 700;
-        margin-top: 0.2rem;
-      }
-
-      .mg-security__fact-head {
+      .mg-security__profile-meta {
         display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.55rem;
+        flex-direction: column;
+        gap: 0.25rem;
+        min-width: 0;
       }
 
-      .mg-security__fact-detail {
+      .mg-security__profile-subtitle {
         color: var(--mg-security-muted);
-        font-size: var(--font-down-1);
-        margin-top: 0.45rem;
-      }
-
-      .mg-security__empty {
-        color: var(--mg-security-muted);
-        border: 1px dashed var(--mg-security-border);
-        border-radius: 14px;
-        padding: 0.85rem 1rem;
-        background: var(--mg-security-surface-alt);
-      }
-
-      .mg-security__top-list {
-        display: grid;
-        gap: 0.55rem;
       }
 
       .mg-security__top-item {
@@ -223,10 +260,14 @@ export default RouteTemplate(
         align-items: center;
         justify-content: space-between;
         gap: 0.75rem;
-        border: 1px solid var(--mg-security-border);
+        padding: 0.8rem 0.95rem;
+      }
+
+      .mg-security__top-empty {
+        border: 1px dashed var(--mg-security-border);
         border-radius: 14px;
+        padding: 0.9rem 1rem;
         background: var(--mg-security-surface-alt);
-        padding: 0.7rem 0.85rem;
       }
 
       .mg-security__error {
@@ -237,12 +278,22 @@ export default RouteTemplate(
         padding: 0.8rem 0.95rem;
       }
 
+      @media (max-width: 1000px) {
+        .mg-security__settings-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-security__profile-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
       @media (max-width: 700px) {
         .mg-security__header,
         .mg-security__panel-header,
-        .mg-security__control-header,
-        .mg-security__setting-header,
-        .mg-security__profile-header {
+        .mg-security__summary-head,
+        .mg-security__item-head,
+        .mg-security__profile-head {
           flex-direction: column;
           align-items: stretch;
         }
@@ -272,14 +323,15 @@ export default RouteTemplate(
 
       <section class="mg-security__summary-grid" aria-label="Security summary">
         {{#each @controller.summaryCards as |card|}}
-          <div class="mg-security__summary-card">
-            <div class="mg-security__muted">{{card.label}}</div>
-            <div class="mg-security__summary-value">{{card.value}}</div>
-            <div class="mg-security__badge-row">
-              <span class={{card.badgeClass}}>{{card.badgeLabel}}</span>
+          <article class="mg-security__summary-card">
+            <div class="mg-security__summary-head">
+              <div class="mg-security__eyebrow">{{card.label}}</div>
+              <span class={{card.statusDotClass}} title={{card.statusTitle}} aria-label={{card.statusTitle}}></span>
             </div>
+            <div class="mg-security__summary-value">{{card.value}}</div>
+            <div class="mg-security__summary-secondary">{{card.secondary}}</div>
             <p class="mg-security__muted">{{card.detail}}</p>
-          </div>
+          </article>
         {{/each}}
       </section>
 
@@ -290,15 +342,18 @@ export default RouteTemplate(
             <p class="mg-security__muted">High-level controls and configuration-dependent protections. No detailed open-issue list is shown here.</p>
           </div>
         </div>
-        <div class="mg-security__controls">
+        <div class="mg-security__controls mg-security__section-body">
           {{#each @controller.controls as |control|}}
             <article class="mg-security__control">
-              <div class="mg-security__control-header">
-                <div class="mg-security__control-copy">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
                   <h3>{{control.title}}</h3>
                   <p>{{control.summary}}</p>
                 </div>
-                <span class={{control.badgeClass}}>{{control.label}}</span>
+                <span class={{control.statusChipClass}}>
+                  <span class={{control.statusDotClass}}></span>
+                  <span>{{control.statusText}}</span>
+                </span>
               </div>
               <p class="mg-security__muted">{{control.action}}</p>
             </article>
@@ -313,17 +368,20 @@ export default RouteTemplate(
             <p class="mg-security__muted">Current protection signals that influence whether users receive HLS-only, fingerprinted or directly streamable media.</p>
           </div>
         </div>
-        <div class="mg-security__facts">
+        <div class="mg-security__facts mg-security__section-body">
           {{#each @controller.downloadFacts as |fact|}}
             <article class="mg-security__fact">
-              <div class="mg-security__fact-head">
-                <div>
-                  <div class="mg-security__fact-label">{{fact.label}}</div>
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
                   <div class="mg-security__fact-value">{{fact.value}}</div>
                 </div>
-                <span class={{fact.badgeClass}}>{{fact.badgeLabel}}</span>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
               </div>
-              <p class="mg-security__fact-detail">{{fact.detail}}</p>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
             </article>
           {{/each}}
         </div>
@@ -337,16 +395,20 @@ export default RouteTemplate(
           </div>
           <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery">Open settings</a>
         </div>
-        <div class="mg-security__settings-grid">
+        <div class="mg-security__settings-grid mg-security__section-body">
           {{#each @controller.settings as |setting|}}
             <article class="mg-security__setting">
-              <div class="mg-security__setting-header">
-                <div>
-                  <h3>{{setting.label}}</h3>
-                  <p class="mg-security__setting-value">{{setting.value}}</p>
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <h3 class="mg-security__setting-title">{{setting.label}}</h3>
                 </div>
-                <span class={{setting.badgeClass}}>{{setting.presentLabel}}</span>
+                <span class={{setting.statusChipClass}}>
+                  <span class={{setting.statusDotClass}}></span>
+                  <span>{{setting.statusText}}</span>
+                </span>
               </div>
+              <div class="mg-security__setting-value">{{setting.displayValue}}</div>
+              <p class="mg-security__setting-note">{{setting.note}}</p>
               <p class="mg-security__setting-recommended">Recommended: {{setting.recommended}}</p>
             </article>
           {{/each}}
@@ -361,19 +423,48 @@ export default RouteTemplate(
           </div>
           <a class="btn" href="/admin/plugins/media-gallery-migrations">Open storage tools</a>
         </div>
-        <div class="mg-security__storage-grid">
-          {{#each @controller.profiles as |profile|}}
+        <div class="mg-security__storage-list mg-security__section-body">
+          {{#each @controller.storageProfiles as |profile|}}
             <article class="mg-security__profile">
-              <div class="mg-security__profile-header">
-                <div>
-                  <h3>{{profile.label}}</h3>
-                  <p class="mg-security__muted">{{profile.profile_key}} · {{profile.backendLabel}} · {{profile.deliveryModeLabel}}</p>
+              <div class="mg-security__profile-head">
+                <div class="mg-security__item-copy">
+                  <h3 class="mg-security__profile-title">{{profile.label}}</h3>
+                  <p class="mg-security__profile-subtitle">{{profile.profileKey}} · {{profile.backendLabel}} · {{profile.deliveryModeLabel}}</p>
+                </div>
+                <span class={{profile.statusChipClass}}>
+                  <span class={{profile.statusDotClass}}></span>
+                  <span>{{profile.statusText}}</span>
+                </span>
+              </div>
+              <div class="mg-security__profile-grid">
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Backend</div>
+                  <div class="mg-security__meta-value"><strong>{{profile.backendLabel}}</strong></div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Delivery mode</div>
+                  <div class="mg-security__meta-value"><strong>{{profile.deliveryModeLabel}}</strong></div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Bucket</div>
+                  <div class="mg-security__meta-value mg-security__mono">{{profile.bucket}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Endpoint</div>
+                  <div class="mg-security__meta-value mg-security__mono">{{profile.endpoint}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Prefix / root</div>
+                  <div class="mg-security__meta-value mg-security__mono">{{profile.pathValue}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Status</div>
+                  <div class="mg-security__meta-value"><strong>{{profile.statusText}}</strong></div>
                 </div>
               </div>
-              <p class="mg-security__meta mg-security__mono">Endpoint: {{profile.endpoint}}</p>
-              <p class="mg-security__meta mg-security__mono">Bucket: {{profile.bucket}}</p>
-              <p class="mg-security__meta mg-security__mono">Prefix/root: {{profile.prefix}}{{profile.rootPath}}</p>
             </article>
+          {{else}}
+            <div class="mg-security__top-empty">No configured storage profiles found.</div>
           {{/each}}
         </div>
       </section>
@@ -386,17 +477,20 @@ export default RouteTemplate(
           </div>
           <a class="btn" href="/admin/plugins/media-gallery-forensics-exports">Open exports</a>
         </div>
-        <div class="mg-security__facts">
+        <div class="mg-security__facts mg-security__section-body">
           {{#each @controller.forensicsFacts as |fact|}}
             <article class="mg-security__fact">
-              <div class="mg-security__fact-head">
-                <div>
-                  <div class="mg-security__fact-label">{{fact.label}}</div>
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
                   <div class="mg-security__fact-value">{{fact.value}}</div>
                 </div>
-                <span class={{fact.badgeClass}}>{{fact.badgeLabel}}</span>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
               </div>
-              <p class="mg-security__fact-detail">{{fact.detail}}</p>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
             </article>
           {{/each}}
         </div>
@@ -410,14 +504,14 @@ export default RouteTemplate(
           </div>
           <a class="btn" href="/admin/plugins/media-gallery-logs">Open logs</a>
         </div>
-        <div class="mg-security__top-list">
+        <div class="mg-security__top-list mg-security__section-body">
           {{#each @controller.topEventTypes as |event|}}
             <div class="mg-security__top-item">
               <span>{{event.label}}</span>
               <strong>{{event.count}}</strong>
             </div>
           {{else}}
-            <p class="mg-security__muted">No recent media security events found.</p>
+            <div class="mg-security__top-empty">No recent media security events found.</div>
           {{/each}}
         </div>
       </section>
@@ -429,8 +523,8 @@ export default RouteTemplate(
             <p class="mg-security__muted">Related read-only or admin tools.</p>
           </div>
         </div>
-        <div class="mg-security__link-row">
-          {{#each @controller.links as |link|}}
+        <div class="mg-security__link-row mg-security__section-body">
+          {{#each @controller.quickLinks as |link|}}
             <a class="btn" href={{link.url}}>{{link.label}}</a>
           {{/each}}
         </div>
