@@ -169,6 +169,12 @@ plugins:
     type: list
     client: true
 
+  # Security hardening: if the actual media content cannot be recognized by ffprobe,
+  # fail the media item before the full FFmpeg processing pipeline is attempted.
+  media_gallery_fail_closed_on_unrecognized_media:
+    default: true
+    client: false
+
   # Exact duplicate upload handling for media gallery registration.
   # allow = permit duplicates, warn = ask users to confirm, block = prevent duplicates unless staff overrides.
   media_gallery_duplicate_upload_action:

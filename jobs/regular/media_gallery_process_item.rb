@@ -213,6 +213,60 @@ module Jobs
       processing_meta.delete("current_run_job_class")
     end
 
+    def verify_media_content_type!(item:, upload:, declared_type:, input_path:)
+      @current_processing_stage = "detect_media_type"
+
+      detected_type = MediaGallery::TypeDetector.infer_from_path(input_path)
+      if detected_type.blank?
+        if fail_closed_on_unrecognized_media?
+          item.update!(status: "failed", error_message: "file_content_unrecognized")
+          raise "file_content_unrecognized"
+        end
+
+        Rails.logger.warn(
+          "[media_gallery] media content type detection returned blank; continuing because fail-closed validation is disabled item_id=#{item.id} public_id=#{item.public_id} declared_type=#{declared_type}"
+        )
+        return declared_type
+      end
+
+      return declared_type if detected_type == declared_type
+
+      ext = upload.extension.to_s
+      if MediaGallery::TypeDetector.extension_allowed_for_type?(ext, detected_type)
+        Rails.logger.info(
+          "[media_gallery] media type corrected item_id=#{item.id} public_id=#{item.public_id} from=#{declared_type} to=#{detected_type} ext=#{ext}"
+        )
+        item.media_type = detected_type
+        item.save!
+        return detected_type
+      end
+
+      item.update!(status: "failed", error_message: "file_content_mismatch")
+      raise "file_content_mismatch"
+    rescue => e
+      raise e if %w[file_content_unrecognized file_content_mismatch].include?(e.message.to_s)
+
+      if fail_closed_on_unrecognized_media?
+        item.update!(status: "failed", error_message: "file_content_unrecognized")
+        raise "file_content_unrecognized"
+      end
+
+      Rails.logger.warn(
+        "[media_gallery] media content type detection failed; continuing because fail-closed validation is disabled item_id=#{item&.id} public_id=#{item&.public_id} error=#{e.class}: #{e.message}"
+      )
+      declared_type
+    ensure
+      @current_processing_stage = "transcoding"
+    end
+
+    def fail_closed_on_unrecognized_media?
+      return true unless SiteSetting.respond_to?(:media_gallery_fail_closed_on_unrecognized_media)
+
+      !!SiteSetting.media_gallery_fail_closed_on_unrecognized_media
+    rescue
+      true
+    end
+
     def process_item!(item)
       raise "missing_original_upload" if item.original_upload.blank?
 
@@ -238,31 +292,15 @@ module Jobs
         processed_tmp = nil
         thumb_tmp = nil
 
-        # Verify/correct the media type using ffprobe. This catches cases where the
-        # declared type (based on extension/mime) does not match the actual container.
-        media_type = declared_type
-        begin
-          detected_type = MediaGallery::TypeDetector.infer_from_path(tmp_input)
-          if detected_type.present? && detected_type != declared_type
-            ext = original_upload.extension.to_s
-
-            if MediaGallery::TypeDetector.extension_allowed_for_type?(ext, detected_type)
-              Rails.logger.info(
-                "[media_gallery] media type corrected item_id=#{item.id} public_id=#{item.public_id} from=#{declared_type} to=#{detected_type} ext=#{ext}"
-              )
-              media_type = detected_type
-              item.media_type = detected_type
-              item.save!
-            else
-              item.update!(status: "failed", error_message: "file_content_mismatch")
-              raise "file_content_mismatch"
-            end
-          end
-        rescue => e
-          # If detection fails, fall back to declared type.
-          # But if we explicitly flagged mismatch, keep the failure.
-          raise e if e.message.to_s == "file_content_mismatch"
-        end
+        # Verify/correct the media type using ffprobe before the heavier FFmpeg
+        # processing pipeline is attempted. This catches renamed/spoofed files
+        # such as PDF/HTML/ZIP bytes uploaded with a media extension.
+        media_type = verify_media_content_type!(
+          item: item,
+          upload: original_upload,
+          declared_type: declared_type,
+          input_path: tmp_input
+        )
 
         @current_processing_stage = "transcoding"
         case media_type

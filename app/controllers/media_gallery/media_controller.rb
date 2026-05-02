@@ -251,7 +251,7 @@ module ::MediaGallery
         if managed_storage
           true
         elsif media_type == "image"
-          transcode_images || watermark_enabled
+          transcode_images || watermark_enabled || fail_closed_on_unrecognized_media?
         else
           true
         end
@@ -2307,6 +2307,14 @@ end
       details = unsupported_file_extension_details(upload, media_type)
       ext = details[:extension].presence || "unknown"
       "Files with the .#{ext} extension are not allowed for #{media_type.to_s} uploads. Allowed extensions: #{details[:allowed_extensions].join(', ')}."
+    end
+
+    def fail_closed_on_unrecognized_media?
+      return true unless SiteSetting.respond_to?(:media_gallery_fail_closed_on_unrecognized_media)
+
+      !!SiteSetting.media_gallery_fail_closed_on_unrecognized_media
+    rescue
+      true
     end
 
     def preflight_duration_limit_error(upload, media_type)
