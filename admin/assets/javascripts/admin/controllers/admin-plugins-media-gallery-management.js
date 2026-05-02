@@ -593,6 +593,16 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     );
   }
 
+  get selectedProcessingErrorMessage() {
+    const message = String(this.selectedItem?.error_message || "").trim();
+
+    if (!message || this.selectedItem?.status !== "failed") {
+      return "";
+    }
+
+    return message;
+  }
+
   get selectedMetaRows() {
     const item = this.selectedItem || {};
     return [

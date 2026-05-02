@@ -87,6 +87,32 @@ export default RouteTemplate(
         color: var(--danger);
       }
 
+      .mg-management__processing-error {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.35rem;
+        margin-top: 1rem;
+        padding: 0.85rem 1rem;
+        border: 1px solid var(--danger-low-mid);
+        border-radius: 14px;
+        background: var(--danger-low);
+        color: var(--primary-high);
+        overflow-wrap: anywhere;
+      }
+
+      .mg-management__processing-error-title {
+        color: var(--danger);
+        font-weight: 700;
+      }
+
+      .mg-management__processing-error-message {
+        font-family: var(--d-font-family--monospace, monospace);
+        line-height: 1.45;
+        white-space: normal;
+        word-break: normal;
+        overflow-wrap: anywhere;
+      }
+
       .mg-management__filters {
         grid-template-columns: repeat(4, minmax(0, 1fr));
         align-items: end;
@@ -728,6 +754,13 @@ export default RouteTemplate(
                 {{/if}}
               </div>
             </div>
+
+            {{#if @controller.selectedProcessingErrorMessage}}
+              <div class="mg-management__processing-error">
+                <div class="mg-management__processing-error-title">Processing error</div>
+                <div class="mg-management__processing-error-message">{{@controller.selectedProcessingErrorMessage}}</div>
+              </div>
+            {{/if}}
 
             <div class="mg-management__summary-grid" style="margin-top: 1rem;">
               {{#each @controller.selectedMetaRows as |row|}}
