@@ -204,6 +204,23 @@ export default RouteTemplate(
           </span>
         </a>
 
+        <a class="mg-landing__card" href="/admin/plugins/media-gallery-settings-guide">
+          <div class="mg-landing__card-header">
+            <div class="mg-landing__card-title">
+              <span class="mg-landing__card-badge">
+                {{i18n "admin.media_gallery.category_configuration"}}
+              </span>
+              <h3>Settings guide</h3>
+            </div>
+          </div>
+          <p class="mg-landing__card-description">
+            Understand the most important Media Gallery settings, recommended values, and where to change them.
+          </p>
+          <span class="mg-landing__card-action">
+            {{i18n "admin.media_gallery.open_tool"}}
+          </span>
+        </a>
+
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-management">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
