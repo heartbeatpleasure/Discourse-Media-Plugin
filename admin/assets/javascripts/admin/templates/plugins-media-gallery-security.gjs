@@ -232,6 +232,26 @@ export default RouteTemplate(
         line-height: 1.3;
       }
 
+      .mg-security__environment .mg-security__item-head {
+        gap: 1.35rem;
+      }
+
+      .mg-security__environment .mg-security__item-copy {
+        flex: 1 1 auto;
+        min-width: 0;
+        gap: 0.55rem;
+        padding-right: 0.4rem;
+      }
+
+      .mg-security__environment .mg-security__fact-value {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .mg-security__environment .mg-security__status-chip {
+        flex: 0 0 auto;
+      }
+
       .mg-security__setting-value,
       .mg-security__mono {
         font-family: var(--d-font-family--monospace, monospace);
@@ -335,11 +355,11 @@ export default RouteTemplate(
         {{/each}}
       </section>
 
-      <section class="mg-security__panel">
+      <section class="mg-security__panel mg-security__environment">
         <div class="mg-security__panel-header">
           <div class="mg-security__panel-copy">
-            <h2>Production HTTPS and canonical URL</h2>
-            <p class="mg-security__muted">Read-only warning signal for production HTTPS, canonical host and reverse-proxy scheme handling.</p>
+            <h2>HTTPS and canonical URL</h2>
+            <p class="mg-security__muted">Read-only warning signal for HTTPS, canonical host and reverse-proxy scheme handling.</p>
           </div>
         </div>
         <div class="mg-security__facts mg-security__section-body">
@@ -444,8 +464,8 @@ export default RouteTemplate(
       <section class="mg-security__panel">
         <div class="mg-security__panel-header">
           <div class="mg-security__panel-copy">
-            <h2>Recently added security controls</h2>
-            <p class="mg-security__muted">Visibility for F08/F11/F12 and upload validation controls that were added after the original security review.</p>
+            <h2>Additional security controls</h2>
+            <p class="mg-security__muted">Status of hardening controls that complement the recommended security baseline.</p>
           </div>
         </div>
         <div class="mg-security__facts mg-security__section-body">

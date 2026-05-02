@@ -642,7 +642,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         key: "base_url",
         label: "Canonical base URL",
         value: normalizeText(this.environment?.base_url),
-        detail: "Production should use a single HTTPS canonical URL.",
+        detail: "Recommended: use a single HTTPS canonical URL.",
         statusText: normalizeText(this.environment?.label || status),
         statusChipClass: statusChipClass(status),
         statusDotClass: statusDotClass(status),
@@ -674,7 +674,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     return [
       {
         key: "f08_soft",
-        label: "F08 stream anomaly logging",
+        label: "Stream anomaly logging",
         value: this.download?.log_stream_anomalies ? "Enabled" : "Disabled",
         detail: `Soft thresholds: ${formatNumber(this.download?.stream_anomaly_requests_per_token_per_minute)} requests/min and ${formatNumber(this.download?.stream_anomaly_range_requests_per_token_per_minute)} range requests/min.`,
         statusText: this.download?.log_stream_anomalies ? "OK" : "Check",
@@ -683,7 +683,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
       },
       {
         key: "f08_hard",
-        label: "F08 hard stream limits",
+        label: "Hard stream limits",
         value: hardStreamLimits ? "Configured" : "Observe only",
         detail: `Hard limits: ${formatNumber(this.download?.stream_requests_per_token_per_minute)} total/min and ${formatNumber(this.download?.stream_range_requests_per_token_per_minute)} range/min.`,
         statusText: hardStreamLimits ? "Active" : "Safe default",
@@ -692,7 +692,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
       },
       {
         key: "f11_policy",
-        label: "F11 forensic HTTP policy",
+        label: "Forensic HTTP policy",
         value: f11Policy,
         detail: "deny_all is strict production behavior; canonical_only is useful for HTTP test sites.",
         statusText: f11Policy === "deny_all" ? "OK" : f11Policy === "canonical_only" ? "Test mode" : "Review",
@@ -701,7 +701,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
       },
       {
         key: "f12_thumbs",
-        label: "F12 thumbnail no-store",
+        label: "Thumbnail no-store",
         value: this.download?.no_store_thumbnails ? "Enabled" : "Disabled",
         detail: "No-store thumbnails reduce cache reuse but can increase thumbnail traffic.",
         statusText: this.download?.no_store_thumbnails ? "OK" : "Optional",
