@@ -850,6 +850,12 @@ plugins:
     max: 31536000
     client: false
 
+  # Optional privacy/download-deterrence hardening for stable thumbnail URLs.
+  # When enabled, thumbnail and placeholder responses use no-store headers.
+  media_gallery_no_store_thumbnails:
+    default: false
+    client: false
+
   media_gallery_bind_stream_to_user:
     default: true
     client: false

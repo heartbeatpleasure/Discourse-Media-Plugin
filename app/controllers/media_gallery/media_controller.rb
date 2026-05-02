@@ -883,8 +883,7 @@ module ::MediaGallery
       return render_default_thumbnail(item) if thumb.blank?
 
       max_age = thumbnail_cache_max_age_seconds
-      response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age)
-      response.headers["X-Content-Type-Options"] = "nosniff"
+      set_thumbnail_cache_headers!(max_age)
 
       if thumb[:mode] == :memory
         data = thumb[:data].to_s.b
@@ -892,7 +891,7 @@ module ::MediaGallery
         file_mtime = thumb[:last_modified] || item.updated_at || Time.now
         etag = Digest::SHA1.hexdigest("thumb|#{item.public_id}|#{file_size}|#{file_mtime.to_i}")
 
-        return unless stale?(etag: etag, last_modified: file_mtime, public: false)
+        return unless thumbnail_no_store_enabled? || stale?(etag: etag, last_modified: file_mtime, public: false)
 
         response.headers["Content-Disposition"] = "inline; filename=\"#{thumb[:filename]}\""
         response.headers["Content-Type"] = thumb[:content_type]
@@ -912,8 +911,8 @@ module ::MediaGallery
       file_size = File.size(local_path).to_i
       etag = Digest::SHA1.hexdigest("thumb|#{item.public_id}|#{file_size}|#{file_mtime.to_i}")
 
-      # Handle conditional GET/HEAD (ETag + Last-Modified)
-      return unless stale?(etag: etag, last_modified: file_mtime, public: false)
+      # Handle conditional GET/HEAD (ETag + Last-Modified) unless thumbnail no-store is enabled.
+      return unless thumbnail_no_store_enabled? || stale?(etag: etag, last_modified: file_mtime, public: false)
 
       response.headers["Content-Disposition"] = "inline; filename=\"#{thumb[:filename]}\""
       response.headers["Content-Type"] = thumb[:content_type]
@@ -2050,7 +2049,26 @@ end
       v
     end
 
+    def thumbnail_no_store_enabled?
+      SiteSetting.respond_to?(:media_gallery_no_store_thumbnails) &&
+        SiteSetting.media_gallery_no_store_thumbnails
+    rescue
+      false
+    end
+
+    def set_thumbnail_cache_headers!(max_age_seconds)
+      response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age_seconds)
+      response.headers["X-Content-Type-Options"] = "nosniff"
+
+      return unless thumbnail_no_store_enabled?
+
+      response.headers["Pragma"] = "no-cache"
+      response.headers["Expires"] = "0"
+    end
+
     def thumbnail_cache_control_header(max_age_seconds)
+      return "no-store, no-cache, private, max-age=0, must-revalidate" if thumbnail_no_store_enabled?
+
       max_age = max_age_seconds.to_i
       if max_age <= 0
         "private, max-age=0, must-revalidate"
@@ -2068,10 +2086,9 @@ end
       last_modified = (item.updated_at || Time.now).utc
       etag = Digest::SHA1.hexdigest("thumb-missing|v1|#{item.public_id}|#{last_modified.to_i}")
 
-      response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age)
-      response.headers["X-Content-Type-Options"] = "nosniff"
+      set_thumbnail_cache_headers!(max_age)
 
-      return unless stale?(etag: etag, last_modified: last_modified, public: false)
+      return unless thumbnail_no_store_enabled? || stale?(etag: etag, last_modified: last_modified, public: false)
 
       filename = "media-#{item.public_id}-thumb.svg"
       response.headers["Content-Disposition"] = "inline; filename=\"#{filename}\""
