@@ -105,12 +105,20 @@ export default RouteTemplate(
         font-weight: 700;
       }
 
-      .mg-management__processing-error-message {
-        font-family: var(--d-font-family--monospace, monospace);
+      .mg-management__processing-error-message,
+      .mg-management__processing-error-advice,
+      .mg-management__processing-error-retry,
+      .mg-management__processing-error-raw {
         line-height: 1.45;
         white-space: normal;
         word-break: normal;
         overflow-wrap: anywhere;
+      }
+
+      .mg-management__processing-error-raw {
+        color: var(--mg-muted);
+        font-family: var(--d-font-family--monospace, monospace);
+        font-size: var(--font-down-1);
       }
 
       .mg-management__filters {
@@ -757,8 +765,15 @@ export default RouteTemplate(
 
             {{#if @controller.selectedProcessingErrorMessage}}
               <div class="mg-management__processing-error">
-                <div class="mg-management__processing-error-title">Processing error</div>
-                <div class="mg-management__processing-error-message">{{@controller.selectedProcessingErrorMessage}}</div>
+                <div class="mg-management__processing-error-title">{{@controller.selectedProcessingErrorTitle}}</div>
+                <div class="mg-management__processing-error-message">{{@controller.selectedProcessingErrorSummary}}</div>
+                {{#if @controller.selectedProcessingErrorAdvice}}
+                  <div class="mg-management__processing-error-advice">{{@controller.selectedProcessingErrorAdvice}}</div>
+                {{/if}}
+                {{#if @controller.selectedProcessingErrorRetry}}
+                  <div class="mg-management__processing-error-retry">{{@controller.selectedProcessingErrorRetry}}</div>
+                {{/if}}
+                <div class="mg-management__processing-error-raw">Raw code: {{@controller.selectedProcessingErrorMessage}}</div>
               </div>
             {{/if}}
 

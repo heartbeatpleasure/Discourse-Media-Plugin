@@ -338,6 +338,60 @@ export default RouteTemplate(
       <section class="mg-security__panel">
         <div class="mg-security__panel-header">
           <div class="mg-security__panel-copy">
+            <h2>Production HTTPS and canonical URL</h2>
+            <p class="mg-security__muted">Read-only warning signal for production HTTPS, canonical host and reverse-proxy scheme handling.</p>
+          </div>
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.environmentFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Recommended security baseline</h2>
+            <p class="mg-security__muted">Current values compared with practical production recommendations. This is guidance only and does not change settings.</p>
+          </div>
+          <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery">Open settings</a>
+        </div>
+        <div class="mg-security__settings-grid mg-security__section-body">
+          {{#each @controller.baselineRows as |row|}}
+            <article class="mg-security__setting">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <h3 class="mg-security__setting-title">{{row.label}}</h3>
+                </div>
+                <span class={{row.statusChipClass}}>
+                  <span class={{row.statusDotClass}}></span>
+                  <span>{{row.statusText}}</span>
+                </span>
+              </div>
+              <div class="mg-security__setting-value">{{row.current}}</div>
+              <p class="mg-security__setting-note">{{row.note}}</p>
+              <p class="mg-security__setting-recommended">Recommended: {{row.recommended}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
             <h2>Control status</h2>
             <p class="mg-security__muted">High-level controls and configuration-dependent protections. No detailed open-issue list is shown here.</p>
           </div>
@@ -370,6 +424,32 @@ export default RouteTemplate(
         </div>
         <div class="mg-security__facts mg-security__section-body">
           {{#each @controller.downloadFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Recently added security controls</h2>
+            <p class="mg-security__muted">Visibility for F08/F11/F12 and upload validation controls that were added after the original security review.</p>
+          </div>
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.recentControlFacts as |fact|}}
             <article class="mg-security__fact">
               <div class="mg-security__item-head">
                 <div class="mg-security__item-copy">
@@ -499,6 +579,82 @@ export default RouteTemplate(
       <section class="mg-security__panel">
         <div class="mg-security__panel-header">
           <div class="mg-security__panel-copy">
+            <h2>Backup and retention visibility</h2>
+            <p class="mg-security__muted">Private paths and export/archive locations. Paths outside /shared may need separate backup or cleanup procedures.</p>
+          </div>
+        </div>
+        <div class="mg-security__storage-list mg-security__section-body">
+          {{#each @controller.backupPathFacts as |path|}}
+            <article class="mg-security__profile">
+              <div class="mg-security__profile-head">
+                <div class="mg-security__item-copy">
+                  <h3 class="mg-security__profile-title">{{path.label}}</h3>
+                  <p class="mg-security__profile-subtitle">{{path.purpose}} · retention {{path.retention}}</p>
+                </div>
+                <span class={{path.statusChipClass}}>
+                  <span class={{path.statusDotClass}}></span>
+                  <span>{{path.statusText}}</span>
+                </span>
+              </div>
+              <div class="mg-security__profile-grid">
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Path</div>
+                  <div class="mg-security__meta-value mg-security__mono">{{path.path}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Recommendation</div>
+                  <div class="mg-security__meta-value">{{path.recommendation}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Status note</div>
+                  <div class="mg-security__meta-value">{{path.note}}</div>
+                </div>
+              </div>
+            </article>
+          {{else}}
+            <div class="mg-security__top-empty">No private path information available.</div>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Processing failure metrics</h2>
+            <p class="mg-security__muted">Failed media items grouped by sanitized reason codes. No raw user content is shown in this summary.</p>
+          </div>
+          <a class="btn" href="/admin/plugins/media-gallery-management?status=failed">Open failed items</a>
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.processingFailureSummaryFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+        <div class="mg-security__top-list mg-security__section-body">
+          {{#each @controller.processingFailureFacts as |reason|}}
+            <div class="mg-security__top-item">
+              <span>{{reason.label}}</span>
+              <strong>{{reason.count}}</strong>
+            </div>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
             <h2>Recent media security events</h2>
             <p class="mg-security__muted">Top event types from the last 7 days. Use the logs page for details.</p>
           </div>
@@ -512,6 +668,14 @@ export default RouteTemplate(
             </div>
           {{else}}
             <div class="mg-security__top-empty">No recent media security events found.</div>
+          {{/each}}
+        </div>
+        <div class="mg-security__top-list mg-security__section-body">
+          {{#each @controller.eventCounterFacts as |event|}}
+            <div class="mg-security__top-item">
+              <span>{{event.label}}</span>
+              <strong>{{event.count}}</strong>
+            </div>
           {{/each}}
         </div>
       </section>

@@ -14,8 +14,12 @@ module ::MediaGallery
     private
 
     def security_payload
+      environment = environment_status
       download = download_prevention_status
-      controls = security_controls(download)
+      baseline = security_baseline_checks(environment, download)
+      processing_failures = processing_failure_metrics
+      backup_retention = backup_retention_status
+      controls = security_controls(download, environment, baseline)
       counts = controls.each_with_object(Hash.new(0)) { |control, memo| memo[control[:status].to_s] += 1 }
 
       {
@@ -28,18 +32,26 @@ module ::MediaGallery
           attention_count: counts["attention"],
           partial_count: counts["partial"],
           manual_count: counts["manual"],
+          baseline_total: baseline.length,
+          baseline_ok_count: baseline.count { |row| row[:status].to_s == "ok" },
+          baseline_attention_count: baseline.count { |row| row[:status].to_s == "attention" },
+          baseline_partial_count: baseline.count { |row| row[:status].to_s == "partial" },
         },
+        environment: environment,
         controls: controls,
+        baseline_checks: baseline,
         download_prevention: download,
         settings: security_settings,
         storage: storage_status,
         forensics: forensics_status,
+        processing_failures: processing_failures,
+        backup_retention: backup_retention,
         recent_events: recent_security_events,
         links: admin_links,
       }
     end
 
-    def security_controls(download)
+    def security_controls(download, environment, baseline)
       [
         control(
           "Request origin protection",
@@ -96,6 +108,42 @@ module ::MediaGallery
           "ok",
           "Structured media gallery event logging is available for playback/security signals and admin diagnostics.",
           "Review recent events periodically and ensure production log routing/backups are in place."
+        ),
+        control(
+          "Production HTTPS and canonical URL",
+          environment[:status],
+          environment[:summary],
+          environment[:action]
+        ),
+        control(
+          "Recommended security baseline",
+          baseline_control_status(baseline),
+          baseline_control_summary(baseline),
+          "Use the baseline section below as configuration guidance. This is a read-only check and does not change settings."
+        ),
+        control(
+          "Stream scraping anomaly detection",
+          stream_scraping_control_status,
+          stream_scraping_control_summary,
+          "Keep soft anomaly logging enabled first; only enable hard stream limits after observing normal traffic."
+        ),
+        control(
+          "Forensic source URL policy",
+          forensic_http_policy_control_status,
+          forensic_http_policy_control_summary,
+          "Use deny_all in production. Use canonical_only only for HTTP test sites that need local forensic identify URLs."
+        ),
+        control(
+          "Thumbnail cache privacy",
+          thumbnail_cache_control_status,
+          thumbnail_cache_control_summary,
+          "Enable no-store thumbnails when privacy matters more than browser thumbnail caching."
+        ),
+        control(
+          "Upload content validation",
+          fail_closed_upload_control_status,
+          fail_closed_upload_control_summary,
+          "Keep fail-closed enabled so renamed PDFs/ZIPs/random bytes do not enter the full FFmpeg pipeline."
         ),
       ]
     end
@@ -174,6 +222,14 @@ module ::MediaGallery
         max_active_tokens_per_ip: setting_int(:media_gallery_max_active_tokens_per_ip),
         hls_playlist_requests_per_token_per_minute: setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute),
         hls_segment_requests_per_token_per_minute: setting_int(:media_gallery_hls_segment_requests_per_token_per_minute),
+        log_stream_anomalies: setting_bool(:media_gallery_log_stream_anomalies),
+        stream_requests_per_token_per_minute: setting_int(:media_gallery_stream_requests_per_token_per_minute),
+        stream_range_requests_per_token_per_minute: setting_int(:media_gallery_stream_range_requests_per_token_per_minute),
+        stream_anomaly_requests_per_token_per_minute: setting_int(:media_gallery_stream_anomaly_requests_per_token_per_minute),
+        stream_anomaly_range_requests_per_token_per_minute: setting_int(:media_gallery_stream_anomaly_range_requests_per_token_per_minute),
+        no_store_thumbnails: setting_bool(:media_gallery_no_store_thumbnails),
+        forensics_http_source_url_policy: setting_string(:media_gallery_forensics_http_source_url_policy, default: "deny_all"),
+        fail_closed_on_unrecognized_media: setting_bool(:media_gallery_fail_closed_on_unrecognized_media, default: true),
       }
     end
 
@@ -271,6 +327,12 @@ module ::MediaGallery
         setting_row(:media_gallery_forensics_playback_session_retention_days, "Playback-session retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_retention_days, "Export retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_archive_retention_days, "Archive retention", recommended: "90 days or policy"),
+        setting_row(:media_gallery_log_stream_anomalies, "Stream anomaly logging", recommended: "true"),
+        setting_row(:media_gallery_stream_anomaly_requests_per_token_per_minute, "Stream anomaly request threshold", recommended: "observe and tune"),
+        setting_row(:media_gallery_stream_anomaly_range_requests_per_token_per_minute, "Stream anomaly range threshold", recommended: "observe and tune"),
+        setting_row(:media_gallery_forensics_http_source_url_policy, "Forensic HTTP source URL policy", recommended: "deny_all in production"),
+        setting_row(:media_gallery_no_store_thumbnails, "No-store thumbnails", recommended: "true for privacy-sensitive libraries"),
+        setting_row(:media_gallery_fail_closed_on_unrecognized_media, "Fail closed on unrecognized uploads", recommended: "true"),
       ]
     end
 
@@ -372,19 +434,328 @@ module ::MediaGallery
         scope = ::MediaGallery::MediaLogEvent.where("created_at >= ?", 7.days.ago)
       end
 
-      return { total_7d: 0, warning_or_danger_7d: 0, top_event_types: [] } if scope.blank?
+      return empty_recent_security_events if scope.blank?
 
       top = scope.group(:event_type).order(Arel.sql("COUNT(*) DESC")).limit(6).count.map do |event_type, count|
         { event_type: event_type.to_s, count: count.to_i }
       end
 
+      counters = recent_event_counters(scope)
+
       {
         total_7d: scope.count,
         warning_or_danger_7d: scope.where(severity: %w[warning danger error]).count,
         top_event_types: top,
+        counters: counters,
       }
     rescue
-      { total_7d: 0, warning_or_danger_7d: 0, top_event_types: [] }
+      empty_recent_security_events
+    end
+
+    def environment_status
+      base_url = Discourse.base_url.to_s
+      base_uri = URI.parse(base_url)
+      forwarded_proto = request.headers["X-Forwarded-Proto"].to_s.split(",").first.to_s.strip
+      request_scheme = forwarded_proto.presence || request.scheme.to_s
+      request_scheme = request_scheme.sub(%r{://\z}, "")
+      request_scheme = request_scheme.sub(%r{://.*\z}, "") if request_scheme.include?("://")
+      request_scheme = request_scheme.presence || (request.ssl? ? "https" : "http")
+      canonical_host = base_uri.host.to_s.downcase
+      request_host = request.host.to_s.downcase
+      host_matches = canonical_host.present? && request_host == canonical_host
+      base_https = base_uri.scheme.to_s == "https"
+      request_https = request_scheme.to_s == "https"
+      https_ok = base_https && request_https
+
+      status = if https_ok && host_matches
+        "ok"
+      elsif base_https || request_https || host_matches
+        "partial"
+      else
+        "attention"
+      end
+
+      summary = if status == "ok"
+        "Canonical URL and current admin request are using HTTPS and the request host matches the canonical host."
+      elsif !base_https
+        "The canonical Discourse base URL is not HTTPS. Playback tokens and session-bound media requests are safer over HTTPS in production."
+      elsif !request_https
+        "The canonical URL is HTTPS, but this admin request appears to arrive over #{request_scheme.upcase}. Check reverse proxy HTTPS headers."
+      else
+        "The current request host does not match the canonical Discourse host. Confirm that admins and users access one canonical domain."
+      end
+
+      action = status == "ok" ? "Keep force-HTTPS, reverse proxy and HSTS configuration monitored." : "For production, use HTTPS for the canonical Discourse URL and ensure reverse proxy headers preserve the original scheme."
+
+      {
+        status: status,
+        label: status_label(status),
+        base_url: base_url,
+        base_scheme: base_uri.scheme.to_s.presence || "unknown",
+        request_scheme: request_scheme,
+        canonical_host: canonical_host,
+        request_host: request_host,
+        host_matches: host_matches,
+        https_ok: https_ok,
+        summary: summary,
+        action: action,
+      }
+    rescue => e
+      {
+        status: "partial",
+        label: "Partial",
+        base_url: Discourse.base_url.to_s,
+        base_scheme: "unknown",
+        request_scheme: "unknown",
+        canonical_host: "unknown",
+        request_host: request&.host.to_s,
+        host_matches: false,
+        https_ok: false,
+        summary: "Could not fully inspect HTTPS/canonical URL status: #{e.class.name}.",
+        action: "Verify Discourse base_url, force_https, HSTS and reverse proxy scheme headers manually.",
+      }
+    end
+
+    def security_baseline_checks(environment, download)
+      ttl = setting_int(:media_gallery_stream_token_ttl_minutes)
+      archive_enabled = setting_bool(:media_gallery_forensics_export_archive_enabled)
+      archive_days = setting_int(:media_gallery_forensics_export_archive_retention_days)
+      f11_policy = setting_string(:media_gallery_forensics_http_source_url_policy, default: "deny_all")
+      playlist_limit = setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute)
+      segment_limit = setting_int(:media_gallery_hls_segment_requests_per_token_per_minute)
+
+      [
+        baseline_check("production_https", "Production HTTPS/canonical URL", environment[:https_ok] ? "HTTPS" : "Review", "HTTPS canonical production URL", environment[:status], environment[:summary]),
+        baseline_check("hls_enabled", "HLS enabled", yes_no(download[:hls_enabled]), "Enabled for protected videos", download[:hls_enabled] ? "ok" : "attention", "HLS enables segmented delivery, fingerprinting and stricter video fallback policy."),
+        baseline_check("hls_only", "HLS-only protected video", yes_no(download[:hls_only_enabled]), "Enabled for protected video", download[:hls_only_enabled] ? "ok" : "attention", "Blocks direct MP4 stream fallback for protected video playback."),
+        baseline_check("bind_user", "Bind stream tokens to user", yes_no(download[:bind_to_user]), "Enabled", download[:bind_to_user] ? "ok" : "attention", "Prevents a token issued for one user from being reused by another user."),
+        baseline_check("bind_session", "Bind stream tokens to browser session", yes_no(download[:bind_to_session]), "Enabled", download[:bind_to_session] ? "ok" : "partial", "Adds a signed session-binding cookie check in addition to token validation."),
+        baseline_check("stream_ttl", "Stream token lifetime", "#{ttl} minutes", "5-15 minutes for high-value content", ttl.positive? && ttl <= 20 ? "ok" : ttl.positive? ? "partial" : "attention", "Shorter TTLs reduce replay windows; very short values can affect unstable clients."),
+        baseline_check("watermark", "Visible watermark", yes_no(download[:watermark_enabled]), "Enabled for protected content", download[:watermark_enabled] ? "ok" : "partial", "A visible watermark is a deterrent and helps communicate traceability."),
+        baseline_check("watermark_toggle", "User watermark opt-out", download[:watermark_user_can_toggle] ? "Allowed" : "Blocked", "Blocked for protected content", download[:watermark_user_can_toggle] ? "partial" : "ok", "Protected content is stronger when users cannot disable the visible watermark."),
+        baseline_check("fingerprint", "HLS fingerprinting", yes_no(download[:fingerprint_enabled]), "Enabled for protected videos", download[:fingerprint_enabled] ? "ok" : "partial", "A/B HLS fingerprinting helps identify likely recipients of leaked streams."),
+        baseline_check("hls_limits", "HLS request rate limits", "playlist #{playlist_limit}/min, segments #{segment_limit}/min", "Both > 0", playlist_limit.positive? && segment_limit.positive? ? "ok" : "partial", "Per-token HLS limits make automated segment scraping noisier and easier to detect."),
+        baseline_check("stream_anomaly", "Stream anomaly logging", yes_no(setting_bool(:media_gallery_log_stream_anomalies)), "Enabled", setting_bool(:media_gallery_log_stream_anomalies) ? "ok" : "partial", "Soft anomaly logging is safer than immediate blocking while thresholds are tuned."),
+        baseline_check("f11_policy", "Forensic HTTP source URL policy", f11_policy, "deny_all in production", f11_policy == "deny_all" ? "ok" : f11_policy == "canonical_only" ? "partial" : "attention", "Controls whether admin forensic identify may use http:// source URLs."),
+        baseline_check("thumbnail_no_store", "Thumbnail no-store", yes_no(setting_bool(:media_gallery_no_store_thumbnails)), "Enabled for privacy-sensitive libraries", setting_bool(:media_gallery_no_store_thumbnails) ? "ok" : "partial", "No-store thumbnails reduce browser/proxy caching of stable thumbnail URLs."),
+        baseline_check("fail_closed_uploads", "Fail closed on unrecognized uploads", yes_no(setting_bool(:media_gallery_fail_closed_on_unrecognized_media, default: true)), "Enabled", setting_bool(:media_gallery_fail_closed_on_unrecognized_media, default: true) ? "ok" : "attention", "Rejects renamed non-media before the full FFmpeg processing pipeline."),
+        baseline_check("playback_retention", "Playback-session retention", "#{setting_int(:media_gallery_forensics_playback_session_retention_days)} days", "90 days or policy", setting_int(:media_gallery_forensics_playback_session_retention_days).positive? ? "ok" : "attention", "Playback forensic data can include IP/user-agent signals and should have a real retention period."),
+        baseline_check("export_retention", "Forensics export retention", "#{setting_int(:media_gallery_forensics_export_retention_days)} days", "90 days or policy", setting_int(:media_gallery_forensics_export_retention_days).positive? ? "ok" : "partial", "Export files should not remain available forever unless a policy explicitly requires that."),
+        baseline_check("archive_retention", "Forensics archive retention", archive_enabled ? "#{archive_days} days" : "Archive disabled", "90 days or policy when archive is enabled", !archive_enabled || archive_days.positive? ? "ok" : "partial", "Archive copies should have explicit retention if enabled."),
+      ]
+    end
+
+    def baseline_check(key, label, current, recommended, status, note)
+      status = status.to_s.presence || "info"
+      {
+        key: key,
+        label: label,
+        current: current.to_s.presence || "—",
+        recommended: recommended.to_s.presence || "—",
+        status: status,
+        status_label: status_label(status),
+        note: note.to_s,
+      }
+    end
+
+    def baseline_control_status(baseline)
+      statuses = Array(baseline).map { |row| row[:status].to_s }
+      return "attention" if statuses.include?("attention")
+      return "partial" if statuses.include?("partial")
+      "ok"
+    end
+
+    def baseline_control_summary(baseline)
+      ok = Array(baseline).count { |row| row[:status].to_s == "ok" }
+      partial = Array(baseline).count { |row| row[:status].to_s == "partial" }
+      attention = Array(baseline).count { |row| row[:status].to_s == "attention" }
+      "Recommended baseline: #{ok} OK, #{partial} partial, #{attention} attention."
+    end
+
+    def stream_scraping_control_status
+      return "ok" if setting_bool(:media_gallery_log_stream_anomalies)
+      "partial"
+    end
+
+    def stream_scraping_control_summary
+      soft = setting_bool(:media_gallery_log_stream_anomalies) ? "enabled" : "disabled"
+      hard = [setting_int(:media_gallery_stream_requests_per_token_per_minute), setting_int(:media_gallery_stream_range_requests_per_token_per_minute)].any?(&:positive?) ? "configured" : "disabled"
+      "Soft anomaly logging is #{soft}; hard stream request limits are #{hard}."
+    end
+
+    def forensic_http_policy_control_status
+      case setting_string(:media_gallery_forensics_http_source_url_policy, default: "deny_all")
+      when "deny_all" then "ok"
+      when "canonical_only" then "partial"
+      else "attention"
+      end
+    end
+
+    def forensic_http_policy_control_summary
+      policy = setting_string(:media_gallery_forensics_http_source_url_policy, default: "deny_all")
+      "Admin forensic identify HTTP source URL policy is #{policy}."
+    end
+
+    def thumbnail_cache_control_status
+      setting_bool(:media_gallery_no_store_thumbnails) ? "ok" : "partial"
+    end
+
+    def thumbnail_cache_control_summary
+      setting_bool(:media_gallery_no_store_thumbnails) ?
+        "Thumbnail responses use no-store/no-cache headers." :
+        "Thumbnail responses may use private browser caching for performance."
+    end
+
+    def fail_closed_upload_control_status
+      setting_bool(:media_gallery_fail_closed_on_unrecognized_media, default: true) ? "ok" : "attention"
+    end
+
+    def fail_closed_upload_control_summary
+      setting_bool(:media_gallery_fail_closed_on_unrecognized_media, default: true) ?
+        "Unrecognized uploaded media fails before the full FFmpeg processing pipeline." :
+        "Unrecognized media may fall back to the declared extension/MIME processing path."
+    end
+
+    def processing_failure_metrics
+      return empty_processing_failure_metrics unless defined?(::MediaGallery::MediaItem)
+
+      scope = ::MediaGallery::MediaItem.where(status: "failed")
+      last_7 = scope.where("updated_at >= ?", 7.days.ago)
+      last_30 = scope.where("updated_at >= ?", 30.days.ago)
+      reasons = normalized_failure_reason_counts(last_30.limit(5000).pluck(:error_message))
+
+      {
+        total_failed: scope.count,
+        failed_7d: last_7.count,
+        failed_30d: last_30.count,
+        top_reasons_30d: reasons.first(8).map { |reason, count| { reason: reason, count: count } },
+      }
+    rescue
+      empty_processing_failure_metrics
+    end
+
+    def empty_processing_failure_metrics
+      { total_failed: 0, failed_7d: 0, failed_30d: 0, top_reasons_30d: [] }
+    end
+
+    def normalized_failure_reason_counts(messages)
+      counts = Hash.new(0)
+      Array(messages).each do |message|
+        counts[normalize_failure_reason(message)] += 1
+      end
+      counts.sort_by { |reason, count| [-count, reason] }
+    end
+
+    def normalize_failure_reason(message)
+      msg = message.to_s.strip
+      return "unknown_failure" if msg.blank?
+      return "file_content_unrecognized" if msg == "file_content_unrecognized"
+      return "file_content_mismatch" if msg == "file_content_mismatch"
+      return "duration_probe_failed" if msg == "duration_probe_failed"
+      return "duration_exceeds_limit" if msg.start_with?("duration_exceeds_")
+      return "processing_attempt_limit_reached" if msg == "processing_attempt_limit_reached"
+      return "ffprobe_failed" if msg.include?("ffprobe_failed")
+      return "ffmpeg_failed" if msg.include?("ffmpeg_") || msg.include?("FFmpeg")
+      return "storage_failed" if msg.include?("storage") || msg.include?("store_") || msg.include?("upload")
+      return "hls_packaging_failed" if msg.include?("hls")
+      "other_processing_failure"
+    end
+
+    def backup_retention_status
+      paths = backup_retention_paths
+      attention_count = paths.count { |row| row[:status].to_s == "attention" }
+      partial_count = paths.count { |row| row[:status].to_s == "partial" }
+
+      {
+        status: attention_count.positive? ? "attention" : partial_count.positive? ? "partial" : "ok",
+        paths: paths,
+        summary: "#{paths.length} private/export paths reviewed; #{attention_count} attention, #{partial_count} partial.",
+      }
+    rescue
+      { status: "partial", paths: [], summary: "Backup/retention path visibility could not be calculated." }
+    end
+
+    def backup_retention_paths
+      private_root = setting_string(:media_gallery_private_root_path, default: "/shared/media_gallery/private")
+      original_root = setting_string(:media_gallery_original_export_root_path, default: "/shared/media_gallery/original_export")
+      export_root = effective_forensics_export_root(private_root, original_root)
+      archive_root = effective_forensics_archive_root(private_root)
+
+      [
+        backup_path_row("Private media root", private_root, "processed media and thumbnails", "backup required for local/private media", "retention depends on media lifecycle"),
+        backup_path_row("Original export root", original_root, "temporary exported originals", "include or exclude intentionally", "#{setting_int(:media_gallery_original_retention_hours)} hours"),
+        backup_path_row("Forensics export root", export_root, "admin forensic CSV/GZIP exports", "sensitive evidence files", "#{setting_int(:media_gallery_forensics_export_retention_days)} days"),
+        backup_path_row("Forensics archive root", archive_root, "optional private archive copies", "sensitive evidence files", "#{setting_int(:media_gallery_forensics_export_archive_retention_days)} days"),
+      ]
+    end
+
+    def backup_path_row(label, path, purpose, recommendation, retention)
+      path = path.to_s.strip
+      status = if path.blank?
+        "partial"
+      elsif path.start_with?("/shared/") || path == "/shared"
+        "ok"
+      else
+        "partial"
+      end
+      note = if path.blank?
+        "No explicit path is set; plugin fallback behavior will be used."
+      elsif status == "ok"
+        "Path is under /shared, which is normally included in Discourse container backups."
+      else
+        "Path is outside /shared. Confirm your backup/retention process covers it intentionally."
+      end
+
+      {
+        label: label,
+        path: path.presence || "—",
+        purpose: purpose,
+        recommendation: recommendation,
+        retention: retention,
+        status: status,
+        status_label: status_label(status),
+        note: note,
+      }
+    end
+
+    def effective_forensics_export_root(private_root, original_root)
+      configured = setting_string(:media_gallery_forensics_export_root_path)
+      return configured if configured.present?
+      return ::File.join(original_root, "forensics_exports") if original_root.present?
+      return ::File.join(private_root, "forensics_exports") if private_root.present?
+      "/shared/media_gallery/private/forensics_exports"
+    end
+
+    def effective_forensics_archive_root(private_root)
+      configured = setting_string(:media_gallery_forensics_export_archive_root_path)
+      return configured if configured.present?
+      return ::File.join(private_root, "forensics_export_archive") if private_root.present?
+      "/shared/media_gallery/private/forensics_export_archive"
+    end
+
+    def recent_event_counters(scope)
+      interesting = %w[
+        stream_scrape_anomaly
+        stream_rate_limited
+        hls_denied
+        play_rate_limited
+        hls_only_force_stream_blocked
+      ]
+      raw = scope.where(event_type: interesting).group(:event_type).count
+      interesting.map { |event_type| { event_type: event_type, count: raw[event_type].to_i } }
+    end
+
+    def empty_recent_security_events
+      {
+        total_7d: 0,
+        warning_or_danger_7d: 0,
+        top_event_types: [],
+        counters: [],
+      }
+    end
+
+    def yes_no(value)
+      value ? "Yes" : "No"
     end
 
     def admin_links

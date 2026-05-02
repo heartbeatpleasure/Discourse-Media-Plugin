@@ -265,6 +265,54 @@ function decorateEvent(entry) {
   };
 }
 
+function decorateBaselineCheck(check) {
+  const status = check?.status || "info";
+  return {
+    ...check,
+    key: check?.key || check?.label,
+    label: normalizeText(check?.label),
+    current: normalizeText(check?.current),
+    recommended: normalizeText(check?.recommended),
+    note: normalizeText(check?.note),
+    statusText: normalizeText(check?.status_label || status),
+    statusChipClass: statusChipClass(status),
+    statusDotClass: statusDotClass(status),
+  };
+}
+
+function decoratePath(row) {
+  const status = row?.status || "info";
+  return {
+    ...row,
+    key: row?.label || row?.path,
+    label: normalizeText(row?.label),
+    path: normalizeText(row?.path),
+    purpose: normalizeText(row?.purpose),
+    recommendation: normalizeText(row?.recommendation),
+    retention: normalizeText(row?.retention),
+    note: normalizeText(row?.note),
+    statusText: normalizeText(row?.status_label || status),
+    statusChipClass: statusChipClass(status),
+    statusDotClass: statusDotClass(status),
+  };
+}
+
+function decorateFailureReason(row) {
+  return {
+    key: row?.reason || "unknown",
+    label: titleize(row?.reason || "unknown"),
+    count: formatNumber(row?.count),
+  };
+}
+
+function decorateCounter(row) {
+  return {
+    key: row?.event_type || "event",
+    label: titleize(row?.event_type || "event"),
+    count: formatNumber(row?.count),
+  };
+}
+
 function normalizeSecurityPayload(payload) {
   return payload?.security || payload?.security_status || payload?.data || payload || {};
 }
@@ -281,7 +329,13 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
   @tracked forensics = {};
   @tracked recentEvents = {};
   @tracked topEventTypes = [];
+  @tracked eventCounters = [];
   @tracked links = [];
+  @tracked environment = {};
+  @tracked baselineChecks = [];
+  @tracked processingFailures = {};
+  @tracked backupRetention = {};
+  @tracked backupPaths = [];
   @tracked generatedAt = "";
   @tracked hasLoaded = false;
 
@@ -297,7 +351,13 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.forensics = {};
     this.recentEvents = {};
     this.topEventTypes = [];
+    this.eventCounters = [];
     this.links = [];
+    this.environment = {};
+    this.baselineChecks = [];
+    this.processingFailures = {};
+    this.backupRetention = {};
+    this.backupPaths = [];
     this.generatedAt = "";
     this.hasLoaded = false;
   }
@@ -319,9 +379,17 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.download = data?.download_prevention || {};
     this.profiles = Array.isArray(data?.storage?.profiles) ? data.storage.profiles.map(decorateProfile) : [];
     this.forensics = data?.forensics || {};
+    this.environment = data?.environment || {};
+    this.baselineChecks = Array.isArray(data?.baseline_checks) ? data.baseline_checks.map(decorateBaselineCheck) : [];
+    this.processingFailures = data?.processing_failures || {};
+    this.backupRetention = data?.backup_retention || {};
+    this.backupPaths = Array.isArray(data?.backup_retention?.paths) ? data.backup_retention.paths.map(decoratePath) : [];
     this.recentEvents = data?.recent_events || {};
     this.topEventTypes = Array.isArray(data?.recent_events?.top_event_types)
       ? data.recent_events.top_event_types.map(decorateEvent)
+      : [];
+    this.eventCounters = Array.isArray(data?.recent_events?.counters)
+      ? data.recent_events.counters.map(decorateCounter)
       : [];
     this.links = Array.isArray(data?.links) ? data.links : [];
     this.hasLoaded = true;
@@ -565,6 +633,147 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         pathValue,
       };
     });
+  }
+
+  get environmentFacts() {
+    const status = this.environment?.status || "info";
+    return [
+      {
+        key: "base_url",
+        label: "Canonical base URL",
+        value: normalizeText(this.environment?.base_url),
+        detail: "Production should use a single HTTPS canonical URL.",
+        statusText: normalizeText(this.environment?.label || status),
+        statusChipClass: statusChipClass(status),
+        statusDotClass: statusDotClass(status),
+      },
+      {
+        key: "request_scheme",
+        label: "Current request scheme",
+        value: normalizeText(this.environment?.request_scheme).toUpperCase(),
+        detail: `Request host ${normalizeText(this.environment?.request_host)}; canonical host ${normalizeText(this.environment?.canonical_host)}.`,
+        statusText: this.environment?.https_ok ? "HTTPS" : "Review",
+        statusChipClass: statusChipClass(this.environment?.https_ok ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.environment?.https_ok ? "ok" : "warning"),
+      },
+      {
+        key: "host_match",
+        label: "Canonical host match",
+        value: this.environment?.host_matches ? "Matches" : "Review",
+        detail: normalizeText(this.environment?.action),
+        statusText: this.environment?.host_matches ? "OK" : "Check",
+        statusChipClass: statusChipClass(this.environment?.host_matches ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.environment?.host_matches ? "ok" : "warning"),
+      },
+    ];
+  }
+
+  get recentControlFacts() {
+    const hardStreamLimits = Number(this.download?.stream_requests_per_token_per_minute || 0) > 0 || Number(this.download?.stream_range_requests_per_token_per_minute || 0) > 0;
+    const f11Policy = normalizeText(this.download?.forensics_http_source_url_policy, "deny_all");
+    return [
+      {
+        key: "f08_soft",
+        label: "F08 stream anomaly logging",
+        value: this.download?.log_stream_anomalies ? "Enabled" : "Disabled",
+        detail: `Soft thresholds: ${formatNumber(this.download?.stream_anomaly_requests_per_token_per_minute)} requests/min and ${formatNumber(this.download?.stream_anomaly_range_requests_per_token_per_minute)} range requests/min.`,
+        statusText: this.download?.log_stream_anomalies ? "OK" : "Check",
+        statusChipClass: statusChipClass(this.download?.log_stream_anomalies ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.download?.log_stream_anomalies ? "ok" : "warning"),
+      },
+      {
+        key: "f08_hard",
+        label: "F08 hard stream limits",
+        value: hardStreamLimits ? "Configured" : "Observe only",
+        detail: `Hard limits: ${formatNumber(this.download?.stream_requests_per_token_per_minute)} total/min and ${formatNumber(this.download?.stream_range_requests_per_token_per_minute)} range/min.`,
+        statusText: hardStreamLimits ? "Active" : "Safe default",
+        statusChipClass: statusChipClass(hardStreamLimits ? "warning" : "ok"),
+        statusDotClass: statusDotClass(hardStreamLimits ? "warning" : "ok"),
+      },
+      {
+        key: "f11_policy",
+        label: "F11 forensic HTTP policy",
+        value: f11Policy,
+        detail: "deny_all is strict production behavior; canonical_only is useful for HTTP test sites.",
+        statusText: f11Policy === "deny_all" ? "OK" : f11Policy === "canonical_only" ? "Test mode" : "Review",
+        statusChipClass: statusChipClass(f11Policy === "deny_all" ? "ok" : f11Policy === "canonical_only" ? "warning" : "attention"),
+        statusDotClass: statusDotClass(f11Policy === "deny_all" ? "ok" : f11Policy === "canonical_only" ? "warning" : "attention"),
+      },
+      {
+        key: "f12_thumbs",
+        label: "F12 thumbnail no-store",
+        value: this.download?.no_store_thumbnails ? "Enabled" : "Disabled",
+        detail: "No-store thumbnails reduce cache reuse but can increase thumbnail traffic.",
+        statusText: this.download?.no_store_thumbnails ? "OK" : "Optional",
+        statusChipClass: statusChipClass(this.download?.no_store_thumbnails ? "ok" : "info"),
+        statusDotClass: statusDotClass(this.download?.no_store_thumbnails ? "ok" : "info"),
+      },
+      {
+        key: "fail_closed",
+        label: "Upload content validation",
+        value: this.download?.fail_closed_on_unrecognized_media ? "Fail closed" : "Fallback allowed",
+        detail: "Rejects renamed PDFs/ZIPs/random bytes before the full FFmpeg processing pipeline.",
+        statusText: this.download?.fail_closed_on_unrecognized_media ? "OK" : "Review",
+        statusChipClass: statusChipClass(this.download?.fail_closed_on_unrecognized_media ? "ok" : "attention"),
+        statusDotClass: statusDotClass(this.download?.fail_closed_on_unrecognized_media ? "ok" : "attention"),
+      },
+    ];
+  }
+
+  get baselineRows() {
+    return this.baselineChecks;
+  }
+
+  get processingFailureFacts() {
+    const rows = Array.isArray(this.processingFailures?.top_reasons_30d)
+      ? this.processingFailures.top_reasons_30d.map(decorateFailureReason)
+      : [];
+
+    if (rows.length) {
+      return rows;
+    }
+
+    return [{ key: "none", label: "No recent processing failures", count: "0" }];
+  }
+
+  get processingFailureSummaryFacts() {
+    return [
+      {
+        key: "failed_7d",
+        label: "Failed last 7 days",
+        value: formatNumber(this.processingFailures?.failed_7d),
+        detail: "Media items currently failed and updated in the last 7 days.",
+        statusText: Number(this.processingFailures?.failed_7d || 0) > 0 ? "Review" : "OK",
+        statusChipClass: statusChipClass(Number(this.processingFailures?.failed_7d || 0) > 0 ? "warning" : "ok"),
+        statusDotClass: statusDotClass(Number(this.processingFailures?.failed_7d || 0) > 0 ? "warning" : "ok"),
+      },
+      {
+        key: "failed_30d",
+        label: "Failed last 30 days",
+        value: formatNumber(this.processingFailures?.failed_30d),
+        detail: "Grouped by sanitized failure reason, not raw user content.",
+        statusText: Number(this.processingFailures?.failed_30d || 0) > 0 ? "Info" : "OK",
+        statusChipClass: statusChipClass(Number(this.processingFailures?.failed_30d || 0) > 0 ? "info" : "ok"),
+        statusDotClass: statusDotClass(Number(this.processingFailures?.failed_30d || 0) > 0 ? "info" : "ok"),
+      },
+      {
+        key: "failed_total",
+        label: "Total failed items",
+        value: formatNumber(this.processingFailures?.total_failed),
+        detail: "All currently failed media items, regardless of age.",
+        statusText: "Info",
+        statusChipClass: statusChipClass("info"),
+        statusDotClass: statusDotClass("info"),
+      },
+    ];
+  }
+
+  get backupPathFacts() {
+    return this.backupPaths;
+  }
+
+  get eventCounterFacts() {
+    return this.eventCounters;
   }
 
   get quickLinks() {

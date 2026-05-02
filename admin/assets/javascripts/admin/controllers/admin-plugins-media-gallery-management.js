@@ -110,6 +110,101 @@ function stringifyValue(value, key = "") {
   return normalized.trim() ? normalized : "—";
 }
 
+function friendlyProcessingError(message) {
+  const raw = String(message || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (raw === "file_content_unrecognized") {
+    return {
+      title: "File content could not be recognized",
+      summary: "The uploaded file does not look like a valid image, audio file, or video file after server-side inspection.",
+      advice: "Ask the user to upload the original media file again. Renamed PDFs, ZIP files, documents, or corrupted files are intentionally rejected.",
+      retry: "Retry is usually not useful unless the user uploads a clean media file first.",
+      raw,
+    };
+  }
+
+  if (raw === "file_content_mismatch") {
+    return {
+      title: "File content does not match the extension",
+      summary: "The server detected media content that does not match the uploaded file extension or allowed media type.",
+      advice: "Ask the user to export the file with a correct extension and upload it again.",
+      retry: "Retrying the same file is unlikely to help.",
+      raw,
+    };
+  }
+
+  if (raw === "duration_probe_failed") {
+    return {
+      title: "Duration could not be checked",
+      summary: "The server could not read the media duration before processing.",
+      advice: "Ask the user to try a standard MP4, MP3, M4A, or image export. Check FFprobe/FFmpeg availability if this happens often.",
+      retry: "Retry may help only if the failure was temporary.",
+      raw,
+    };
+  }
+
+  if (raw.startsWith("duration_exceeds_")) {
+    return {
+      title: "Media duration is too long",
+      summary: "The file is longer than the configured Media Gallery duration policy allows.",
+      advice: "Ask the user to shorten the media or adjust the duration limit if this content should be allowed.",
+      retry: "Retrying the same file will fail until the file or policy changes.",
+      raw,
+    };
+  }
+
+  if (raw === "processing_attempt_limit_reached") {
+    return {
+      title: "Processing attempt limit reached",
+      summary: "The item failed repeatedly and processing was stopped to avoid an endless retry loop.",
+      advice: "Review earlier logs for the first failure reason, then retry only after fixing the underlying cause.",
+      retry: "Retry only after reviewing the cause.",
+      raw,
+    };
+  }
+
+  if (raw.includes("ffprobe_failed")) {
+    return {
+      title: "FFprobe could not inspect the file",
+      summary: "The media inspection step failed. This can happen with corrupted, unsupported, or unusual media containers.",
+      advice: "Ask for a standard export and check FFprobe availability if multiple normal files fail.",
+      retry: "Retry may help only for temporary server issues.",
+      raw,
+    };
+  }
+
+  if (raw.includes("ffmpeg_")) {
+    return {
+      title: "FFmpeg processing failed",
+      summary: "The media reached the processing pipeline, but FFmpeg could not produce the required output.",
+      advice: "Ask for a standard export, or review server logs if this happens for normal files.",
+      retry: "Retry may help if the failure was caused by temporary storage or worker load.",
+      raw,
+    };
+  }
+
+  if (raw.includes("storage") || raw.includes("store_") || raw.includes("upload")) {
+    return {
+      title: "Storage or output save failed",
+      summary: "The file may have processed, but the server could not store or register the output safely.",
+      advice: "Check local/S3/R2 storage health, permissions, bucket configuration and available disk space.",
+      retry: "Retry after storage health is confirmed.",
+      raw,
+    };
+  }
+
+  return {
+    title: "Processing failed",
+    summary: "The item failed during processing. The raw code below is kept for support and log lookup.",
+    advice: "Check Media Gallery logs and server logs for details before retrying repeatedly.",
+    retry: "Retry may help only if the underlying cause was temporary.",
+    raw,
+  };
+}
+
 function formatHistoryAction(action) {
   switch (String(action || "")) {
     case "update_metadata":
@@ -593,14 +688,34 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     );
   }
 
-  get selectedProcessingErrorMessage() {
+  get selectedProcessingErrorDetails() {
     const message = String(this.selectedItem?.error_message || "").trim();
 
     if (!message || this.selectedItem?.status !== "failed") {
-      return "";
+      return null;
     }
 
-    return message;
+    return friendlyProcessingError(message);
+  }
+
+  get selectedProcessingErrorMessage() {
+    return this.selectedProcessingErrorDetails?.raw || "";
+  }
+
+  get selectedProcessingErrorTitle() {
+    return this.selectedProcessingErrorDetails?.title || "Processing error";
+  }
+
+  get selectedProcessingErrorSummary() {
+    return this.selectedProcessingErrorDetails?.summary || "";
+  }
+
+  get selectedProcessingErrorAdvice() {
+    return this.selectedProcessingErrorDetails?.advice || "";
+  }
+
+  get selectedProcessingErrorRetry() {
+    return this.selectedProcessingErrorDetails?.retry || "";
   }
 
   get selectedMetaRows() {
