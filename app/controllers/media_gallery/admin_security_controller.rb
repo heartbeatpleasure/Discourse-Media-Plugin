@@ -230,6 +230,7 @@ module ::MediaGallery
         no_store_thumbnails: setting_bool(:media_gallery_no_store_thumbnails),
         forensics_http_source_url_policy: setting_string(:media_gallery_forensics_http_source_url_policy, default: "deny_all"),
         fail_closed_on_unrecognized_media: setting_bool(:media_gallery_fail_closed_on_unrecognized_media, default: true),
+        block_direct_media_navigation: setting_bool(:media_gallery_block_direct_media_navigation, default: true),
       }
     end
 
@@ -327,6 +328,7 @@ module ::MediaGallery
         setting_row(:media_gallery_forensics_playback_session_retention_days, "Playback-session retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_retention_days, "Export retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_archive_retention_days, "Archive retention", recommended: "90 days or policy"),
+        setting_row(:media_gallery_block_direct_media_navigation, "Block direct media navigation", recommended: "true"),
         setting_row(:media_gallery_log_stream_anomalies, "Stream anomaly logging", recommended: "true"),
         setting_row(:media_gallery_stream_anomaly_requests_per_token_per_minute, "Stream anomaly request threshold", recommended: "observe and tune"),
         setting_row(:media_gallery_stream_anomaly_range_requests_per_token_per_minute, "Stream anomaly range threshold", recommended: "observe and tune"),
@@ -535,6 +537,7 @@ module ::MediaGallery
         baseline_check("watermark_toggle", "User watermark opt-out", download[:watermark_user_can_toggle] ? "Allowed" : "Blocked", "Blocked for protected content", download[:watermark_user_can_toggle] ? "partial" : "ok", "Protected content is stronger when users cannot disable the visible watermark."),
         baseline_check("fingerprint", "HLS fingerprinting", yes_no(download[:fingerprint_enabled]), "Enabled for protected videos", download[:fingerprint_enabled] ? "ok" : "partial", "A/B HLS fingerprinting helps identify likely recipients of leaked streams."),
         baseline_check("hls_limits", "HLS request rate limits", "playlist #{playlist_limit}/min, segments #{segment_limit}/min", "Both > 0", playlist_limit.positive? && segment_limit.positive? ? "ok" : "partial", "Per-token HLS limits make automated segment scraping noisier and easier to detect."),
+        baseline_check("direct_media_navigation", "Block direct media navigation", yes_no(download[:block_direct_media_navigation]), "Enabled", download[:block_direct_media_navigation] ? "ok" : "partial", "Blocks clear address-bar/new-tab navigation to tokenized play/stream/HLS endpoints while allowing normal player requests."),
         baseline_check("stream_anomaly", "Stream anomaly logging", yes_no(setting_bool(:media_gallery_log_stream_anomalies)), "Enabled", setting_bool(:media_gallery_log_stream_anomalies) ? "ok" : "partial", "Soft anomaly logging is safer than immediate blocking while thresholds are tuned."),
         baseline_check("f11_policy", "Forensic HTTP source URL policy", f11_policy, "deny_all in production", f11_policy == "deny_all" ? "ok" : f11_policy == "canonical_only" ? "partial" : "attention", "Controls whether admin forensic identify may use http:// source URLs."),
         baseline_check("thumbnail_no_store", "Thumbnail no-store", yes_no(setting_bool(:media_gallery_no_store_thumbnails)), "Enabled for privacy-sensitive libraries", setting_bool(:media_gallery_no_store_thumbnails) ? "ok" : "partial", "No-store thumbnails reduce browser/proxy caching of stable thumbnail URLs."),
@@ -740,6 +743,7 @@ module ::MediaGallery
         hls_denied
         play_rate_limited
         hls_only_force_stream_blocked
+        direct_media_navigation_blocked
       ]
       raw = scope.where(event_type: interesting).group(:event_type).count
       interesting.map { |event_type| { event_type: event_type, count: raw[event_type].to_i } }

@@ -27,6 +27,7 @@ module ::MediaGallery
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
+      deny_direct_media_navigation!(:master, token: token, item: item)
 
       role = hls_role_for(item)
       data = read_master_playlist!(item, role: role)
@@ -48,6 +49,7 @@ module ::MediaGallery
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
+      deny_direct_media_navigation!(:variant, token: token, item: item)
 
       variant = params[:variant].to_s
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
@@ -72,6 +74,7 @@ module ::MediaGallery
       deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
+      deny_direct_media_navigation!(:segment, token: token, item: item)
 
       variant = params[:variant].to_s
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
@@ -210,6 +213,38 @@ module ::MediaGallery
 
     def deny!(reason, token: nil)
       log_denial!(reason, token: token)
+      raise Discourse::NotFound
+    end
+
+    def deny_direct_media_navigation!(endpoint, token:, item: nil)
+      return unless ::MediaGallery::RequestSecurity.direct_media_navigation_blocked?(request)
+
+      details = {
+        reason: "direct_media_navigation_blocked",
+        endpoint: endpoint.to_s,
+        public_id: params[:public_id].to_s.presence,
+        variant: params[:variant].to_s.presence,
+        segment: params[:segment].to_s.presence,
+        token_present: token.present?,
+        token_sha256: token_sha256_label(token),
+      }.merge(::MediaGallery::RequestSecurity.fetch_metadata_details(request))
+
+      ::MediaGallery::LogEvents.record(
+        event_type: "direct_media_navigation_blocked",
+        severity: "warning",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        message: "hls_#{endpoint}",
+        details: details,
+      )
+
+      log_denial!("direct_media_navigation_blocked", token: token)
+      raise Discourse::NotFound
+    rescue Discourse::NotFound
+      raise
+    rescue
       raise Discourse::NotFound
     end
 

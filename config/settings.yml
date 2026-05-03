@@ -610,6 +610,13 @@ plugins:
     default: false
     client: false
 
+  # Block copied media URLs opened directly in a browser tab/window.
+  # Uses Fetch Metadata headers to block clear top-level navigation requests to
+  # tokenized play/stream/HLS endpoints while allowing normal player/media requests.
+  media_gallery_block_direct_media_navigation:
+    default: true
+    client: false
+
   # Stream scraping/anomaly controls for /media/stream.
   # Hard limits default to 0 (disabled) to avoid breaking legitimate browser range behavior.
   # Soft anomaly logging is enabled by default and records warning events when thresholds are exceeded.

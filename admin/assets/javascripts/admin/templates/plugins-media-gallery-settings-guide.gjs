@@ -415,6 +415,16 @@ export default RouteTemplate(
 
           <article class="mg-guide__setting-row">
             <div class="mg-guide__row-copy">
+              <h3>Block direct media URL opening</h3>
+              <code class="mg-guide__setting-name">media_gallery_block_direct_media_navigation</code>
+              <p class="mg-guide__setting-help">Prevents copied tokenized play, stream and HLS URLs from opening as a normal browser page while still allowing the site player to load media. This applies while requests pass through Discourse; final S3/R2 redirect URLs remain controlled only by their short expiry.</p>
+            </div>
+            <div class="mg-guide__setting-value"><span class="mg-guide__value-label">Suggested value</span><span class="mg-guide__value-text">true</span></div>
+            <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery_block_direct_media_navigation">Open setting</a>
+          </article>
+
+          <article class="mg-guide__setting-row">
+            <div class="mg-guide__row-copy">
               <h3>Stream anomaly logging</h3>
               <code class="mg-guide__setting-name">media_gallery_log_stream_anomalies</code>
               <p class="mg-guide__setting-help">Logs suspicious request patterns, such as many stream or range requests per token. Good first step before enabling hard blocking.</p>

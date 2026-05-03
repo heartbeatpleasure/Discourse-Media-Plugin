@@ -1025,6 +1025,30 @@ module ::MediaGallery
     end
 
     def ensure_secure_play_request!
+      if ::MediaGallery::RequestSecurity.direct_media_navigation_blocked?(request)
+        details = {
+          reason: "direct_media_navigation_blocked",
+          method: request.request_method,
+        }.merge(::MediaGallery::RequestSecurity.fetch_metadata_details(request))
+
+        ::MediaGallery::OperationLogger.warn(
+          "request_blocked",
+          operation: action_name,
+          item: nil,
+          data: details
+        )
+        log_security_event(
+          event_type: "direct_media_navigation_blocked",
+          severity: "warning",
+          category: "playback",
+          message: "play_token_navigation_blocked",
+          details: details,
+        )
+
+        set_sensitive_json_headers!
+        return render_json_error("forbidden", status: 403, message: "Forbidden")
+      end
+
       return if ::MediaGallery::RequestSecurity.secure_token_issue_request?(self)
 
       ::MediaGallery::OperationLogger.warn(

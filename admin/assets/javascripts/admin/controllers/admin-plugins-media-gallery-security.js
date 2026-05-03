@@ -166,6 +166,15 @@ function evaluateSetting(setting) {
           ? "Users may disable the visible watermark."
           : "Users cannot disable the visible watermark.",
       };
+    case "media_gallery_block_direct_media_navigation":
+      return {
+        displayValue: boolValue ? "Enabled" : "Disabled",
+        status: boolValue ? "ok" : "warning",
+        statusText: boolValue ? "OK" : "Partial",
+        note: boolValue
+          ? "Clear top-level navigation to tokenized media URLs is blocked."
+          : "Copied media URLs may open directly while their token remains valid.",
+      };
     case "media_gallery_bind_stream_to_user":
     case "media_gallery_bind_stream_to_session":
       return {
@@ -489,6 +498,17 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         statusDotClass: statusDotClass(this.download?.hls_only_enabled ? "ok" : "warning"),
       },
       {
+        key: "direct_navigation",
+        label: "Direct URL opening",
+        value: this.download?.block_direct_media_navigation ? "Blocked" : "Allowed",
+        detail: this.download?.block_direct_media_navigation
+          ? "Address-bar/new-tab navigation to tokenized media endpoints is blocked when browsers send Fetch Metadata headers."
+          : "Copied tokenized media URLs may open directly until their token expires.",
+        statusText: this.download?.block_direct_media_navigation ? "OK" : "Partial",
+        statusChipClass: statusChipClass(this.download?.block_direct_media_navigation ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.download?.block_direct_media_navigation ? "ok" : "warning"),
+      },
+      {
         key: "fingerprint",
         label: "Fingerprinting",
         value: this.download?.fingerprint_enabled ? "Enabled" : "Disabled",
@@ -672,6 +692,15 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     const hardStreamLimits = Number(this.download?.stream_requests_per_token_per_minute || 0) > 0 || Number(this.download?.stream_range_requests_per_token_per_minute || 0) > 0;
     const f11Policy = normalizeText(this.download?.forensics_http_source_url_policy, "deny_all");
     return [
+      {
+        key: "direct_navigation",
+        label: "Direct media URL opening",
+        value: this.download?.block_direct_media_navigation ? "Blocked" : "Allowed",
+        detail: "Blocks clear top-level browser navigation to tokenized play, stream and HLS endpoints. Final S3/R2 redirect URLs cannot be controlled after redirect.",
+        statusText: this.download?.block_direct_media_navigation ? "OK" : "Partial",
+        statusChipClass: statusChipClass(this.download?.block_direct_media_navigation ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.download?.block_direct_media_navigation ? "ok" : "warning"),
+      },
       {
         key: "f08_soft",
         label: "Stream anomaly logging",

@@ -19,6 +19,48 @@ module ::MediaGallery
       false
     end
 
+    def direct_media_navigation_blocked?(request)
+      block_direct_media_navigation? && direct_navigation_request?(request)
+    rescue
+      false
+    end
+
+    def direct_navigation_request?(request)
+      return false if request.blank?
+
+      method = request.request_method.to_s.upcase
+      return false unless %w[GET HEAD].include?(method)
+
+      fetch_mode = request.headers["Sec-Fetch-Mode"].to_s.strip.downcase
+      fetch_dest = request.headers["Sec-Fetch-Dest"].to_s.strip.downcase
+
+      # Modern browsers mark address-bar/new-tab navigations as mode=navigate
+      # and/or destination=document. Media element and hls.js requests use video,
+      # audio, empty, no-cors/cors/same-origin, etc. Missing headers are allowed
+      # for compatibility with older browsers and non-browser diagnostic tools.
+      fetch_mode == "navigate" || fetch_dest == "document"
+    rescue
+      false
+    end
+
+    def fetch_metadata_details(request)
+      {
+        sec_fetch_mode: request.headers["Sec-Fetch-Mode"].to_s.presence,
+        sec_fetch_dest: request.headers["Sec-Fetch-Dest"].to_s.presence,
+        sec_fetch_site: request.headers["Sec-Fetch-Site"].to_s.presence,
+        accept: request.headers["Accept"].to_s[0, 160].presence,
+      }
+    rescue
+      {}
+    end
+
+    def block_direct_media_navigation?
+      SiteSetting.respond_to?(:media_gallery_block_direct_media_navigation) &&
+        SiteSetting.media_gallery_block_direct_media_navigation
+    rescue
+      false
+    end
+
     def same_origin_request?(request)
       return false if request.blank?
 

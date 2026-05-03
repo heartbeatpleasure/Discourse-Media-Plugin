@@ -48,6 +48,10 @@ module ::MediaGallery
 
       kind = "main" if kind.blank?
 
+      if ::MediaGallery::RequestSecurity.direct_media_navigation_blocked?(request)
+        deny_stream!(:direct_media_navigation_blocked, token: token, payload: payload, item: item)
+      end
+
       return unless enforce_stream_scraping_controls!(token: token, payload: payload, item: item)
 
       delivery = resolve_file(item, payload, kind)
@@ -116,7 +120,7 @@ module ::MediaGallery
           media_public_id: item&.public_id,
           token_present: token.present?,
           token_sha256: ::MediaGallery::Security.token_sha256_label(token),
-        },
+        }.merge(::MediaGallery::RequestSecurity.fetch_metadata_details(request)),
       )
       raise Discourse::NotFound
     end
