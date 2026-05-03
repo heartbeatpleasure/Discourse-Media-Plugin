@@ -33,20 +33,48 @@ module ::MediaGallery
 
       fetch_mode = request.headers["Sec-Fetch-Mode"].to_s.strip.downcase
       fetch_dest = request.headers["Sec-Fetch-Dest"].to_s.strip.downcase
-      fetch_site = request.headers["Sec-Fetch-Site"].to_s.strip.downcase
+
+      # Clear top-level browser navigations should never be needed for tokenized
+      # media endpoints. This catches many address-bar/new-tab opens directly.
+      return true if fetch_mode == "navigate" || fetch_dest == "document"
+
+      # For media-like direct opens (.m3u8/.ts), some browsers do not present the
+      # request as document navigation. In that case, require a trusted site/player
+      # context and reject requests whose own Referrer is another tokenized media
+      # endpoint, such as a playlist opened directly in the browser.
+      !trusted_media_player_context?(request)
+    rescue
+      false
+    end
+
+    def trusted_media_player_context?(request)
+      expected = trusted_base_urls
+      return false if expected.blank?
+
       origin = request.headers["Origin"].to_s.strip
       referer = request.referer.to_s.strip
+      fetch_site = request.headers["Sec-Fetch-Site"].to_s.strip.downcase
 
-      # Modern browsers mark normal address-bar/new-tab navigations as
-      # mode=navigate and/or destination=document. Some browsers treat direct
-      # .m3u8/.ts URL opens as media/download requests instead; those often show
-      # Sec-Fetch-Site: none with no Origin/Referer because they did not originate
-      # from the site player. Same-origin player requests should carry a same-origin
-      # Fetch Metadata value or a same-origin Referer/Origin.
-      return true if fetch_mode == "navigate" || fetch_dest == "document"
-      return true if fetch_site == "none" && origin.blank? && referer.blank?
+      # Browser media/XHR requests from the site can provide Origin. Origin has no
+      # path, so a same-origin Origin is enough to prove it came from the site.
+      return true if origin.present? && same_origin_url_any?(origin, expected)
 
-      false
+      if referer.present?
+        return false unless same_origin_url_any?(referer, expected)
+
+        # If the Referer itself is a tokenized media endpoint, the current request
+        # probably originates from a playlist or media file that was opened directly
+        # outside the Media Gallery page/player. Do not let that chain continue.
+        return false if media_endpoint_url?(referer)
+
+        return true
+      end
+
+      # Some valid browser media requests have no Origin/Referer but do include
+      # Fetch Metadata. Only trust that when the request is addressed to the
+      # canonical Discourse origin.
+      %w[same-origin same-site].include?(fetch_site) &&
+        canonical_request_origin?(request, expected)
     rescue
       false
     end
@@ -135,6 +163,19 @@ module ::MediaGallery
       nil
     end
     private_class_method :request_origin_url
+
+    def media_endpoint_url?(candidate)
+      uri = URI.parse(candidate)
+      path = uri.path.to_s
+
+      path.start_with?("/media/hls/") ||
+        path == "/media/stream" ||
+        path.start_with?("/media/stream/") ||
+        path.match?(%r{\A/media/[^/]+/play\z})
+    rescue URI::InvalidURIError
+      false
+    end
+    private_class_method :media_endpoint_url?
 
     def same_origin_url?(candidate, expected)
       candidate_uri = URI.parse(candidate)
