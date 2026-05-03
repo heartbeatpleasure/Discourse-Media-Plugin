@@ -33,12 +33,20 @@ module ::MediaGallery
 
       fetch_mode = request.headers["Sec-Fetch-Mode"].to_s.strip.downcase
       fetch_dest = request.headers["Sec-Fetch-Dest"].to_s.strip.downcase
+      fetch_site = request.headers["Sec-Fetch-Site"].to_s.strip.downcase
+      origin = request.headers["Origin"].to_s.strip
+      referer = request.referer.to_s.strip
 
-      # Modern browsers mark address-bar/new-tab navigations as mode=navigate
-      # and/or destination=document. Media element and hls.js requests use video,
-      # audio, empty, no-cors/cors/same-origin, etc. Missing headers are allowed
-      # for compatibility with older browsers and non-browser diagnostic tools.
-      fetch_mode == "navigate" || fetch_dest == "document"
+      # Modern browsers mark normal address-bar/new-tab navigations as
+      # mode=navigate and/or destination=document. Some browsers treat direct
+      # .m3u8/.ts URL opens as media/download requests instead; those often show
+      # Sec-Fetch-Site: none with no Origin/Referer because they did not originate
+      # from the site player. Same-origin player requests should carry a same-origin
+      # Fetch Metadata value or a same-origin Referer/Origin.
+      return true if fetch_mode == "navigate" || fetch_dest == "document"
+      return true if fetch_site == "none" && origin.blank? && referer.blank?
+
+      false
     rescue
       false
     end
