@@ -2,6 +2,7 @@
 
 require "digest"
 require "json"
+require "set"
 
 module ::MediaGallery
   # Admin-only helper endpoints.
@@ -14,16 +15,21 @@ module ::MediaGallery
 
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
     def search
-      items = filtered_search_scope.limit(search_limit).map do |item|
+      candidates = filtered_search_scope.limit(search_candidate_limit).to_a
+      active_key_ids_by_item = hls_aes128_active_key_ids_by_item(candidates)
+
+      items = []
+      candidates.each do |item|
         has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
         next if has_hls_filter == "true" && !has_hls
         next if has_hls_filter == "false" && has_hls
 
-        aes_status = hls_aes128_status_for(item, has_hls: has_hls)
+        aes_status = hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item)
         next unless hls_aes128_filter_matches?(aes_status, hls_aes128_filter)
 
-        serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status)
-      end.compact
+        items << serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status)
+        break if items.length >= search_limit
+      end
 
       render_json_dump(items: items, search_profiles: search_profiles_summary)
     end
@@ -667,6 +673,15 @@ module ::MediaGallery
       limit
     end
 
+    def search_candidate_limit
+      # HLS/AES filters are partly derived from manifest metadata, so we may need
+      # to inspect more rows than the final UI limit to return a full page. Keep
+      # this bounded to avoid expensive admin searches on large libraries.
+      return search_limit if hls_aes128_filter.blank? || hls_aes128_filter == "all"
+
+      [[search_limit * 5, search_limit].max, 500].min
+    end
+
     def search_profiles_summary
       ::MediaGallery::StorageSettingsResolver.configured_profiles_summary.map do |profile|
         {
@@ -1252,19 +1267,41 @@ module ::MediaGallery
     end
 
 
-    def hls_aes128_status_for(item, has_hls: nil)
+    def hls_aes128_active_key_ids_by_item(items)
+      return {} unless hls_aes128_key_table_available?
+
+      ids = Array(items).map(&:id).compact.uniq
+      return {} if ids.blank?
+
+      rows = ::MediaGallery::HlsAes128Key.active
+        .where(media_item_id: ids, variant: ::MediaGallery::Hls::DEFAULT_VARIANT, ab: "")
+        .pluck(:media_item_id, :key_id)
+
+      rows.each_with_object({}) do |(media_item_id, key_id), memo|
+        memo[media_item_id.to_i] ||= Set.new
+        memo[media_item_id.to_i] << key_id.to_s
+      end
+    rescue => e
+      ::MediaGallery::OperationLogger.warn("hls_aes128_key_prefetch_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
+      {}
+    end
+
+    def hls_aes128_status_for(item, has_hls: nil, active_key_ids_by_item: nil)
       has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash) if has_hls.nil?
       role = ::MediaGallery::Hls.managed_role_for(item)
       role = role.deep_stringify_keys if role.is_a?(Hash)
       status = ::MediaGallery::Hls.aes128_status_for(item, role: role)
       encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
       key_id = status["key_id"].to_s.presence || (encryption.is_a?(Hash) ? encryption["key_id"].to_s.presence : nil)
-      key_record_present = key_id.present? && hls_aes128_key_record_present?(item, key_id: key_id)
+      key_record_present = key_id.present? && hls_aes128_key_record_present?(item, key_id: key_id, active_key_ids_by_item: active_key_ids_by_item)
       encryption_present = encryption.is_a?(Hash) && encryption.present?
       ready = ActiveModel::Type::Boolean.new.cast(status["ready"]) && key_record_present
       enabled = ActiveModel::Type::Boolean.new.cast(status["enabled"])
       required = ActiveModel::Type::Boolean.new.cast(status["required"])
-      needs_backfill = !!has_hls && !ready && (enabled || required) && !encryption_present
+      backfill_state = defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.state_for(item) : {}
+      backfill_status = backfill_state.is_a?(Hash) ? backfill_state["status"].to_s : ""
+      backfill_in_progress = %w[queued processing].include?(backfill_status)
+      needs_backfill = !!has_hls && !ready && (enabled || required) && !encryption_present && !backfill_in_progress
 
       status_label =
         if ready
@@ -1285,7 +1322,7 @@ module ::MediaGallery
         "key_id" => key_id,
         "key_record_present" => key_record_present,
         "status" => status_label,
-        "backfill" => (defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.state_for(item) : {}),
+        "backfill" => backfill_state,
       ).compact
     rescue => e
       {
@@ -1322,7 +1359,11 @@ module ::MediaGallery
       }
     end
 
-    def hls_aes128_key_record_present?(item, key_id:)
+    def hls_aes128_key_record_present?(item, key_id:, active_key_ids_by_item: nil)
+      if active_key_ids_by_item.is_a?(Hash) && active_key_ids_by_item.key?(item.id.to_i)
+        return active_key_ids_by_item[item.id.to_i].include?(key_id.to_s)
+      end
+
       return false unless hls_aes128_key_table_available?
 
       ::MediaGallery::HlsAes128Key.active.exists?(
