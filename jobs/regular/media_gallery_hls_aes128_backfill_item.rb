@@ -11,7 +11,8 @@ module Jobs
       ::MediaGallery::HlsAes128Backfill.perform_item!(
         item,
         requested_by: args[:requested_by].to_s.presence,
-        force: ActiveModel::Type::Boolean.new.cast(args[:force])
+        force: ActiveModel::Type::Boolean.new.cast(args[:force]),
+        run_token: args[:run_token].to_s.presence
       )
     rescue => e
       Rails.logger.warn("[media_gallery] AES backfill job failed item_id=#{args[:media_item_id]} error=#{e.class}: #{e.message}")

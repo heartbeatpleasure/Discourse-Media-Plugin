@@ -2,6 +2,7 @@
 
 require "fileutils"
 require "time"
+require "securerandom"
 
 module ::MediaGallery
   # Repackage existing ready video items into AES-128 HLS without rerunning the
@@ -18,22 +19,51 @@ module ::MediaGallery
       raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
       validate_backfill_preconditions!(item, force: force, allow_already_ready: true)
 
-      state = mark_queued!(item, requested_by: requested_by, force: force)
-      ::Jobs.enqueue(:media_gallery_hls_aes128_backfill_item, media_item_id: item.id, requested_by: requested_by.to_s, force: force)
+      run_token = SecureRandom.hex(16)
+      state = mark_queued!(item, requested_by: requested_by, force: force, run_token: run_token)
+      ::Jobs.enqueue(:media_gallery_hls_aes128_backfill_item, media_item_id: item.id, requested_by: requested_by.to_s, force: force, run_token: run_token)
       state
     end
 
-    def perform_item!(item, requested_by: nil, force: false)
+    def restart_item!(item, requested_by:)
+      enqueue_item!(item, requested_by: requested_by, force: true)
+    end
+
+    def clear_state!(item, requested_by:, reason: nil)
+      raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
+
+      update_state!(item) do |state|
+        now = Time.now.utc.iso8601
+        state.merge(
+          "status" => "cancelled",
+          "cancelled_at" => now,
+          "cancelled_by" => requested_by.to_s.presence,
+          "cancel_reason" => reason.to_s.presence,
+        ).except("last_error", "last_error_class", "failed_at")
+      end
+    end
+
+    def perform_item!(item, requested_by: nil, force: false, run_token: nil)
       raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
 
       with_item_mutex(item) do
         item.reload
+        current_state = state_for(item)
+
+        unless job_token_current?(current_state, run_token)
+          return current_state
+        end
+
+        if current_state["status"].to_s == "cancelled" && !force
+          return current_state
+        end
+
         if aes_ready?(item) && !force
           return mark_skipped!(item, reason: "already_aes_ready", requested_by: requested_by, force: force)
         end
 
         validate_backfill_preconditions!(item, force: force, allow_already_ready: false)
-        mark_processing!(item, requested_by: requested_by, force: force)
+        mark_processing!(item, requested_by: requested_by, force: force, run_token: current_state["run_token"].presence || run_token)
 
         result = nil
         ::MediaGallery::ProcessingWorkspace.open do |workspace|
@@ -69,6 +99,26 @@ module ::MediaGallery
       STATUSES_IN_PROGRESS.include?(state_for(item)["status"].to_s)
     end
 
+    def stale_state?(state)
+      return false unless state.is_a?(Hash)
+
+      status = state["status"].to_s
+      case status
+      when "queued"
+        timestamp_stale?(state["queued_at"], 15.minutes.ago)
+      when "processing"
+        timestamp_stale?(state["started_at"], 4.hours.ago)
+      else
+        false
+      end
+    rescue
+      false
+    end
+
+    def stale?(item)
+      stale_state?(state_for(item))
+    end
+
     def eligible?(item, force: false)
       validate_backfill_preconditions!(item, force: force, allow_already_ready: true)
       true
@@ -86,6 +136,25 @@ module ::MediaGallery
       [[value, 1].max, 100].min
     rescue
       10
+    end
+
+    def job_token_current?(state, run_token)
+      token = run_token.to_s.presence
+      return true if token.blank?
+
+      state_token = state.is_a?(Hash) ? state["run_token"].to_s.presence : nil
+      return false if state_token.blank?
+      return false unless state_token == token
+
+      STATUSES_IN_PROGRESS.include?(state["status"].to_s)
+    end
+
+    def timestamp_stale?(value, threshold)
+      return false if value.blank?
+
+      Time.iso8601(value.to_s) < threshold
+    rescue ArgumentError, TypeError
+      false
     end
 
     def validate_backfill_preconditions!(item, force: false, allow_already_ready: false)
@@ -117,7 +186,7 @@ module ::MediaGallery
       false
     end
 
-    def mark_queued!(item, requested_by:, force: false)
+    def mark_queued!(item, requested_by:, force: false, run_token: nil)
       update_state!(item) do |state|
         now = Time.now.utc.iso8601
         state.merge(
@@ -126,11 +195,12 @@ module ::MediaGallery
           "queued_by" => requested_by.to_s.presence,
           "force" => !!force,
           "attempt_count" => state["attempt_count"].to_i,
-        ).except("last_error", "last_error_class", "failed_at")
+          "run_token" => run_token.to_s.presence || state["run_token"].to_s.presence,
+        ).except("last_error", "last_error_class", "failed_at", "cancelled_at", "cancelled_by", "cancel_reason")
       end
     end
 
-    def mark_processing!(item, requested_by:, force: false)
+    def mark_processing!(item, requested_by:, force: false, run_token: nil)
       update_state!(item) do |state|
         now = Time.now.utc.iso8601
         state.merge(
@@ -139,7 +209,8 @@ module ::MediaGallery
           "started_by" => requested_by.to_s.presence,
           "force" => !!force,
           "attempt_count" => state["attempt_count"].to_i + 1,
-        ).except("last_error", "last_error_class", "failed_at")
+          "run_token" => run_token.to_s.presence || state["run_token"].to_s.presence,
+        ).except("last_error", "last_error_class", "failed_at", "cancelled_at", "cancelled_by", "cancel_reason")
       end
     end
 
@@ -154,7 +225,7 @@ module ::MediaGallery
           "key_id" => encryption.is_a?(Hash) ? encryption["key_id"].to_s.presence : nil,
           "scheme" => encryption.is_a?(Hash) ? encryption["scheme"].to_s.presence : nil,
           "role_backend" => hls_role.is_a?(Hash) ? hls_role["backend"].to_s.presence : nil,
-        ).compact.except("last_error", "last_error_class", "failed_at")
+        ).compact.except("last_error", "last_error_class", "failed_at", "run_token")
       end
     end
 

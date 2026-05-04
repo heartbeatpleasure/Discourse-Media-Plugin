@@ -333,8 +333,14 @@ function formatHistoryAction(action) {
     case "unblock_owner_upload":
       return "Unblocked uploader from upload only";
     case "hls_aes128_backfill":
+    case "hls_aes128_backfill_requested":
       return "Queued AES HLS backfill";
+    case "hls_aes128_backfill_restarted":
+      return "Restarted AES HLS backfill";
+    case "hls_aes128_backfill_cleared":
+      return "Cleared AES HLS backfill state";
     case "bulk_hls_aes128_backfill":
+    case "bulk_hls_aes128_backfill_requested":
       return "Queued bulk AES HLS backfill";
     default:
       return titleize(action || "change");
@@ -598,10 +604,22 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return this.selectedItem?.hls_aes128?.backfill || {};
   }
 
+  get selectedAesBackfillStatus() {
+    return String(this.selectedAesBackfillState?.status || "");
+  }
+
+  get selectedAesBackfillStale() {
+    return !!this.selectedAesBackfillState?.stale;
+  }
+
+  get selectedAesBackfillMaintenanceVisible() {
+    return ["queued", "processing", "failed", "cancelled"].includes(this.selectedAesBackfillStatus);
+  }
+
   get selectedAesBackfillDisabled() {
     const item = this.selectedItem || {};
     const status = item.hls_aes128 || {};
-    const backfillStatus = String(status.backfill?.status || "");
+    const backfillStatus = this.selectedAesBackfillStatus;
     return (
       !this.hasSelectedItem ||
       this.isBackfillingAes ||
@@ -616,17 +634,46 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   get selectedAesBackfillButtonLabel() {
-    const state = String(this.selectedAesBackfillState?.status || "");
+    const state = this.selectedAesBackfillStatus;
     if (this.isBackfillingAes) {
       return "Queuing AES backfill…";
     }
     if (state === "queued") {
-      return "AES backfill queued";
+      return this.selectedAesBackfillStale ? "AES queued stale" : "AES backfill queued";
     }
     if (state === "processing") {
-      return "AES backfill processing";
+      return this.selectedAesBackfillStale ? "AES processing stale" : "AES backfill processing";
     }
     return "Queue AES backfill";
+  }
+
+  get selectedAesBackfillRestartDisabled() {
+    return (
+      !this.hasSelectedItem ||
+      this.isBackfillingAes ||
+      this.selectedItem?.status !== "ready" ||
+      this.selectedItem?.media_type !== "video" ||
+      !this.selectedItem?.hls_aes128?.enabled ||
+      !this.selectedItem?.hls_aes128?.has_hls ||
+      !!this.selectedItem?.hls_aes128?.ready ||
+      !["queued", "processing", "failed", "cancelled"].includes(this.selectedAesBackfillStatus)
+    );
+  }
+
+  get selectedAesBackfillClearDisabled() {
+    return (
+      !this.hasSelectedItem ||
+      this.isBackfillingAes ||
+      !["queued", "processing", "failed"].includes(this.selectedAesBackfillStatus)
+    );
+  }
+
+  get selectedAesBackfillRestartLabel() {
+    return this.isBackfillingAes ? "Restarting…" : "Restart backfill";
+  }
+
+  get selectedAesBackfillClearLabel() {
+    return this.isBackfillingAes ? "Clearing…" : "Clear status";
   }
 
   get bulkAesBackfillDisabled() {
@@ -1369,6 +1416,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       });
       this.selectedItem = json;
       this._syncEditForm(json);
+      this._syncSearchResult(json);
     } catch (e) {
       if (e?.name === "AbortError") {
         return;
@@ -1657,6 +1705,81 @@ This repackages the existing processed video into encrypted HLS. Normal playback
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "AES HLS backfill queued.";
       this._syncSearchResult(this.selectedItem);
+      await this.refreshSelected();
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isBackfillingAes = false;
+    }
+  }
+
+  @action
+  async restartAesBackfill() {
+    if (this.selectedAesBackfillRestartDisabled) {
+      return;
+    }
+
+    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
+    if (!window.confirm(`Restart AES HLS backfill for:
+
+${title}
+
+This queues a fresh backfill job and supersedes earlier queued jobs created by the newer backfill flow.`)) {
+      return;
+    }
+
+    this.isBackfillingAes = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/aes-backfill/restart.json`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      this.selectedItem = json?.item || this.selectedItem;
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || "AES HLS backfill restarted.";
+      this._syncSearchResult(this.selectedItem);
+      await this.refreshSelected();
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isBackfillingAes = false;
+    }
+  }
+
+  @action
+  async clearAesBackfill() {
+    if (this.selectedAesBackfillClearDisabled) {
+      return;
+    }
+
+    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
+    if (!window.confirm(`Clear AES HLS backfill status for:
+
+${title}
+
+Use this only for stuck queued/processing/failed states. It does not delete existing HLS media.`)) {
+      return;
+    }
+
+    this.isBackfillingAes = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/aes-backfill/clear.json`, {
+        method: "POST",
+        body: JSON.stringify({ reason: "admin_clear" }),
+      });
+      this.selectedItem = json?.item || this.selectedItem;
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || "AES HLS backfill state cleared.";
+      this._syncSearchResult(this.selectedItem);
+      await this.refreshSelected();
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {

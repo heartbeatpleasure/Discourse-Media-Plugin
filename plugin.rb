@@ -182,6 +182,8 @@ after_initialize do
     get "/admin/plugins/media-gallery/media-items/:public_id/verify-target" => "media_gallery/admin_media_items#verify_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/verify-hls-integrity" => "media_gallery/admin_media_items#verify_hls_integrity", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill" => "media_gallery/admin_media_items#aes_backfill", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill/restart" => "media_gallery/admin_media_items#restart_aes_backfill", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill/clear" => "media_gallery/admin_media_items#clear_aes_backfill", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/bulk-aes-backfill" => "media_gallery/admin_media_items#bulk_aes_backfill", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/rollback-to-source" => "media_gallery/admin_media_items#rollback_to_source", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/finalize-migration" => "media_gallery/admin_media_items#finalize_migration", defaults: { format: :json }

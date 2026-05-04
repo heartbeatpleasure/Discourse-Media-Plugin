@@ -286,11 +286,37 @@ module ::MediaGallery
       item = load_item!
       force = boolean_param(:force)
       state = ::MediaGallery::HlsAes128Backfill.enqueue_item!(item, requested_by: current_user.username, force: force)
+      append_aes_backfill_management_log!(item, action: "hls_aes128_backfill_requested", result: state["status"], changes: { "hls_aes128_backfill" => [nil, state["status"]] })
       audit_admin_action!("hls_aes128_backfill_requested", item: item, operation: "hls_aes128_backfill", result: state["status"], data: { force: force })
       item.reload
       render_json_dump(ok: true, public_id: item.public_id, hls_aes128_backfill: state, item: management_item_payload(item), message: "AES HLS backfill queued.")
     rescue => e
       render_operation_error(e, operation: "hls_aes128_backfill", item: item, status: 422)
+    end
+
+    def restart_aes_backfill
+      item = load_item!
+      previous = ::MediaGallery::HlsAes128Backfill.state_for(item)
+      state = ::MediaGallery::HlsAes128Backfill.restart_item!(item, requested_by: current_user.username)
+      append_aes_backfill_management_log!(item, action: "hls_aes128_backfill_restarted", result: state["status"], changes: { "hls_aes128_backfill" => [previous["status"], state["status"]] })
+      audit_admin_action!("hls_aes128_backfill_restarted", item: item, operation: "hls_aes128_backfill_restart", result: state["status"], data: { previous_status: previous["status"] })
+      item.reload
+      render_json_dump(ok: true, public_id: item.public_id, hls_aes128_backfill: state, item: management_item_payload(item), message: "AES HLS backfill restarted.")
+    rescue => e
+      render_operation_error(e, operation: "hls_aes128_backfill_restart", item: item, status: 422)
+    end
+
+    def clear_aes_backfill
+      item = load_item!
+      previous = ::MediaGallery::HlsAes128Backfill.state_for(item)
+      reason = ::MediaGallery::TextSanitizer.plain_text(params[:reason], max_length: 500, allow_newlines: false).presence || "admin_clear"
+      state = ::MediaGallery::HlsAes128Backfill.clear_state!(item, requested_by: current_user.username, reason: reason)
+      append_aes_backfill_management_log!(item, action: "hls_aes128_backfill_cleared", result: state["status"], changes: { "hls_aes128_backfill" => [previous["status"], state["status"]] })
+      audit_admin_action!("hls_aes128_backfill_cleared", item: item, operation: "hls_aes128_backfill_clear", result: state["status"], data: { previous_status: previous["status"], reason: reason })
+      item.reload
+      render_json_dump(ok: true, public_id: item.public_id, hls_aes128_backfill: state, item: management_item_payload(item), message: "AES HLS backfill state cleared.")
+    rescue => e
+      render_operation_error(e, operation: "hls_aes128_backfill_clear", item: item, status: 422)
     end
 
     def copy_to_target
@@ -557,6 +583,21 @@ module ::MediaGallery
       Rails.logger.warn("[media_gallery] admin audit failed event=#{event} error=#{e.class}: #{e.message}")
     end
 
+    def append_aes_backfill_management_log!(item, action:, result:, changes: nil)
+      item.reload
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      append_management_log!(
+        meta,
+        action: action,
+        item: item,
+        note: sanitized_admin_note,
+        changes: changes.presence || { "hls_aes128_backfill" => [nil, result] }
+      )
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+    rescue => e
+      Rails.logger.warn("[media_gallery] AES backfill management log failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
+    end
+
     def load_item!
       @current_item ||= begin
         item = ::MediaGallery::MediaItem.includes(:user).find_by(public_id: params[:public_id].to_s)
@@ -649,6 +690,8 @@ module ::MediaGallery
         scope = scope.where(managed_storage_profile: profile)
       end
 
+      scope = apply_hls_aes128_sql_prefilter(scope)
+
       sort = params[:sort].to_s.strip
       scope = case sort
       when "oldest"
@@ -666,6 +709,26 @@ module ::MediaGallery
       scope
     end
 
+    def apply_hls_aes128_sql_prefilter(scope)
+      case hls_aes128_filter
+      when "ready"
+        scope.where("storage_manifest -> 'roles' -> 'hls' -> 'encryption' IS NOT NULL")
+      when "needs_backfill", "not_encrypted"
+        scope.where(media_type: "video", status: "ready")
+          .where("storage_manifest -> 'roles' -> 'hls' IS NOT NULL")
+          .where("storage_manifest -> 'roles' -> 'hls' -> 'encryption' IS NULL")
+      when "not_ready"
+        scope.where("storage_manifest -> 'roles' -> 'hls' IS NOT NULL")
+      when "no_hls"
+        scope.where("storage_manifest -> 'roles' -> 'hls' IS NULL")
+      else
+        scope
+      end
+    rescue => e
+      ::MediaGallery::OperationLogger.warn("hls_aes128_search_prefilter_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
+      scope
+    end
+
     def search_limit
       limit = params[:limit].to_i
       limit = 20 if limit <= 0
@@ -679,7 +742,7 @@ module ::MediaGallery
       # this bounded to avoid expensive admin searches on large libraries.
       return search_limit if hls_aes128_filter.blank? || hls_aes128_filter == "all"
 
-      [[search_limit * 5, search_limit].max, 500].min
+      [[search_limit * 3, search_limit].max, 200].min
     end
 
     def search_profiles_summary
@@ -1300,6 +1363,7 @@ module ::MediaGallery
       required = ActiveModel::Type::Boolean.new.cast(status["required"])
       backfill_state = defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.state_for(item) : {}
       backfill_status = backfill_state.is_a?(Hash) ? backfill_state["status"].to_s : ""
+      backfill_stale = defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.stale_state?(backfill_state) : false
       backfill_in_progress = %w[queued processing].include?(backfill_status)
       needs_backfill = !!has_hls && !ready && (enabled || required) && !encryption_present && !backfill_in_progress
 
@@ -1322,7 +1386,7 @@ module ::MediaGallery
         "key_id" => key_id,
         "key_record_present" => key_record_present,
         "status" => status_label,
-        "backfill" => backfill_state,
+        "backfill" => backfill_state.merge("stale" => backfill_stale),
       ).compact
     rescue => e
       {

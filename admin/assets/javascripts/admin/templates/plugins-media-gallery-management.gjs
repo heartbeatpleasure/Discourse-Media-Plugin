@@ -175,22 +175,27 @@ export default RouteTemplate(
 
       .mg-management__action-groups {
         display: grid;
-        gap: 0.75rem;
+        gap: 1.15rem;
         margin-top: 1rem;
       }
 
-      .mg-management__action-row {
+      .mg-management__action-group {
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .mg-management__action-group-title {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        font-weight: 700;
+        margin: 0;
+      }
+
+      .mg-management__action-buttons {
         display: flex;
         flex-wrap: wrap;
         gap: 0.75rem;
         align-items: center;
-      }
-
-      .mg-management__action-row-label {
-        flex: 0 0 110px;
-        color: var(--mg-muted);
-        font-size: var(--font-down-1);
-        font-weight: 600;
       }
 
       .mg-management__results-wrap {
@@ -949,60 +954,76 @@ export default RouteTemplate(
                 </div>
 
                 <div class="mg-management__action-groups">
-                  <div class="mg-management__action-row">
-                    <span class="mg-management__action-row-label">Item</span>
-                    <button class="btn btn-primary" type="button" {{on "click" @controller.saveChanges}} disabled={{@controller.saveDisabled}}>
-                      {{if @controller.isSaving "Saving…" "Save changes"}}
-                    </button>
-                    <button class="btn" type="button" {{on "click" @controller.toggleHidden}} disabled={{@controller.toggleHiddenDisabled}}>
-                      {{if @controller.isTogglingHidden "Updating…" @controller.hiddenButtonLabel}}
-                    </button>
-                    <button class="btn" type="button" {{on "click" @controller.retryProcessing}} disabled={{@controller.retryDisabled}}>
-                      {{if @controller.isRetrying "Queuing…" "Retry processing"}}
-                    </button>
-                    <button class="btn" type="button" {{on "click" @controller.refreshSelected}} disabled={{@controller.isLoadingSelection}}>
-                      {{if @controller.isLoadingSelection "Refreshing…" "Refresh"}}
-                    </button>
+                  <div class="mg-management__action-group">
+                    <h4 class="mg-management__action-group-title">Item</h4>
+                    <div class="mg-management__action-buttons">
+                      <button class="btn btn-primary" type="button" {{on "click" @controller.saveChanges}} disabled={{@controller.saveDisabled}}>
+                        {{if @controller.isSaving "Saving…" "Save changes"}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.toggleHidden}} disabled={{@controller.toggleHiddenDisabled}}>
+                        {{if @controller.isTogglingHidden "Updating…" @controller.hiddenButtonLabel}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.retryProcessing}} disabled={{@controller.retryDisabled}}>
+                        {{if @controller.isRetrying "Queuing…" "Retry processing"}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.refreshSelected}} disabled={{@controller.isLoadingSelection}}>
+                        {{if @controller.isLoadingSelection "Refreshing…" "Refresh"}}
+                      </button>
+                    </div>
                   </div>
 
-                  <div class="mg-management__action-row">
-                    <span class="mg-management__action-row-label">HLS</span>
-                    <button class="btn" type="button" {{on "click" @controller.queueAesBackfill}} disabled={{@controller.selectedAesBackfillDisabled}}>
-                      {{@controller.selectedAesBackfillButtonLabel}}
-                    </button>
-                    <button class="btn" type="button" {{on "click" @controller.verifyHlsIntegrity}} disabled={{@controller.isVerifyingHlsIntegrity}}>
-                      {{if @controller.isVerifyingHlsIntegrity "Checking HLS…" "Verify HLS integrity"}}
-                    </button>
-                    <button class="btn" type="button" {{on "click" @controller.copyDiagnosticsBundle}} disabled={{@controller.isCopyingDiagnostics}}>
-                      {{if @controller.isCopyingDiagnostics "Copying diagnostics…" "Copy diagnostics"}}
-                    </button>
+                  <div class="mg-management__action-group">
+                    <h4 class="mg-management__action-group-title">HLS</h4>
+                    <div class="mg-management__action-buttons">
+                      <button class="btn" type="button" {{on "click" @controller.queueAesBackfill}} disabled={{@controller.selectedAesBackfillDisabled}}>
+                        {{@controller.selectedAesBackfillButtonLabel}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.restartAesBackfill}} disabled={{@controller.selectedAesBackfillRestartDisabled}}>
+                        {{@controller.selectedAesBackfillRestartLabel}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.clearAesBackfill}} disabled={{@controller.selectedAesBackfillClearDisabled}}>
+                        {{@controller.selectedAesBackfillClearLabel}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.verifyHlsIntegrity}} disabled={{@controller.isVerifyingHlsIntegrity}}>
+                        {{if @controller.isVerifyingHlsIntegrity "Checking HLS…" "Verify HLS integrity"}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.copyDiagnosticsBundle}} disabled={{@controller.isCopyingDiagnostics}}>
+                        {{if @controller.isCopyingDiagnostics "Copying diagnostics…" "Copy diagnostics"}}
+                      </button>
+                    </div>
                   </div>
 
-                  <div class="mg-management__action-row">
-                    <span class="mg-management__action-row-label">View access</span>
-                    <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "view-block")}} disabled={{@controller.ownerViewBlockDisabled}}>
-                      Block view & upload
-                    </button>
-                    <button class="btn" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "view-unblock")}} disabled={{@controller.ownerViewUnblockDisabled}}>
-                      Restore view
-                    </button>
+                  <div class="mg-management__action-group">
+                    <h4 class="mg-management__action-group-title">View access</h4>
+                    <div class="mg-management__action-buttons">
+                      <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "view-block")}} disabled={{@controller.ownerViewBlockDisabled}}>
+                        Block view & upload
+                      </button>
+                      <button class="btn" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "view-unblock")}} disabled={{@controller.ownerViewUnblockDisabled}}>
+                        Restore view
+                      </button>
+                    </div>
                   </div>
 
-                  <div class="mg-management__action-row">
-                    <span class="mg-management__action-row-label">Upload access</span>
-                    <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "upload-block")}} disabled={{@controller.ownerUploadBlockDisabled}}>
-                      Block upload only
-                    </button>
-                    <button class="btn" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "upload-unblock")}} disabled={{@controller.ownerUploadUnblockDisabled}}>
-                      Restore upload
-                    </button>
+                  <div class="mg-management__action-group">
+                    <h4 class="mg-management__action-group-title">Upload access</h4>
+                    <div class="mg-management__action-buttons">
+                      <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "upload-block")}} disabled={{@controller.ownerUploadBlockDisabled}}>
+                        Block upload only
+                      </button>
+                      <button class="btn" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "upload-unblock")}} disabled={{@controller.ownerUploadUnblockDisabled}}>
+                        Restore upload
+                      </button>
+                    </div>
                   </div>
 
-                  <div class="mg-management__action-row">
-                    <span class="mg-management__action-row-label">Danger zone</span>
-                    <button class="btn btn-danger" type="button" {{on "click" @controller.deleteItem}} disabled={{@controller.deleteDisabled}}>
-                      {{if @controller.isDeleting "Deleting…" "Delete item"}}
-                    </button>
+                  <div class="mg-management__action-group">
+                    <h4 class="mg-management__action-group-title">Danger zone</h4>
+                    <div class="mg-management__action-buttons">
+                      <button class="btn btn-danger" type="button" {{on "click" @controller.deleteItem}} disabled={{@controller.deleteDisabled}}>
+                        {{if @controller.isDeleting "Deleting…" "Delete item"}}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </section>
