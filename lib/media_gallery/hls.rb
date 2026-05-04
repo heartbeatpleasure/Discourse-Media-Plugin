@@ -36,10 +36,9 @@ module ::MediaGallery
 
     # AES-128 HLS hardening helpers.
     #
-    # Iteratie 1 intentionally exposes settings and read-only status helpers only.
-    # Packaging, key storage, key endpoints and playback enforcement are added in
-    # later iterations so enabling these settings cannot silently change current
-    # playback behavior before the full AES path exists.
+    # The AES implementation is intentionally incremental. These helpers expose
+    # site-wide status and metadata while the packaging/controller layers opt in
+    # only when the full guarded path is available.
     def aes128_setting_enabled?
       SiteSetting.respond_to?(:media_gallery_hls_aes128_enabled) &&
         ActiveModel::Type::Boolean.new.cast(SiteSetting.media_gallery_hls_aes128_enabled)
@@ -231,6 +230,19 @@ module ::MediaGallery
       FileUtils.rm_rf(build_root) if build_root.present? && Dir.exist?(build_root)
       FileUtils.mkdir_p(build_root)
 
+      aes128_material = nil
+      aes128_keyinfo_file = nil
+      if aes128_enabled?
+        aes128_material = ::MediaGallery::HlsAes128.generate_key_material(key_id: variant)
+        aes128_files = ::MediaGallery::HlsAes128.write_key_files!(
+          workspace_dir: File.join(build_root, ".aes128"),
+          key_id: aes128_material["key_id"],
+          key_bytes: aes128_material["key_bytes"],
+          iv_hex: aes128_material["iv_hex"]
+        )
+        aes128_keyinfo_file = aes128_files[:keyinfo_path]
+      end
+
       wm_profile = nil
       wm_layout = nil
       if fingerprinting_enabled?
@@ -264,7 +276,8 @@ module ::MediaGallery
           vf_a: vf_a,
           vf_b: vf_b,
           video_bitrate_kbps: v_kbps,
-          audio_bitrate_kbps: SiteSetting.media_gallery_audio_bitrate_kbps.to_i
+          audio_bitrate_kbps: SiteSetting.media_gallery_audio_bitrate_kbps.to_i,
+          hls_key_info_file: aes128_keyinfo_file
         )
 
         a_pl = File.join(tmp_a_dir, "index.m3u8")
@@ -278,7 +291,8 @@ module ::MediaGallery
         MediaGallery::Ffmpeg.package_hls_single_variant(
           input_path: input_path,
           output_dir: tmp_variant_dir,
-          segment_seconds: segment_duration_seconds
+          segment_seconds: segment_duration_seconds,
+          hls_key_info_file: aes128_keyinfo_file
         )
       end
 
@@ -293,6 +307,10 @@ module ::MediaGallery
         "build_root" => build_root,
         "cleanup_build_root_after_publish" => cleanup_after_publish
       }
+
+      if aes128_material.present?
+        meta["encryption"] = ::MediaGallery::HlsAes128.public_metadata_for(aes128_material)
+      end
 
       if fingerprinting_enabled?
         meta["ab_fingerprint"] = true
@@ -363,7 +381,12 @@ module ::MediaGallery
         end
       end
 
-      validate_packaged_video!(build_root: build_root, variant: variant, ab_fingerprint: meta["ab_fingerprint"])
+      validate_packaged_video!(build_root: build_root, variant: variant, ab_fingerprint: meta["ab_fingerprint"], aes128: aes128_material.present?)
+
+      if aes128_material.present?
+        ::MediaGallery::HlsAes128.store_key!(item: item, material: aes128_material, variant: variant)
+      end
+
       meta
     rescue => e
       Rails.logger.warn("[media_gallery] HLS packaging failed public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
@@ -619,6 +642,9 @@ module ::MediaGallery
         next if File.directory?(abs_path)
         rel_path = abs_path.sub(%r{\A#{Regexp.escape(final_root.to_s.chomp('/'))}/?}, "")
         next if rel_path.blank?
+        next if rel_path.split(File::SEPARATOR).include?(".aes128")
+        next if defined?(::MediaGallery::HlsAes128) && ::MediaGallery::HlsAes128.hls_key_artifact_rel_path?(rel_path)
+
         yield abs_path, rel_path
       end
     end
@@ -703,7 +729,7 @@ module ::MediaGallery
     end
     private_class_method :build_root_for_package
 
-    def validate_packaged_video!(build_root:, variant:, ab_fingerprint: false)
+    def validate_packaged_video!(build_root:, variant:, ab_fingerprint: false, aes128: false)
       master_path = File.join(build_root, "master.m3u8")
       complete_path = File.join(build_root, ".complete")
       variant_playlist = File.join(build_root, variant.to_s, "index.m3u8")
@@ -718,9 +744,32 @@ module ::MediaGallery
         raise "hls_segments_missing" unless hls_segments_present?(variant_dir)
       end
 
+      if aes128
+        playlists = [variant_playlist]
+        if ab_fingerprint
+          playlists << File.join(build_root, "a", variant.to_s, "index.m3u8")
+          playlists << File.join(build_root, "b", variant.to_s, "index.m3u8")
+        end
+
+        playlists.uniq.each do |playlist|
+          raise "hls_aes128_playlist_missing" unless File.exist?(playlist)
+          raise "hls_aes128_key_tag_missing" unless playlist_has_aes128_key_tag?(playlist)
+        end
+      end
+
       true
     end
     private_class_method :validate_packaged_video!
+
+    def playlist_has_aes128_key_tag?(playlist_path)
+      File.read(playlist_path).each_line.any? do |line|
+        line.match?(/^#EXT-X-KEY:.*METHOD=AES-128/i) &&
+          line.include?(::MediaGallery::HlsAes128.key_uri_placeholder(DEFAULT_VARIANT))
+      end
+    rescue
+      false
+    end
+    private_class_method :playlist_has_aes128_key_tag?
 
     def hls_segments_present?(dir)
       return false unless dir.present? && Dir.exist?(dir)
