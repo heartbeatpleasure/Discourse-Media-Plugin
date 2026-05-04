@@ -220,7 +220,7 @@ module ::MediaGallery
       legacy_local_ready?(item)
     end
 
-    def package_video!(item, input_path:, workspace: nil)
+    def package_video!(item, input_path:, workspace: nil, aes128: nil)
       return nil unless enabled?
       return nil unless item&.media_type.to_s == "video"
       return nil if input_path.blank? || !File.exist?(input_path)
@@ -230,9 +230,10 @@ module ::MediaGallery
       FileUtils.rm_rf(build_root) if build_root.present? && Dir.exist?(build_root)
       FileUtils.mkdir_p(build_root)
 
+      aes128_packaging_enabled = aes128.nil? ? aes128_enabled? : ActiveModel::Type::Boolean.new.cast(aes128)
       aes128_material = nil
       aes128_keyinfo_file = nil
-      if aes128_enabled?
+      if aes128_packaging_enabled
         aes128_material = ::MediaGallery::HlsAes128.generate_key_material(key_id: variant)
         aes128_files = ::MediaGallery::HlsAes128.write_key_files!(
           workspace_dir: File.join(build_root, ".aes128"),

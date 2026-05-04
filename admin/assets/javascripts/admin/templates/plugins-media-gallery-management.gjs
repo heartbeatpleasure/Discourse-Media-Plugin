@@ -1004,6 +1004,15 @@ export default RouteTemplate(
                       <button class="btn" type="button" {{on "click" @controller.cleanupAesMaintenance}} disabled={{@controller.selectedAesMaintenanceCleanupDisabled}}>
                         {{@controller.selectedAesMaintenanceCleanupLabel}}
                       </button>
+                      <button class="btn btn-danger" type="button" {{on "click" @controller.queueClearHlsRollback}} disabled={{@controller.selectedClearRollbackDisabled}}>
+                        {{@controller.selectedClearRollbackButtonLabel}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.restartClearHlsRollback}} disabled={{@controller.selectedClearRollbackRestartDisabled}}>
+                        {{@controller.selectedClearRollbackRestartLabel}}
+                      </button>
+                      <button class="btn" type="button" {{on "click" @controller.clearClearHlsRollback}} disabled={{@controller.selectedClearRollbackClearDisabled}}>
+                        {{@controller.selectedClearRollbackClearLabel}}
+                      </button>
                       <button class="btn" type="button" {{on "click" @controller.verifyHlsIntegrity}} disabled={{@controller.isVerifyingHlsIntegrity}}>
                         {{if @controller.isVerifyingHlsIntegrity "Checking HLS…" "Verify HLS integrity"}}
                       </button>

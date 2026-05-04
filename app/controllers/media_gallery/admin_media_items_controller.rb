@@ -386,6 +386,43 @@ module ::MediaGallery
       render_operation_error(e, operation: "hls_aes128_maintenance_cleanup", item: item, status: 422)
     end
 
+    def hls_clear_rollback
+      item = load_item!
+      force = boolean_param(:force)
+      state = ::MediaGallery::HlsClearRollback.enqueue_item!(item, requested_by: current_user.username, force: force)
+      append_hls_clear_rollback_management_log!(item, action: "hls_clear_rollback_requested", result: state["status"], changes: { "hls_clear_rollback" => [nil, state["status"]] })
+      audit_admin_action!("hls_clear_rollback_requested", item: item, operation: "hls_clear_rollback", result: state["status"], data: { force: force })
+      item.reload
+      render_json_dump(ok: true, public_id: item.public_id, hls_clear_rollback: state, item: management_item_payload(item), message: "Clear HLS rollback queued.")
+    rescue => e
+      render_operation_error(e, operation: "hls_clear_rollback", item: item, status: 422)
+    end
+
+    def restart_hls_clear_rollback
+      item = load_item!
+      previous = ::MediaGallery::HlsClearRollback.state_for(item)
+      state = ::MediaGallery::HlsClearRollback.restart_item!(item, requested_by: current_user.username)
+      append_hls_clear_rollback_management_log!(item, action: "hls_clear_rollback_restarted", result: state["status"], changes: { "hls_clear_rollback" => [previous["status"], state["status"]] })
+      audit_admin_action!("hls_clear_rollback_restarted", item: item, operation: "hls_clear_rollback_restart", result: state["status"], data: { previous_status: previous["status"] })
+      item.reload
+      render_json_dump(ok: true, public_id: item.public_id, hls_clear_rollback: state, item: management_item_payload(item), message: "Clear HLS rollback restarted.")
+    rescue => e
+      render_operation_error(e, operation: "hls_clear_rollback_restart", item: item, status: 422)
+    end
+
+    def clear_hls_clear_rollback
+      item = load_item!
+      previous = ::MediaGallery::HlsClearRollback.state_for(item)
+      reason = ::MediaGallery::TextSanitizer.plain_text(params[:reason], max_length: 500, allow_newlines: false).presence || "admin_clear"
+      state = ::MediaGallery::HlsClearRollback.clear_state!(item, requested_by: current_user.username, reason: reason)
+      append_hls_clear_rollback_management_log!(item, action: "hls_clear_rollback_cleared", result: state["status"], changes: { "hls_clear_rollback" => [previous["status"], state["status"]] })
+      audit_admin_action!("hls_clear_rollback_cleared", item: item, operation: "hls_clear_rollback_clear", result: state["status"], data: { previous_status: previous["status"], reason: reason })
+      item.reload
+      render_json_dump(ok: true, public_id: item.public_id, hls_clear_rollback: state, item: management_item_payload(item), message: "Clear HLS rollback state cleared.")
+    rescue => e
+      render_operation_error(e, operation: "hls_clear_rollback_clear", item: item, status: 422)
+    end
+
     def copy_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
@@ -731,6 +768,21 @@ module ::MediaGallery
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
     rescue => e
       Rails.logger.warn("[media_gallery] AES maintenance management log failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
+    end
+
+    def append_hls_clear_rollback_management_log!(item, action:, result:, changes: nil)
+      item.reload
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      append_management_log!(
+        meta,
+        action: action,
+        item: item,
+        note: sanitized_admin_note,
+        changes: changes.presence || { "hls_clear_rollback" => [nil, result] }
+      )
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+    rescue => e
+      Rails.logger.warn("[media_gallery] Clear HLS rollback management log failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
     end
 
     def load_item!
@@ -1583,7 +1635,9 @@ module ::MediaGallery
         backfill_state = hls_aes128_backfill_state_for_search(item)
         backfill_status = backfill_state["status"].to_s
         backfill_in_progress = %w[queued processing].include?(backfill_status)
-        needs_backfill = has_hls && !ready && (enabled || required) && !encryption_present && !backfill_in_progress
+        clear_rollback_state = hls_clear_rollback_state_for_search(item)
+        clear_rollback_in_progress = %w[queued processing].include?(clear_rollback_state["status"].to_s)
+        needs_backfill = has_hls && !ready && (enabled || required) && !encryption_present && !backfill_in_progress && !clear_rollback_in_progress
 
         status_label =
           if ready
@@ -1610,6 +1664,7 @@ module ::MediaGallery
           "key_record_present" => key_record_present,
           "status" => status_label,
           "backfill" => backfill_state,
+          "clear_rollback" => clear_rollback_state,
         }.compact
       end
     rescue => e
@@ -1645,6 +1700,15 @@ module ::MediaGallery
       {}
     end
 
+    def hls_clear_rollback_state_for_search(item)
+      return {} unless defined?(::MediaGallery::HlsClearRollback)
+
+      state = ::MediaGallery::HlsClearRollback.state_for(item)
+      state.is_a?(Hash) ? state.slice("status", "queued_at", "started_at", "finished_at", "failed_at", "last_error", "deactivated_aes_keys") : {}
+    rescue
+      {}
+    end
+
     def hls_aes128_truthy?(value)
       value == true || value.to_s.casecmp("true").zero? || value.to_s == "1"
     end
@@ -1665,7 +1729,11 @@ module ::MediaGallery
       backfill_status = backfill_state.is_a?(Hash) ? backfill_state["status"].to_s : ""
       backfill_stale = defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.stale_state?(backfill_state) : false
       backfill_in_progress = %w[queued processing].include?(backfill_status)
-      needs_backfill = !!has_hls && !ready && (enabled || required) && !encryption_present && !backfill_in_progress
+      clear_rollback_state = defined?(::MediaGallery::HlsClearRollback) ? ::MediaGallery::HlsClearRollback.state_for(item) : {}
+      clear_rollback_stale = defined?(::MediaGallery::HlsClearRollback) ? ::MediaGallery::HlsClearRollback.stale_state?(clear_rollback_state) : false
+      clear_rollback_status = clear_rollback_state.is_a?(Hash) ? clear_rollback_state["status"].to_s : ""
+      clear_rollback_in_progress = %w[queued processing].include?(clear_rollback_status)
+      needs_backfill = !!has_hls && !ready && (enabled || required) && !encryption_present && !backfill_in_progress && !clear_rollback_in_progress
 
       status_label =
         if ready
@@ -1687,6 +1755,7 @@ module ::MediaGallery
         "key_record_present" => key_record_present,
         "status" => status_label,
         "backfill" => backfill_state.merge("stale" => backfill_stale),
+        "clear_rollback" => clear_rollback_state.merge("stale" => clear_rollback_stale),
       ).compact
     rescue => e
       {
@@ -1714,6 +1783,7 @@ module ::MediaGallery
         "key_records_count" => records.length,
         "key_table_available" => hls_aes128_key_table_available?,
         "backfill" => (defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.state_for(item) : {}),
+        "clear_rollback" => (defined?(::MediaGallery::HlsClearRollback) ? ::MediaGallery::HlsClearRollback.state_for(item) : {}),
       ).compact
     rescue => e
       {

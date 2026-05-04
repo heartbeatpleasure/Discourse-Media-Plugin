@@ -65,6 +65,7 @@ after_initialize do
   require_relative "lib/media_gallery/hls"
   require_relative "lib/media_gallery/hls_aes128"
   require_relative "lib/media_gallery/hls_aes128_backfill"
+  require_relative "lib/media_gallery/hls_clear_rollback"
   require_relative "lib/media_gallery/hls_aes128_maintenance"
   require_relative "lib/media_gallery/hls_integrity_verifier"
   require_relative "lib/media_gallery/fingerprinting"
@@ -112,6 +113,7 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_copy_item_to_target.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_cleanup_source_after_switch.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_hls_aes128_backfill_item.rb", __dir__)
+  require_dependency File.expand_path("jobs/regular/media_gallery_hls_clear_rollback_item.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_health_watchdog.rb", __dir__)
@@ -187,6 +189,9 @@ after_initialize do
     post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill/restart" => "media_gallery/admin_media_items#restart_aes_backfill", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill/clear" => "media_gallery/admin_media_items#clear_aes_backfill", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/aes-maintenance/cleanup" => "media_gallery/admin_media_items#aes_maintenance_cleanup", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/hls-clear-rollback" => "media_gallery/admin_media_items#hls_clear_rollback", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/hls-clear-rollback/restart" => "media_gallery/admin_media_items#restart_hls_clear_rollback", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/hls-clear-rollback/clear" => "media_gallery/admin_media_items#clear_hls_clear_rollback", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/bulk-aes-backfill" => "media_gallery/admin_media_items#bulk_aes_backfill", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/rollback-to-source" => "media_gallery/admin_media_items#rollback_to_source", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/finalize-migration" => "media_gallery/admin_media_items#finalize_migration", defaults: { format: :json }

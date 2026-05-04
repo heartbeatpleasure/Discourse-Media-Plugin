@@ -185,6 +185,19 @@ function hlsAes128Badge(status) {
   const enabled = !!s.enabled;
   const required = !!s.required;
   const backfillStatus = String(s.backfill?.status || "");
+  const clearRollbackStatus = String(s.clear_rollback?.status || "");
+
+  if (clearRollbackStatus === "queued") {
+    return { label: "Clear queued", className: "is-warning", title: "Clear HLS rollback has been queued" };
+  }
+
+  if (clearRollbackStatus === "processing") {
+    return { label: "Clear processing", className: "is-warning", title: "Clear HLS rollback is processing" };
+  }
+
+  if (clearRollbackStatus === "failed") {
+    return { label: "Clear failed", className: "is-danger", title: s.clear_rollback?.last_error || "Clear HLS rollback failed" };
+  }
 
   if (backfillStatus === "queued") {
     return { label: "AES queued", className: "is-warning", title: "AES HLS backfill has been queued" };
@@ -353,6 +366,18 @@ function formatHistoryAction(action) {
       return "Cleared AES HLS backfill state";
     case "hls_aes128_maintenance_cleanup":
       return "Cleaned AES HLS maintenance state";
+    case "hls_clear_rollback_requested":
+      return "Queued normal HLS rollback";
+    case "hls_clear_rollback_restarted":
+      return "Restarted normal HLS rollback";
+    case "hls_clear_rollback_processing":
+      return "Started normal HLS rollback";
+    case "hls_clear_rollback_succeeded":
+      return "Completed normal HLS rollback";
+    case "hls_clear_rollback_failed":
+      return "Failed normal HLS rollback";
+    case "hls_clear_rollback_cleared":
+      return "Cleared normal HLS rollback state";
     case "bulk_hls_aes128_backfill":
     case "bulk_hls_aes128_backfill_requested":
       return "Queued bulk AES HLS backfill";
@@ -439,6 +464,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isRetrying = false;
   @tracked isBlockingOwner = false;
   @tracked isBackfillingAes = false;
+  @tracked isRollingBackClearHls = false;
   @tracked isCleaningAes = false;
   @tracked isBulkAesBackfilling = false;
   @tracked isVerifyingHlsIntegrity = false;
@@ -493,6 +519,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.isRetrying = false;
     this.isBlockingOwner = false;
     this.isBackfillingAes = false;
+    this.isRollingBackClearHls = false;
     this.isCleaningAes = false;
     this.isBulkAesBackfilling = false;
     this.availableSearchProfiles = [];
@@ -709,6 +736,73 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   get selectedAesMaintenanceCleanupLabel() {
     return this.isCleaningAes ? "Cleaning AES…" : "Clean AES state";
+  }
+
+
+  get selectedClearRollbackState() {
+    return this.selectedItem?.hls_aes128?.clear_rollback || {};
+  }
+
+  get selectedClearRollbackStatus() {
+    return String(this.selectedClearRollbackState?.status || "");
+  }
+
+  get selectedClearRollbackDisabled() {
+    const item = this.selectedItem || {};
+    const status = item.hls_aes128 || {};
+    return (
+      !this.hasSelectedItem ||
+      this.isRollingBackClearHls ||
+      this.isBackfillingAes ||
+      item.status !== "ready" ||
+      item.media_type !== "video" ||
+      !status.has_hls ||
+      !status.encrypted ||
+      !!status.required ||
+      ["queued", "processing"].includes(this.selectedClearRollbackStatus)
+    );
+  }
+
+  get selectedClearRollbackRestartDisabled() {
+    return (
+      !this.hasSelectedItem ||
+      this.isRollingBackClearHls ||
+      this.isBackfillingAes ||
+      this.selectedItem?.status !== "ready" ||
+      this.selectedItem?.media_type !== "video" ||
+      !this.selectedItem?.hls_aes128?.has_hls ||
+      !["queued", "processing", "failed", "cancelled"].includes(this.selectedClearRollbackStatus)
+    );
+  }
+
+  get selectedClearRollbackClearDisabled() {
+    return (
+      !this.hasSelectedItem ||
+      this.isRollingBackClearHls ||
+      !["queued", "processing", "failed"].includes(this.selectedClearRollbackStatus)
+    );
+  }
+
+  get selectedClearRollbackButtonLabel() {
+    const state = this.selectedClearRollbackStatus;
+    if (this.isRollingBackClearHls) {
+      return "Queuing normal HLS…";
+    }
+    if (state === "queued") {
+      return "Normal HLS queued";
+    }
+    if (state === "processing") {
+      return "Normal HLS processing";
+    }
+    return "Repackage as normal HLS";
+  }
+
+  get selectedClearRollbackRestartLabel() {
+    return this.isRollingBackClearHls ? "Restarting…" : "Restart normal HLS";
+  }
+
+  get selectedClearRollbackClearLabel() {
+    return this.isRollingBackClearHls ? "Clearing…" : "Clear normal-HLS status";
   }
 
   get bulkAesBackfillDisabled() {
@@ -997,6 +1091,19 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     }
     if (backfillStatus === "failed") {
       return `Backfill failed${s.backfill?.last_error ? ` — ${s.backfill.last_error}` : ""}`;
+    }
+    const clearStatus = String(s.clear_rollback?.status || "");
+    if (clearStatus === "queued") {
+      return "Normal HLS rollback queued";
+    }
+    if (clearStatus === "processing") {
+      return "Normal HLS rollback processing";
+    }
+    if (clearStatus === "failed") {
+      return `Normal HLS rollback failed${s.clear_rollback?.last_error ? ` — ${s.clear_rollback.last_error}` : ""}`;
+    }
+    if (clearStatus === "ready") {
+      return "Normal HLS rollback completed";
     }
     if (state === "ready" || s.ready) {
       return `Ready${s.key_id ? ` (${s.key_id})` : ""}`;
@@ -1291,6 +1398,32 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this._applySelectedItem(json?.item || null);
     const backfill = json?.hls_aes128_backfill || json?.item?.hls_aes128?.backfill || { status: fallbackStatus };
     this._applyBackfillState(backfill, fallbackStatus);
+  }
+
+  _applyClearRollbackState(state, fallbackStatus = "queued") {
+    const current = this.selectedItem || {};
+    const currentAes = current.hls_aes128 || {};
+    const clearRollback = state && typeof state === "object" ? state : { status: fallbackStatus };
+    const nextAes = {
+      ...currentAes,
+      clear_rollback: {
+        ...(currentAes.clear_rollback || {}),
+        ...clearRollback,
+        status: String(clearRollback.status || fallbackStatus),
+      },
+    };
+
+    this.selectedItem = {
+      ...current,
+      hls_aes128: nextAes,
+    };
+    this._syncSearchResult(this.selectedItem);
+  }
+
+  _applyClearRollbackResponse(json, fallbackStatus = "queued") {
+    this._applySelectedItem(json?.item || null);
+    const state = json?.hls_clear_rollback || json?.item?.hls_aes128?.clear_rollback || { status: fallbackStatus };
+    this._applyClearRollbackState(state, fallbackStatus);
   }
 
 
@@ -1810,6 +1943,44 @@ This cannot be undone.`)) {
     }
   }
 
+
+  _startClearRollbackStatusPolling() {
+    const publicId = this.selectedPublicId;
+    if (!publicId) {
+      return;
+    }
+
+    const pollRunId = ++this.backfillPollRunId;
+    this._pollClearRollbackStatus(publicId, pollRunId);
+  }
+
+  async _pollClearRollbackStatus(publicId, pollRunId) {
+    const intervals = [800, 1200, 1800, 2500, 3500, 5000, 7000, 10000];
+
+    for (const interval of intervals) {
+      if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
+        return;
+      }
+
+      const status = this.selectedClearRollbackStatus;
+      if (!["queued", "processing"].includes(status)) {
+        return;
+      }
+
+      await delay(interval);
+
+      if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
+        return;
+      }
+
+      try {
+        await this.refreshSelected({ preserveNotice: true });
+      } catch {
+        return;
+      }
+    }
+  }
+
   @action
   async queueAesBackfill() {
     if (this.selectedAesBackfillDisabled) {
@@ -1844,6 +2015,7 @@ This repackages the existing processed video into encrypted HLS. Normal playback
       this.selectionError = e?.message || String(e);
     } finally {
       this.isBackfillingAes = false;
+    this.isRollingBackClearHls = false;
     this.isCleaningAes = false;
     }
   }
@@ -1882,6 +2054,7 @@ This queues a fresh backfill job and supersedes earlier queued jobs created by t
       this.selectionError = e?.message || String(e);
     } finally {
       this.isBackfillingAes = false;
+    this.isRollingBackClearHls = false;
     this.isCleaningAes = false;
     }
   }
@@ -1920,6 +2093,7 @@ Use this only for stuck queued/processing/failed states. It does not delete exis
       this.selectionError = e?.message || String(e);
     } finally {
       this.isBackfillingAes = false;
+    this.isRollingBackClearHls = false;
     this.isCleaningAes = false;
     }
   }
@@ -1964,6 +2138,115 @@ This removes safe temporary/unused AES state only: stale failed/queued metadata,
       this.selectionError = e?.message || String(e);
     } finally {
       this.isCleaningAes = false;
+    }
+  }
+
+  @action
+  async queueClearHlsRollback() {
+    if (this.selectedClearRollbackDisabled) {
+      return;
+    }
+
+    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
+    if (!window.confirm(`Repackage this item as normal, non-AES HLS?
+
+${title}
+
+This removes AES protection for this item by repackaging the existing processed video into clear HLS. Do not use this while AES required mode is enabled.`)) {
+      return;
+    }
+
+    this.isRollingBackClearHls = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/hls-clear-rollback.json`, {
+        method: "POST",
+        body: JSON.stringify({ force: false }),
+      });
+      this._applyClearRollbackResponse(json, "queued");
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || "Clear HLS rollback queued.";
+      await this.refreshSelected({ preserveNotice: true });
+      this._startClearRollbackStatusPolling();
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isRollingBackClearHls = false;
+    }
+  }
+
+  @action
+  async restartClearHlsRollback() {
+    if (this.selectedClearRollbackRestartDisabled) {
+      return;
+    }
+
+    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
+    if (!window.confirm(`Restart normal HLS rollback for:
+
+${title}`)) {
+      return;
+    }
+
+    this.isRollingBackClearHls = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/hls-clear-rollback/restart.json`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      this._applyClearRollbackResponse(json, "queued");
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || "Clear HLS rollback restarted.";
+      await this.refreshSelected({ preserveNotice: true });
+      this._startClearRollbackStatusPolling();
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isRollingBackClearHls = false;
+    }
+  }
+
+  @action
+  async clearClearHlsRollback() {
+    if (this.selectedClearRollbackClearDisabled) {
+      return;
+    }
+
+    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
+    if (!window.confirm(`Clear normal HLS rollback status for:
+
+${title}
+
+This does not change media files.`)) {
+      return;
+    }
+
+    this.isRollingBackClearHls = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/hls-clear-rollback/clear.json`, {
+        method: "POST",
+        body: JSON.stringify({ reason: "admin_clear" }),
+      });
+      this._applyClearRollbackResponse(json, "cancelled");
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || "Clear HLS rollback state cleared.";
+      this.backfillPollRunId += 1;
+      await this.refreshSelected({ preserveNotice: true });
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isRollingBackClearHls = false;
     }
   }
 
