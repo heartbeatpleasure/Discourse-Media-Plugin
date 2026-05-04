@@ -15,23 +15,27 @@ module ::MediaGallery
 
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
     def search
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       candidates = filtered_search_scope.limit(search_candidate_limit).to_a
+      hls_roles_by_item = hls_roles_by_item_from_manifest(candidates)
       active_key_ids_by_item = hls_aes128_active_key_ids_by_item(candidates)
 
       items = []
       candidates.each do |item|
-        has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash)
+        hls_role = hls_roles_by_item[item.id.to_i]
+        has_hls = hls_role.is_a?(Hash)
         next if has_hls_filter == "true" && !has_hls
         next if has_hls_filter == "false" && has_hls
 
-        aes_status = hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item)
+        aes_status = hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item, role: hls_role)
         next unless hls_aes128_filter_matches?(aes_status, hls_aes128_filter)
 
         items << serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status)
         break if items.length >= search_limit
       end
 
-      render_json_dump(items: items, search_profiles: search_profiles_summary)
+      elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
+      render_json_dump(items: items, search_profiles: search_profiles_summary, timing_ms: elapsed_ms)
     end
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/management.json
@@ -1330,6 +1334,26 @@ module ::MediaGallery
     end
 
 
+
+    def hls_roles_by_item_from_manifest(items)
+      Array(items).each_with_object({}) do |item, memo|
+        role = hls_role_from_manifest(item)
+        memo[item.id.to_i] = role if role.is_a?(Hash)
+      end
+    rescue => e
+      ::MediaGallery::OperationLogger.warn("hls_role_manifest_prefetch_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
+      {}
+    end
+
+    def hls_role_from_manifest(item)
+      manifest = item.respond_to?(:storage_manifest_hash) ? item.storage_manifest_hash : item.storage_manifest
+      manifest = manifest.deep_stringify_keys if manifest.is_a?(Hash)
+      role = manifest.dig("roles", "hls") if manifest.is_a?(Hash)
+      role.is_a?(Hash) ? role.deep_stringify_keys : nil
+    rescue
+      nil
+    end
+
     def hls_aes128_active_key_ids_by_item(items)
       return {} unless hls_aes128_key_table_available?
 
@@ -1349,10 +1373,10 @@ module ::MediaGallery
       {}
     end
 
-    def hls_aes128_status_for(item, has_hls: nil, active_key_ids_by_item: nil)
-      has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash) if has_hls.nil?
-      role = ::MediaGallery::Hls.managed_role_for(item)
+    def hls_aes128_status_for(item, has_hls: nil, active_key_ids_by_item: nil, role: nil)
+      role ||= ::MediaGallery::Hls.managed_role_for(item)
       role = role.deep_stringify_keys if role.is_a?(Hash)
+      has_hls = role.is_a?(Hash) if has_hls.nil?
       status = ::MediaGallery::Hls.aes128_status_for(item, role: role)
       encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
       key_id = status["key_id"].to_s.presence || (encryption.is_a?(Hash) ? encryption["key_id"].to_s.presence : nil)

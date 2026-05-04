@@ -176,34 +176,38 @@ export default RouteTemplate(
       .mg-management__action-groups {
         display: flex;
         flex-direction: column;
-        gap: 1.15rem;
+        gap: 1rem;
         margin-top: 1rem;
       }
 
       .mg-management__action-group {
-        display: block;
-        padding: 0.85rem 0 0.95rem;
-        border-top: 1px solid var(--mg-border);
-      }
-
-      .mg-management__action-group:first-child {
-        border-top: 0;
-        padding-top: 0;
+        display: block !important;
+        padding: 0.85rem;
+        border: 1px solid var(--mg-border);
+        border-radius: 12px;
+        background: var(--mg-surface);
       }
 
       .mg-management__action-group-title {
-        display: block;
+        display: block !important;
+        width: 100%;
         color: var(--mg-muted);
         font-size: var(--font-down-1);
         font-weight: 700;
-        margin: 0 0 0.55rem;
+        margin: 0 0 0.65rem;
       }
 
       .mg-management__action-buttons {
-        display: flex;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, max-content));
         gap: 0.75rem;
         align-items: center;
+        justify-content: start;
+      }
+
+      .mg-management__action-buttons .btn {
+        width: auto;
+        justify-self: start;
       }
 
       .mg-management__results-wrap {
@@ -749,7 +753,12 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-management__results-wrap">
-            {{#if @controller.searchResults.length}}
+            {{#if @controller.isSearching}}
+              <div class="mg-management__empty-state">
+                <strong>Loading media items…</strong>
+                <span class="mg-management__muted">Please wait while the current filters are applied.</span>
+              </div>
+            {{else if @controller.searchResults.length}}
               <div class="mg-management__results-list">
                 {{#each @controller.decoratedSearchResults key="public_id" as |item|}}
                   <article class="mg-management__result-card {{if item.isSelected "is-selected"}}">

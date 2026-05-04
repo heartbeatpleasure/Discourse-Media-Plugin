@@ -158,6 +158,10 @@ async function copyTextToClipboard(text) {
   }
 }
 
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function hlsStatusBadgeClass(status) {
   switch (String(status || "").toLowerCase()) {
     case "ok":
@@ -337,6 +341,14 @@ function formatHistoryAction(action) {
       return "Queued AES HLS backfill";
     case "hls_aes128_backfill_restarted":
       return "Restarted AES HLS backfill";
+    case "hls_aes128_backfill_processing":
+      return "Started AES HLS backfill";
+    case "hls_aes128_backfill_succeeded":
+      return "Completed AES HLS backfill";
+    case "hls_aes128_backfill_failed":
+      return "Failed AES HLS backfill";
+    case "hls_aes128_backfill_skipped":
+      return "Skipped AES HLS backfill";
     case "hls_aes128_backfill_cleared":
       return "Cleared AES HLS backfill state";
     case "bulk_hls_aes128_backfill":
@@ -401,6 +413,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isSearching = false;
   @tracked searchError = "";
   @tracked searchInfo = "";
+  @tracked lastSearchTimingMs = null;
   @tracked hasSearched = false;
 
   @tracked selectedPublicId = "";
@@ -431,6 +444,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   searchAbortController = null;
   selectionAbortController = null;
+  backfillPollRunId = 0;
 
   resetState() {
     this.searchQuery = "";
@@ -449,6 +463,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.isSearching = false;
     this.searchError = "";
     this.searchInfo = "";
+    this.lastSearchTimingMs = null;
     this.hasSearched = false;
 
     this.selectedPublicId = "";
@@ -1064,7 +1079,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   _updateSearchInfo() {
-    this.searchInfo = `${this.searchResults.length} item(s) found.`;
+    const timing = Number(this.lastSearchTimingMs || 0);
+    const suffix = timing > 0 ? ` • server ${timing}ms` : "";
+    this.searchInfo = `${this.searchResults.length} item(s) found${suffix}.`;
   }
 
   _sortSearchResults(items) {
@@ -1243,10 +1260,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   _applyBackfillResponse(json, fallbackStatus = "queued") {
-    const itemApplied = this._applySelectedItem(json?.item || null);
-    if (!itemApplied || !json?.item?.hls_aes128?.backfill?.status) {
-      this._applyBackfillState(json?.hls_aes128_backfill || {}, fallbackStatus);
-    }
+    this._applySelectedItem(json?.item || null);
+    const backfill = json?.hls_aes128_backfill || json?.item?.hls_aes128?.backfill || { status: fallbackStatus };
+    this._applyBackfillState(backfill, fallbackStatus);
   }
 
 
@@ -1406,6 +1422,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         signal: controller.signal,
       });
       this.availableSearchProfiles = Array.isArray(json?.search_profiles) ? json.search_profiles : this.availableSearchProfiles;
+      this.lastSearchTimingMs = Number(json?.timing_ms || 0) || null;
       this.searchResults = this._sortSearchResults(Array.isArray(json?.items) ? json.items : []);
       this._updateSearchInfo();
     } catch (e) {
@@ -1474,6 +1491,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     } finally {
       if (this.selectionAbortController === controller) {
         this.selectionAbortController = null;
+  backfillPollRunId = 0;
       }
       this.isLoadingSelection = false;
     }
@@ -1725,6 +1743,45 @@ This cannot be undone.`)) {
     }
   }
 
+
+  _startBackfillStatusPolling() {
+    const publicId = this.selectedPublicId;
+    if (!publicId) {
+      return;
+    }
+
+    const pollRunId = ++this.backfillPollRunId;
+    this._pollBackfillStatus(publicId, pollRunId);
+  }
+
+  async _pollBackfillStatus(publicId, pollRunId) {
+    const intervals = [800, 1200, 1800, 2500, 3500, 5000, 7000, 10000];
+
+    for (const interval of intervals) {
+      if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
+        return;
+      }
+
+      const status = this.selectedAesBackfillStatus;
+      const aesReady = !!this.selectedItem?.hls_aes128?.ready;
+      if (aesReady || !["queued", "processing"].includes(status)) {
+        return;
+      }
+
+      await delay(interval);
+
+      if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
+        return;
+      }
+
+      try {
+        await this.refreshSelected({ preserveNotice: true });
+      } catch {
+        return;
+      }
+    }
+  }
+
   @action
   async queueAesBackfill() {
     if (this.selectedAesBackfillDisabled) {
@@ -1754,6 +1811,7 @@ This repackages the existing processed video into encrypted HLS. Normal playback
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "AES HLS backfill queued.";
       await this.refreshSelected({ preserveNotice: true });
+      this._startBackfillStatusPolling();
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
@@ -1790,6 +1848,7 @@ This queues a fresh backfill job and supersedes earlier queued jobs created by t
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "AES HLS backfill restarted.";
       await this.refreshSelected({ preserveNotice: true });
+      this._startBackfillStatusPolling();
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
@@ -1825,6 +1884,7 @@ Use this only for stuck queued/processing/failed states. It does not delete exis
       this._applyBackfillResponse(json, "cancelled");
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "AES HLS backfill state cleared.";
+      this.backfillPollRunId += 1;
       await this.refreshSelected({ preserveNotice: true });
     } catch (e) {
       this.selectionError = e?.message || String(e);

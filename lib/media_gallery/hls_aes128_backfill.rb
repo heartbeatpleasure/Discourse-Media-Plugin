@@ -69,8 +69,9 @@ module ::MediaGallery
           return mark_skipped!(item, reason: "already_aes_ready", requested_by: requested_by, force: force)
         end
 
-        validate_backfill_preconditions!(item, force: force, allow_already_ready: false)
-        mark_processing!(item, requested_by: requested_by, force: force, run_token: current_state["run_token"].presence || run_token)
+        validate_backfill_preconditions!(item, force: force, allow_already_ready: false, allow_in_progress: true)
+        processing_state = mark_processing!(item, requested_by: requested_by, force: force, run_token: current_state["run_token"].presence || run_token)
+        append_backfill_management_log!(item, action: "hls_aes128_backfill_processing", requested_by: requested_by, changes: { "hls_aes128_backfill" => [current_state["status"], processing_state["status"]] })
 
         result = nil
         ::MediaGallery::ProcessingWorkspace.open do |workspace|
@@ -85,6 +86,7 @@ module ::MediaGallery
           hls_role = ::MediaGallery::Hls.publish_packaged_video!(item, store: store, hls_meta: hls_meta)
           persist_hls_role_and_meta!(item, hls_role: hls_role, hls_meta: hls_meta)
           result = mark_succeeded!(item, requested_by: requested_by, force: force, hls_role: hls_role, hls_meta: hls_meta)
+          append_backfill_management_log!(item, action: "hls_aes128_backfill_succeeded", requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", result["status"]] })
           ::MediaGallery::OperationLogger.info(
             "hls_aes128_backfill_job_succeeded",
             item: item,
@@ -96,7 +98,10 @@ module ::MediaGallery
         result
       end
     rescue => e
-      mark_failed!(item, error: e, requested_by: requested_by, force: force) if item&.persisted?
+      if item&.persisted?
+        failed_state = mark_failed!(item, error: e, requested_by: requested_by, force: force)
+        append_backfill_management_log!(item, action: "hls_aes128_backfill_failed", requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", failed_state&.dig("status") || "failed"], "error" => [nil, e.message.to_s.truncate(500)] })
+      end
       raise e
     end
 
@@ -131,7 +136,10 @@ module ::MediaGallery
 
       job_id
     rescue => e
-      mark_failed!(item, error: e, requested_by: requested_by, force: force) if item&.persisted?
+      if item&.persisted?
+        failed_state = mark_failed!(item, error: e, requested_by: requested_by, force: force)
+        append_backfill_management_log!(item, action: "hls_aes128_backfill_failed", requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", failed_state&.dig("status") || "failed"], "error" => [nil, e.message.to_s.truncate(500)] })
+      end
       raise e
     end
 
@@ -205,7 +213,7 @@ module ::MediaGallery
       false
     end
 
-    def validate_backfill_preconditions!(item, force: false, allow_already_ready: false)
+    def validate_backfill_preconditions!(item, force: false, allow_already_ready: false, allow_in_progress: false)
       raise "hls_disabled" unless ::MediaGallery::Hls.enabled?
       raise "hls_aes128_disabled" unless ::MediaGallery::Hls.aes128_enabled?
       raise "managed_storage_disabled" unless ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
@@ -220,7 +228,7 @@ module ::MediaGallery
         raise "hls_aes128_already_ready"
       end
 
-      if in_progress?(item) && !force
+      if in_progress?(item) && !force && !allow_in_progress
         raise "hls_aes128_backfill_already_queued"
       end
 
@@ -378,6 +386,30 @@ module ::MediaGallery
       hls_meta.except("build_root", "cleanup_build_root_after_publish")
     rescue
       hls_meta
+    end
+
+    def append_backfill_management_log!(item, action:, requested_by:, changes: nil, note: nil)
+      item.reload
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      log = meta["admin_management_log"]
+      log = [] unless log.is_a?(Array)
+
+      entry = {
+        "action" => action.to_s,
+        "at" => Time.now.utc.iso8601,
+        "admin_username" => requested_by.to_s.presence || "system",
+        "admin_user_id" => nil,
+        "public_id" => item.public_id.to_s,
+      }
+      entry["note"] = note.to_s if note.to_s.present?
+      entry["changes"] = changes.deep_stringify_keys if changes.is_a?(Hash) && changes.present?
+
+      log.unshift(entry)
+      meta["admin_management_log"] = log.first(50)
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+    rescue => e
+      Rails.logger.warn("[media_gallery] AES backfill management history update failed item_id=#{item&.id} action=#{action} error=#{e.class}: #{e.message}")
+      nil
     end
 
     def with_item_mutex(item, &blk)
