@@ -409,6 +409,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
   @tracked backupRetention = {};
   @tracked backupPaths = [];
   @tracked rateLimitTuning = {};
+  @tracked aesBackfill = {};
   @tracked generatedAt = "";
   @tracked hasLoaded = false;
 
@@ -432,6 +433,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.backupRetention = {};
     this.backupPaths = [];
     this.rateLimitTuning = {};
+    this.aesBackfill = {};
     this.generatedAt = "";
     this.hasLoaded = false;
   }
@@ -459,6 +461,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.backupRetention = data?.backup_retention || {};
     this.backupPaths = Array.isArray(data?.backup_retention?.paths) ? data.backup_retention.paths.map(decoratePath) : [];
     this.rateLimitTuning = data?.rate_limit_tuning || {};
+    this.aesBackfill = data?.aes128_backfill || {};
     this.recentEvents = data?.recent_events || {};
     this.topEventTypes = Array.isArray(data?.recent_events?.top_event_types)
       ? data.recent_events.top_event_types.map(decorateEvent)
@@ -737,6 +740,38 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     });
   }
 
+  get aesBackfillFact() {
+    const b = this.aesBackfill || {};
+    const enabled = !!b.aes_enabled;
+    const failed = Number(b.failed_count || 0);
+    const stale = Number(b.stale_count || 0);
+    const queued = Number(b.queued_count || 0);
+    const processing = Number(b.processing_count || 0);
+    const needs = Number(b.needs_backfill_count || 0);
+    const ready = Number(b.aes_ready_count || 0);
+    const hls = Number(b.hls_ready_video_count || 0);
+    const status = !enabled
+      ? "info"
+      : failed > 0 || stale > 0
+        ? "attention"
+        : queued > 0 || processing > 0 || needs > 0
+          ? "warning"
+          : "ok";
+
+    return {
+      key: "aes_backfill_health",
+      label: "AES backfill health",
+      value: enabled ? `${formatNumber(ready)} / ${formatNumber(hls)} AES-ready` : "AES disabled",
+      detail: enabled
+        ? `Needs ${formatNumber(needs)} · queued ${formatNumber(queued)} · processing ${formatNumber(processing)} · failed ${formatNumber(failed)} · stale ${formatNumber(stale)}`
+        : "Enable HLS AES-128 before backfilling legacy HLS videos.",
+      statusText: !enabled ? "Off" : failed > 0 || stale > 0 ? "Review" : queued > 0 || processing > 0 ? "Running" : needs > 0 ? "Backfill" : "OK",
+      statusChipClass: statusChipClass(status),
+      statusDotClass: statusDotClass(status),
+    };
+  }
+
+
   get environmentFacts() {
     const status = this.environment?.status || "info";
     return [
@@ -801,6 +836,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         statusChipClass: statusChipClass(this.download?.log_hls_aes128_key_denials ? "ok" : "info"),
         statusDotClass: statusDotClass(this.download?.log_hls_aes128_key_denials ? "ok" : "info"),
       },
+      this.aesBackfillFact,
       {
         key: "f08_hard",
         label: "Hard stream limits",

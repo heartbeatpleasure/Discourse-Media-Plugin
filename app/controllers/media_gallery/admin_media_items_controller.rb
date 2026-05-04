@@ -23,7 +23,8 @@ module ::MediaGallery
       candidates = timed_phase!(timing, :query) { filtered_search_scope.limit(candidate_limit).to_a }
       hls_roles_by_item = timed_phase!(timing, :hls_manifest) { hls_roles_by_item_from_manifest(candidates) }
       active_key_ids_by_item = timed_phase!(timing, :aes_key_prefetch) { hls_aes128_active_key_ids_by_item(candidates) }
-      storage_profile_cache = timed_phase!(timing, :storage_profiles) { storage_profile_cache_for_items(candidates) }
+      storage_profile_info_by_item = timed_phase!(timing, :storage_profiles) { storage_profile_info_by_item_for_items(candidates) }
+      usernames_by_id = timed_phase!(timing, :users) { usernames_by_id_for_items(candidates) }
 
       items = []
       timed_phase!(timing, :serialize) do
@@ -36,7 +37,13 @@ module ::MediaGallery
           aes_status = hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item, role: hls_role)
           next unless hls_aes128_filter_matches?(aes_status, hls_aes128_filter)
 
-          items << serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status, storage_profile_cache: storage_profile_cache)
+          items << serialize_search_item(
+            item,
+            has_hls: has_hls,
+            hls_aes128_status: aes_status,
+            storage_profile_info_by_item: storage_profile_info_by_item,
+            usernames_by_id: usernames_by_id
+          )
           break if items.length >= final_limit
         end
       end
@@ -708,7 +715,10 @@ module ::MediaGallery
     end
 
     def filtered_search_scope
-      scope = ::MediaGallery::MediaItem.includes(:user).order(created_at: :desc)
+      # Keep the search query itself lightweight. Usernames are prefetched in one
+      # separate pluck for the returned candidate batch so serialization cannot
+      # accidentally perform N+1 user lookups.
+      scope = ::MediaGallery::MediaItem.order(created_at: :desc)
       q = ::MediaGallery::TextSanitizer.search_query(params[:q], max_length: 200)
 
       if q.present?
@@ -869,10 +879,15 @@ module ::MediaGallery
       Array(raw).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
     end
 
-    def serialize_search_item(item, has_hls:, hls_aes128_status: nil, storage_profile_cache: nil)
-      visibility = item.admin_visibility_state
-      profile_info = storage_profile_info_for_item(item, storage_profile_cache: storage_profile_cache)
-      duplicate_payload = duplicate_detection_payload(item, resolve_match: false)
+    def serialize_search_item(item, has_hls:, hls_aes128_status: nil, storage_profile_info_by_item: nil, usernames_by_id: nil)
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
+      visibility = meta[VISIBILITY_KEY].is_a?(Hash) ? meta[VISIBILITY_KEY] : {}
+      duplicate = meta["duplicate_detection"].is_a?(Hash) ? meta["duplicate_detection"] : {}
+      possible_duplicate = ActiveModel::Type::Boolean.new.cast(duplicate["possible_duplicate"]) ||
+        ActiveModel::Type::Boolean.new.cast(duplicate["duplicate_found"])
+      profile_info = storage_profile_info_for_item(item, storage_profile_info_by_item: storage_profile_info_by_item)
+      username = usernames_by_id.is_a?(Hash) ? usernames_by_id[item.user_id.to_i] : nil
+
       {
         id: item.id,
         public_id: item.public_id,
@@ -881,7 +896,7 @@ module ::MediaGallery
         created_at: item.created_at,
         updated_at: item.updated_at,
         user_id: item.user_id,
-        username: item.user&.username,
+        username: username,
         media_type: item.media_type,
         gender: item.gender,
         filesize_processed_bytes: item.filesize_processed_bytes,
@@ -896,8 +911,8 @@ module ::MediaGallery
         hls_aes128: hls_aes128_status || hls_aes128_status_for(item, has_hls: has_hls),
         hidden: ActiveModel::Type::Boolean.new.cast(visibility["hidden"]),
         hidden_reason: visibility["reason"],
-        possible_duplicate: ActiveModel::Type::Boolean.new.cast(duplicate_payload[:possible_duplicate] || duplicate_payload["possible_duplicate"]),
-        duplicate_detection: duplicate_payload,
+        possible_duplicate: possible_duplicate,
+        duplicate_detection: { possible_duplicate: possible_duplicate },
       }
     end
 
@@ -1411,25 +1426,45 @@ module ::MediaGallery
       {}
     end
 
-    def storage_profile_cache_for_items(items)
-      keys = Array(items).map { |item| managed_storage_profile_key_for(item) }.compact.uniq
-      keys.each_with_object({}) do |key, memo|
+    def storage_profile_info_by_item_for_items(items)
+      entries = Array(items).map do |item|
+        key = managed_storage_profile_key_for(item).to_s
+        [item.id.to_i, key]
+      end
+      keys = entries.map { |_item_id, key| key.presence }.compact.uniq
+      profiles = keys.each_with_object({}) do |key, memo|
         memo[key.to_s] = {
           key: key.to_s,
           label: ::MediaGallery::StorageSettingsResolver.profile_label_for_key(key),
           location_fingerprint_key: ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(key),
         }
       end
+
+      entries.each_with_object({}) do |(item_id, key), memo|
+        memo[item_id] = profiles[key.to_s] || { key: key.presence, label: key.presence, location_fingerprint_key: nil }
+      end
     rescue => e
       ::MediaGallery::OperationLogger.warn("storage_profile_cache_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
       {}
     end
 
-    def storage_profile_info_for_item(item, storage_profile_cache: nil)
-      key = managed_storage_profile_key_for(item).to_s
-      cached = storage_profile_cache.is_a?(Hash) ? storage_profile_cache[key] : nil
+    def usernames_by_id_for_items(items)
+      ids = Array(items).map(&:user_id).compact.uniq
+      return {} if ids.blank?
+
+      ::User.where(id: ids).pluck(:id, :username).each_with_object({}) do |(id, username), memo|
+        memo[id.to_i] = username.to_s
+      end
+    rescue => e
+      ::MediaGallery::OperationLogger.warn("management_search_user_prefetch_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
+      {}
+    end
+
+    def storage_profile_info_for_item(item, storage_profile_info_by_item: nil)
+      cached = storage_profile_info_by_item.is_a?(Hash) ? storage_profile_info_by_item[item.id.to_i] : nil
       return cached if cached.is_a?(Hash)
 
+      key = managed_storage_profile_key_for(item).to_s
       {
         key: key.presence,
         label: managed_storage_profile_label_for(item),
