@@ -200,15 +200,18 @@ function hlsAes128Badge(status) {
   }
 
   if (backfillStatus === "queued") {
-    return { label: "AES queued", className: "is-warning", title: "AES HLS backfill has been queued" };
+    const rotating = String(s.backfill?.operation || "") === "key_rotation";
+    return { label: rotating ? "AES rotate queued" : "AES queued", className: "is-warning", title: rotating ? "AES key rotation has been queued" : "AES HLS backfill has been queued" };
   }
 
   if (backfillStatus === "processing") {
-    return { label: "AES processing", className: "is-warning", title: "AES HLS backfill is processing" };
+    const rotating = String(s.backfill?.operation || "") === "key_rotation";
+    return { label: rotating ? "AES rotating" : "AES processing", className: "is-warning", title: rotating ? "AES key rotation is processing" : "AES HLS backfill is processing" };
   }
 
   if (backfillStatus === "failed") {
-    return { label: "AES failed", className: "is-danger", title: s.backfill?.last_error || "AES HLS backfill failed" };
+    const rotating = String(s.backfill?.operation || "") === "key_rotation";
+    return { label: rotating ? "AES rotate failed" : "AES failed", className: "is-danger", title: s.backfill?.last_error || (rotating ? "AES key rotation failed" : "AES HLS backfill failed") };
   }
 
   if (state === "ready" || s.ready) {
@@ -364,6 +367,14 @@ function formatHistoryAction(action) {
       return "Skipped AES HLS backfill";
     case "hls_aes128_backfill_cleared":
       return "Cleared AES HLS backfill state";
+    case "hls_aes128_key_rotation_requested":
+      return "Queued AES key rotation";
+    case "hls_aes128_key_rotation_processing":
+      return "Started AES key rotation";
+    case "hls_aes128_key_rotation_succeeded":
+      return "Completed AES key rotation";
+    case "hls_aes128_key_rotation_failed":
+      return "Failed AES key rotation";
     case "hls_aes128_maintenance_cleanup":
       return "Cleaned AES HLS maintenance state";
     case "hls_clear_rollback_requested":
@@ -740,6 +751,40 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return this.isCleaningAes ? "Cleaning AES…" : "Clean AES state";
   }
 
+  get selectedAesKeyRotationDisabled() {
+    const item = this.selectedItem || {};
+    const status = item.hls_aes128 || {};
+    const backfillStatus = this.selectedAesBackfillStatus;
+    const clearRollbackStatus = this.selectedClearRollbackStatus;
+    return (
+      !this.hasSelectedItem ||
+      this.isBackfillingAes ||
+      this.isRollingBackClearHls ||
+      item.status !== "ready" ||
+      item.media_type !== "video" ||
+      !status.enabled ||
+      !status.has_hls ||
+      !status.ready ||
+      !status.key_record_present ||
+      ["queued", "processing"].includes(backfillStatus) ||
+      ["queued", "processing"].includes(clearRollbackStatus)
+    );
+  }
+
+  get selectedAesKeyRotationLabel() {
+    const operation = String(this.selectedAesBackfillState?.operation || "");
+    const status = this.selectedAesBackfillStatus;
+    if (this.isBackfillingAes && operation === "key_rotation") {
+      return "Queuing rotation…";
+    }
+    if (operation === "key_rotation" && status === "queued") {
+      return "Rotation queued";
+    }
+    if (operation === "key_rotation" && status === "processing") {
+      return "Rotation processing";
+    }
+    return "Rotate AES key";
+  }
 
   get selectedClearRollbackState() {
     return this.selectedItem?.hls_aes128?.clear_rollback || {};
@@ -1085,14 +1130,15 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     const s = status || {};
     const state = String(s.status || "");
     const backfillStatus = String(s.backfill?.status || "");
+    const backfillOperation = String(s.backfill?.operation || "");
     if (backfillStatus === "queued") {
-      return "Backfill queued";
+      return backfillOperation === "key_rotation" ? "Key rotation queued" : "Backfill queued";
     }
     if (backfillStatus === "processing") {
-      return "Backfill processing";
+      return backfillOperation === "key_rotation" ? "Key rotation processing" : "Backfill processing";
     }
     if (backfillStatus === "failed") {
-      return `Backfill failed${s.backfill?.last_error ? ` — ${s.backfill.last_error}` : ""}`;
+      return `${backfillOperation === "key_rotation" ? "Key rotation" : "Backfill"} failed${s.backfill?.last_error ? ` — ${s.backfill.last_error}` : ""}`;
     }
     const clearStatus = String(s.clear_rollback?.status || "");
     if (clearStatus === "queued") {
@@ -2146,6 +2192,43 @@ This removes safe temporary/unused AES state only: stale failed/queued metadata,
       this.selectionError = e?.message || String(e);
     } finally {
       this.isCleaningAes = false;
+    }
+  }
+
+  @action
+  async rotateAesKey() {
+    if (this.selectedAesKeyRotationDisabled) {
+      return;
+    }
+
+    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
+    if (!window.confirm(`Rotate the AES key for this HLS item?
+
+${title}
+
+This repackages the existing processed video into a fresh encrypted HLS package with a new server-side AES key. Existing downloaded copies that already include the old key and old segments cannot be recalled, but future playback will use the new key/package.`)) {
+      return;
+    }
+
+    this.isBackfillingAes = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/aes-key-rotation.json`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      this._applyBackfillResponse(json, "queued");
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || "AES key rotation queued.";
+      await this.refreshSelected({ preserveNotice: true });
+      this._startBackfillStatusPolling();
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isBackfillingAes = false;
     }
   }
 

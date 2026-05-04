@@ -188,6 +188,7 @@ after_initialize do
     post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill" => "media_gallery/admin_media_items#aes_backfill", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill/restart" => "media_gallery/admin_media_items#restart_aes_backfill", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill/clear" => "media_gallery/admin_media_items#clear_aes_backfill", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/aes-key-rotation" => "media_gallery/admin_media_items#rotate_aes_key", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/aes-maintenance/cleanup" => "media_gallery/admin_media_items#aes_maintenance_cleanup", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/hls-clear-rollback" => "media_gallery/admin_media_items#hls_clear_rollback", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/hls-clear-rollback/restart" => "media_gallery/admin_media_items#restart_hls_clear_rollback", defaults: { format: :json }

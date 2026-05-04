@@ -356,6 +356,33 @@ module ::MediaGallery
       render_operation_error(e, operation: "hls_aes128_backfill_clear", item: item, status: 422)
     end
 
+    def rotate_aes_key
+      item = load_item!
+      previous = ::MediaGallery::HlsAes128Backfill.state_for(item)
+      previous_aes = hls_aes128_status_for(item)
+      state = ::MediaGallery::HlsAes128Backfill.rotate_key!(item, requested_by: current_user.username)
+      append_aes_backfill_management_log!(
+        item,
+        action: "hls_aes128_key_rotation_requested",
+        result: state["status"],
+        changes: {
+          "hls_aes128_key_rotation" => [previous["status"], state["status"]],
+          "key_id" => [previous_aes["key_id"], state["key_id"]].compact,
+        }
+      )
+      audit_admin_action!(
+        "hls_aes128_key_rotation_requested",
+        item: item,
+        operation: "hls_aes128_key_rotation",
+        result: state["status"],
+        data: { previous_status: previous["status"], note: "forced AES repackage to replace server-side HLS key" }
+      )
+      item.reload
+      render_json_dump(ok: true, public_id: item.public_id, hls_aes128_backfill: state, item: management_item_payload(item), message: "AES key rotation queued.")
+    rescue => e
+      render_operation_error(e, operation: "hls_aes128_key_rotation", item: item, status: 422)
+    end
+
     def aes_maintenance_cleanup
       item = load_item!
       result = ::MediaGallery::HlsAes128Maintenance.cleanup_item!(
@@ -1702,6 +1729,9 @@ module ::MediaGallery
         "failed_at" => state["failed_at"].presence,
         "cancelled_at" => state["cancelled_at"].presence,
         "last_error" => state["last_error"].to_s.presence,
+        "operation" => state["operation"].to_s.presence,
+        "key_id" => state["key_id"].to_s.presence,
+        "scheme" => state["scheme"].to_s.presence,
         "stale" => stale,
       }.compact
     rescue

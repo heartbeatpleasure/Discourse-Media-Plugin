@@ -1004,6 +1004,9 @@ export default RouteTemplate(
                       <button class="btn" type="button" {{on "click" @controller.cleanupAesMaintenance}} disabled={{@controller.selectedAesMaintenanceCleanupDisabled}}>
                         {{@controller.selectedAesMaintenanceCleanupLabel}}
                       </button>
+                      <button class="btn btn-danger" type="button" {{on "click" @controller.rotateAesKey}} disabled={{@controller.selectedAesKeyRotationDisabled}}>
+                        {{@controller.selectedAesKeyRotationLabel}}
+                      </button>
                       <button class="btn btn-danger" type="button" {{on "click" @controller.queueClearHlsRollback}} disabled={{@controller.selectedClearRollbackDisabled}}>
                         {{@controller.selectedClearRollbackButtonLabel}}
                       </button>

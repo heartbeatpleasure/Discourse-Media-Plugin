@@ -15,18 +15,25 @@ module ::MediaGallery
     STATE_KEY = "hls_aes128_backfill"
     STATUSES_IN_PROGRESS = %w[queued processing].freeze
 
-    def enqueue_item!(item, requested_by:, force: false)
+    def enqueue_item!(item, requested_by:, force: false, operation: nil)
       raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
-      validate_backfill_preconditions!(item, force: force, allow_already_ready: true)
+      validate_backfill_preconditions!(item, force: force, allow_already_ready: true, operation: operation)
 
       run_token = SecureRandom.hex(16)
-      state = mark_queued!(item, requested_by: requested_by, force: force, run_token: run_token)
+      state = mark_queued!(item, requested_by: requested_by, force: force, run_token: run_token, operation: operation)
       enqueue_backfill_job!(item, requested_by: requested_by, force: force, run_token: run_token)
       state
     end
 
     def restart_item!(item, requested_by:)
       enqueue_item!(item, requested_by: requested_by, force: true)
+    end
+
+    def rotate_key!(item, requested_by:)
+      raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
+      raise "hls_aes128_not_ready_to_rotate" unless aes_ready?(item)
+
+      enqueue_item!(item, requested_by: requested_by, force: true, operation: "key_rotation")
     end
 
     def clear_state!(item, requested_by:, reason: nil)
@@ -69,9 +76,10 @@ module ::MediaGallery
           return mark_skipped!(item, reason: "already_aes_ready", requested_by: requested_by, force: force)
         end
 
-        validate_backfill_preconditions!(item, force: force, allow_already_ready: false, allow_in_progress: true)
-        processing_state = mark_processing!(item, requested_by: requested_by, force: force, run_token: current_state["run_token"].presence || run_token)
-        append_backfill_management_log!(item, action: "hls_aes128_backfill_processing", requested_by: requested_by, changes: { "hls_aes128_backfill" => [current_state["status"], processing_state["status"]] })
+        operation = current_state["operation"].to_s
+        validate_backfill_preconditions!(item, force: force, allow_already_ready: false, allow_in_progress: true, operation: operation.presence)
+        processing_state = mark_processing!(item, requested_by: requested_by, force: force, run_token: current_state["run_token"].presence || run_token, operation: operation.presence)
+        append_backfill_management_log!(item, action: operation_action(operation, "processing"), requested_by: requested_by, changes: { "hls_aes128_backfill" => [current_state["status"], processing_state["status"]] })
 
         result = nil
         ::MediaGallery::ProcessingWorkspace.open do |workspace|
@@ -86,7 +94,7 @@ module ::MediaGallery
           hls_role = ::MediaGallery::Hls.publish_packaged_video!(item, store: store, hls_meta: hls_meta)
           persist_hls_role_and_meta!(item, hls_role: hls_role, hls_meta: hls_meta)
           result = mark_succeeded!(item, requested_by: requested_by, force: force, hls_role: hls_role, hls_meta: hls_meta)
-          append_backfill_management_log!(item, action: "hls_aes128_backfill_succeeded", requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", result["status"]] })
+          append_backfill_management_log!(item, action: operation_action(operation, "succeeded"), requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", result["status"]], "hls_aes128_key" => ["previous", result["key_id"].to_s.presence || "rotated"] })
           ::MediaGallery::OperationLogger.info(
             "hls_aes128_backfill_job_succeeded",
             item: item,
@@ -100,7 +108,8 @@ module ::MediaGallery
     rescue => e
       if item&.persisted?
         failed_state = mark_failed!(item, error: e, requested_by: requested_by, force: force)
-        append_backfill_management_log!(item, action: "hls_aes128_backfill_failed", requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", failed_state&.dig("status") || "failed"], "error" => [nil, e.message.to_s.truncate(500)] })
+        operation = state_for(item)["operation"].to_s
+        append_backfill_management_log!(item, action: operation_action(operation, "failed"), requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", failed_state&.dig("status") || "failed"], "error" => [nil, e.message.to_s.truncate(500)] })
       end
       raise e
     end
@@ -138,7 +147,8 @@ module ::MediaGallery
     rescue => e
       if item&.persisted?
         failed_state = mark_failed!(item, error: e, requested_by: requested_by, force: force)
-        append_backfill_management_log!(item, action: "hls_aes128_backfill_failed", requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", failed_state&.dig("status") || "failed"], "error" => [nil, e.message.to_s.truncate(500)] })
+        operation = state_for(item)["operation"].to_s
+        append_backfill_management_log!(item, action: operation_action(operation, "failed"), requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", failed_state&.dig("status") || "failed"], "error" => [nil, e.message.to_s.truncate(500)] })
       end
       raise e
     end
@@ -213,7 +223,7 @@ module ::MediaGallery
       false
     end
 
-    def validate_backfill_preconditions!(item, force: false, allow_already_ready: false, allow_in_progress: false)
+    def validate_backfill_preconditions!(item, force: false, allow_already_ready: false, allow_in_progress: false, operation: nil)
       raise "hls_disabled" unless ::MediaGallery::Hls.enabled?
       raise "hls_aes128_disabled" unless ::MediaGallery::Hls.aes128_enabled?
       raise "managed_storage_disabled" unless ::MediaGallery::StorageSettingsResolver.managed_storage_enabled?
@@ -224,7 +234,9 @@ module ::MediaGallery
       raise "hls_role_missing" unless hls_role.is_a?(Hash)
       raise "hls_not_ready" unless ::MediaGallery::Hls.ready?(item)
 
-      if aes_ready?(item) && !force && !allow_already_ready
+      if operation.to_s == "key_rotation"
+        raise "hls_aes128_not_ready_to_rotate" unless aes_ready?(item)
+      elsif aes_ready?(item) && !force && !allow_already_ready
         raise "hls_aes128_already_ready"
       end
 
@@ -242,7 +254,7 @@ module ::MediaGallery
       false
     end
 
-    def mark_queued!(item, requested_by:, force: false, run_token: nil)
+    def mark_queued!(item, requested_by:, force: false, run_token: nil, operation: nil)
       update_state!(item) do |state|
         now = Time.now.utc.iso8601
         state.merge(
@@ -252,11 +264,12 @@ module ::MediaGallery
           "force" => !!force,
           "attempt_count" => state["attempt_count"].to_i,
           "run_token" => run_token.to_s.presence || state["run_token"].to_s.presence,
+          "operation" => operation.to_s.presence || state["operation"].to_s.presence,
         ).except("last_error", "last_error_class", "failed_at", "cancelled_at", "cancelled_by", "cancel_reason")
       end
     end
 
-    def mark_processing!(item, requested_by:, force: false, run_token: nil)
+    def mark_processing!(item, requested_by:, force: false, run_token: nil, operation: nil)
       update_state!(item) do |state|
         now = Time.now.utc.iso8601
         state.merge(
@@ -266,6 +279,7 @@ module ::MediaGallery
           "force" => !!force,
           "attempt_count" => state["attempt_count"].to_i + 1,
           "run_token" => run_token.to_s.presence || state["run_token"].to_s.presence,
+          "operation" => operation.to_s.presence || state["operation"].to_s.presence,
         ).except("last_error", "last_error_class", "failed_at", "cancelled_at", "cancelled_by", "cancel_reason")
       end
     end
@@ -386,6 +400,14 @@ module ::MediaGallery
       hls_meta.except("build_root", "cleanup_build_root_after_publish")
     rescue
       hls_meta
+    end
+
+    def operation_action(operation, suffix)
+      if operation.to_s == "key_rotation"
+        "hls_aes128_key_rotation_#{suffix}"
+      else
+        "hls_aes128_backfill_#{suffix}"
+      end
     end
 
     def append_backfill_management_log!(item, action:, requested_by:, changes: nil, note: nil)
