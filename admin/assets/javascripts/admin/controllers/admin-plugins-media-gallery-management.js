@@ -130,6 +130,34 @@ function compactHlsPath(value) {
   return parts.length ? parts.slice(-2).join("/") : withoutQuery;
 }
 
+async function copyTextToClipboard(text) {
+  const value = String(text || "");
+  if (!value) {
+    return false;
+  }
+
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+
+  try {
+    textarea.focus();
+    textarea.select();
+    return document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+}
+
 function hlsStatusBadgeClass(status) {
   switch (String(status || "").toLowerCase()) {
     case "ok":
@@ -341,6 +369,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isRetrying = false;
   @tracked isBlockingOwner = false;
   @tracked isVerifyingHlsIntegrity = false;
+  @tracked isCopyingDiagnostics = false;
   @tracked hlsIntegrityResult = null;
   @tracked availableSearchProfiles = [];
 
@@ -368,6 +397,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.selectedPublicId = "";
     this.selectedItem = null;
     this.hlsIntegrityResult = null;
+    this.isCopyingDiagnostics = false;
     this.isLoadingSelection = false;
     this.selectionError = "";
     this.noticeMessage = "";
@@ -1204,6 +1234,33 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   get hlsIntegrityStatusBadgeClass() {
     return hlsStatusBadgeClass(this.hlsIntegrityResult?.status);
+  }
+
+  @action
+  async copyDiagnosticsBundle() {
+    if (!this.selectedPublicId || this.isCopyingDiagnostics) {
+      return;
+    }
+
+    this.isCopyingDiagnostics = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/diagnostics-bundle.json`, { method: "GET" });
+      const bundleText = json?.bundle_text || JSON.stringify(json?.bundle || {}, null, 2);
+      const copied = await copyTextToClipboard(bundleText);
+
+      this.noticeTone = copied ? "success" : "danger";
+      this.noticeMessage = copied
+        ? "Diagnostics bundle copied to clipboard."
+        : "Diagnostics bundle could not be copied automatically. Please use the JSON response from the diagnostics bundle endpoint.";
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isCopyingDiagnostics = false;
+    }
   }
 
   @action

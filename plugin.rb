@@ -171,6 +171,7 @@ after_initialize do
     post "/admin/plugins/media-gallery/media-items/:public_id/visibility" => "media_gallery/admin_media_items#visibility", defaults: { format: :json }
     delete "/admin/plugins/media-gallery/media-items/:public_id/admin-destroy" => "media_gallery/admin_media_items#admin_destroy", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/diagnostics" => "media_gallery/admin_media_items#diagnostics", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/media-items/:public_id/diagnostics-bundle" => "media_gallery/admin_media_items#diagnostics_bundle", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/migration-plan" => "media_gallery/admin_media_items#migration_plan", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/copy-to-target" => "media_gallery/admin_media_items#copy_to_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/switch-to-target" => "media_gallery/admin_media_items#switch_to_target", defaults: { format: :json }

@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "digest"
+require "json"
+
 module ::MediaGallery
   # Admin-only helper endpoints.
   class AdminMediaItemsController < ::Admin::AdminController
@@ -195,6 +198,31 @@ module ::MediaGallery
       )
     rescue => e
       render_operation_error(e, operation: "diagnostics", item: item, status: 422)
+    end
+
+    # GET /admin/plugins/media-gallery/media-items/:public_id/diagnostics-bundle.json
+    def diagnostics_bundle
+      item = load_item!
+      bundle = diagnostics_bundle_for(item)
+      audit_admin_action!(
+        "diagnostics_bundle_generated",
+        item: item,
+        operation: "diagnostics_bundle",
+        result: "generated",
+        data: {
+          schema_version: bundle[:schema_version],
+          includes_hls: bundle.dig(:hls, :has_role),
+          includes_migration: true
+        }
+      )
+
+      render_json_dump(
+        ok: true,
+        bundle: bundle,
+        bundle_text: JSON.pretty_generate(bundle)
+      )
+    rescue => e
+      render_operation_error(e, operation: "diagnostics_bundle", item: item, status: 422)
     end
 
     def reset_processing
@@ -1194,6 +1222,246 @@ module ::MediaGallery
         recommended_action: normalized[:recommended_action],
       }.compact
     end
+
+    def diagnostics_bundle_for(item)
+      processing = processing_metadata(item)
+      roles = diagnostics_roles(item)
+      hls_role = roles.find { |entry| entry[:name].to_s == "hls" }
+
+      {
+        schema_version: "media_gallery_diagnostics_bundle_v1",
+        generated_at: Time.now.utc.iso8601,
+        generated_by: {
+          user_id: current_user&.id,
+          username: current_user&.username,
+        }.compact,
+        item: {
+          public_id: item.public_id,
+          title_present: item.title.present?,
+          status: item.status,
+          media_type: item.media_type,
+          gender: item.gender,
+          created_at: item.created_at&.iso8601,
+          updated_at: item.updated_at&.iso8601,
+          error_message: truncate_diagnostic_value(item.error_message, 300),
+          processing_stale: processing_stale?(item),
+          processing_stale_after_minutes: processing_stale_after_minutes,
+        }.compact,
+        storage: {
+          managed_storage_backend: item.managed_storage_backend,
+          managed_storage_profile: managed_storage_profile_key_for(item),
+          managed_storage_profile_label: managed_storage_profile_label_for(item),
+          managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
+          delivery_mode: item.delivery_mode,
+        }.compact,
+        roles: roles.map { |entry| diagnostics_bundle_role_summary(entry) },
+        hls: diagnostics_bundle_hls_summary(item, hls_role),
+        processing: diagnostics_bundle_processing_summary(processing),
+        migration: diagnostics_bundle_migration_summary(item),
+        duplicate_detection: diagnostics_bundle_duplicate_summary(item),
+        security_review: diagnostics_bundle_security_review_summary(item),
+        relevant_settings: diagnostics_bundle_settings_summary,
+        notes: [
+          "This bundle is intended for troubleshooting and support.",
+          "It intentionally omits raw playback tokens, presigned URLs, credentials, cookies, and full storage object keys.",
+          "Storage object identifiers are shown as SHA256 labels and short suffixes only."
+        ],
+      }.compact
+    end
+
+    def diagnostics_bundle_role_summary(entry)
+      role = entry[:role].is_a?(Hash) ? entry[:role] : {}
+      keys = %w[key key_prefix master_key complete_key fingerprint_meta_key segment_key_template variant_playlist_key_template ab_segment_key_template]
+
+      {
+        name: entry[:name],
+        backend: role["backend"].to_s.presence,
+        exists: entry[:exists],
+        upload_id_present: role["upload_id"].present?,
+        variants: Array(role["variants"]).map(&:to_s).first(10),
+        ready: role.key?("ready") ? !!role["ready"] : nil,
+        key_references: keys.each_with_object({}) do |key, memo|
+          next if role[key].blank?
+
+          memo[key] = diagnostic_key_reference(role[key])
+        end.presence,
+      }.compact
+    end
+
+    def diagnostics_bundle_hls_summary(item, hls_role)
+      role = hls_role.is_a?(Hash) ? hls_role[:role] : nil
+      fingerprint = hls_fingerprint_diagnostics(item)
+
+      {
+        has_role: role.is_a?(Hash),
+        role_backend: role.is_a?(Hash) ? role["backend"].to_s.presence : nil,
+        role_ready: role.is_a?(Hash) && role.key?("ready") ? !!role["ready"] : nil,
+        variants: role.is_a?(Hash) ? Array(role["variants"]).map(&:to_s).first(10) : [],
+        master_key: role.is_a?(Hash) && role["master_key"].present? ? diagnostic_key_reference(role["master_key"]) : nil,
+        key_prefix: role.is_a?(Hash) && role["key_prefix"].present? ? diagnostic_key_reference(role["key_prefix"]) : nil,
+        fingerprint: fingerprint,
+      }.compact
+    rescue => e
+      { error: "#{e.class}: #{truncate_diagnostic_value(e.message, 180)}" }
+    end
+
+    def diagnostics_bundle_processing_summary(processing)
+      return {} unless processing.is_a?(Hash)
+
+      allowed = %w[
+        current_stage
+        current_run_started_at
+        current_run_job_class
+        last_started_at
+        last_finished_at
+        last_error_class
+        last_error_message
+        last_error_code
+        last_error_at
+        retry_count
+        attempts
+        ffmpeg_exit_status
+        ffprobe_exit_status
+      ]
+
+      allowed.each_with_object({}) do |key, memo|
+        next unless processing.key?(key)
+
+        memo[key] = truncate_diagnostic_value(processing[key], 500)
+      end
+    end
+
+    def diagnostics_bundle_migration_summary(item)
+      {
+        copy: diagnostics_bundle_state_summary(::MediaGallery::MigrationCopy.copy_state_for(item)),
+        verify: diagnostics_bundle_state_summary(::MediaGallery::MigrationVerify.verify_state_for(item)),
+        switch: diagnostics_bundle_state_summary(::MediaGallery::MigrationSwitch.switch_state_for(item)),
+        cleanup: diagnostics_bundle_state_summary(::MediaGallery::MigrationCleanup.cleanup_state_for(item)),
+        rollback: diagnostics_bundle_state_summary(::MediaGallery::MigrationRollback.rollback_state_for(item)),
+        finalize: diagnostics_bundle_state_summary(::MediaGallery::MigrationFinalize.finalize_state_for(item)),
+      }.compact
+    end
+
+    def diagnostics_bundle_state_summary(state)
+      return nil unless state.is_a?(Hash) && state.present?
+
+      allowed = %w[
+        status
+        target_profile
+        source_profile
+        object_count
+        progress_index
+        progress_total
+        objects_copied
+        objects_skipped
+        objects_deleted
+        cleanup_mode
+        last_error_code
+        last_error_human
+        last_error_detail
+        last_error_at
+        retryable
+        recommended_action
+        requested_by
+        started_at
+        finished_at
+        updated_at
+      ]
+
+      allowed.each_with_object({}) do |key, memo|
+        next unless state.key?(key)
+
+        memo[key] = truncate_diagnostic_value(state[key], 500)
+      end
+    end
+
+    def diagnostics_bundle_duplicate_summary(item)
+      detection = duplicate_detection_payload(item, resolve_match: true)
+      return {} unless detection.is_a?(Hash)
+
+      {
+        possible_duplicate: !!detection[:possible_duplicate],
+        reason: truncate_diagnostic_value(detection[:reason], 200),
+        match_public_id: detection.dig(:match, :public_id),
+        match_status: detection.dig(:match, :status),
+      }.compact
+    rescue
+      {}
+    end
+
+    def diagnostics_bundle_security_review_summary(item)
+      review = ::MediaGallery::SecurityReview.for_item(item)
+      return {} unless review.is_a?(Hash)
+
+      {
+        status: review[:status] || review["status"],
+        summary: truncate_diagnostic_value(review[:summary] || review["summary"], 500),
+        findings_count: Array(review[:findings] || review["findings"]).length,
+      }.compact
+    rescue
+      {}
+    end
+
+    def diagnostics_bundle_settings_summary
+      {
+        hls_enabled: safe_site_setting_bool(:media_gallery_hls_enabled),
+        protected_video_hls_only: safe_site_setting_bool(:media_gallery_protected_video_hls_only),
+        private_storage_enabled: safe_site_setting_bool(:media_gallery_private_storage_enabled),
+        default_storage_profile: safe_site_setting_string(:media_gallery_default_storage_profile_key),
+        delivery_mode_default: safe_site_setting_string(:media_gallery_delivery_mode_default),
+        bind_stream_to_user: safe_site_setting_bool(:media_gallery_bind_stream_to_user),
+        bind_stream_to_session: safe_site_setting_bool(:media_gallery_bind_stream_to_session),
+        bind_stream_to_ip: safe_site_setting_bool(:media_gallery_bind_stream_to_ip),
+        stream_token_ttl_minutes: safe_site_setting_int(:media_gallery_stream_token_ttl_minutes),
+        no_store_thumbnails: safe_site_setting_bool(:media_gallery_no_store_thumbnails),
+        block_direct_media_navigation: safe_site_setting_bool(:media_gallery_block_direct_media_navigation),
+        fail_closed_on_unrecognized_media: safe_site_setting_bool(:media_gallery_fail_closed_on_unrecognized_media),
+        forensics_http_source_url_policy: safe_site_setting_string(:media_gallery_forensics_http_source_url_policy),
+      }.compact
+    end
+
+    def diagnostic_key_reference(value)
+      text = value.to_s
+      {
+        sha256: Digest::SHA256.hexdigest(text),
+        suffix: diagnostic_key_suffix(text),
+        length: text.length,
+      }
+    end
+
+    def diagnostic_key_suffix(value)
+      text = value.to_s.split("?").first.to_s
+      parts = text.split("/").reject(&:blank?)
+      parts.last(3).join("/")
+    end
+
+    def truncate_diagnostic_value(value, max = 500)
+      return nil if value.nil?
+      return value if value == true || value == false
+      return value if value.is_a?(Numeric)
+
+      text = value.is_a?(String) ? value : value.to_s
+      text.length > max ? "#{text[0, max]}…" : text
+    end
+
+    def safe_site_setting_bool(name)
+      SiteSetting.respond_to?(name) ? !!SiteSetting.public_send(name) : nil
+    rescue
+      nil
+    end
+
+    def safe_site_setting_int(name)
+      SiteSetting.respond_to?(name) ? SiteSetting.public_send(name).to_i : nil
+    rescue
+      nil
+    end
+
+    def safe_site_setting_string(name)
+      SiteSetting.respond_to?(name) ? SiteSetting.public_send(name).to_s : nil
+    rescue
+      nil
+    end
+
 
     def render_operation_error(error, operation:, item: nil, status: 422, extra: nil)
       normalized = ::MediaGallery::OperationErrors.normalize(error, operation: operation)

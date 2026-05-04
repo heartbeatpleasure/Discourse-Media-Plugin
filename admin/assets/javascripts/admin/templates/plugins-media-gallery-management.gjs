@@ -935,6 +935,9 @@ export default RouteTemplate(
                   <button class="btn" type="button" {{on "click" @controller.verifyHlsIntegrity}} disabled={{@controller.isVerifyingHlsIntegrity}}>
                     {{if @controller.isVerifyingHlsIntegrity "Checking HLS…" "Verify HLS integrity"}}
                   </button>
+                  <button class="btn" type="button" {{on "click" @controller.copyDiagnosticsBundle}} disabled={{@controller.isCopyingDiagnostics}}>
+                    {{if @controller.isCopyingDiagnostics "Copying diagnostics…" "Copy diagnostics"}}
+                  </button>
                   <button class="btn" type="button" {{on "click" @controller.refreshSelected}} disabled={{@controller.isLoadingSelection}}>
                     {{if @controller.isLoadingSelection "Refreshing…" "Refresh"}}
                   </button>
