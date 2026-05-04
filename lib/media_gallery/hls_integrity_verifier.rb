@@ -93,6 +93,8 @@ module ::MediaGallery
       if encryption.blank?
         if required
           checks << check("critical", "hls_aes128_missing", "AES-128 is required but this HLS role has no encryption metadata.", nil, required: true)
+        elsif (::MediaGallery::Hls.aes128_enabled? rescue false)
+          checks << check("ok", "hls_aes128_legacy_not_encrypted", "This is a legacy HLS package without AES encryption metadata; HLS integrity can still be OK, but it needs AES backfill before AES-required mode.", nil, required: false)
         end
         return checks
       end

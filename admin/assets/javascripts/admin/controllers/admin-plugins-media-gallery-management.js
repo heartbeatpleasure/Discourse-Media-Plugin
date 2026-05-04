@@ -174,6 +174,36 @@ function hlsStatusBadgeClass(status) {
   }
 }
 
+function hlsAes128Badge(status) {
+  const s = status || {};
+  const state = String(s.status || "");
+  const hasHls = !!s.has_hls;
+  const enabled = !!s.enabled;
+  const required = !!s.required;
+
+  if (state === "ready" || s.ready) {
+    return { label: "AES", className: "is-success", title: s.key_id ? `AES-ready HLS (${s.key_id})` : "AES-ready HLS" };
+  }
+
+  if (!hasHls || state === "no_hls") {
+    return null;
+  }
+
+  if (required && state === "not_ready") {
+    return { label: "AES missing", className: "is-danger", title: "AES is required but this HLS package is not AES-ready" };
+  }
+
+  if (state === "not_ready") {
+    return { label: "AES pending", className: "is-warning", title: "AES metadata exists but the package/key is not ready" };
+  }
+
+  if (enabled && state === "not_encrypted") {
+    return { label: "No AES", className: "is-warning", title: "Legacy HLS package; reprocess/backfill to convert" };
+  }
+
+  return null;
+}
+
 function friendlyProcessingError(message) {
   const raw = String(message || "").trim();
   if (!raw) {
@@ -341,6 +371,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked userIdFilter = "";
   @tracked duplicateFilter = "all";
   @tracked genderFilter = "all";
+  @tracked hlsAes128Filter = "all";
   @tracked limit = "50";
   @tracked sortBy = "newest";
   @tracked searchResults = [];
@@ -386,6 +417,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.userIdFilter = "";
     this.duplicateFilter = "all";
     this.genderFilter = "all";
+    this.hlsAes128Filter = "all";
     this.limit = "50";
     this.sortBy = "newest";
     this.searchResults = [];
@@ -724,6 +756,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       visibilityBadgeClass: item?.hidden ? "is-danger" : "is-success",
       displayDuplicate: item?.possible_duplicate ? "Possible duplicate" : "",
       duplicateBadgeClass: item?.possible_duplicate ? "is-warning" : "",
+      aesBadge: hlsAes128Badge(item?.hls_aes128),
     }));
   }
 
@@ -739,6 +772,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   get selectedVisibilityBadgeClass() {
     return this.selectedItem?.hidden ? "is-danger" : "is-success";
+  }
+
+  get selectedAesBadge() {
+    return hlsAes128Badge(this.selectedItem?.hls_aes128);
   }
 
   get selectedDisplayStatus() {
@@ -801,7 +838,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       { label: "Updated", value: formatDateTime(item.updated_at) },
       { label: "Storage", value: item.managed_storage_profile_label || item.managed_storage_profile || item.managed_storage_backend || "—" },
       { label: "Delivery", value: item.delivery_mode || "—" },
-      { label: "HLS AES-128", value: this.hlsAes128Label(item.hls_aes128) },
+      { label: "HLS AES", value: this.hlsAes128Label(item.hls_aes128) },
       { label: "Visibility", value: item.hidden ? `Hidden${item.visibility?.reason ? ` — ${item.visibility.reason}` : ""}` : "Visible" },
     ];
   }
@@ -813,7 +850,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       return `Ready${s.key_id ? ` (${s.key_id})` : ""}`;
     }
     if (state === "not_ready") {
-      return s.required ? "Required, not ready" : "Enabled, not ready";
+      return s.required ? "Required, not ready" : "AES metadata/key not ready";
     }
     if (state === "no_hls") {
       return "No HLS";
@@ -821,7 +858,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     if (state === "error") {
       return "Status error";
     }
-    return s.enabled ? "Enabled, not encrypted" : "Not encrypted";
+    if (state === "not_encrypted") {
+      return s.enabled ? "Legacy HLS — needs AES backfill" : "Not encrypted";
+    }
+    return s.enabled ? "Legacy HLS — needs AES backfill" : "Not encrypted";
   }
 
   get historyEntries() {
@@ -973,6 +1013,30 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       return false;
     }
 
+    if (this.hlsAes128Filter !== "all") {
+      const status = item?.hls_aes128 || {};
+      const state = String(status.status || "");
+      const ready = !!status.ready || state === "ready";
+      const hasHls = !!status.has_hls;
+      const needsBackfill = !!status.needs_backfill;
+
+      if (this.hlsAes128Filter === "ready" && !ready) {
+        return false;
+      }
+      if (this.hlsAes128Filter === "not_encrypted" && !(hasHls && state === "not_encrypted")) {
+        return false;
+      }
+      if (this.hlsAes128Filter === "needs_backfill" && !needsBackfill) {
+        return false;
+      }
+      if (this.hlsAes128Filter === "not_ready" && !(hasHls && !ready && state !== "not_encrypted")) {
+        return false;
+      }
+      if (this.hlsAes128Filter === "no_hls" && hasHls) {
+        return false;
+      }
+    }
+
     return true;
   }
 
@@ -1000,6 +1064,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       managed_storage_location_fingerprint_key: item.managed_storage_location_fingerprint_key,
       delivery_mode: item.delivery_mode,
       has_hls: item.has_hls,
+      hls_aes128: item.hls_aes128 || {},
       hidden: item.hidden,
       hidden_reason: item.visibility?.reason || item.hidden_reason,
       possible_duplicate: !!item.possible_duplicate,
@@ -1056,6 +1121,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   @action onGenderFilterChange(event) {
     this.genderFilter = event?.target?.value || "all";
+  }
+
+  @action onHlsAes128FilterChange(event) {
+    this.hlsAes128Filter = event?.target?.value || "all";
   }
 
   @action onLimitChange(event) {
@@ -1156,6 +1225,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       }
       if (this.genderFilter !== "all") {
         params.set("gender", this.genderFilter);
+      }
+      if (this.hlsAes128Filter !== "all") {
+        params.set("hls_aes128", this.hlsAes128Filter);
       }
       params.set("limit", String(this.limit || "50"));
       params.set("sort", String(this.sortBy || "newest"));

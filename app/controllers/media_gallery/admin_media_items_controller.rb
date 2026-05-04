@@ -19,7 +19,10 @@ module ::MediaGallery
         next if has_hls_filter == "true" && !has_hls
         next if has_hls_filter == "false" && has_hls
 
-        serialize_search_item(item, has_hls: has_hls)
+        aes_status = hls_aes128_status_for(item, has_hls: has_hls)
+        next unless hls_aes128_filter_matches?(aes_status, hls_aes128_filter)
+
+        serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status)
       end.compact
 
       render_json_dump(items: items, search_profiles: search_profiles_summary)
@@ -607,6 +610,36 @@ module ::MediaGallery
       params[:has_hls].to_s.strip
     end
 
+    def hls_aes128_filter
+      params[:hls_aes128].to_s.strip
+    end
+
+    def hls_aes128_filter_matches?(status, filter)
+      filter = filter.to_s.strip
+      return true if filter.blank? || filter == "all"
+
+      s = status.is_a?(Hash) ? status : {}
+      state = s["status"].to_s
+      has_hls = ActiveModel::Type::Boolean.new.cast(s["has_hls"])
+      ready = ActiveModel::Type::Boolean.new.cast(s["ready"])
+      needs_backfill = ActiveModel::Type::Boolean.new.cast(s["needs_backfill"])
+
+      case filter
+      when "ready"
+        ready
+      when "not_encrypted"
+        has_hls && state == "not_encrypted"
+      when "needs_backfill"
+        needs_backfill
+      when "not_ready"
+        has_hls && !ready && state != "not_encrypted"
+      when "no_hls"
+        state == "no_hls" || !has_hls
+      else
+        true
+      end
+    end
+
     def boolean_param(name)
       ActiveModel::Type::Boolean.new.cast(params[name])
     end
@@ -617,7 +650,7 @@ module ::MediaGallery
       Array(raw).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
     end
 
-    def serialize_search_item(item, has_hls:)
+    def serialize_search_item(item, has_hls:, hls_aes128_status: nil)
       visibility = item.admin_visibility_state
       {
         id: item.id,
@@ -639,7 +672,7 @@ module ::MediaGallery
         managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
         delivery_mode: item.delivery_mode,
         has_hls: has_hls,
-        hls_aes128: hls_aes128_status_for(item, has_hls: has_hls),
+        hls_aes128: hls_aes128_status || hls_aes128_status_for(item, has_hls: has_hls),
         hidden: item.admin_hidden?,
         hidden_reason: visibility["reason"],
         possible_duplicate: possible_duplicate_item?(item),
@@ -1154,16 +1187,18 @@ module ::MediaGallery
       encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
       key_id = status["key_id"].to_s.presence || (encryption.is_a?(Hash) ? encryption["key_id"].to_s.presence : nil)
       key_record_present = key_id.present? && hls_aes128_key_record_present?(item, key_id: key_id)
+      encryption_present = encryption.is_a?(Hash) && encryption.present?
       ready = ActiveModel::Type::Boolean.new.cast(status["ready"]) && key_record_present
       enabled = ActiveModel::Type::Boolean.new.cast(status["enabled"])
       required = ActiveModel::Type::Boolean.new.cast(status["required"])
+      needs_backfill = !!has_hls && !ready && (enabled || required) && !encryption_present
 
       status_label =
         if ready
           "ready"
         elsif !has_hls
           "no_hls"
-        elsif enabled || required
+        elsif required || encryption_present
           "not_ready"
         else
           "not_encrypted"
@@ -1172,6 +1207,8 @@ module ::MediaGallery
       status.merge(
         "has_hls" => !!has_hls,
         "ready" => ready,
+        "encrypted" => encryption_present,
+        "needs_backfill" => needs_backfill,
         "key_id" => key_id,
         "key_record_present" => key_record_present,
         "status" => status_label,

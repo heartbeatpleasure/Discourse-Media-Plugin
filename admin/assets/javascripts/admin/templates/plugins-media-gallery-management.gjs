@@ -624,6 +624,18 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-management__field">
+            <label>HLS AES</label>
+            <select value={{@controller.hlsAes128Filter}} {{on "change" @controller.onHlsAes128FilterChange}}>
+              <option value="all">All</option>
+              <option value="ready">AES-ready</option>
+              <option value="needs_backfill">Needs AES backfill</option>
+              <option value="not_encrypted">Legacy / no AES</option>
+              <option value="not_ready">AES metadata/key issue</option>
+              <option value="no_hls">No HLS</option>
+            </select>
+          </div>
+
+          <div class="mg-management__field">
             <label>Visibility</label>
             <select value={{@controller.hiddenFilter}} {{on "change" @controller.onHiddenFilterChange}}>
               <option value="all">All</option>
@@ -727,6 +739,9 @@ export default RouteTemplate(
                       <span class="mg-management__badge {{item.statusBadgeClass}}">{{item.displayStatus}}</span>
                       <span class="mg-management__badge">{{item.displayMediaType}}</span>
                       <span class="mg-management__badge">{{item.displayStorage}}</span>
+                      {{#if item.aesBadge}}
+                        <span class="mg-management__badge {{item.aesBadge.className}}" title={{item.aesBadge.title}}>{{item.aesBadge.label}}</span>
+                      {{/if}}
                       <span class="mg-management__badge {{item.visibilityBadgeClass}}">{{item.displayVisibility}}</span>
                       {{#if item.displayDuplicate}}
                         <span class="mg-management__badge {{item.duplicateBadgeClass}}">{{item.displayDuplicate}}</span>
@@ -776,6 +791,9 @@ export default RouteTemplate(
                 <span class="mg-management__badge {{@controller.selectedStatusBadgeClass}}">{{@controller.selectedDisplayStatus}}</span>
                 <span class="mg-management__badge">{{@controller.selectedDisplayMediaType}}</span>
                 <span class="mg-management__badge">{{@controller.selectedDisplayStorage}}</span>
+                {{#if @controller.selectedAesBadge}}
+                  <span class="mg-management__badge {{@controller.selectedAesBadge.className}}" title={{@controller.selectedAesBadge.title}}>{{@controller.selectedAesBadge.label}}</span>
+                {{/if}}
                 <span class="mg-management__badge {{@controller.selectedVisibilityBadgeClass}}">{{if @controller.selectedItem.hidden "Hidden" "Visible"}}</span>
                 {{#if @controller.selectedHasPossibleDuplicate}}
                   <span class="mg-management__badge {{@controller.selectedDuplicateBadgeClass}}">Possible duplicate</span>
