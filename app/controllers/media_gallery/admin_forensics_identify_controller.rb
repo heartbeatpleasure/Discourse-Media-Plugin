@@ -2209,21 +2209,40 @@ module ::MediaGallery
       raise "variant_playlist_not_found" if abs.blank? || !File.exist?(abs)
 
       raw = File.read(abs)
-      rewritten = rewrite_hls_playlist_with_local_paths(
-        raw,
-        resolver: lambda do |segment, seg_counter, map_uri|
-          resolve_segment_abs_path(
-            public_id,
-            variant,
-            segment,
-            fingerprint_id: fingerprint_id,
-            media_item_id: media_item.id,
-            seg_counter: seg_counter
-          )
-        end
-      )
 
-      write_localized_hls_playlist!(rewritten, prefix: "media_gallery_identify_local_")
+      cleanup_stale_forensics_hls_tempdirs!
+      temp_dir = Dir.mktmpdir(FORENSICS_HLS_TEMP_PREFIX)
+      cache = {}
+
+      begin
+        rewritten = rewrite_hls_playlist_with_local_paths(
+          raw,
+          resolver: lambda do |segment, seg_counter, map_uri|
+            resolve_segment_abs_path(
+              public_id,
+              variant,
+              segment,
+              fingerprint_id: fingerprint_id,
+              media_item_id: media_item.id,
+              seg_counter: seg_counter
+            )
+          end,
+          aes_key_resolver: lambda do |key_uri|
+            localize_hls_aes128_key_for_identify!(
+              media_item: media_item,
+              key_uri: key_uri,
+              variant: variant,
+              temp_dir: temp_dir,
+              cache: cache
+            )
+          end
+        )
+
+        write_localized_hls_playlist!(rewritten, prefix: "media_gallery_identify_local_", cleanup_dir: temp_dir)
+      rescue
+        FileUtils.rm_rf(temp_dir) if temp_dir.present? && Dir.exist?(temp_dir)
+        raise
+      end
     end
 
     def localize_managed_hls_playlist_to_tempfile!(media_item:, role:, variant:, fingerprint_id: nil)
@@ -2261,6 +2280,16 @@ module ::MediaGallery
             )
 
             localize_managed_hls_object!(store: store, key: key, temp_dir: temp_dir, cache: cache, suggested_name: segment)
+          end,
+          aes_key_resolver: lambda do |key_uri|
+            localize_hls_aes128_key_for_identify!(
+              media_item: media_item,
+              key_uri: key_uri,
+              role: role,
+              variant: variant,
+              temp_dir: temp_dir,
+              cache: cache
+            )
           end
         )
 
@@ -2271,14 +2300,16 @@ module ::MediaGallery
       end
     end
 
-    def rewrite_hls_playlist_with_local_paths(raw, resolver:)
+    def rewrite_hls_playlist_with_local_paths(raw, resolver:, aes_key_resolver: nil)
       rewritten = []
       seg_counter = 0
 
       raw.to_s.each_line do |line|
         l = line.to_s.rstrip
         if l.blank? || l.start_with?("#")
-          if l.include?("URI=\"")
+          if hls_aes128_key_tag?(l)
+            rewritten << rewrite_hls_aes128_key_tag_for_identify(l, aes_key_resolver: aes_key_resolver)
+          elsif l.include?("URI=\"")
             rewritten << l.gsub(/URI=\"([^\"]+)\"/) do
               uri_str = Regexp.last_match(1).to_s
               file = safe_hls_reference_filename!(uri_str, allowed_extensions: %w[mp4 m4s])
@@ -2304,6 +2335,22 @@ module ::MediaGallery
       out = rewritten.join("\n") + "\n"
       raise "playlist did not look like M3U8" unless out.lstrip.start_with?("#EXTM3U")
       out
+    end
+
+    def hls_aes128_key_tag?(line)
+      line.to_s.start_with?("#EXT-X-KEY") && line.to_s.match?(/METHOD=AES-128/i) && line.to_s.include?("URI=\"")
+    end
+
+    def rewrite_hls_aes128_key_tag_for_identify(line, aes_key_resolver:)
+      raise "hls_aes128_key_resolver_missing" unless aes_key_resolver.respond_to?(:call)
+
+      line.to_s.gsub(/URI=\"([^\"]+)\"/) do
+        key_uri = Regexp.last_match(1).to_s
+        local = aes_key_resolver.call(key_uri).to_s
+        raise "hls_aes128_key_localization_failed" if local.blank?
+
+        "URI=\"#{local}\""
+      end
     end
 
     def write_localized_hls_playlist!(content, prefix:, cleanup_dir: nil)
@@ -2345,6 +2392,56 @@ module ::MediaGallery
       return nil unless meta.is_a?(Hash)
 
       meta["codebook_scheme"].to_s.presence || MediaGallery::Fingerprinting.codebook_scheme_for(layout: meta["layout"].to_s)
+    rescue
+      nil
+    end
+
+    def localize_hls_aes128_key_for_identify!(media_item:, key_uri:, variant:, temp_dir:, cache:, role: nil)
+      raise "hls_aes128_key_temp_dir_missing" if temp_dir.blank?
+
+      key_id = hls_aes128_key_id_from_reference_for_identify(key_uri)
+      raise "hls_aes128_key_reference_unsupported" if key_id.blank?
+
+      if role.present?
+        encryption = MediaGallery::Hls.aes128_encryption_meta_for(media_item, role: role)
+        expected_key_id = encryption.is_a?(Hash) ? encryption["key_id"].to_s.presence : nil
+        raise "hls_aes128_key_mismatch" if expected_key_id.present? && expected_key_id != key_id
+      end
+
+      variant = variant.to_s.presence || MediaGallery::Hls::DEFAULT_VARIANT
+      cache_key = "aes128-key:#{media_item.id}:#{variant}:#{key_id}"
+      cached = cache[cache_key]
+      return cached if cached.present? && File.exist?(cached) && File.size(cached).to_i == ::MediaGallery::HlsAes128::KEY_BYTES
+
+      key_bytes = MediaGallery::HlsAes128.fetch_key_bytes(item: media_item, key_id: key_id, variant: variant)
+      if !MediaGallery::HlsAes128.valid_key_bytes?(key_bytes) && variant.to_s != MediaGallery::Hls::DEFAULT_VARIANT.to_s
+        key_bytes = MediaGallery::HlsAes128.fetch_key_bytes(item: media_item, key_id: key_id, variant: MediaGallery::Hls::DEFAULT_VARIANT)
+      end
+      raise "hls_aes128_key_missing" unless MediaGallery::HlsAes128.valid_key_bytes?(key_bytes)
+
+      keys_dir = File.join(temp_dir, "keys")
+      FileUtils.mkdir_p(keys_dir)
+      safe_key_id = MediaGallery::HlsAes128.normalize_key_id(key_id)
+      filename = "#{Digest::SHA256.hexdigest(cache_key)[0, 16]}_#{safe_key_id}.key"
+      local = File.join(keys_dir, filename)
+
+      File.binwrite(local, key_bytes.b)
+      File.chmod(0o600, local) rescue nil
+      raise "hls_aes128_key_localization_failed" unless File.exist?(local) && File.size(local).to_i == ::MediaGallery::HlsAes128::KEY_BYTES
+
+      cache[cache_key] = local
+      local
+    end
+
+    def hls_aes128_key_id_from_reference_for_identify(uri)
+      key_id = MediaGallery::HlsAes128.key_id_from_placeholder_uri(uri)
+      return key_id if key_id.present?
+
+      file = File.basename(uri.to_s.split("?", 2).first.to_s)
+      match = file.match(/\A([a-zA-Z0-9_-]+)\.key\z/)
+      return nil unless match
+
+      MediaGallery::HlsAes128.normalize_key_id(match[1])
     rescue
       nil
     end
