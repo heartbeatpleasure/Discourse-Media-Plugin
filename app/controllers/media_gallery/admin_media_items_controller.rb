@@ -16,26 +16,43 @@ module ::MediaGallery
     # GET /admin/plugins/media-gallery/media-items/search.json?q=...
     def search
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      candidates = filtered_search_scope.limit(search_candidate_limit).to_a
-      hls_roles_by_item = hls_roles_by_item_from_manifest(candidates)
-      active_key_ids_by_item = hls_aes128_active_key_ids_by_item(candidates)
+      timing = {}
+      candidate_limit = search_candidate_limit
+      final_limit = search_limit
+
+      candidates = timed_phase!(timing, :query) { filtered_search_scope.limit(candidate_limit).to_a }
+      hls_roles_by_item = timed_phase!(timing, :hls_manifest) { hls_roles_by_item_from_manifest(candidates) }
+      active_key_ids_by_item = timed_phase!(timing, :aes_key_prefetch) { hls_aes128_active_key_ids_by_item(candidates) }
 
       items = []
-      candidates.each do |item|
-        hls_role = hls_roles_by_item[item.id.to_i]
-        has_hls = hls_role.is_a?(Hash)
-        next if has_hls_filter == "true" && !has_hls
-        next if has_hls_filter == "false" && has_hls
+      timed_phase!(timing, :serialize) do
+        candidates.each do |item|
+          hls_role = hls_roles_by_item[item.id.to_i]
+          has_hls = hls_role.is_a?(Hash)
+          next if has_hls_filter == "true" && !has_hls
+          next if has_hls_filter == "false" && has_hls
 
-        aes_status = hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item, role: hls_role)
-        next unless hls_aes128_filter_matches?(aes_status, hls_aes128_filter)
+          aes_status = hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item, role: hls_role)
+          next unless hls_aes128_filter_matches?(aes_status, hls_aes128_filter)
 
-        items << serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status)
-        break if items.length >= search_limit
+          items << serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status)
+          break if items.length >= final_limit
+        end
       end
 
+      profiles = timed_phase!(timing, :profiles) { search_profiles_summary }
       elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
-      render_json_dump(items: items, search_profiles: search_profiles_summary, timing_ms: elapsed_ms)
+      timing[:total] = elapsed_ms
+      maybe_log_slow_management_search!(timing, candidates_count: candidates.length, returned_count: items.length, candidate_limit: candidate_limit, final_limit: final_limit)
+      render_json_dump(
+        items: items,
+        search_profiles: profiles,
+        timing_ms: elapsed_ms,
+        timing_breakdown_ms: timing,
+        candidates_count: candidates.length,
+        returned_count: items.length,
+        candidate_limit: candidate_limit,
+      )
     end
 
     # GET /admin/plugins/media-gallery/media-items/:public_id/management.json
@@ -555,6 +572,52 @@ module ::MediaGallery
     end
 
     private
+
+    def timed_phase!(timing, key)
+      phase_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      yield
+    ensure
+      if timing.is_a?(Hash) && key.present?
+        timing[key] = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - phase_started_at) * 1000).round
+      end
+    end
+
+    def maybe_log_slow_management_search!(timing, candidates_count:, returned_count:, candidate_limit:, final_limit:)
+      threshold = management_search_slow_log_ms
+      return if threshold <= 0
+      return if timing[:total].to_i < threshold
+
+      payload = {
+        timing_ms: timing,
+        candidates_count: candidates_count,
+        returned_count: returned_count,
+        candidate_limit: candidate_limit,
+        final_limit: final_limit,
+        q_present: params[:q].to_s.present?,
+        status: params[:status].to_s.presence,
+        media_type: params[:media_type].to_s.presence,
+        hls_aes128: params[:hls_aes128].to_s.presence,
+        sort: params[:sort].to_s.presence || "newest",
+      }.compact
+
+      if defined?(::MediaGallery::OperationLogger)
+        ::MediaGallery::OperationLogger.warn("management_search_slow", operation: "management_search", data: payload)
+      else
+        Rails.logger.warn("[media_gallery] management_search_slow #{payload.inspect}")
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] management search slow-log failed: #{e.class}: #{e.message}")
+    end
+
+    def management_search_slow_log_ms
+      if SiteSetting.respond_to?(:media_gallery_management_search_slow_log_ms)
+        SiteSetting.media_gallery_management_search_slow_log_ms.to_i
+      else
+        2000
+      end
+    rescue
+      2000
+    end
 
     def audit_hls_integrity_verify!(item, result)
       payload = {

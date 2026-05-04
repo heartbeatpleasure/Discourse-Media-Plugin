@@ -414,6 +414,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked searchError = "";
   @tracked searchInfo = "";
   @tracked lastSearchTimingMs = null;
+  @tracked lastSearchTimingBreakdown = null;
   @tracked hasSearched = false;
 
   @tracked selectedPublicId = "";
@@ -464,6 +465,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.searchError = "";
     this.searchInfo = "";
     this.lastSearchTimingMs = null;
+    this.lastSearchTimingBreakdown = null;
     this.hasSearched = false;
 
     this.selectedPublicId = "";
@@ -1080,7 +1082,15 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   _updateSearchInfo() {
     const timing = Number(this.lastSearchTimingMs || 0);
-    const suffix = timing > 0 ? ` • server ${timing}ms` : "";
+    const breakdown = this.lastSearchTimingBreakdown || {};
+    const parts = ["query", "hls_manifest", "aes_key_prefetch", "serialize", "profiles"]
+      .map((key) => {
+        const value = Number(breakdown?.[key] || 0);
+        return value > 0 ? `${key.replace(/_/g, " ")} ${value}ms` : null;
+      })
+      .filter(Boolean)
+      .join(" · ");
+    const suffix = timing > 0 ? ` • server ${timing}ms${parts ? ` (${parts})` : ""}` : "";
     this.searchInfo = `${this.searchResults.length} item(s) found${suffix}.`;
   }
 
@@ -1423,6 +1433,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       });
       this.availableSearchProfiles = Array.isArray(json?.search_profiles) ? json.search_profiles : this.availableSearchProfiles;
       this.lastSearchTimingMs = Number(json?.timing_ms || 0) || null;
+      this.lastSearchTimingBreakdown = json?.timing_breakdown_ms || null;
       this.searchResults = this._sortSearchResults(Array.isArray(json?.items) ? json.items : []);
       this._updateSearchInfo();
     } catch (e) {

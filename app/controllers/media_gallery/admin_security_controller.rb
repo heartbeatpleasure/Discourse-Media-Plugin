@@ -19,7 +19,8 @@ module ::MediaGallery
       baseline = security_baseline_checks(environment, download)
       processing_failures = processing_failure_metrics
       backup_retention = backup_retention_status
-      controls = security_controls(download, environment, baseline)
+      aes128_backfill = aes128_backfill_status
+      controls = security_controls(download, environment, baseline, aes128_backfill)
       counts = controls.each_with_object(Hash.new(0)) { |control, memo| memo[control[:status].to_s] += 1 }
 
       {
@@ -46,13 +47,14 @@ module ::MediaGallery
         forensics: forensics_status,
         processing_failures: processing_failures,
         backup_retention: backup_retention,
+        aes128_backfill: aes128_backfill,
         rate_limit_tuning: rate_limit_tuning_status,
         recent_events: recent_security_events,
         links: admin_links,
       }
     end
 
-    def security_controls(download, environment, baseline)
+    def security_controls(download, environment, baseline, aes128_backfill = {})
       [
         control(
           "Request origin protection",
@@ -79,6 +81,12 @@ module ::MediaGallery
           aes128_control_status(download),
           aes128_control_summary(download),
           aes128_control_action(download)
+        ),
+        control(
+          "HLS AES-128 backfill health",
+          aes128_backfill_control_status(aes128_backfill),
+          aes128_backfill_control_summary(aes128_backfill),
+          aes128_backfill_control_action(aes128_backfill)
         ),
         control(
           "Watermark and fingerprinting",
@@ -278,6 +286,99 @@ module ::MediaGallery
       end
     end
 
+    def aes128_backfill_status
+      scope = ::MediaGallery::MediaItem.where(media_type: "video", status: "ready")
+      hls_scope = scope.where("storage_manifest -> 'roles' -> 'hls' IS NOT NULL")
+      aes_ready_scope = hls_scope.where("storage_manifest -> 'roles' -> 'hls' -> 'encryption' IS NOT NULL")
+      needs_backfill_scope = hls_scope.where("storage_manifest -> 'roles' -> 'hls' -> 'encryption' IS NULL")
+
+      states = hls_scope
+        .where("extra_metadata -> 'hls_aes128_backfill' IS NOT NULL")
+        .limit(500)
+        .pluck(:id, :public_id, :title, :extra_metadata)
+
+      queued = 0
+      processing = 0
+      failed = 0
+      stale = 0
+      recent_failed = []
+
+      states.each do |(id, public_id, title, meta)|
+        state = meta.is_a?(Hash) ? meta["hls_aes128_backfill"] : nil
+        next unless state.is_a?(Hash)
+
+        case state["status"].to_s
+        when "queued"
+          queued += 1
+        when "processing"
+          processing += 1
+        when "failed"
+          failed += 1
+          recent_failed << {
+            id: id,
+            public_id: public_id.to_s,
+            title: title.to_s.presence || public_id.to_s,
+            error: state["last_error"].to_s.truncate(180),
+            failed_at: state["failed_at"].to_s.presence,
+          } if recent_failed.length < 5
+        end
+
+        if defined?(::MediaGallery::HlsAes128Backfill) && ::MediaGallery::HlsAes128Backfill.stale_state?(state)
+          stale += 1
+        end
+      end
+
+      {
+        aes_enabled: setting_bool(:media_gallery_hls_aes128_enabled),
+        aes_required: setting_bool(:media_gallery_hls_aes128_required),
+        hls_ready_video_count: hls_scope.count,
+        aes_ready_count: aes_ready_scope.count,
+        needs_backfill_count: needs_backfill_scope.count,
+        queued_count: queued,
+        processing_count: processing,
+        failed_count: failed,
+        stale_count: stale,
+        sampled_backfill_state_count: states.length,
+        recent_failed: recent_failed,
+      }
+    rescue => e
+      { error: "#{e.class}: #{e.message}" }
+    end
+
+    def aes128_backfill_control_status(backfill)
+      return "manual" unless setting_bool(:media_gallery_hls_aes128_enabled)
+      return "attention" if backfill[:error].present? || backfill[:failed_count].to_i.positive? || backfill[:stale_count].to_i.positive?
+      return "partial" if backfill[:needs_backfill_count].to_i.positive? || backfill[:queued_count].to_i.positive? || backfill[:processing_count].to_i.positive?
+      "ok"
+    end
+
+    def aes128_backfill_control_summary(backfill)
+      return "AES-128 backfill status could not be checked: #{backfill[:error]}" if backfill[:error].present?
+
+      ready = backfill[:aes_ready_count].to_i
+      needs = backfill[:needs_backfill_count].to_i
+      queued = backfill[:queued_count].to_i
+      processing = backfill[:processing_count].to_i
+      failed = backfill[:failed_count].to_i
+      stale = backfill[:stale_count].to_i
+
+      "AES-ready #{ready}; needs backfill #{needs}; queued #{queued}; processing #{processing}; failed #{failed}; stale #{stale}."
+    end
+
+    def aes128_backfill_control_action(backfill)
+      if backfill[:error].present?
+        "Open Media Gallery Management and verify the AES database migration/key model is available."
+      elsif backfill[:failed_count].to_i.positive? || backfill[:stale_count].to_i.positive?
+        "Use Management filters to inspect AES failed/stale items, then Clear status or Restart backfill per item."
+      elsif backfill[:needs_backfill_count].to_i.positive?
+        "Backfill remaining legacy HLS items gradually before enabling AES required mode."
+      elsif backfill[:queued_count].to_i.positive? || backfill[:processing_count].to_i.positive?
+        "Monitor queued/processing items until they become AES-ready; check Sidekiq logs if queued states do not move."
+      else
+        "Backfill appears complete for ready HLS videos in the current manifest model."
+      end
+    end
+
     def watermark_fingerprint_status
       watermark = setting_bool(:media_gallery_watermark_enabled)
       fingerprint = setting_bool(:media_gallery_fingerprint_enabled)
@@ -366,6 +467,7 @@ module ::MediaGallery
         setting_row(:media_gallery_hls_aes128_required, "Require HLS AES-128", recommended: "true after backfill"),
         setting_row(:media_gallery_hls_aes128_key_rotation_segments, "HLS AES key rotation", recommended: "0 for v1"),
         setting_row(:media_gallery_hls_aes128_backfill_bulk_limit, "HLS AES backfill bulk limit", recommended: "small batch, e.g. 10"),
+        setting_row(:media_gallery_management_search_slow_log_ms, "Management slow search logging", recommended: "2000 during QA, 0 to disable"),
         setting_row(:media_gallery_fingerprint_enabled, "Fingerprinting", recommended: "true for protected video"),
         setting_row(:media_gallery_watermark_enabled, "Watermarking", recommended: "true for protected video"),
         setting_row(:media_gallery_watermark_user_can_toggle, "Users can disable watermark", recommended: "false for protected video"),
