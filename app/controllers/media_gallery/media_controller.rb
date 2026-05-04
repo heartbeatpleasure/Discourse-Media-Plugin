@@ -489,20 +489,24 @@ module ::MediaGallery
           { "enabled" => false, "required" => false, "ready" => false }
         end
 
-      if hls_only_required && force_stream
+      aes128_required = video_media && aes128_status.is_a?(Hash) && ActiveModel::Type::Boolean.new.cast(aes128_status["required"])
+      aes128_ready = video_media && aes128_status.is_a?(Hash) && ActiveModel::Type::Boolean.new.cast(aes128_status["ready"])
+      hls_protection_required = hls_only_required || aes128_required
+
+      if hls_protection_required && force_stream
         log_security_event(
-          event_type: "hls_only_force_stream_blocked",
+          event_type: (aes128_required ? "aes128_required_force_stream_blocked" : "hls_only_force_stream_blocked"),
           severity: "warning",
           category: "playback",
           user: current_user,
           media_item: item,
           message: "force_stream_blocked",
-          details: { ip: ip, media_public_id: item.public_id }
+          details: { ip: ip, media_public_id: item.public_id, aes128_required: aes128_required }
         )
         return render_json_error(
-          "hls_required",
+          (aes128_required ? "aes128_required" : "hls_required"),
           status: 403,
-          message: "Protected video playback requires HLS; direct stream fallback is disabled."
+          message: (aes128_required ? "Protected video playback requires encrypted HLS; direct stream fallback is disabled." : "Protected video playback requires HLS; direct stream fallback is disabled.")
         )
       end
 
@@ -520,6 +524,42 @@ module ::MediaGallery
           "hls_not_ready",
           status: 409,
           message: "Protected video playback requires HLS, but HLS is not ready for this video."
+        )
+      end
+
+      if aes128_required && !hls_capable
+        log_security_event(
+          event_type: "aes128_required_hls_not_ready",
+          severity: "warning",
+          category: "playback",
+          user: current_user,
+          media_item: item,
+          message: "hls_not_ready",
+          details: { ip: ip, media_public_id: item.public_id, aes128_status: aes128_status }
+        )
+        return render_json_error(
+          "hls_not_ready",
+          status: 409,
+          message: "Encrypted HLS playback is required, but HLS is not ready for this video.",
+          extra: { aes128: aes128_status }
+        )
+      end
+
+      if aes128_required && !aes128_ready
+        log_security_event(
+          event_type: "aes128_required_not_ready",
+          severity: "warning",
+          category: "playback",
+          user: current_user,
+          media_item: item,
+          message: "aes128_not_ready",
+          details: { ip: ip, media_public_id: item.public_id, aes128_status: aes128_status }
+        )
+        return render_json_error(
+          "aes128_not_ready",
+          status: 409,
+          message: "Encrypted HLS playback is required, but this video has not been encrypted yet.",
+          extra: { aes128: aes128_status }
         )
       end
 
@@ -677,7 +717,7 @@ module ::MediaGallery
             heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
             heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds,
             hls_only: hls_only_required,
-            stream_fallback_allowed: !hls_only_required,
+            stream_fallback_allowed: !hls_protection_required,
             aes128: aes128_status
           },
           overlay: overlay_payload
@@ -701,7 +741,7 @@ module ::MediaGallery
             heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
             heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds,
             hls_only: hls_only_required,
-            stream_fallback_allowed: !hls_only_required,
+            stream_fallback_allowed: !hls_protection_required,
             aes128: aes128_status
           },
           overlay: overlay_payload

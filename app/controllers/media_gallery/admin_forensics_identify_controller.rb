@@ -808,8 +808,12 @@ module ::MediaGallery
             end
           end
           temps << playlist_tmp if playlist_tmp
-          playlist_variants = parse_ab_variants_from_playlist_file(playlist_tmp.path)
-          playlist_variants = nil if playlist_variants.blank? || playlist_variants.none?(&:present?)
+          playlist_samples = parse_ab_samples_from_playlist_file(playlist_tmp.path)
+          if playlist_samples[:variants].present? && playlist_samples[:variants].any?(&:present?)
+            playlist_variants = playlist_samples
+          else
+            playlist_variants = nil
+          end
         end
       rescue
         playlist_variants = nil
@@ -824,14 +828,20 @@ module ::MediaGallery
 
           # Prefer playlist-based extraction when available.
           if playlist_variants.present?
-            sliced = playlist_variants.first(ms.to_i)
+            sliced_variants = Array(playlist_variants[:variants]).first(ms.to_i)
+            sliced_indices = Array(playlist_variants[:segment_indices]).first(sliced_variants.length)
+            codebook_scheme = playlist_variants[:codebook_scheme].to_s.presence || hls_codebook_scheme_for_identify(media_item)
+            exact_segment_indices = sliced_indices.any? { |idx| !idx.nil? }
             res = identify_from_observed_variants(
               media_item: media_item,
-              observed_variants: sliced,
-              max_offset_segments: max_offset_segments,
+              observed_variants: sliced_variants,
+              observed_segment_indices: sliced_indices,
+              max_offset_segments: (exact_segment_indices ? 0 : max_offset_segments),
               layout: layout,
               segment_seconds: segment_seconds,
-              source_mode: "hls_playlist"
+              source_mode: "hls_playlist",
+              codebook_scheme: codebook_scheme,
+              exact_segment_indices: exact_segment_indices
             )
           else
             tmp = download_source_url_to_tempfile!(
@@ -885,14 +895,19 @@ module ::MediaGallery
       [best, meta_patch, temps]
     end
 
-    def identify_from_observed_variants(media_item:, observed_variants:, max_offset_segments:, layout:, segment_seconds:, source_mode:)
+    def identify_from_observed_variants(media_item:, observed_variants:, max_offset_segments:, layout:, segment_seconds:, source_mode:, observed_segment_indices: nil, codebook_scheme: nil, exact_segment_indices: false)
       lay = layout.presence || (::MediaGallery::ForensicsIdentify.detect_layout_for(media_item: media_item) rescue nil)
       lay = lay.presence || "auto"
+
+      codebook_scheme = codebook_scheme.to_s.presence || hls_codebook_scheme_for_identify(media_item)
+      previous_codebook_scheme = (::MediaGallery::Fingerprinting.current_thread_codebook_scheme rescue nil)
+      Thread.current[:media_gallery_fingerprint_codebook_scheme] = codebook_scheme if codebook_scheme.present?
 
       match = ::MediaGallery::ForensicsIdentify.match_fingerprints(
         media_item: media_item,
         observed_variants: observed_variants,
         observed_confidences: nil,
+        observed_segment_indices: observed_segment_indices,
         max_offset_segments: max_offset_segments
       )
 
@@ -914,41 +929,52 @@ module ::MediaGallery
           "samples" => variants.length,
           "usable_samples" => usable,
           "source_mode" => source_mode.to_s,
+          "hls_url_exact_segment_indices" => exact_segment_indices ? true : false,
+          "hls_url_codebook_scheme" => codebook_scheme,
         }.merge(meta_from_match),
         "observed" => {
           "variants" => variants.map { |v| v.presence || "?" }.join,
+          "segment_indices" => Array(observed_segment_indices),
           "confidences" => [],
         },
         "candidates" => (match[:candidates] || []),
       }
 
       result
+    ensure
+      Thread.current[:media_gallery_fingerprint_codebook_scheme] = previous_codebook_scheme
     end
 
-    def parse_ab_variants_from_playlist_file(path)
+    def parse_ab_samples_from_playlist_file(path)
       raw = File.read(path.to_s)
-      return [] if raw.blank?
+      return { variants: [], segment_indices: [], codebook_scheme: nil } if raw.blank?
 
-      out = []
+      variants = []
+      segment_indices = []
+      codebook_scheme = nil
 
       raw.each_line do |line|
         l = line.to_s.strip
         next if l.blank?
 
         if l.start_with?("#")
-          # Handle EXT-X-MAP (fMP4) if present.
-          if l.include?("URI=\"")
-            uri = l[/URI=\"([^\"]+)\"/, 1].to_s
-            _v = ab_from_path(uri)
-            # we do not treat init segments as samples
+          if l.include?("MEDIA-GALLERY-CODEBOOK=")
+            codebook_scheme = l[/MEDIA-GALLERY-CODEBOOK=([^,\s]+)/, 1].to_s.presence
           end
           next
         end
 
-        out << ab_from_path(l)
+        variants << ab_from_path(l)
+        segment_indices << segment_index_from_hls_reference(l)
       end
 
-      out
+      { variants: variants, segment_indices: segment_indices, codebook_scheme: codebook_scheme }
+    rescue
+      { variants: [], segment_indices: [], codebook_scheme: nil }
+    end
+
+    def parse_ab_variants_from_playlist_file(path)
+      parse_ab_samples_from_playlist_file(path)[:variants]
     rescue
       []
     end
@@ -961,6 +987,32 @@ module ::MediaGallery
       m = p.match(%r{/hls/(?<ab>a|b)/}i)
       return m[:ab].to_s.downcase if m
 
+      nil
+    end
+
+    def segment_index_from_hls_reference(path)
+      file = File.basename(path.to_s.split("?", 2).first.to_s)
+      ::MediaGallery::Fingerprinting.segment_index_from_filename(file)
+    rescue
+      nil
+    end
+
+    def hls_codebook_scheme_for_identify(media_item)
+      role = managed_hls_role_for_identify(media_item)
+      if role.present?
+        store = MediaGallery::Hls.store_for_managed_role(media_item, role)
+        scheme = packaged_codebook_scheme_for_identify(media_item, role: role, store: store)
+        return scheme.to_s.presence if scheme.present?
+      end
+
+      meta = MediaGallery::Hls.fingerprint_meta_for(media_item)
+      if meta.is_a?(Hash)
+        scheme = meta["codebook_scheme"].to_s.presence || ::MediaGallery::Fingerprinting.codebook_scheme_for(layout: meta["layout"].to_s)
+        return scheme.to_s.presence if scheme.present?
+      end
+
+      nil
+    rescue
       nil
     end
 

@@ -30,6 +30,7 @@ module ::MediaGallery
       deny_direct_media_navigation!(:master, token: token, item: item)
 
       role = hls_role_for(item)
+      enforce_aes128_required!(item, role: role, token: token)
       data = read_master_playlist!(item, role: role)
       data = rewrite_master_playlist(data, public_id: item.public_id, token: token)
 
@@ -55,6 +56,7 @@ module ::MediaGallery
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
 
       role = hls_role_for(item)
+      enforce_aes128_required!(item, role: role, token: token)
       data = read_variant_playlist!(item, variant: variant, role: role)
       data = rewrite_variant_playlist(data, item: item, variant: variant, token: token, fingerprint_id: payload["fingerprint_id"], media_item_id: item.id, role: role)
 
@@ -107,6 +109,7 @@ module ::MediaGallery
       end
 
       role = hls_role_for(item)
+      enforce_aes128_required!(item, role: role, token: token)
       delivery = resolve_segment_delivery(item, variant: variant, segment: segment, ab: ab, role: role)
       raise Discourse::NotFound if delivery.blank?
 
@@ -181,6 +184,13 @@ module ::MediaGallery
 
     def ensure_hls_enabled
       raise Discourse::NotFound unless SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled
+    end
+
+
+    def enforce_aes128_required!(item, role:, token:)
+      return unless MediaGallery::Hls.aes128_required?
+
+      deny!(:hls_aes128_not_ready, token: token) unless MediaGallery::Hls.aes128_ready?(item, role: role)
     end
 
     def enforce_asset_binding!(item, payload:, kind:, token:)
