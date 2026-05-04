@@ -616,6 +616,16 @@ plugins:
     max: 20000
     client: false
 
+  # Optional: separate AES-128 key endpoint rate limit. 0 = disabled.
+  # Normal AES-HLS playback usually needs one key request per variant/load, but
+  # retries, seeks and future key rotation can increase this, so keep generous.
+  media_gallery_hls_key_requests_per_token_per_minute:
+    default: 120
+    type: integer
+    min: 0
+    max: 20000
+    client: false
+
   # HLS AES-128 content hardening (iterative rollout).
   # This is not DRM: authorized clients still receive decryption keys for playback.
   # Keep disabled until the packaging pipeline, key storage and key endpoint iterations are complete.
@@ -623,9 +633,8 @@ plugins:
     default: false
     client: false
 
-  # When enabled in a later iteration, playback may require an AES-128-ready HLS package
-  # and direct stream fallback must stay blocked for protected video.
-  # This setting is intentionally inert until the AES playback enforcement iteration wires it in.
+  # When enabled, playback requires an AES-128-ready HLS package
+  # and direct stream fallback stays blocked for protected video.
   media_gallery_hls_aes128_required:
     default: false
     client: false

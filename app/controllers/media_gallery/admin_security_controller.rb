@@ -75,6 +75,12 @@ module ::MediaGallery
           download[:hls_only_enabled] ? "Monitor HLS health and browser compatibility." : "Enable HLS-only mode for protected/high-value video content."
         ),
         control(
+          "HLS AES-128 content hardening",
+          aes128_control_status(download),
+          aes128_control_summary(download),
+          aes128_control_action(download)
+        ),
+        control(
           "Watermark and fingerprinting",
           watermark_fingerprint_status,
           watermark_fingerprint_summary,
@@ -189,11 +195,15 @@ module ::MediaGallery
       watermark_enabled = setting_bool(:media_gallery_watermark_enabled)
       watermark_toggle_allowed = setting_bool(:media_gallery_watermark_user_can_toggle, default: true)
       fingerprint_enabled = setting_bool(:media_gallery_fingerprint_enabled)
+      aes128_enabled = setting_bool(:media_gallery_hls_aes128_enabled)
+      aes128_required = aes128_enabled && setting_bool(:media_gallery_hls_aes128_required)
 
       level =
-        if hls_enabled && hls_only_enabled && fingerprint_enabled && watermark_enabled && !watermark_toggle_allowed
+        if hls_enabled && hls_only_enabled && aes128_required && fingerprint_enabled && watermark_enabled && !watermark_toggle_allowed
           "Strong"
-        elsif hls_enabled && hls_only_enabled && (fingerprint_enabled || watermark_enabled)
+        elsif hls_enabled && hls_only_enabled && (aes128_required || (fingerprint_enabled && watermark_enabled && !watermark_toggle_allowed))
+          "Medium"
+        elsif hls_enabled && hls_only_enabled && (fingerprint_enabled || watermark_enabled || aes128_enabled)
           "Medium"
         elsif hls_enabled
           "Basic"
@@ -223,6 +233,11 @@ module ::MediaGallery
         max_active_tokens_per_ip: setting_int(:media_gallery_max_active_tokens_per_ip),
         hls_playlist_requests_per_token_per_minute: setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute),
         hls_segment_requests_per_token_per_minute: setting_int(:media_gallery_hls_segment_requests_per_token_per_minute),
+        hls_key_requests_per_token_per_minute: setting_int(:media_gallery_hls_key_requests_per_token_per_minute),
+        hls_aes128_enabled: aes128_enabled,
+        hls_aes128_required: aes128_required,
+        hls_aes128_key_rotation_segments: setting_int(:media_gallery_hls_aes128_key_rotation_segments),
+        log_hls_aes128_key_denials: setting_bool(:media_gallery_log_hls_aes128_key_denials),
         log_stream_anomalies: setting_bool(:media_gallery_log_stream_anomalies),
         stream_requests_per_token_per_minute: setting_int(:media_gallery_stream_requests_per_token_per_minute),
         stream_range_requests_per_token_per_minute: setting_int(:media_gallery_stream_range_requests_per_token_per_minute),
@@ -233,6 +248,33 @@ module ::MediaGallery
         fail_closed_on_unrecognized_media: setting_bool(:media_gallery_fail_closed_on_unrecognized_media, default: true),
         block_direct_media_navigation: setting_bool(:media_gallery_block_direct_media_navigation, default: true),
       }
+    end
+
+    def aes128_control_status(download)
+      return "attention" if download[:hls_aes128_required] && !download[:hls_aes128_enabled]
+      return "ok" if download[:hls_aes128_required]
+      return "partial" if download[:hls_aes128_enabled]
+      "manual"
+    end
+
+    def aes128_control_summary(download)
+      if download[:hls_aes128_required]
+        "AES-128 is required for HLS playback; non-AES HLS packages are blocked from protected playback."
+      elsif download[:hls_aes128_enabled]
+        "AES-128 packaging is enabled for new/reprocessed HLS packages, but required mode is still off for migration compatibility."
+      else
+        "AES-128 HLS encryption is available but disabled. Existing HLS playback remains unchanged."
+      end
+    end
+
+    def aes128_control_action(download)
+      if download[:hls_aes128_required]
+        "Monitor key endpoint denials and browser compatibility before tightening related token/rate-limit settings."
+      elsif download[:hls_aes128_enabled]
+        "Backfill existing HLS video packages and validate Safari/hls.js playback before enabling required mode."
+      else
+        "Enable AES-128 first on staging, verify encrypted upload/playback, then plan backfill before requiring it site-wide."
+      end
     end
 
     def watermark_fingerprint_status
@@ -319,6 +361,9 @@ module ::MediaGallery
       [
         setting_row(:media_gallery_protected_video_hls_only, "HLS-only video mode", recommended: "true for protected video"),
         setting_row(:media_gallery_hls_enabled, "HLS enabled", recommended: "true"),
+        setting_row(:media_gallery_hls_aes128_enabled, "HLS AES-128 encryption", recommended: "true after staging validation"),
+        setting_row(:media_gallery_hls_aes128_required, "Require HLS AES-128", recommended: "true after backfill"),
+        setting_row(:media_gallery_hls_aes128_key_rotation_segments, "HLS AES key rotation", recommended: "0 for v1"),
         setting_row(:media_gallery_fingerprint_enabled, "Fingerprinting", recommended: "true for protected video"),
         setting_row(:media_gallery_watermark_enabled, "Watermarking", recommended: "true for protected video"),
         setting_row(:media_gallery_watermark_user_can_toggle, "Users can disable watermark", recommended: "false for protected video"),
@@ -326,6 +371,8 @@ module ::MediaGallery
         setting_row(:media_gallery_bind_stream_to_session, "Bind stream tokens to session", recommended: "true when supported"),
         setting_row(:media_gallery_hls_playlist_requests_per_token_per_minute, "HLS playlist rate limit", recommended: "> 0"),
         setting_row(:media_gallery_hls_segment_requests_per_token_per_minute, "HLS segment rate limit", recommended: "> 0"),
+        setting_row(:media_gallery_hls_key_requests_per_token_per_minute, "HLS AES key rate limit", recommended: "> 0"),
+        setting_row(:media_gallery_log_hls_aes128_key_denials, "Log denied HLS AES key requests", recommended: "true during QA, false or monitored in production"),
         setting_row(:media_gallery_forensics_playback_session_retention_days, "Playback-session retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_retention_days, "Export retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_archive_retention_days, "Archive retention", recommended: "90 days or policy"),
@@ -438,6 +485,7 @@ module ::MediaGallery
       stream_anomalies = counts["stream_scrape_anomaly"].to_i
       stream_rate_limited = counts["stream_rate_limited"].to_i
       hls_denied = counts["hls_denied"].to_i
+      hls_key_denied = hls_key_denied_count(scope)
       play_rate_limited = counts["play_rate_limited"].to_i
       play_tokens = counts["play_token_issued"].to_i
       token_session_limits = %w[
@@ -448,7 +496,7 @@ module ::MediaGallery
       ].sum { |event_type| counts[event_type].to_i }
 
       enforcement_hits = stream_rate_limited + play_rate_limited + token_session_limits
-      soft_hits = stream_anomalies + hls_denied
+      soft_hits = stream_anomalies + hls_denied + hls_key_denied
       status =
         if enforcement_hits.positive?
           "attention"
@@ -465,7 +513,8 @@ module ::MediaGallery
         rows: [
           tuning_row("stream_anomalies", "Stream anomaly events", stream_anomalies, stream_anomalies.positive? ? "warning" : "ok", "Soft F08 detections. Use these to tune thresholds before enabling hard blocking."),
           tuning_row("stream_rate_limited", "Hard stream rate limits", stream_rate_limited, stream_rate_limited.positive? ? "attention" : "ok", "Requests blocked by /media/stream hard per-token limits."),
-          tuning_row("hls_denied", "HLS denied requests", hls_denied, hls_denied.positive? ? "warning" : "ok", "Denied HLS playlist/segment requests, including token, policy, readiness or rate-limit denials."),
+          tuning_row("hls_denied", "HLS denied requests", hls_denied, hls_denied.positive? ? "warning" : "ok", "Denied HLS playlist/segment/key requests, including token, policy, readiness or rate-limit denials."),
+          tuning_row("hls_key_denied", "HLS AES key denials", hls_key_denied, hls_key_denied.positive? ? "warning" : "ok", "Denied requests to the AES-128 key endpoint. During QA, use this to detect token/session/key-id problems."),
           tuning_row("play_rate_limited", "Play-token rate limited", play_rate_limited, play_rate_limited.positive? ? "attention" : "ok", "Play-token creation blocked by the per-IP play-token rate limit."),
           tuning_row("token_session_limits", "Token/session limit hits", token_session_limits, token_session_limits.positive? ? "attention" : "ok", "Playback blocked by active-token or concurrent-session limits."),
           tuning_row("play_tokens", "Play tokens issued", play_tokens, "info", "Volume signal only. A sudden increase can indicate sharing, scraping attempts or a successful campaign.")
@@ -511,6 +560,14 @@ module ::MediaGallery
       Hash.new(0)
     end
 
+    def hls_key_denied_count(scope)
+      return 0 if scope.blank?
+
+      scope.where(event_type: "hls_denied").where("path LIKE ?", "%/key/%").count.to_i
+    rescue
+      0
+    end
+
     def rate_limit_tuning_summary(status)
       case status.to_s
       when "attention"
@@ -539,12 +596,14 @@ module ::MediaGallery
       anomaly_range = setting_int(:media_gallery_stream_anomaly_range_requests_per_token_per_minute)
       hls_playlist = setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute)
       hls_segments = setting_int(:media_gallery_hls_segment_requests_per_token_per_minute)
+      hls_keys = setting_int(:media_gallery_hls_key_requests_per_token_per_minute)
       play_tokens = setting_int(:media_gallery_play_tokens_per_ip_per_minute)
 
       [
         tuning_row("stream_anomaly_thresholds", "Stream anomaly thresholds", "#{anomaly_stream}/#{anomaly_range}", setting_bool(:media_gallery_log_stream_anomalies) ? "ok" : "warning", "Soft logging thresholds: total requests per token/minute and range requests per token/minute."),
         tuning_row("hard_stream_limits", "Hard stream limits", "#{hard_stream}/#{hard_range}", hard_stream.positive? || hard_range.positive? ? "warning" : "info", "Hard blocking limits: total stream requests/minute and range requests/minute. 0 means observe-only for that limit."),
         tuning_row("hls_rate_limits", "HLS rate limits", "#{hls_playlist}/#{hls_segments}", hls_playlist.positive? && hls_segments.positive? ? "ok" : "warning", "Playlist and segment requests allowed per HLS token per minute."),
+        tuning_row("hls_key_rate_limit", "HLS AES key rate limit", hls_keys, hls_keys.positive? ? "ok" : "warning", "AES-128 key endpoint requests allowed per HLS token per minute. 0 disables this protection."),
         tuning_row("play_token_rate_limit", "Play-token rate limit", play_tokens, play_tokens.positive? ? "ok" : "warning", "Maximum play-token creation requests per IP per minute. 0 disables this protection.")
       ]
     end
@@ -645,18 +704,22 @@ module ::MediaGallery
       f11_policy = setting_string(:media_gallery_forensics_http_source_url_policy, default: "deny_all")
       playlist_limit = setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute)
       segment_limit = setting_int(:media_gallery_hls_segment_requests_per_token_per_minute)
+      key_limit = setting_int(:media_gallery_hls_key_requests_per_token_per_minute)
+      aes_enabled = setting_bool(:media_gallery_hls_aes128_enabled)
+      aes_required = aes_enabled && setting_bool(:media_gallery_hls_aes128_required)
 
       [
         baseline_check("production_https", "Production HTTPS/canonical URL", environment[:https_ok] ? "HTTPS" : "Review", "HTTPS canonical production URL", environment[:status], environment[:summary]),
         baseline_check("hls_enabled", "HLS enabled", yes_no(download[:hls_enabled]), "Enabled for protected videos", download[:hls_enabled] ? "ok" : "attention", "HLS enables segmented delivery, fingerprinting and stricter video fallback policy."),
         baseline_check("hls_only", "HLS-only protected video", yes_no(download[:hls_only_enabled]), "Enabled for protected video", download[:hls_only_enabled] ? "ok" : "attention", "Blocks direct MP4 stream fallback for protected video playback."),
+        baseline_check("hls_aes128", "HLS AES-128 content hardening", aes_required ? "Required" : aes_enabled ? "Enabled" : "Disabled", "Enabled, then required after backfill", aes_required ? "ok" : aes_enabled ? "partial" : "partial", "Encrypts HLS segments with an authenticated key endpoint. This is not DRM; authorized clients can still receive keys."),
         baseline_check("bind_user", "Bind stream tokens to user", yes_no(download[:bind_to_user]), "Enabled", download[:bind_to_user] ? "ok" : "attention", "Prevents a token issued for one user from being reused by another user."),
         baseline_check("bind_session", "Bind stream tokens to browser session", yes_no(download[:bind_to_session]), "Enabled", download[:bind_to_session] ? "ok" : "partial", "Adds a signed session-binding cookie check in addition to token validation."),
         baseline_check("stream_ttl", "Stream token lifetime", "#{ttl} minutes", "5-15 minutes for high-value content", ttl.positive? && ttl <= 20 ? "ok" : ttl.positive? ? "partial" : "attention", "Shorter TTLs reduce replay windows; very short values can affect unstable clients."),
         baseline_check("watermark", "Visible watermark", yes_no(download[:watermark_enabled]), "Enabled for protected content", download[:watermark_enabled] ? "ok" : "partial", "A visible watermark is a deterrent and helps communicate traceability."),
         baseline_check("watermark_toggle", "User watermark opt-out", download[:watermark_user_can_toggle] ? "Allowed" : "Blocked", "Blocked for protected content", download[:watermark_user_can_toggle] ? "partial" : "ok", "Protected content is stronger when users cannot disable the visible watermark."),
         baseline_check("fingerprint", "HLS fingerprinting", yes_no(download[:fingerprint_enabled]), "Enabled for protected videos", download[:fingerprint_enabled] ? "ok" : "partial", "A/B HLS fingerprinting helps identify likely recipients of leaked streams."),
-        baseline_check("hls_limits", "HLS request rate limits", "playlist #{playlist_limit}/min, segments #{segment_limit}/min", "Both > 0", playlist_limit.positive? && segment_limit.positive? ? "ok" : "partial", "Per-token HLS limits make automated segment scraping noisier and easier to detect."),
+        baseline_check("hls_limits", "HLS request rate limits", "playlist #{playlist_limit}/min, segments #{segment_limit}/min, keys #{key_limit}/min", "All > 0", playlist_limit.positive? && segment_limit.positive? && key_limit.positive? ? "ok" : "partial", "Per-token HLS limits make automated playlist, segment and AES-key scraping noisier and easier to detect."),
         baseline_check("direct_media_navigation", "Block direct media navigation", yes_no(download[:block_direct_media_navigation]), "Enabled", download[:block_direct_media_navigation] ? "ok" : "partial", "Blocks clear address-bar/new-tab navigation to tokenized play/stream/HLS endpoints while allowing normal player requests."),
         baseline_check("stream_anomaly", "Stream anomaly logging", yes_no(setting_bool(:media_gallery_log_stream_anomalies)), "Enabled", setting_bool(:media_gallery_log_stream_anomalies) ? "ok" : "partial", "Soft anomaly logging is safer than immediate blocking while thresholds are tuned."),
         baseline_check("f11_policy", "Forensic HTTP source URL policy", f11_policy, "deny_all in production", f11_policy == "deny_all" ? "ok" : f11_policy == "canonical_only" ? "partial" : "attention", "Controls whether admin forensic identify may use http:// source URLs."),

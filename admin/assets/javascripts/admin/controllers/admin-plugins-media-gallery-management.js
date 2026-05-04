@@ -801,8 +801,27 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       { label: "Updated", value: formatDateTime(item.updated_at) },
       { label: "Storage", value: item.managed_storage_profile_label || item.managed_storage_profile || item.managed_storage_backend || "—" },
       { label: "Delivery", value: item.delivery_mode || "—" },
+      { label: "HLS AES-128", value: this.hlsAes128Label(item.hls_aes128) },
       { label: "Visibility", value: item.hidden ? `Hidden${item.visibility?.reason ? ` — ${item.visibility.reason}` : ""}` : "Visible" },
     ];
+  }
+
+  hlsAes128Label(status) {
+    const s = status || {};
+    const state = String(s.status || "");
+    if (state === "ready" || s.ready) {
+      return `Ready${s.key_id ? ` (${s.key_id})` : ""}`;
+    }
+    if (state === "not_ready") {
+      return s.required ? "Required, not ready" : "Enabled, not ready";
+    }
+    if (state === "no_hls") {
+      return "No HLS";
+    }
+    if (state === "error") {
+      return "Status error";
+    }
+    return s.enabled ? "Enabled, not encrypted" : "Not encrypted";
   }
 
   get historyEntries() {

@@ -44,6 +44,8 @@ module ::MediaGallery
       end
       checks.concat(segment_checks)
 
+      checks.concat(aes128_checks(item, role: role, store: store, variants: variants))
+
       if role["fingerprint_meta_key"].present?
         checks << object_check(store, key: role["fingerprint_meta_key"], label: "Fingerprint metadata", required: true)
       end
@@ -82,6 +84,71 @@ module ::MediaGallery
       end
     end
     private_class_method :summary_for
+
+    def aes128_checks(item, role:, store:, variants:)
+      checks = []
+      encryption = role["encryption"].is_a?(Hash) ? role["encryption"].deep_stringify_keys : nil
+      required = ::MediaGallery::Hls.aes128_required? rescue false
+
+      if encryption.blank?
+        if required
+          checks << check("critical", "hls_aes128_missing", "AES-128 is required but this HLS role has no encryption metadata.", nil, required: true)
+        end
+        return checks
+      end
+
+      method = encryption["method"].to_s
+      key_id = encryption["key_id"].to_s
+      scheme = encryption["scheme"].to_s
+      ready = ActiveModel::Type::Boolean.new.cast(encryption["ready"])
+
+      checks << check(method.casecmp("AES-128").zero? ? "ok" : "critical", "hls_aes128_method", method.casecmp("AES-128").zero? ? "AES-128 encryption metadata is present." : "HLS encryption method is not AES-128.", method.presence || "missing", required: true)
+      checks << check(key_id.present? ? "ok" : "critical", "hls_aes128_key_id", key_id.present? ? "AES-128 key id is present." : "AES-128 key id is missing.", key_id.presence, required: true)
+      checks << check(scheme.present? ? "ok" : "warning", "hls_aes128_scheme", scheme.present? ? "AES-128 scheme is recorded." : "AES-128 scheme is missing.", scheme.presence, required: false)
+      checks << check(ready ? "ok" : "critical", "hls_aes128_ready", ready ? "AES-128 role metadata is marked ready." : "AES-128 role metadata is not marked ready.", nil, required: true)
+
+      if key_id.present?
+        record = fetch_aes128_key_record(item, key_id: key_id)
+        checks << check(record.present? ? "ok" : "critical", "hls_aes128_key_record", record.present? ? "Server-side AES key record exists." : "Server-side AES key record is missing.", key_id, required: true)
+        checks.concat(aes128_key_artifact_checks(store, role: role, key_id: key_id, variants: variants))
+      end
+
+      checks
+    rescue => e
+      [check("warning", "hls_aes128_check_failed", "AES-128 integrity checks could not be completed.", "#{e.class}: #{e.message}".truncate(300), required: false)]
+    end
+    private_class_method :aes128_checks
+
+    def fetch_aes128_key_record(item, key_id:)
+      return nil unless defined?(::MediaGallery::HlsAes128Key) && ::MediaGallery::HlsAes128Key.table_exists?
+
+      ::MediaGallery::HlsAes128Key.fetch_key_record(media_item: item, key_id: key_id)
+    rescue
+      nil
+    end
+    private_class_method :fetch_aes128_key_record
+
+    def aes128_key_artifact_checks(store, role:, key_id:, variants:)
+      return [] if store.blank?
+
+      placeholders = [
+        ::MediaGallery::HlsAes128.key_uri_placeholder(key_id),
+        ::MediaGallery::HlsAes128.keyinfo_filename(key_id)
+      ]
+      prefixes = [role["key_prefix"].to_s]
+      Array(variants).each do |variant|
+        prefixes << key_join(role["key_prefix"], variant)
+        prefixes << key_join(role["key_prefix"], "a", variant) if ActiveModel::Type::Boolean.new.cast(role["ab_fingerprint"]) || role["ab_segment_key_template"].present?
+        prefixes << key_join(role["key_prefix"], "b", variant) if ActiveModel::Type::Boolean.new.cast(role["ab_fingerprint"]) || role["ab_segment_key_template"].present?
+      end
+
+      keys = prefixes.uniq.flat_map { |prefix| placeholders.map { |name| key_join(prefix, name) } }.uniq
+      leaked = keys.select { |key| key.present? && store.exists?(key) }
+      [check(leaked.empty? ? "ok" : "critical", "hls_aes128_key_artifacts_absent", leaked.empty? ? "No AES key/keyinfo build artifacts were found in sampled HLS storage paths." : "AES key/keyinfo build artifacts were found in HLS storage.", leaked.join(", ").presence, required: true)]
+    rescue => e
+      [check("warning", "hls_aes128_artifact_check_failed", "AES key artifact absence could not be verified.", "#{e.class}: #{e.message}".truncate(300), required: false)]
+    end
+    private_class_method :aes128_key_artifact_checks
 
     def object_check(store, key:, label:, required: true)
       ok = key.present? && store.present? && store.exists?(key)

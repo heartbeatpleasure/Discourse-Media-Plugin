@@ -139,6 +139,42 @@ function evaluateSetting(setting) {
           ? "Segmented HLS delivery is available for video playback."
           : "Protected video controls are weaker when HLS is disabled.",
       };
+    case "media_gallery_hls_aes128_enabled":
+      return {
+        displayValue: boolValue ? "Enabled" : "Disabled",
+        status: boolValue ? "ok" : "info",
+        statusText: boolValue ? "On" : "Off",
+        note: boolValue
+          ? "New/reprocessed HLS packages are encrypted with AES-128."
+          : "AES-128 is available but disabled; current HLS behavior is unchanged.",
+      };
+    case "media_gallery_hls_aes128_required":
+      return {
+        displayValue: boolValue ? "Required" : "Not required",
+        status: boolValue ? "ok" : "warning",
+        statusText: boolValue ? "Enforced" : "Migration",
+        note: boolValue
+          ? "Only AES-ready HLS packages may play when the backend setting is active."
+          : "Legacy/non-AES HLS can still play while backfill is in progress.",
+      };
+    case "media_gallery_hls_aes128_key_rotation_segments":
+      return {
+        displayValue: Number.isFinite(numericValue) ? String(numericValue) : normalizeText(rawValue),
+        status: numericValue === 0 ? "ok" : "warning",
+        statusText: numericValue === 0 ? "v1 OK" : "Reserved",
+        note: numericValue === 0
+          ? "Current v1 uses one AES key per video/package."
+          : "Non-zero key rotation is reserved for a later implementation.",
+      };
+    case "media_gallery_log_hls_aes128_key_denials":
+      return {
+        displayValue: boolValue ? "Enabled" : "Disabled",
+        status: boolValue ? "ok" : "info",
+        statusText: boolValue ? "Logging" : "Quiet",
+        note: boolValue
+          ? "Denied AES key requests are logged for QA/troubleshooting."
+          : "Enable during AES QA if key request denials need diagnosis.",
+      };
     case "media_gallery_fingerprint_enabled":
       return {
         displayValue: boolValue ? "Enabled" : "Disabled",
@@ -187,6 +223,7 @@ function evaluateSetting(setting) {
       };
     case "media_gallery_hls_playlist_requests_per_token_per_minute":
     case "media_gallery_hls_segment_requests_per_token_per_minute":
+    case "media_gallery_hls_key_requests_per_token_per_minute":
       return {
         displayValue: Number.isFinite(numericValue) ? `${formatNumber(numericValue)} req/min` : normalizeText(rawValue),
         status: numericValue > 0 ? "ok" : "attention",
@@ -527,6 +564,19 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         statusDotClass: statusDotClass(this.download?.hls_only_enabled ? "ok" : "warning"),
       },
       {
+        key: "hls_aes128",
+        label: "HLS AES-128",
+        value: this.download?.hls_aes128_required ? "Required" : this.download?.hls_aes128_enabled ? "Enabled" : "Disabled",
+        detail: this.download?.hls_aes128_required
+          ? "Only AES-ready HLS packages may play; direct stream fallback is blocked."
+          : this.download?.hls_aes128_enabled
+            ? `Encrypting new/reprocessed HLS packages; key limit ${formatNumber(this.download?.hls_key_requests_per_token_per_minute)} req/min.`
+            : "AES-128 hardening is available but currently off.",
+        statusText: this.download?.hls_aes128_required ? "Enforced" : this.download?.hls_aes128_enabled ? "Migration" : "Off",
+        statusChipClass: statusChipClass(this.download?.hls_aes128_required ? "ok" : this.download?.hls_aes128_enabled ? "warning" : "info"),
+        statusDotClass: statusDotClass(this.download?.hls_aes128_required ? "ok" : this.download?.hls_aes128_enabled ? "warning" : "info"),
+      },
+      {
         key: "direct_navigation",
         label: "Direct URL opening",
         value: this.download?.block_direct_media_navigation ? "Blocked" : "Allowed",
@@ -587,22 +637,25 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
       {
         key: "hls_limits",
         label: "HLS rate limits",
-        value: `${formatNumber(this.download?.hls_playlist_requests_per_token_per_minute)} / ${formatNumber(this.download?.hls_segment_requests_per_token_per_minute)} req/min`,
-        detail: "Playlist / segment requests allowed per token per minute.",
+        value: `${formatNumber(this.download?.hls_playlist_requests_per_token_per_minute)} / ${formatNumber(this.download?.hls_segment_requests_per_token_per_minute)} / ${formatNumber(this.download?.hls_key_requests_per_token_per_minute)} req/min`,
+        detail: "Playlist / segment / AES key requests allowed per token per minute.",
         statusText:
           Number(this.download?.hls_playlist_requests_per_token_per_minute || 0) > 0 &&
-          Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0
+          Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0 &&
+          Number(this.download?.hls_key_requests_per_token_per_minute || 0) > 0
             ? "OK"
             : "Check",
         statusChipClass: statusChipClass(
           Number(this.download?.hls_playlist_requests_per_token_per_minute || 0) > 0 &&
-            Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0
+            Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0 &&
+            Number(this.download?.hls_key_requests_per_token_per_minute || 0) > 0
             ? "ok"
             : "warning"
         ),
         statusDotClass: statusDotClass(
           Number(this.download?.hls_playlist_requests_per_token_per_minute || 0) > 0 &&
-            Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0
+            Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0 &&
+            Number(this.download?.hls_key_requests_per_token_per_minute || 0) > 0
             ? "ok"
             : "warning"
         ),
@@ -738,6 +791,15 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         statusText: this.download?.log_stream_anomalies ? "OK" : "Check",
         statusChipClass: statusChipClass(this.download?.log_stream_anomalies ? "ok" : "warning"),
         statusDotClass: statusDotClass(this.download?.log_stream_anomalies ? "ok" : "warning"),
+      },
+      {
+        key: "aes_key_logging",
+        label: "AES key denial logging",
+        value: this.download?.log_hls_aes128_key_denials ? "Enabled" : "Disabled",
+        detail: `Key endpoint rate limit: ${formatNumber(this.download?.hls_key_requests_per_token_per_minute)} requests per token per minute.`,
+        statusText: this.download?.log_hls_aes128_key_denials ? "QA ready" : "Quiet",
+        statusChipClass: statusChipClass(this.download?.log_hls_aes128_key_denials ? "ok" : "info"),
+        statusDotClass: statusDotClass(this.download?.log_hls_aes128_key_denials ? "ok" : "info"),
       },
       {
         key: "f08_hard",

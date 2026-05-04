@@ -235,6 +235,14 @@ module ::MediaGallery
           SiteSetting.respond_to?(:media_gallery_hls_playlist_requests_per_token_per_minute) ?
             SiteSetting.media_gallery_hls_playlist_requests_per_token_per_minute.to_i :
             0
+        when "key"
+          if SiteSetting.respond_to?(:media_gallery_hls_key_requests_per_token_per_minute)
+            SiteSetting.media_gallery_hls_key_requests_per_token_per_minute.to_i
+          elsif SiteSetting.respond_to?(:media_gallery_hls_segment_requests_per_token_per_minute)
+            SiteSetting.media_gallery_hls_segment_requests_per_token_per_minute.to_i
+          else
+            0
+          end
         else
           SiteSetting.respond_to?(:media_gallery_hls_segment_requests_per_token_per_minute) ?
             SiteSetting.media_gallery_hls_segment_requests_per_token_per_minute.to_i :
@@ -326,6 +334,7 @@ module ::MediaGallery
           reason: reason.to_s,
           public_id: params[:public_id].to_s.presence,
           variant: params[:variant].to_s.presence,
+          endpoint: params[:action].to_s.presence,
           segment: params[:segment].to_s.presence,
           key_id: params[:key_id].to_s.presence,
           token_present: token.present?,

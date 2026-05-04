@@ -192,6 +192,7 @@ module ::MediaGallery
         orphan_cleanup_preview: ::MediaGallery::OrphanInspector.preview_for_item(item),
         security_review: ::MediaGallery::SecurityReview.for_item(item),
         hls_fingerprint: hls_fingerprint_diagnostics(item),
+        hls_aes128: hls_aes128_diagnostics(item),
         recent_test_downloads: ::MediaGallery::TestDownloads.recent_artifacts_for(item.public_id, limit: 10),
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
@@ -638,6 +639,7 @@ module ::MediaGallery
         managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
         delivery_mode: item.delivery_mode,
         has_hls: has_hls,
+        hls_aes128: hls_aes128_status_for(item, has_hls: has_hls),
         hidden: item.admin_hidden?,
         hidden_reason: visibility["reason"],
         possible_duplicate: possible_duplicate_item?(item),
@@ -667,6 +669,7 @@ module ::MediaGallery
         managed_storage_profile_label: managed_storage_profile_label_for(item),
         delivery_mode: item.delivery_mode,
         has_hls: ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash),
+        hls_aes128: hls_aes128_status_for(item),
         hidden: item.admin_hidden?,
         visibility: visibility,
         processing: processing_metadata(item),
@@ -1142,6 +1145,89 @@ module ::MediaGallery
       store
     end
 
+
+    def hls_aes128_status_for(item, has_hls: nil)
+      has_hls = ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash) if has_hls.nil?
+      role = ::MediaGallery::Hls.managed_role_for(item)
+      role = role.deep_stringify_keys if role.is_a?(Hash)
+      status = ::MediaGallery::Hls.aes128_status_for(item, role: role)
+      encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
+      key_id = status["key_id"].to_s.presence || (encryption.is_a?(Hash) ? encryption["key_id"].to_s.presence : nil)
+      key_record_present = key_id.present? && hls_aes128_key_record_present?(item, key_id: key_id)
+      ready = ActiveModel::Type::Boolean.new.cast(status["ready"]) && key_record_present
+      enabled = ActiveModel::Type::Boolean.new.cast(status["enabled"])
+      required = ActiveModel::Type::Boolean.new.cast(status["required"])
+
+      status_label =
+        if ready
+          "ready"
+        elsif !has_hls
+          "no_hls"
+        elsif enabled || required
+          "not_ready"
+        else
+          "not_encrypted"
+        end
+
+      status.merge(
+        "has_hls" => !!has_hls,
+        "ready" => ready,
+        "key_id" => key_id,
+        "key_record_present" => key_record_present,
+        "status" => status_label,
+      ).compact
+    rescue => e
+      {
+        "has_hls" => !!has_hls,
+        "ready" => false,
+        "status" => "error",
+        "error" => "#{e.class}: #{e.message}"
+      }
+    end
+
+    def hls_aes128_diagnostics(item)
+      status = hls_aes128_status_for(item)
+      role = ::MediaGallery::Hls.managed_role_for(item)
+      role = role.deep_stringify_keys if role.is_a?(Hash)
+      encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
+
+      records = []
+      if hls_aes128_key_table_available?
+        records = ::MediaGallery::HlsAes128Key.where(media_item_id: item.id).order(created_at: :desc).limit(10).map(&:public_metadata)
+      end
+
+      status.merge(
+        "encryption_metadata" => encryption,
+        "key_records" => records,
+        "key_records_count" => records.length,
+        "key_table_available" => hls_aes128_key_table_available?,
+      ).compact
+    rescue => e
+      {
+        "ready" => false,
+        "status" => "error",
+        "error" => "#{e.class}: #{e.message}"
+      }
+    end
+
+    def hls_aes128_key_record_present?(item, key_id:)
+      return false unless hls_aes128_key_table_available?
+
+      ::MediaGallery::HlsAes128Key.active.exists?(
+        media_item_id: item.id,
+        key_id: key_id.to_s,
+        variant: ::MediaGallery::Hls::DEFAULT_VARIANT,
+        ab: ""
+      )
+    rescue
+      false
+    end
+
+    def hls_aes128_key_table_available?
+      defined?(::MediaGallery::HlsAes128Key) && ::MediaGallery::HlsAes128Key.table_exists?
+    rescue
+      false
+    end
 
     def hls_fingerprint_diagnostics(item)
       configured_layout = ::MediaGallery::FingerprintWatermark.layout_mode
