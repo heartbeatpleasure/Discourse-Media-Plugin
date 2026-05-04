@@ -21,7 +21,7 @@ module ::MediaGallery
 
       run_token = SecureRandom.hex(16)
       state = mark_queued!(item, requested_by: requested_by, force: force, run_token: run_token)
-      ::Jobs.enqueue(:media_gallery_hls_aes128_backfill_item, media_item_id: item.id, requested_by: requested_by.to_s, force: force, run_token: run_token)
+      enqueue_backfill_job!(item, requested_by: requested_by, force: force, run_token: run_token)
       state
     end
 
@@ -58,6 +58,13 @@ module ::MediaGallery
           return current_state
         end
 
+        ::MediaGallery::OperationLogger.info(
+          "hls_aes128_backfill_job_started",
+          item: item,
+          operation: "hls_aes128_backfill",
+          data: { requested_by: requested_by.to_s.presence, force: !!force, run_token_present: run_token.to_s.present? }
+        ) if defined?(::MediaGallery::OperationLogger)
+
         if aes_ready?(item) && !force
           return mark_skipped!(item, reason: "already_aes_ready", requested_by: requested_by, force: force)
         end
@@ -78,10 +85,51 @@ module ::MediaGallery
           hls_role = ::MediaGallery::Hls.publish_packaged_video!(item, store: store, hls_meta: hls_meta)
           persist_hls_role_and_meta!(item, hls_role: hls_role, hls_meta: hls_meta)
           result = mark_succeeded!(item, requested_by: requested_by, force: force, hls_role: hls_role, hls_meta: hls_meta)
+          ::MediaGallery::OperationLogger.info(
+            "hls_aes128_backfill_job_succeeded",
+            item: item,
+            operation: "hls_aes128_backfill",
+            data: { requested_by: requested_by.to_s.presence, force: !!force, key_id: result["key_id"].to_s.presence, scheme: result["scheme"].to_s.presence }
+          ) if defined?(::MediaGallery::OperationLogger)
         end
 
         result
       end
+    rescue => e
+      mark_failed!(item, error: e, requested_by: requested_by, force: force) if item&.persisted?
+      raise e
+    end
+
+    def enqueue_backfill_job!(item, requested_by:, force: false, run_token: nil)
+      unless defined?(::Jobs::MediaGalleryHlsAes128BackfillItem)
+        raise "hls_aes128_backfill_job_not_loaded"
+      end
+
+      job_id = ::Jobs.enqueue(
+        :media_gallery_hls_aes128_backfill_item,
+        media_item_id: item.id,
+        requested_by: requested_by.to_s,
+        force: !!force,
+        run_token: run_token.to_s.presence
+      )
+
+      update_state!(item) do |state|
+        state.merge(
+          "job_enqueued_at" => Time.now.utc.iso8601,
+          "job_class" => "Jobs::MediaGalleryHlsAes128BackfillItem",
+          "job_name" => "media_gallery_hls_aes128_backfill_item",
+          "job_id" => job_id.to_s.presence,
+        )
+      end
+
+      ::MediaGallery::OperationLogger.info(
+        "hls_aes128_backfill_job_enqueued",
+        item: item,
+        operation: "hls_aes128_backfill",
+        data: { requested_by: requested_by.to_s, force: !!force, run_token_present: run_token.to_s.present?, job_id: job_id.to_s.presence }
+      ) if defined?(::MediaGallery::OperationLogger)
+
+      job_id
     rescue => e
       mark_failed!(item, error: e, requested_by: requested_by, force: force) if item&.persisted?
       raise e

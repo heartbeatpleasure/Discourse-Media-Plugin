@@ -1208,6 +1208,48 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this._updateSearchInfo();
   }
 
+  _applySelectedItem(item, { syncForm = false } = {}) {
+    if (!item?.public_id) {
+      return false;
+    }
+
+    this.selectedItem = { ...(this.selectedItem || {}), ...item };
+    if (syncForm) {
+      this._syncEditForm(this.selectedItem);
+    }
+    this._syncSearchResult(this.selectedItem);
+    return true;
+  }
+
+  _applyBackfillState(state, fallbackStatus = "queued") {
+    const current = this.selectedItem || {};
+    const currentAes = current.hls_aes128 || {};
+    const backfill = state && typeof state === "object" ? state : { status: fallbackStatus };
+    const nextAes = {
+      ...currentAes,
+      needs_backfill: false,
+      backfill: {
+        ...(currentAes.backfill || {}),
+        ...backfill,
+        status: String(backfill.status || fallbackStatus),
+      },
+    };
+
+    this.selectedItem = {
+      ...current,
+      hls_aes128: nextAes,
+    };
+    this._syncSearchResult(this.selectedItem);
+  }
+
+  _applyBackfillResponse(json, fallbackStatus = "queued") {
+    const itemApplied = this._applySelectedItem(json?.item || null);
+    if (!itemApplied || !json?.item?.hls_aes128?.backfill?.status) {
+      this._applyBackfillState(json?.hls_aes128_backfill || {}, fallbackStatus);
+    }
+  }
+
+
   @action onSearchInput(event) {
     this.searchQuery = event?.target?.value || "";
   }
@@ -1395,7 +1437,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   @action
-  async refreshSelected() {
+  async refreshSelected({ preserveNotice = false } = {}) {
     if (!this.selectedPublicId) {
       return;
     }
@@ -1406,16 +1448,23 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
     this.isLoadingSelection = true;
     this.selectionError = "";
-    this.noticeMessage = "";
-    this.noticeTone = "success";
+    const previousNoticeMessage = this.noticeMessage;
+    const previousNoticeTone = this.noticeTone;
+    if (!preserveNotice) {
+      this.noticeMessage = "";
+      this.noticeTone = "success";
+    }
 
     try {
       const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/management.json`, {
         method: "GET",
         signal: controller.signal,
       });
-      this.selectedItem = json;
-      this._syncEditForm(json);
+      this._applySelectedItem(json, { syncForm: true });
+      if (preserveNotice) {
+        this.noticeMessage = previousNoticeMessage;
+        this.noticeTone = previousNoticeTone || "success";
+      }
       this._syncSearchResult(json);
     } catch (e) {
       if (e?.name === "AbortError") {
@@ -1701,11 +1750,10 @@ This repackages the existing processed video into encrypted HLS. Normal playback
         method: "POST",
         body: JSON.stringify({ force: false }),
       });
-      this.selectedItem = json?.item || this.selectedItem;
+      this._applyBackfillResponse(json, "queued");
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "AES HLS backfill queued.";
-      this._syncSearchResult(this.selectedItem);
-      await this.refreshSelected();
+      await this.refreshSelected({ preserveNotice: true });
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
@@ -1738,11 +1786,10 @@ This queues a fresh backfill job and supersedes earlier queued jobs created by t
         method: "POST",
         body: JSON.stringify({}),
       });
-      this.selectedItem = json?.item || this.selectedItem;
+      this._applyBackfillResponse(json, "queued");
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "AES HLS backfill restarted.";
-      this._syncSearchResult(this.selectedItem);
-      await this.refreshSelected();
+      await this.refreshSelected({ preserveNotice: true });
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {
@@ -1775,11 +1822,10 @@ Use this only for stuck queued/processing/failed states. It does not delete exis
         method: "POST",
         body: JSON.stringify({ reason: "admin_clear" }),
       });
-      this.selectedItem = json?.item || this.selectedItem;
+      this._applyBackfillResponse(json, "cancelled");
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "AES HLS backfill state cleared.";
-      this._syncSearchResult(this.selectedItem);
-      await this.refreshSelected();
+      await this.refreshSelected({ preserveNotice: true });
     } catch (e) {
       this.selectionError = e?.message || String(e);
     } finally {

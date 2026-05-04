@@ -174,21 +174,29 @@ export default RouteTemplate(
       }
 
       .mg-management__action-groups {
-        display: grid;
+        display: flex;
+        flex-direction: column;
         gap: 1.15rem;
         margin-top: 1rem;
       }
 
       .mg-management__action-group {
-        display: grid;
-        gap: 0.55rem;
+        display: block;
+        padding: 0.85rem 0 0.95rem;
+        border-top: 1px solid var(--mg-border);
+      }
+
+      .mg-management__action-group:first-child {
+        border-top: 0;
+        padding-top: 0;
       }
 
       .mg-management__action-group-title {
+        display: block;
         color: var(--mg-muted);
         font-size: var(--font-down-1);
         font-weight: 700;
-        margin: 0;
+        margin: 0 0 0.55rem;
       }
 
       .mg-management__action-buttons {

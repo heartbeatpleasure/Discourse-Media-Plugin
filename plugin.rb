@@ -110,6 +110,7 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_copy_item_to_target.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_cleanup_source_after_switch.rb", __dir__)
+  require_dependency File.expand_path("jobs/regular/media_gallery_hls_aes128_backfill_item.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_health_watchdog.rb", __dir__)
