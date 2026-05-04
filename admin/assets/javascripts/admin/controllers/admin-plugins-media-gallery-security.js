@@ -322,6 +322,32 @@ function decorateCounter(row) {
   };
 }
 
+function decorateTuningRow(row) {
+  const status = row?.status || "info";
+  return {
+    key: row?.key || "tuning",
+    label: normalizeText(row?.label),
+    value: formatNumber(row?.value),
+    detail: normalizeText(row?.detail),
+    statusText: normalizeText(row?.status_label || status),
+    statusChipClass: statusChipClass(status),
+    statusDotClass: statusDotClass(status),
+  };
+}
+
+function decorateTuningThreshold(row) {
+  const status = row?.status || "info";
+  return {
+    key: row?.key || "threshold",
+    label: normalizeText(row?.label),
+    value: normalizeText(row?.value),
+    detail: normalizeText(row?.detail),
+    statusText: normalizeText(row?.status_label || status),
+    statusChipClass: statusChipClass(status),
+    statusDotClass: statusDotClass(status),
+  };
+}
+
 function normalizeSecurityPayload(payload) {
   return payload?.security || payload?.security_status || payload?.data || payload || {};
 }
@@ -345,6 +371,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
   @tracked processingFailures = {};
   @tracked backupRetention = {};
   @tracked backupPaths = [];
+  @tracked rateLimitTuning = {};
   @tracked generatedAt = "";
   @tracked hasLoaded = false;
 
@@ -367,6 +394,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.processingFailures = {};
     this.backupRetention = {};
     this.backupPaths = [];
+    this.rateLimitTuning = {};
     this.generatedAt = "";
     this.hasLoaded = false;
   }
@@ -393,6 +421,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.processingFailures = data?.processing_failures || {};
     this.backupRetention = data?.backup_retention || {};
     this.backupPaths = Array.isArray(data?.backup_retention?.paths) ? data.backup_retention.paths.map(decoratePath) : [];
+    this.rateLimitTuning = data?.rate_limit_tuning || {};
     this.recentEvents = data?.recent_events || {};
     this.topEventTypes = Array.isArray(data?.recent_events?.top_event_types)
       ? data.recent_events.top_event_types.map(decorateEvent)
@@ -763,6 +792,38 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     }
 
     return [{ key: "none", label: "No recent processing failures", count: "0" }];
+  }
+
+  get rateLimitTuningFacts() {
+    const rows = Array.isArray(this.rateLimitTuning?.rows)
+      ? this.rateLimitTuning.rows.map(decorateTuningRow)
+      : [];
+
+    return rows.length
+      ? rows
+      : [{ key: "none", label: "No tuning events", value: "0", detail: "No recent rate-limit or anomaly signals found.", statusText: "OK", statusChipClass: statusChipClass("ok"), statusDotClass: statusDotClass("ok") }];
+  }
+
+  get rateLimitThresholdFacts() {
+    return Array.isArray(this.rateLimitTuning?.thresholds)
+      ? this.rateLimitTuning.thresholds.map(decorateTuningThreshold)
+      : [];
+  }
+
+  get rateLimitTuningStatusChipClass() {
+    return statusChipClass(this.rateLimitTuning?.status || "info");
+  }
+
+  get rateLimitTuningStatusDotClass() {
+    return statusDotClass(this.rateLimitTuning?.status || "info");
+  }
+
+  get rateLimitTuningStatusText() {
+    return titleize(this.rateLimitTuning?.status || "info");
+  }
+
+  get rateLimitTuningSummary() {
+    return normalizeText(this.rateLimitTuning?.summary, "Observe recent traffic before tightening enforcement thresholds.");
   }
 
   get processingFailureSummaryFacts() {

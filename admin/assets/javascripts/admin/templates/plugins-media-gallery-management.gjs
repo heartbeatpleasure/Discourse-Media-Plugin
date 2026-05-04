@@ -357,6 +357,13 @@ export default RouteTemplate(
         gap: 0.5rem;
       }
 
+      .mg-management__hls-card .mg-management__badge,
+      .mg-management__hls-status-card .mg-management__badge {
+        align-self: flex-start;
+        padding: 0.15rem 0.5rem;
+        font-size: var(--font-down-2);
+      }
+
       .mg-management__hls-detail {
         color: var(--mg-muted);
         font-family: var(--d-font-family--monospace, monospace);
@@ -868,7 +875,7 @@ export default RouteTemplate(
                 <section class="mg-management__editor-section" style="margin-top: 1rem;">
                   <h3>HLS integrity verification</h3>
                   <p class="mg-management__muted" style="margin-top: 0.3rem;">{{@controller.hlsIntegrityResult.summary}}</p>
-                  <div class="mg-management__summary-card" style="margin-top: 1rem;">
+                  <div class="mg-management__summary-card mg-management__hls-status-card" style="margin-top: 1rem;">
                     <div class="mg-management__summary-label">Status</div>
                     <span class={{@controller.hlsIntegrityStatusBadgeClass}}>{{@controller.hlsIntegrityStatusLabel}}</span>
                   </div>

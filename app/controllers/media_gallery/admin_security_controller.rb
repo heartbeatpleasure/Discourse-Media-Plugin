@@ -46,6 +46,7 @@ module ::MediaGallery
         forensics: forensics_status,
         processing_failures: processing_failures,
         backup_retention: backup_retention,
+        rate_limit_tuning: rate_limit_tuning_status,
         recent_events: recent_security_events,
         links: admin_links,
       }
@@ -429,6 +430,125 @@ module ::MediaGallery
     rescue
       0
     end
+
+    def rate_limit_tuning_status
+      scope = media_log_scope_since(7.days.ago)
+      counts = rate_limit_tuning_counts(scope)
+
+      stream_anomalies = counts["stream_scrape_anomaly"].to_i
+      stream_rate_limited = counts["stream_rate_limited"].to_i
+      hls_denied = counts["hls_denied"].to_i
+      play_rate_limited = counts["play_rate_limited"].to_i
+      play_tokens = counts["play_token_issued"].to_i
+      token_session_limits = %w[
+        play_token_limit_reached
+        new_session_limit_reached
+        concurrent_session_limit_reached
+        heartbeat_session_limit_reached
+      ].sum { |event_type| counts[event_type].to_i }
+
+      enforcement_hits = stream_rate_limited + play_rate_limited + token_session_limits
+      soft_hits = stream_anomalies + hls_denied
+      status =
+        if enforcement_hits.positive?
+          "attention"
+        elsif soft_hits.positive?
+          "warning"
+        else
+          "ok"
+        end
+
+      {
+        window_days: 7,
+        status: status,
+        summary: rate_limit_tuning_summary(status),
+        rows: [
+          tuning_row("stream_anomalies", "Stream anomaly events", stream_anomalies, stream_anomalies.positive? ? "warning" : "ok", "Soft F08 detections. Use these to tune thresholds before enabling hard blocking."),
+          tuning_row("stream_rate_limited", "Hard stream rate limits", stream_rate_limited, stream_rate_limited.positive? ? "attention" : "ok", "Requests blocked by /media/stream hard per-token limits."),
+          tuning_row("hls_denied", "HLS denied requests", hls_denied, hls_denied.positive? ? "warning" : "ok", "Denied HLS playlist/segment requests, including token, policy, readiness or rate-limit denials."),
+          tuning_row("play_rate_limited", "Play-token rate limited", play_rate_limited, play_rate_limited.positive? ? "attention" : "ok", "Play-token creation blocked by the per-IP play-token rate limit."),
+          tuning_row("token_session_limits", "Token/session limit hits", token_session_limits, token_session_limits.positive? ? "attention" : "ok", "Playback blocked by active-token or concurrent-session limits."),
+          tuning_row("play_tokens", "Play tokens issued", play_tokens, "info", "Volume signal only. A sudden increase can indicate sharing, scraping attempts or a successful campaign.")
+        ],
+        thresholds: rate_limit_tuning_thresholds,
+      }
+    rescue
+      {
+        window_days: 7,
+        status: "info",
+        summary: "Rate-limit and anomaly tuning data is not available yet.",
+        rows: [],
+        thresholds: rate_limit_tuning_thresholds,
+      }
+    end
+
+    def media_log_scope_since(time)
+      return nil unless defined?(::MediaGallery::MediaLogEvent) && ::MediaGallery::MediaLogEvent.table_exists?
+
+      ::MediaGallery::MediaLogEvent.where("created_at >= ?", time)
+    rescue
+      nil
+    end
+
+    def rate_limit_tuning_counts(scope)
+      interesting = %w[
+        stream_scrape_anomaly
+        stream_rate_limited
+        hls_denied
+        play_rate_limited
+        play_token_issued
+        play_token_limit_reached
+        new_session_limit_reached
+        concurrent_session_limit_reached
+        heartbeat_session_limit_reached
+      ]
+
+      return Hash.new(0) if scope.blank?
+
+      raw = scope.where(event_type: interesting).group(:event_type).count
+      Hash.new(0).merge(raw.transform_keys(&:to_s))
+    rescue
+      Hash.new(0)
+    end
+
+    def rate_limit_tuning_summary(status)
+      case status.to_s
+      when "attention"
+        "Hard limits or token/session limits were hit in the last 7 days. Review logs before tightening thresholds further."
+      when "warning"
+        "Soft anomaly or denial signals were observed in the last 7 days. Use this as tuning input before enforcing stricter limits."
+      else
+        "No recent rate-limit or anomaly pressure detected. Keep observing normal traffic before changing enforcement."
+      end
+    end
+
+    def tuning_row(key, label, value, status, detail)
+      {
+        key: key,
+        label: label,
+        value: value.to_i,
+        status: status,
+        detail: detail,
+      }
+    end
+
+    def rate_limit_tuning_thresholds
+      hard_stream = setting_int(:media_gallery_stream_requests_per_token_per_minute)
+      hard_range = setting_int(:media_gallery_stream_range_requests_per_token_per_minute)
+      anomaly_stream = setting_int(:media_gallery_stream_anomaly_requests_per_token_per_minute)
+      anomaly_range = setting_int(:media_gallery_stream_anomaly_range_requests_per_token_per_minute)
+      hls_playlist = setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute)
+      hls_segments = setting_int(:media_gallery_hls_segment_requests_per_token_per_minute)
+      play_tokens = setting_int(:media_gallery_play_tokens_per_ip_per_minute)
+
+      [
+        tuning_row("stream_anomaly_thresholds", "Stream anomaly thresholds", "#{anomaly_stream}/#{anomaly_range}", setting_bool(:media_gallery_log_stream_anomalies) ? "ok" : "warning", "Soft logging thresholds: total requests per token/minute and range requests per token/minute."),
+        tuning_row("hard_stream_limits", "Hard stream limits", "#{hard_stream}/#{hard_range}", hard_stream.positive? || hard_range.positive? ? "warning" : "info", "Hard blocking limits: total stream requests/minute and range requests/minute. 0 means observe-only for that limit."),
+        tuning_row("hls_rate_limits", "HLS rate limits", "#{hls_playlist}/#{hls_segments}", hls_playlist.positive? && hls_segments.positive? ? "ok" : "warning", "Playlist and segment requests allowed per HLS token per minute."),
+        tuning_row("play_token_rate_limit", "Play-token rate limit", play_tokens, play_tokens.positive? ? "ok" : "warning", "Maximum play-token creation requests per IP per minute. 0 disables this protection.")
+      ]
+    end
+
 
     def recent_security_events
       scope = nil

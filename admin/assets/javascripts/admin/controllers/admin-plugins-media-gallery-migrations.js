@@ -99,6 +99,8 @@ function toneForStatus(status) {
     case "cleaning":
     case "pending_cleanup":
     case "incomplete":
+    case "warning":
+    case "attention":
       return "warning";
     case "same_profile":
     case "not_configured":

@@ -1184,13 +1184,15 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   get hlsIntegrityChecks() {
     return (Array.isArray(this.hlsIntegrityResult?.checks) ? this.hlsIntegrityResult.checks : []).map((check) => {
       const status = String(check?.status || "");
+      const message = String(check?.message || "");
       const displayDetail = compactHlsPath(check?.detail || check?.key || "");
+      const duplicateDetail = displayDetail && message.includes(displayDetail);
 
       return {
         ...check,
         statusLabel: status ? titleize(status) : "Unknown",
         statusBadgeClass: hlsStatusBadgeClass(status),
-        displayDetail,
+        displayDetail: duplicateDetail ? "" : displayDetail,
       };
     });
   }

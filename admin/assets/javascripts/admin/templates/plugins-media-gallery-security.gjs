@@ -675,6 +675,54 @@ export default RouteTemplate(
       <section class="mg-security__panel">
         <div class="mg-security__panel-header">
           <div class="mg-security__panel-copy">
+            <h2>Rate-limit and anomaly tuning</h2>
+            <p class="mg-security__muted">Seven-day signals for choosing safe thresholds. Observe normal traffic before enabling stricter blocking.</p>
+          </div>
+          <span class={{@controller.rateLimitTuningStatusChipClass}}>
+            <span class={{@controller.rateLimitTuningStatusDotClass}}></span>
+            <span>{{@controller.rateLimitTuningStatusText}}</span>
+          </span>
+        </div>
+        <p class="mg-security__muted mg-security__section-body">{{@controller.rateLimitTuningSummary}}</p>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.rateLimitTuningFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.rateLimitThresholdFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
             <h2>Recent media security events</h2>
             <p class="mg-security__muted">Top event types from the last 7 days. Use the logs page for details.</p>
           </div>

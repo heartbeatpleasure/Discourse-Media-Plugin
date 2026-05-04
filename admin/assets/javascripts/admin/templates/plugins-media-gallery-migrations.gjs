@@ -393,6 +393,12 @@ export default RouteTemplate(
           margin-bottom: 0.2rem;
         }
 
+        .mg-migrations__summary-card .mg-migrations__badge.is-warning {
+          background: #fff3cd;
+          color: #8a5a00;
+          border-color: #f0c36d;
+        }
+
         .mg-migrations__warning-list {
           margin-top: 0.75rem;
         }

@@ -103,6 +103,22 @@ export default RouteTemplate(
         padding-right: 2.75rem;
       }
 
+      .mg-health__operational-card {
+        position: relative;
+        padding-right: 5.2rem;
+      }
+
+      .mg-health__operational-card > .mg-health__badge {
+        position: absolute;
+        top: 0.85rem;
+        right: 0.85rem;
+        margin: 0;
+      }
+
+      .mg-health__operational-card .mg-health__alert-value {
+        margin-top: 0.2rem;
+      }
+
       .mg-health__profile-list {
         display: grid;
         gap: 0.65rem;
@@ -741,10 +757,10 @@ export default RouteTemplate(
 
           <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem;">
             {{#each @controller.operationalSafetyCards as |card|}}
-              <article class="mg-health__alert-card">
+              <article class="mg-health__alert-card mg-health__operational-card">
+                <span class="mg-health__badge {{card.badgeClass}}">{{card.severityLabel}}</span>
                 <div class="mg-health__alert-label">{{card.label}}</div>
                 <div class="mg-health__alert-value">{{card.value}}</div>
-                <span class="mg-health__badge {{card.badgeClass}}" style="margin-top: 0.45rem;">{{card.severityLabel}}</span>
                 <p class="mg-health__muted" style="margin-top: 0.65rem;">{{card.detail}}</p>
               </article>
             {{/each}}
