@@ -206,7 +206,7 @@ module ::MediaGallery
 
       if uri&.path.to_s.downcase.end_with?(".m3u8")
         begin
-          tmp = localize_hls_playlist_to_tempfile!(uri, media_item: item)
+          tmp = localize_hls_playlist_to_tempfile!(uri, media_item: item, download_media_segments: false)
           body = File.read(tmp.path) rescue ""
           tmp.close! rescue nil
           checks << { status: body.lstrip.start_with?("#EXTM3U") ? "ok" : "warning", label: "Playlist", message: body.lstrip.start_with?("#EXTM3U") ? "Playlist can be resolved and localized." : "Playlist resolved but did not look like M3U8." }
@@ -799,7 +799,7 @@ module ::MediaGallery
         uri = URI.parse(source_url.to_s.strip) rescue nil
         if uri&.path.to_s.downcase.end_with?(".m3u8")
           begin
-            playlist_tmp = localize_hls_playlist_to_tempfile!(uri, media_item: media_item)
+            playlist_tmp = localize_hls_playlist_to_tempfile!(uri, media_item: media_item, download_media_segments: false)
           rescue => e
             if e.message.to_s == "unsupported_hls_url"
               playlist_tmp = rewrite_hls_playlist_to_tempfile!(uri)
@@ -2150,7 +2150,7 @@ module ::MediaGallery
     # the HLS package may exist only in the managed store (S3/R2/local managed storage),
     # so we localize the playlist and its referenced objects into a temporary directory
     # and point FFmpeg only at local files.
-    def localize_hls_playlist_to_tempfile!(playlist_uri, media_item:)
+    def localize_hls_playlist_to_tempfile!(playlist_uri, media_item:, download_media_segments: true)
       path = playlist_uri.path.to_s
 
       # Variant playlist URL
@@ -2185,7 +2185,8 @@ module ::MediaGallery
           media_item: media_item,
           role: role,
           variant: variant,
-          fingerprint_id: fingerprint_id
+          fingerprint_id: fingerprint_id,
+          download_media_segments: download_media_segments
         )
       end
 
@@ -2193,11 +2194,12 @@ module ::MediaGallery
         media_item: media_item,
         public_id: public_id,
         variant: variant,
-        fingerprint_id: fingerprint_id
+        fingerprint_id: fingerprint_id,
+        download_media_segments: download_media_segments
       )
     end
 
-    def localize_legacy_hls_playlist_to_tempfile!(media_item:, public_id:, variant:, fingerprint_id: nil)
+    def localize_legacy_hls_playlist_to_tempfile!(media_item:, public_id:, variant:, fingerprint_id: nil, download_media_segments: true)
       if variant.blank?
         master_abs = MediaGallery::PrivateStorage.hls_master_abs_path(media_item)
         raise "master_playlist_not_found" if master_abs.blank? || !File.exist?(master_abs)
@@ -2218,14 +2220,26 @@ module ::MediaGallery
         rewritten = rewrite_hls_playlist_with_local_paths(
           raw,
           resolver: lambda do |segment, seg_counter, map_uri|
-            resolve_segment_abs_path(
-              public_id,
-              variant,
-              segment,
-              fingerprint_id: fingerprint_id,
-              media_item_id: media_item.id,
-              seg_counter: seg_counter
-            )
+            if download_media_segments
+              resolve_segment_abs_path(
+                public_id,
+                variant,
+                segment,
+                fingerprint_id: fingerprint_id,
+                media_item_id: media_item.id,
+                seg_counter: seg_counter
+              )
+            else
+              pseudo_hls_reference_for_identify(
+                media_item: media_item,
+                variant: variant,
+                segment: segment,
+                fingerprint_id: fingerprint_id,
+                seg_counter: seg_counter,
+                codebook_scheme: nil,
+                map_uri: map_uri
+              )
+            end
           end,
           aes_key_resolver: lambda do |key_uri|
             localize_hls_aes128_key_for_identify!(
@@ -2245,7 +2259,7 @@ module ::MediaGallery
       end
     end
 
-    def localize_managed_hls_playlist_to_tempfile!(media_item:, role:, variant:, fingerprint_id: nil)
+    def localize_managed_hls_playlist_to_tempfile!(media_item:, role:, variant:, fingerprint_id: nil, download_media_segments: true)
       store = MediaGallery::Hls.store_for_managed_role(media_item, role)
       raise "managed_hls_store_unavailable" if store.blank?
 
@@ -2267,19 +2281,31 @@ module ::MediaGallery
         rewritten = rewrite_hls_playlist_with_local_paths(
           raw,
           resolver: lambda do |segment, seg_counter, map_uri|
-            key = managed_hls_segment_key_for_identify(
-              media_item: media_item,
-              role: role,
-              store: store,
-              variant: variant,
-              segment: segment,
-              fingerprint_id: fingerprint_id,
-              seg_counter: seg_counter,
-              codebook_scheme: codebook_scheme,
-              map_uri: map_uri
-            )
+            if download_media_segments
+              key = managed_hls_segment_key_for_identify(
+                media_item: media_item,
+                role: role,
+                store: store,
+                variant: variant,
+                segment: segment,
+                fingerprint_id: fingerprint_id,
+                seg_counter: seg_counter,
+                codebook_scheme: codebook_scheme,
+                map_uri: map_uri
+              )
 
-            localize_managed_hls_object!(store: store, key: key, temp_dir: temp_dir, cache: cache, suggested_name: segment)
+              localize_managed_hls_object!(store: store, key: key, temp_dir: temp_dir, cache: cache, suggested_name: segment)
+            else
+              pseudo_hls_reference_for_identify(
+                media_item: media_item,
+                variant: variant,
+                segment: segment,
+                fingerprint_id: fingerprint_id,
+                seg_counter: seg_counter,
+                codebook_scheme: codebook_scheme,
+                map_uri: map_uri
+              )
+            end
           end,
           aes_key_resolver: lambda do |key_uri|
             localize_hls_aes128_key_for_identify!(
@@ -2446,25 +2472,64 @@ module ::MediaGallery
       nil
     end
 
+    def pseudo_hls_reference_for_identify(media_item:, variant:, segment:, fingerprint_id:, seg_counter:, codebook_scheme:, map_uri: false)
+      safe = safe_hls_reference_filename!(segment, allowed_extensions: map_uri ? %w[mp4 m4s] : %w[ts m4s])
+      variant = variant.to_s.presence || MediaGallery::Hls::DEFAULT_VARIANT
+
+      return "/media/hls/#{media_item.public_id}/map/#{variant}/#{safe}" if map_uri
+
+      ab = expected_hls_ab_for_identify(
+        media_item: media_item,
+        segment: safe,
+        fingerprint_id: fingerprint_id,
+        seg_counter: seg_counter,
+        codebook_scheme: codebook_scheme
+      )
+
+      if ab.present?
+        "/media/hls/#{media_item.public_id}/seg/#{variant}/#{ab}/#{safe}"
+      else
+        "/media/hls/#{media_item.public_id}/seg/#{variant}/#{safe}"
+      end
+    end
+
+    def expected_hls_ab_for_identify(media_item:, segment:, fingerprint_id:, seg_counter:, codebook_scheme: nil)
+      return nil unless MediaGallery::Fingerprinting.enabled?
+      return nil if fingerprint_id.blank? || media_item&.id.blank?
+
+      idx = MediaGallery::Fingerprinting.segment_index_from_filename(segment)
+      idx ||= seg_counter
+      return nil if idx.blank?
+
+      ab = MediaGallery::Fingerprinting.expected_variant_for_segment(
+        fingerprint_id: fingerprint_id,
+        media_item_id: media_item.id,
+        segment_index: idx,
+        codebook: codebook_scheme
+      )
+
+      ab = ab.to_s.downcase
+      %w[a b].include?(ab) ? ab : nil
+    rescue
+      nil
+    end
+
     def managed_hls_segment_key_for_identify(media_item:, role:, store:, variant:, segment:, fingerprint_id:, seg_counter:, codebook_scheme:, map_uri: false)
       seg = safe_hls_reference_filename!(segment, allowed_extensions: map_uri ? %w[mp4 m4s] : %w[ts m4s])
       candidates = []
 
-      if !map_uri && MediaGallery::Fingerprinting.enabled? && fingerprint_id.present? && media_item&.id.present?
-        idx = MediaGallery::Fingerprinting.segment_index_from_filename(seg)
-        idx ||= seg_counter
-        if idx.present?
-          ab = MediaGallery::Fingerprinting.expected_variant_for_segment(
-            fingerprint_id: fingerprint_id,
-            media_item_id: media_item.id,
-            segment_index: idx,
-            codebook: codebook_scheme
-          )
+      if !map_uri
+        ab = expected_hls_ab_for_identify(
+          media_item: media_item,
+          segment: seg,
+          fingerprint_id: fingerprint_id,
+          seg_counter: seg_counter,
+          codebook_scheme: codebook_scheme
+        )
 
-          if ab.present?
-            ab_key = MediaGallery::Hls.segment_key_for(media_item, variant, seg, ab: ab, role: role)
-            candidates << ab_key if ab_key.present?
-          end
+        if ab.present?
+          ab_key = MediaGallery::Hls.segment_key_for(media_item, variant, seg, ab: ab, role: role)
+          candidates << ab_key if ab_key.present?
         end
       end
 
