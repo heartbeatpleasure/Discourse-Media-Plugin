@@ -58,6 +58,23 @@ module ::MediaGallery
       "enc_#{normalize_key_id(key_id)}.key"
     end
 
+    def key_id_from_placeholder_uri(uri)
+      uri = uri.to_s.strip
+      return nil if uri.blank?
+
+      # FFmpeg writes the first line of the keyinfo file into EXT-X-KEY as-is.
+      # We intentionally only rewrite our own neutral placeholders. Absolute
+      # URLs or arbitrary filenames are left untouched by the playlist rewriter.
+      path = uri.split("?", 2).first.to_s
+      file = File.basename(path)
+      match = file.match(/\Aenc_([a-zA-Z0-9_-]+)\.key\z/)
+      return nil unless match
+
+      normalize_key_id(match[1])
+    rescue
+      nil
+    end
+
     def keyinfo_filename(key_id = DEFAULT_KEY_ID)
       "enc_#{normalize_key_id(key_id)}.keyinfo"
     end

@@ -56,7 +56,7 @@ module ::MediaGallery
 
       role = hls_role_for(item)
       data = read_variant_playlist!(item, variant: variant, role: role)
-      data = rewrite_variant_playlist(data, item: item, variant: variant, token: token, fingerprint_id: payload["fingerprint_id"], media_item_id: item.id)
+      data = rewrite_variant_playlist(data, item: item, variant: variant, token: token, fingerprint_id: payload["fingerprint_id"], media_item_id: item.id, role: role)
 
       set_playlist_headers!
       send_data(data, type: m3u8_content_type, disposition: "inline")
@@ -138,6 +138,37 @@ module ::MediaGallery
       send_file(abs, type: segment_content_type(segment), disposition: "inline")
     end
 
+    def key
+      token = params[:token].to_s
+      payload = verify_hls_token!(token)
+      return unless enforce_hls_rate_limit!(kind: :key, token: token)
+
+      item = MediaGallery::MediaItem.find_by(public_id: params[:public_id].to_s)
+      deny!(:item_not_ready, token: token) if item.blank?
+      deny!(:item_hidden, token: token) if item.respond_to?(:admin_hidden?) && item.admin_hidden?
+      deny!(:item_not_ready, token: token) unless item.ready?
+      deny!(:token_item_mismatch, token: token) if payload["media_item_id"].to_i != item.id
+      enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
+      deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
+      deny_direct_media_navigation!(:key, token: token, item: item)
+
+      role = hls_role_for(item)
+      deny!(:hls_aes128_role_missing, token: token) unless role.present?
+      encryption = MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
+      deny!(:hls_aes128_not_ready, token: token) unless MediaGallery::Hls.aes128_ready?(item, role: role) && encryption.present?
+
+      key_id = normalized_hls_aes128_key_id!(params[:key_id].to_s, token: token)
+      expected_key_id = encryption["key_id"].to_s
+      deny!(:hls_aes128_key_mismatch, token: token) if expected_key_id.blank? || expected_key_id != key_id
+
+      key_bytes = MediaGallery::HlsAes128.fetch_key_bytes(item: item, key_id: key_id)
+      deny!(:hls_aes128_key_missing, token: token) unless MediaGallery::HlsAes128.valid_key_bytes?(key_bytes)
+
+      set_key_headers!
+      response.headers["Content-Length"] = key_bytes.b.bytesize.to_s
+      send_data(key_bytes.b, type: "application/octet-stream", disposition: "inline")
+    end
+
     private
 
     def ensure_plugin_enabled
@@ -156,6 +187,12 @@ module ::MediaGallery
       return if ::MediaGallery::Token.asset_binding_valid?(media_item: item, kind: kind, payload: payload)
 
       deny!(:asset_binding_mismatch, token: token)
+    end
+
+    def normalized_hls_aes128_key_id!(raw_key_id, token:)
+      ::MediaGallery::HlsAes128.normalize_key_id(raw_key_id)
+    rescue
+      deny!(:hls_aes128_invalid_key_id, token: token)
     end
 
     def verify_hls_token!(token)
@@ -248,7 +285,11 @@ module ::MediaGallery
       raise Discourse::NotFound
     end
 
-    def denial_logging_enabled?
+    def denial_logging_enabled?(reason = nil)
+      if params[:action].to_s == "key" || reason.to_s.start_with?("hls_aes128")
+        return true if MediaGallery::Hls.respond_to?(:aes128_key_denial_logging_enabled?) && MediaGallery::Hls.aes128_key_denial_logging_enabled?
+      end
+
       SiteSetting.respond_to?(:media_gallery_log_hls_denials) && SiteSetting.media_gallery_log_hls_denials
     end
 
@@ -260,7 +301,7 @@ module ::MediaGallery
     end
 
     def log_denial!(reason, token: nil)
-      return unless denial_logging_enabled?
+      return unless denial_logging_enabled?(reason)
       Rails.logger.warn(
         "[media_gallery] HLS denied reason=#{reason} token_sha256=#{token_sha256_label(token)} ip=#{request.remote_ip} user_id=#{current_user&.id} request_id=#{request.request_id}"
       )
@@ -276,6 +317,7 @@ module ::MediaGallery
           public_id: params[:public_id].to_s.presence,
           variant: params[:variant].to_s.presence,
           segment: params[:segment].to_s.presence,
+          key_id: params[:key_id].to_s.presence,
           token_present: token.present?,
           token_sha256: token_sha256_label(token),
         },
@@ -598,6 +640,13 @@ module ::MediaGallery
       response.headers["Content-Type"] = segment_content_type(segment)
     end
 
+    def set_key_headers!
+      response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
+      response.headers["Pragma"] = "no-cache"
+      response.headers["X-Content-Type-Options"] = "nosniff"
+      response.headers["Content-Type"] = "application/octet-stream"
+    end
+
     def m3u8_content_type
       "application/vnd.apple.mpegurl"
     end
@@ -627,7 +676,7 @@ module ::MediaGallery
       out.join("\n") + "\n"
     end
 
-    def rewrite_variant_playlist(raw, item:, variant:, token:, fingerprint_id: nil, media_item_id: nil)
+    def rewrite_variant_playlist(raw, item:, variant:, token:, fingerprint_id: nil, media_item_id: nil, role: nil)
       out = []
       seg_counter = 0
       public_id = item.public_id.to_s
@@ -636,7 +685,9 @@ module ::MediaGallery
       raw.to_s.each_line do |line|
         l = line.rstrip
         if l.blank? || l.start_with?("#")
-          if l.include?("URI=\"")
+          if l.start_with?("#EXT-X-KEY") && l.match?(/METHOD=AES-128/i)
+            out << rewrite_aes128_key_tag(l, item: item, variant: variant, token: token, role: role)
+          elsif l.include?("URI=\"")
             out << l.gsub(/URI=\"([^\"]+)\"/) do
               uri = Regexp.last_match(1).to_s
               file = File.basename(uri)
@@ -678,6 +729,25 @@ module ::MediaGallery
         end
       end
       out.join("\n") + "\n"
+    end
+
+    def rewrite_aes128_key_tag(line, item:, variant:, token:, role: nil)
+      return line unless line.to_s.include?("URI=\"")
+
+      encryption = MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
+      return line unless encryption.present?
+
+      line.gsub(/URI=\"([^\"]+)\"/) do
+        uri = Regexp.last_match(1).to_s
+        key_id = MediaGallery::HlsAes128.key_id_from_placeholder_uri(uri)
+        if key_id.present? && key_id == encryption["key_id"].to_s
+          "URI=\"/media/hls/#{item.public_id}/key/#{key_id}.key?token=#{token}\""
+        else
+          "URI=\"#{uri}\""
+        end
+      end
+    rescue
+      line
     end
   end
 end

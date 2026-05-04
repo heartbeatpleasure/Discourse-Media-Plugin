@@ -205,6 +205,11 @@ after_initialize do
     # HLS (milestone 1)
     get "/media/hls/:public_id/master.m3u8" => "media_gallery/hls#master"
     get "/media/hls/:public_id/v/:variant/index.m3u8" => "media_gallery/hls#variant"
+    # AES-128 HLS key delivery. The key_id is public metadata; the key bytes are
+    # only returned by the controller after the same HLS token/session/user checks
+    # as playlist and segment delivery.
+    get "/media/hls/:public_id/key/:key_id.key" => "media_gallery/hls#key",
+        constraints: { key_id: /[A-Za-z0-9_-]+/ }
     # Segment requests can include a per-segment fingerprint variant (a|b).
     get "/media/hls/:public_id/seg/:variant/:ab/:segment" => "media_gallery/hls#segment",
         constraints: { ab: /a|b/i, segment: /[^\/]+/ }
