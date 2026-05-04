@@ -1491,7 +1491,6 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     } finally {
       if (this.selectionAbortController === controller) {
         this.selectionAbortController = null;
-  backfillPollRunId = 0;
       }
       this.isLoadingSelection = false;
     }
