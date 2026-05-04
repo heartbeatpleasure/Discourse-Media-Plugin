@@ -692,6 +692,9 @@ export default RouteTemplate(
               {{if @controller.isSearching "Searching…" "Search"}}
             </button>
             <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isSearching}}>Reset</button>
+            <button class="btn" type="button" {{on "click" @controller.bulkQueueAesBackfill}} disabled={{@controller.bulkAesBackfillDisabled}}>
+              {{if @controller.isBulkAesBackfilling "Queuing AES…" "Queue AES backfill for filtered"}}
+            </button>
           </div>
           {{#if @controller.searchInfo}}
             <span class="mg-management__muted">{{@controller.searchInfo}}</span>
@@ -934,6 +937,9 @@ export default RouteTemplate(
                   </button>
                   <button class="btn" type="button" {{on "click" @controller.retryProcessing}} disabled={{@controller.retryDisabled}}>
                     {{if @controller.isRetrying "Queuing…" "Retry processing"}}
+                  </button>
+                  <button class="btn" type="button" {{on "click" @controller.queueAesBackfill}} disabled={{@controller.selectedAesBackfillDisabled}}>
+                    {{@controller.selectedAesBackfillButtonLabel}}
                   </button>
                   <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "view-block")}} disabled={{@controller.ownerViewBlockDisabled}}>
                     Block view & upload

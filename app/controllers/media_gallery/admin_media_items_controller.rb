@@ -276,6 +276,17 @@ module ::MediaGallery
       render_operation_error(e, operation: "verify_hls_integrity", item: item, status: 422)
     end
 
+    def aes_backfill
+      item = load_item!
+      force = boolean_param(:force)
+      state = ::MediaGallery::HlsAes128Backfill.enqueue_item!(item, requested_by: current_user.username, force: force)
+      audit_admin_action!("hls_aes128_backfill_requested", item: item, operation: "hls_aes128_backfill", result: state["status"], data: { force: force })
+      item.reload
+      render_json_dump(ok: true, public_id: item.public_id, hls_aes128_backfill: state, item: management_item_payload(item), message: "AES HLS backfill queued.")
+    rescue => e
+      render_operation_error(e, operation: "hls_aes128_backfill", item: item, status: 422)
+    end
+
     def copy_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
@@ -417,6 +428,49 @@ module ::MediaGallery
       render_operation_error(e, operation: "bulk_copy", status: 422)
     end
 
+    def bulk_aes_backfill
+      force = boolean_param(:force)
+      items = bulk_aes_backfill_scope.to_a
+      return render_json_error("no_media_items_selected", status: 422) if items.blank?
+
+      results = []
+      queued = 0
+      skipped = 0
+
+      items.each do |item|
+        begin
+          aes_status = hls_aes128_status_for(item)
+          unless bulk_aes_backfill_candidate?(item, aes_status: aes_status, force: force)
+            skipped += 1
+            results << { public_id: item.public_id, status: "skipped", reason: "not_eligible", hls_aes128: aes_status }
+            next
+          end
+
+          state = ::MediaGallery::HlsAes128Backfill.enqueue_item!(item, requested_by: current_user.username, force: force)
+          queued += 1
+          results << { public_id: item.public_id, status: state["status"].to_s.presence || "queued", hls_aes128_backfill: state }
+        rescue => e
+          skipped += 1
+          normalized = ::MediaGallery::OperationErrors.normalize(e, operation: "hls_aes128_backfill")
+          results << { public_id: item.public_id, status: "skipped", error: normalized[:message], error_code: normalized[:code] }
+        end
+      end
+
+      ::MediaGallery::OperationLogger.info("bulk_hls_aes128_backfill_requested", operation: "bulk_hls_aes128_backfill", data: { requested_count: items.length, queued_count: queued, skipped_count: skipped, requested_by: current_user.username, force: force })
+      audit_admin_action!("bulk_hls_aes128_backfill_requested", operation: "bulk_hls_aes128_backfill", result: queued.positive? ? "queued" : "skipped", data: { requested_count: items.length, queued_count: queued, skipped_count: skipped, force: force })
+
+      render_json_dump(
+        ok: queued.positive?,
+        requested_count: items.length,
+        queued_count: queued,
+        skipped_count: skipped,
+        items: results,
+        message: queued.positive? ? "AES HLS backfill queued for #{queued} item(s)." : "No eligible items were queued."
+      )
+    rescue => e
+      render_operation_error(e, operation: "bulk_hls_aes128_backfill", status: 422)
+    end
+
     def retry_processing
       item = load_item!
       force = boolean_param(:force)
@@ -511,6 +565,25 @@ module ::MediaGallery
 
       items_by_public_id = ::MediaGallery::MediaItem.where(public_id: public_ids).index_by(&:public_id)
       public_ids.filter_map { |public_id| items_by_public_id[public_id] }
+    end
+
+    def bulk_aes_backfill_scope
+      public_ids = requested_bulk_public_ids
+      if public_ids.present?
+        items_by_public_id = ::MediaGallery::MediaItem.includes(:user).where(public_id: public_ids).index_by(&:public_id)
+        return public_ids.filter_map { |public_id| items_by_public_id[public_id] }
+      end
+
+      limit = ::MediaGallery::HlsAes128Backfill.bulk_limit
+      filtered_search_scope.where(media_type: "video", status: "ready").limit(limit)
+    end
+
+    def bulk_aes_backfill_candidate?(item, aes_status:, force: false)
+      return false unless item&.media_type.to_s == "video" && item&.ready?
+      return false unless aes_status.is_a?(Hash) && ActiveModel::Type::Boolean.new.cast(aes_status["has_hls"])
+      return true if force && !ActiveModel::Type::Boolean.new.cast(aes_status["ready"])
+
+      ActiveModel::Type::Boolean.new.cast(aes_status["needs_backfill"])
     end
 
     def requested_bulk_public_ids
@@ -1212,6 +1285,7 @@ module ::MediaGallery
         "key_id" => key_id,
         "key_record_present" => key_record_present,
         "status" => status_label,
+        "backfill" => (defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.state_for(item) : {}),
       ).compact
     rescue => e
       {
@@ -1238,6 +1312,7 @@ module ::MediaGallery
         "key_records" => records,
         "key_records_count" => records.length,
         "key_table_available" => hls_aes128_key_table_available?,
+        "backfill" => (defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.state_for(item) : {}),
       ).compact
     rescue => e
       {

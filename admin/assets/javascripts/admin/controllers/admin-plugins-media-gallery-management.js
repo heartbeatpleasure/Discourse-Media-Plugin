@@ -180,6 +180,19 @@ function hlsAes128Badge(status) {
   const hasHls = !!s.has_hls;
   const enabled = !!s.enabled;
   const required = !!s.required;
+  const backfillStatus = String(s.backfill?.status || "");
+
+  if (backfillStatus === "queued") {
+    return { label: "AES queued", className: "is-warning", title: "AES HLS backfill has been queued" };
+  }
+
+  if (backfillStatus === "processing") {
+    return { label: "AES processing", className: "is-warning", title: "AES HLS backfill is processing" };
+  }
+
+  if (backfillStatus === "failed") {
+    return { label: "AES failed", className: "is-danger", title: s.backfill?.last_error || "AES HLS backfill failed" };
+  }
 
   if (state === "ready" || s.ready) {
     return { label: "AES", className: "is-success", title: s.key_id ? `AES-ready HLS (${s.key_id})` : "AES-ready HLS" };
@@ -319,6 +332,10 @@ function formatHistoryAction(action) {
       return "Blocked uploader from upload only";
     case "unblock_owner_upload":
       return "Unblocked uploader from upload only";
+    case "hls_aes128_backfill":
+      return "Queued AES HLS backfill";
+    case "bulk_hls_aes128_backfill":
+      return "Queued bulk AES HLS backfill";
     default:
       return titleize(action || "change");
   }
@@ -399,6 +416,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isDeleting = false;
   @tracked isRetrying = false;
   @tracked isBlockingOwner = false;
+  @tracked isBackfillingAes = false;
+  @tracked isBulkAesBackfilling = false;
   @tracked isVerifyingHlsIntegrity = false;
   @tracked isCopyingDiagnostics = false;
   @tracked hlsIntegrityResult = null;
@@ -447,6 +466,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.isDeleting = false;
     this.isRetrying = false;
     this.isBlockingOwner = false;
+    this.isBackfillingAes = false;
+    this.isBulkAesBackfilling = false;
     this.availableSearchProfiles = [];
   }
 
@@ -571,6 +592,45 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   get retryDisabled() {
     return !this.hasSelectedItem || this.isRetrying || this.selectedItem?.status !== "failed";
+  }
+
+  get selectedAesBackfillState() {
+    return this.selectedItem?.hls_aes128?.backfill || {};
+  }
+
+  get selectedAesBackfillDisabled() {
+    const item = this.selectedItem || {};
+    const status = item.hls_aes128 || {};
+    const backfillStatus = String(status.backfill?.status || "");
+    return (
+      !this.hasSelectedItem ||
+      this.isBackfillingAes ||
+      item.status !== "ready" ||
+      item.media_type !== "video" ||
+      !status.enabled ||
+      !status.has_hls ||
+      !!status.ready ||
+      backfillStatus === "queued" ||
+      backfillStatus === "processing"
+    );
+  }
+
+  get selectedAesBackfillButtonLabel() {
+    const state = String(this.selectedAesBackfillState?.status || "");
+    if (this.isBackfillingAes) {
+      return "Queuing AES backfill…";
+    }
+    if (state === "queued") {
+      return "AES backfill queued";
+    }
+    if (state === "processing") {
+      return "AES backfill processing";
+    }
+    return "Queue AES backfill";
+  }
+
+  get bulkAesBackfillDisabled() {
+    return this.isBulkAesBackfilling || this.isSearching || !this.searchResults.length;
   }
 
   get ownerMediaAccess() {
@@ -846,6 +906,16 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   hlsAes128Label(status) {
     const s = status || {};
     const state = String(s.status || "");
+    const backfillStatus = String(s.backfill?.status || "");
+    if (backfillStatus === "queued") {
+      return "Backfill queued";
+    }
+    if (backfillStatus === "processing") {
+      return "Backfill processing";
+    }
+    if (backfillStatus === "failed") {
+      return `Backfill failed${s.backfill?.last_error ? ` — ${s.backfill.last_error}` : ""}`;
+    }
     if (state === "ready" || s.ready) {
       return `Ready${s.key_id ? ` (${s.key_id})` : ""}`;
     }
@@ -1181,9 +1251,51 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.hiddenFilter = "all";
     this.duplicateFilter = "all";
     this.genderFilter = "all";
+    this.hlsAes128Filter = "all";
     this.limit = "50";
     this.sortBy = "newest";
     await this.search();
+  }
+
+  _buildSearchParams({ forceAesBackfillFilter = false } = {}) {
+    const params = new URLSearchParams();
+    if ((this.searchQuery || "").trim()) {
+      params.set("q", this.searchQuery.trim());
+    }
+    if (this.backendFilter !== "all") {
+      params.set("backend", this.backendFilter);
+    }
+    if (this.profileFilter !== "all") {
+      params.set("profile", this.profileFilter);
+    }
+    if (this.statusFilter !== "all") {
+      params.set("status", this.statusFilter);
+    }
+    if (this.mediaTypeFilter !== "all") {
+      params.set("media_type", this.mediaTypeFilter);
+    }
+    if (this.hiddenFilter !== "all") {
+      params.set("hidden", this.hiddenFilter);
+    }
+    if ((this.userIdFilter || "").trim()) {
+      params.set("user_id", this.userIdFilter.trim());
+    }
+    if (this.duplicateFilter !== "all") {
+      params.set("duplicate", this.duplicateFilter);
+    }
+    if (this.genderFilter !== "all") {
+      params.set("gender", this.genderFilter);
+    }
+    if (forceAesBackfillFilter) {
+      params.set("hls_aes128", "needs_backfill");
+      params.set("media_type", "video");
+      params.set("status", "ready");
+    } else if (this.hlsAes128Filter !== "all") {
+      params.set("hls_aes128", this.hlsAes128Filter);
+    }
+    params.set("limit", String(this.limit || "50"));
+    params.set("sort", String(this.sortBy || "newest"));
+    return params;
   }
 
   @action
@@ -1198,39 +1310,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.hasSearched = true;
 
     try {
-      const params = new URLSearchParams();
-      if ((this.searchQuery || "").trim()) {
-        params.set("q", this.searchQuery.trim());
-      }
-      if (this.backendFilter !== "all") {
-        params.set("backend", this.backendFilter);
-      }
-      if (this.profileFilter !== "all") {
-        params.set("profile", this.profileFilter);
-      }
-      if (this.statusFilter !== "all") {
-        params.set("status", this.statusFilter);
-      }
-      if (this.mediaTypeFilter !== "all") {
-        params.set("media_type", this.mediaTypeFilter);
-      }
-      if (this.hiddenFilter !== "all") {
-        params.set("hidden", this.hiddenFilter);
-      }
-      if ((this.userIdFilter || "").trim()) {
-        params.set("user_id", this.userIdFilter.trim());
-      }
-      if (this.duplicateFilter !== "all") {
-        params.set("duplicate", this.duplicateFilter);
-      }
-      if (this.genderFilter !== "all") {
-        params.set("gender", this.genderFilter);
-      }
-      if (this.hlsAes128Filter !== "all") {
-        params.set("hls_aes128", this.hlsAes128Filter);
-      }
-      params.set("limit", String(this.limit || "50"));
-      params.set("sort", String(this.sortBy || "newest"));
+      const params = this._buildSearchParams();
 
       const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/search.json?${params.toString()}`, {
         method: "GET",
@@ -1545,6 +1625,78 @@ This cannot be undone.`)) {
       this.selectionError = e?.message || String(e);
     } finally {
       this.isBlockingOwner = false;
+    }
+  }
+
+  @action
+  async queueAesBackfill() {
+    if (this.selectedAesBackfillDisabled) {
+      return;
+    }
+
+    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
+    if (!window.confirm(`Queue AES HLS backfill for:
+
+${title}
+
+This repackages the existing processed video into encrypted HLS. Normal playback should remain available while the job runs.`)) {
+      return;
+    }
+
+    this.isBackfillingAes = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/aes-backfill.json`, {
+        method: "POST",
+        body: JSON.stringify({ force: false }),
+      });
+      this.selectedItem = json?.item || this.selectedItem;
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || "AES HLS backfill queued.";
+      this._syncSearchResult(this.selectedItem);
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isBackfillingAes = false;
+    }
+  }
+
+  @action
+  async bulkQueueAesBackfill() {
+    if (this.bulkAesBackfillDisabled) {
+      return;
+    }
+
+    if (!window.confirm(`Queue AES HLS backfill for eligible No AES / needs-backfill videos in the current search filter?
+
+This is limited by the server bulk limit and should be tested on staging before broad production use.`)) {
+      return;
+    }
+
+    this.isBulkAesBackfilling = true;
+    this.searchError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const params = this._buildSearchParams({ forceAesBackfillFilter: true });
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/bulk-aes-backfill.json?${params.toString()}`, {
+        method: "POST",
+        body: JSON.stringify({ force: false }),
+      });
+      this.noticeTone = json?.queued_count > 0 ? "success" : "danger";
+      this.noticeMessage = json?.message || `Queued ${json?.queued_count || 0} AES backfill job(s).`;
+      await this.search();
+      if (this.selectedPublicId) {
+        await this.refreshSelected();
+      }
+    } catch (e) {
+      this.searchError = e?.message || String(e);
+    } finally {
+      this.isBulkAesBackfilling = false;
     }
   }
 

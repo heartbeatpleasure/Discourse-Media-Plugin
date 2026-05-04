@@ -533,6 +533,8 @@ en:
     media_gallery_hls_aes128_required_title: "Require HLS AES-128 playback"
     media_gallery_hls_aes128_key_rotation_segments: "Reserved for future AES-128 key rotation. 0 means one AES key per video/package, which is the current supported mode."
     media_gallery_hls_aes128_key_rotation_segments_title: "HLS AES-128 key rotation segments"
+    media_gallery_hls_aes128_backfill_bulk_limit: "Maximum number of eligible videos a single admin bulk AES backfill request may enqueue. Keep conservative because repackaging uses FFmpeg and storage I/O."
+    media_gallery_hls_aes128_backfill_bulk_limit_title: "HLS AES backfill bulk limit"
     media_gallery_log_hls_aes128_key_denials: "Logs denied AES-128 key requests separately from generic HLS denial troubleshooting. Useful during QA, but can add log volume."
     media_gallery_log_hls_aes128_key_denials_title: "Log denied HLS AES key requests"
     media_gallery_hls_x_accel_enabled: "When enabled, local HLS files can be served through the reverse proxy using X-Accel-Redirect. Requires matching NGINX/internal-location configuration."

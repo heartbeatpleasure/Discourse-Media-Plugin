@@ -64,6 +64,7 @@ after_initialize do
   require_relative "lib/media_gallery/ffmpeg"
   require_relative "lib/media_gallery/hls"
   require_relative "lib/media_gallery/hls_aes128"
+  require_relative "lib/media_gallery/hls_aes128_backfill"
   require_relative "lib/media_gallery/hls_integrity_verifier"
   require_relative "lib/media_gallery/fingerprinting"
   require_relative "lib/media_gallery/type_detector"
@@ -180,6 +181,8 @@ after_initialize do
     post "/admin/plugins/media-gallery/media-items/:public_id/cleanup-source" => "media_gallery/admin_media_items#cleanup_source", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/verify-target" => "media_gallery/admin_media_items#verify_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/verify-hls-integrity" => "media_gallery/admin_media_items#verify_hls_integrity", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/aes-backfill" => "media_gallery/admin_media_items#aes_backfill", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/bulk-aes-backfill" => "media_gallery/admin_media_items#bulk_aes_backfill", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/rollback-to-source" => "media_gallery/admin_media_items#rollback_to_source", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/finalize-migration" => "media_gallery/admin_media_items#finalize_migration", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/clear-queued-state" => "media_gallery/admin_media_items#clear_queued_state", defaults: { format: :json }

@@ -648,6 +648,15 @@ plugins:
     max: 1000
     client: false
 
+  # Maximum number of media items an admin bulk AES backfill action may enqueue
+  # in one request. Keep conservative; HLS repackaging can be CPU and storage intensive.
+  media_gallery_hls_aes128_backfill_bulk_limit:
+    default: 10
+    type: integer
+    min: 1
+    max: 100
+    client: false
+
   # Optional troubleshooting: log AES-128 key-request denials once the key endpoint exists.
   # Kept separate from generic HLS denials so QA can enable it without increasing all HLS noise.
   media_gallery_log_hls_aes128_key_denials:
