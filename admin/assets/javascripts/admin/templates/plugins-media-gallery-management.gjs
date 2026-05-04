@@ -1001,6 +1001,9 @@ export default RouteTemplate(
                       <button class="btn" type="button" {{on "click" @controller.clearAesBackfill}} disabled={{@controller.selectedAesBackfillClearDisabled}}>
                         {{@controller.selectedAesBackfillClearLabel}}
                       </button>
+                      <button class="btn" type="button" {{on "click" @controller.cleanupAesMaintenance}} disabled={{@controller.selectedAesMaintenanceCleanupDisabled}}>
+                        {{@controller.selectedAesMaintenanceCleanupLabel}}
+                      </button>
                       <button class="btn" type="button" {{on "click" @controller.verifyHlsIntegrity}} disabled={{@controller.isVerifyingHlsIntegrity}}>
                         {{if @controller.isVerifyingHlsIntegrity "Checking HLS…" "Verify HLS integrity"}}
                       </button>

@@ -351,6 +351,8 @@ function formatHistoryAction(action) {
       return "Skipped AES HLS backfill";
     case "hls_aes128_backfill_cleared":
       return "Cleared AES HLS backfill state";
+    case "hls_aes128_maintenance_cleanup":
+      return "Cleaned AES HLS maintenance state";
     case "bulk_hls_aes128_backfill":
     case "bulk_hls_aes128_backfill_requested":
       return "Queued bulk AES HLS backfill";
@@ -437,6 +439,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isRetrying = false;
   @tracked isBlockingOwner = false;
   @tracked isBackfillingAes = false;
+  @tracked isCleaningAes = false;
   @tracked isBulkAesBackfilling = false;
   @tracked isVerifyingHlsIntegrity = false;
   @tracked isCopyingDiagnostics = false;
@@ -490,6 +493,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.isRetrying = false;
     this.isBlockingOwner = false;
     this.isBackfillingAes = false;
+    this.isCleaningAes = false;
     this.isBulkAesBackfilling = false;
     this.availableSearchProfiles = [];
   }
@@ -691,6 +695,20 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
   get selectedAesBackfillClearLabel() {
     return this.isBackfillingAes ? "Clearing…" : "Clear status";
+  }
+
+  get selectedAesMaintenanceCleanupDisabled() {
+    const status = this.selectedItem?.hls_aes128 || {};
+    return (
+      !this.hasSelectedItem ||
+      this.isCleaningAes ||
+      this.isBackfillingAes ||
+      !status.has_hls
+    );
+  }
+
+  get selectedAesMaintenanceCleanupLabel() {
+    return this.isCleaningAes ? "Cleaning AES…" : "Clean AES state";
   }
 
   get bulkAesBackfillDisabled() {
@@ -1826,6 +1844,7 @@ This repackages the existing processed video into encrypted HLS. Normal playback
       this.selectionError = e?.message || String(e);
     } finally {
       this.isBackfillingAes = false;
+    this.isCleaningAes = false;
     }
   }
 
@@ -1863,6 +1882,7 @@ This queues a fresh backfill job and supersedes earlier queued jobs created by t
       this.selectionError = e?.message || String(e);
     } finally {
       this.isBackfillingAes = false;
+    this.isCleaningAes = false;
     }
   }
 
@@ -1900,6 +1920,50 @@ Use this only for stuck queued/processing/failed states. It does not delete exis
       this.selectionError = e?.message || String(e);
     } finally {
       this.isBackfillingAes = false;
+    this.isCleaningAes = false;
+    }
+  }
+
+  @action
+  async cleanupAesMaintenance() {
+    if (this.selectedAesMaintenanceCleanupDisabled) {
+      return;
+    }
+
+    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
+    if (!window.confirm(`Clean AES HLS maintenance state for:
+
+${title}
+
+This removes safe temporary/unused AES state only: stale failed/queued metadata, inactive key records and leaked key/keyinfo artifacts if found. It does not remove active AES playback keys or media segments.`)) {
+      return;
+    }
+
+    this.isCleaningAes = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/aes-maintenance/cleanup.json`, {
+        method: "POST",
+        body: JSON.stringify({
+          clear_stale_state: true,
+          delete_inactive_keys: true,
+          delete_leaked_artifacts: true,
+        }),
+      });
+      this.selectedItem = json?.item || this.selectedItem;
+      this.noticeTone = "success";
+      this.noticeMessage = json?.message || "AES HLS maintenance completed.";
+      this._syncSearchResult(this.selectedItem);
+      if (this.selectedPublicId) {
+        await this.refreshSelected();
+      }
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isCleaningAes = false;
     }
   }
 

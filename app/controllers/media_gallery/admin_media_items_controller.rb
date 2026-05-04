@@ -348,6 +348,37 @@ module ::MediaGallery
       render_operation_error(e, operation: "hls_aes128_backfill_clear", item: item, status: 422)
     end
 
+    def aes_maintenance_cleanup
+      item = load_item!
+      result = ::MediaGallery::HlsAes128Maintenance.cleanup_item!(
+        item,
+        requested_by: current_user.username,
+        clear_stale_state: boolean_param(:clear_stale_state),
+        delete_inactive_keys: params.key?(:delete_inactive_keys) ? boolean_param(:delete_inactive_keys) : true,
+        delete_leaked_artifacts: params.key?(:delete_leaked_artifacts) ? boolean_param(:delete_leaked_artifacts) : true
+      )
+
+      append_aes_maintenance_management_log!(item, result: result)
+      audit_admin_action!(
+        "hls_aes128_maintenance_cleanup",
+        item: item,
+        operation: "hls_aes128_maintenance_cleanup",
+        result: result[:actions].present? ? "cleaned" : "checked",
+        data: result.except(:deleted_key_artifacts)
+      )
+      item.reload
+
+      render_json_dump(
+        ok: true,
+        public_id: item.public_id,
+        hls_aes128_maintenance: result,
+        item: management_item_payload(item),
+        message: result[:actions].present? ? "AES HLS maintenance completed." : "AES HLS maintenance checked; nothing needed cleanup."
+      )
+    rescue => e
+      render_operation_error(e, operation: "hls_aes128_maintenance_cleanup", item: item, status: 422)
+    end
+
     def copy_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
@@ -671,6 +702,28 @@ module ::MediaGallery
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
     rescue => e
       Rails.logger.warn("[media_gallery] AES backfill management log failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
+    end
+
+    def append_aes_maintenance_management_log!(item, result:)
+      item.reload
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      actions = Array(result[:actions] || result["actions"]).map(&:to_s)
+      warnings = Array(result[:warnings] || result["warnings"]).map(&:to_s)
+      changes = {
+        "hls_aes128_maintenance" => [nil, actions.present? ? actions.join(", ") : "checked"],
+      }
+      changes["warnings"] = [nil, warnings.join(", ")] if warnings.present?
+
+      append_management_log!(
+        meta,
+        action: "hls_aes128_maintenance_cleanup",
+        item: item,
+        note: sanitized_admin_note,
+        changes: changes
+      )
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+    rescue => e
+      Rails.logger.warn("[media_gallery] AES maintenance management log failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
     end
 
     def load_item!

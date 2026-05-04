@@ -20,7 +20,8 @@ module ::MediaGallery
       processing_failures = processing_failure_metrics
       backup_retention = backup_retention_status
       aes128_backfill = aes128_backfill_status
-      controls = security_controls(download, environment, baseline, aes128_backfill)
+      aes128_required_readiness = aes128_required_readiness_status
+      controls = security_controls(download, environment, baseline, aes128_backfill, aes128_required_readiness)
       counts = controls.each_with_object(Hash.new(0)) { |control, memo| memo[control[:status].to_s] += 1 }
 
       {
@@ -48,13 +49,14 @@ module ::MediaGallery
         processing_failures: processing_failures,
         backup_retention: backup_retention,
         aes128_backfill: aes128_backfill,
+        aes128_required_readiness: aes128_required_readiness,
         rate_limit_tuning: rate_limit_tuning_status,
         recent_events: recent_security_events,
         links: admin_links,
       }
     end
 
-    def security_controls(download, environment, baseline, aes128_backfill = {})
+    def security_controls(download, environment, baseline, aes128_backfill = {}, aes128_required_readiness = {})
       [
         control(
           "Request origin protection",
@@ -87,6 +89,12 @@ module ::MediaGallery
           aes128_backfill_control_status(aes128_backfill),
           aes128_backfill_control_summary(aes128_backfill),
           aes128_backfill_control_action(aes128_backfill)
+        ),
+        control(
+          "AES required-mode readiness",
+          aes128_required_readiness_control_status(aes128_required_readiness),
+          aes128_required_readiness_control_summary(aes128_required_readiness),
+          aes128_required_readiness_control_action(aes128_required_readiness)
         ),
         control(
           "Watermark and fingerprinting",
@@ -377,6 +385,49 @@ module ::MediaGallery
       else
         "Backfill appears complete for ready HLS videos in the current manifest model."
       end
+    end
+
+    def aes128_required_readiness_status
+      if defined?(::MediaGallery::HlsAes128Maintenance)
+        ::MediaGallery::HlsAes128Maintenance.required_readiness_report(limit: 10)
+      else
+        { status: "attention", can_enable_required: false, error: "HlsAes128Maintenance unavailable" }
+      end
+    rescue => e
+      { status: "attention", can_enable_required: false, error: "#{e.class}: #{e.message}" }
+    end
+
+    def aes128_required_readiness_control_status(readiness)
+      return "attention" if readiness[:error].present? || readiness["error"].present?
+      status = readiness[:status].presence || readiness["status"].presence
+      return status.to_s if status.present?
+      ActiveModel::Type::Boolean.new.cast(readiness[:can_enable_required] || readiness["can_enable_required"]) ? "ok" : "attention"
+    end
+
+    def aes128_required_readiness_control_summary(readiness)
+      error = readiness[:error].presence || readiness["error"].presence
+      return "AES required-mode readiness could not be checked: #{error}" if error.present?
+
+      ready = (readiness[:aes_ready_count] || readiness["aes_ready_count"]).to_i
+      hls = (readiness[:hls_ready_video_count] || readiness["hls_ready_video_count"]).to_i
+      needs = (readiness[:needs_backfill_count] || readiness["needs_backfill_count"]).to_i
+      missing = (readiness[:missing_key_count] || readiness["missing_key_count"]).to_i
+      blockers = Array(readiness[:blockers] || readiness["blockers"])
+
+      if blockers.present?
+        "Required mode has #{blockers.length} blocker(s): #{ready}/#{hls} HLS video(s) AES-ready, #{needs} need backfill, #{missing} missing key records."
+      else
+        "Required mode readiness check passed: #{ready}/#{hls} HLS video(s) are AES-ready and no blocking key/backfill issues were found."
+      end
+    end
+
+    def aes128_required_readiness_control_action(readiness)
+      recommendation = readiness[:recommendation].presence || readiness["recommendation"].presence
+      return recommendation if recommendation.present?
+
+      ActiveModel::Type::Boolean.new.cast(readiness[:can_enable_required] || readiness["can_enable_required"]) ?
+        "Enable AES required mode on staging first, complete browser QA, then enable in production." :
+        "Resolve backfill/key blockers before enabling AES required mode."
     end
 
     def watermark_fingerprint_status
