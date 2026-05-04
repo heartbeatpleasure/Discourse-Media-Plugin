@@ -851,6 +851,26 @@ export default RouteTemplate(
                 </div>
               </section>
 
+              {{#if @controller.hlsIntegrityResult}}
+                <section class="mg-management__editor-section" style="margin-top: 1rem;">
+                  <h3>HLS integrity verification</h3>
+                  <p class="mg-management__muted" style="margin-top: 0.3rem;">{{@controller.hlsIntegrityResult.summary}}</p>
+                  <div class="mg-management__summary-card" style="margin-top: 1rem;">
+                    <div class="mg-management__summary-label">Status</div>
+                    <div class="mg-management__summary-value">{{@controller.hlsIntegrityStatusLabel}}</div>
+                  </div>
+                  <div class="mg-management__summary-grid" style="margin-top: 1rem;">
+                    {{#each @controller.hlsIntegrityChecks as |check|}}
+                      <div class="mg-management__summary-card">
+                        <div class="mg-management__summary-label">{{check.message}}</div>
+                        <div class="mg-management__summary-value">{{check.status}}</div>
+                        {{#if check.detail}}<div class="mg-management__muted">{{check.detail}}</div>{{/if}}
+                      </div>
+                    {{/each}}
+                  </div>
+                </section>
+              {{/if}}
+
               <section class="mg-management__editor-section">
                 <h3>Actions</h3>
                 <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, add an admin note, toggle visibility, queue a retry for failed items, change uploader access, or remove the item.</p>
@@ -891,6 +911,9 @@ export default RouteTemplate(
                   </button>
                   <button class="btn btn-danger" type="button" {{on "click" @controller.deleteItem}} disabled={{@controller.deleteDisabled}}>
                     {{if @controller.isDeleting "Deleting…" "Delete item"}}
+                  </button>
+                  <button class="btn" type="button" {{on "click" @controller.verifyHlsIntegrity}} disabled={{@controller.isVerifyingHlsIntegrity}}>
+                    {{if @controller.isVerifyingHlsIntegrity "Checking HLS…" "Verify HLS integrity"}}
                   </button>
                   <button class="btn" type="button" {{on "click" @controller.refreshSelected}} disabled={{@controller.isLoadingSelection}}>
                     {{if @controller.isLoadingSelection "Refreshing…" "Refresh"}}

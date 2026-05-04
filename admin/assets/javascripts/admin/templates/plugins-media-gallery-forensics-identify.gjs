@@ -1093,6 +1093,10 @@ export default RouteTemplate(
                 {{if @controller.isRunning (i18n "admin.media_gallery.forensics_identify.running") (i18n "admin.media_gallery.forensics_identify.identify_button")}}
               </button>
 
+              <button type="button" class="btn" disabled={{@controller.isRunning}} {{on "click" @controller.preflightSource}}>
+                {{if @controller.isPreflighting "Validating…" "Validate source"}}
+              </button>
+
               <button type="button" class="btn" disabled={{@controller.isRunning}} {{on "click" @controller.clear}}>
                 Clear
               </button>
@@ -1100,6 +1104,17 @@ export default RouteTemplate(
 
             {{#if @controller.statusMessage}}
               <div class="mg-fi__notice is-info" style="margin-top: 1rem;">{{@controller.statusMessage}}</div>
+            {{/if}}
+
+            {{#if @controller.preflightResult}}
+              <div class="mg-fi__notice is-info" style="margin-top: 1rem;">
+                Source validation: <strong>{{@controller.preflightStatusLabel}}</strong>
+                <ul style="margin-top: 0.5rem;">
+                  {{#each @controller.preflightChecks as |check|}}
+                    <li><strong>{{check.label}}</strong>: {{check.message}}</li>
+                  {{/each}}
+                </ul>
+              </div>
             {{/if}}
           </section>
 

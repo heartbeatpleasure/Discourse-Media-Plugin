@@ -56,7 +56,8 @@ module ::MediaGallery
       else
         csv = export.csv_bytes
 
-        send_data csv,
+        ::MediaGallery::OperationLogger.audit("forensics_export_downloaded", operation: "forensics_export_download", user: current_user, request: request, result: "downloaded", data: { export_id: export.id, filename: export.filename, storage_location: storage_location_label_for(export, stored_in_db: export.csv_gzip.present?, archive_exists: export.archive_exists?) })
+      send_data csv,
                   filename: export.download_filename,
                   type: "text/csv; charset=utf-8",
                   disposition: "attachment"

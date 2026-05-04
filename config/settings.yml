@@ -400,6 +400,18 @@ plugins:
     default: "/shared/media_gallery/tmp"
     client: false
 
+  # Safe cleanup for stale plugin-created processing/diagnostic temp directories.
+  media_gallery_temp_cleanup_enabled:
+    default: true
+    client: false
+
+  media_gallery_temp_cleanup_retention_hours:
+    default: 24
+    type: integer
+    min: 1
+    max: 720
+    client: false
+
   media_gallery_delivery_mode_default:
     default: "stream"
     type: enum

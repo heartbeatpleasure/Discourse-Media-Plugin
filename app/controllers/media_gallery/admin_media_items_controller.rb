@@ -149,6 +149,7 @@ module ::MediaGallery
 
       partial = Array(delete_summary&.dig("warnings")).present?
       message = partial ? "Item deleted. Some storage cleanup steps failed; see delete summary." : "Item deleted. Storage cleanup completed."
+      audit_admin_action!("admin_media_item_deleted", item: nil, operation: "delete", result: partial ? "partial" : "deleted", data: { public_id: public_id, title_present: title.present?, partial: partial })
       render_json_dump(ok: true, public_id: public_id, title: title, deleted: true, delete_summary: delete_summary, message: message)
     rescue => e
       render_operation_error(e, operation: "delete", item: item, status: 422)
@@ -228,9 +229,19 @@ module ::MediaGallery
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
       result = ::MediaGallery::MigrationVerify.verify!(item, target_profile: target_profile, requested_by: current_user.username)
+      audit_admin_action!("migration_target_verify_run", item: item, operation: "verify_target", result: result[:status] || result["status"], data: { target_profile: target_profile })
       render_json_dump(result)
     rescue => e
       render_operation_error(e, operation: "verify", item: item, status: 422)
+    end
+
+    def verify_hls_integrity
+      item = load_item!
+      result = ::MediaGallery::HlsIntegrityVerifier.verify(item)
+      audit_admin_action!("hls_integrity_verify_run", item: item, operation: "verify_hls_integrity", result: result[:status], data: { checked_segments: result[:checked_segments], role_backend: result[:role_backend] })
+      render_json_dump(ok: result[:ok], verification: result)
+    rescue => e
+      render_operation_error(e, operation: "verify_hls_integrity", item: item, status: 422)
     end
 
     def copy_to_target
@@ -245,6 +256,7 @@ module ::MediaGallery
         auto_cleanup: boolean_param(:auto_cleanup)
       )
 
+      audit_admin_action!("migration_copy_requested", item: item, operation: "copy", result: state["status"], data: { target_profile: target_profile, force: boolean_param(:force), auto_switch: boolean_param(:auto_switch), auto_cleanup: boolean_param(:auto_cleanup) })
       render_json_dump(ok: true, public_id: item.public_id, migration_copy: state)
     rescue => e
       render_operation_error(e, operation: "copy", item: item, status: 422)
@@ -261,6 +273,7 @@ module ::MediaGallery
         auto_cleanup: boolean_param(:auto_cleanup)
       )
 
+      audit_admin_action!("migration_switch_requested", item: item, operation: "switch", result: state["status"], data: { target_profile: target_profile, auto_cleanup: boolean_param(:auto_cleanup) })
       render_json_dump(ok: true, public_id: item.public_id, migration_switch: state)
     rescue => e
       render_operation_error(e, operation: "switch", item: item, status: 422)
@@ -269,6 +282,7 @@ module ::MediaGallery
     def cleanup_source
       item = load_item!
       state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: current_user.username, force: boolean_param(:force))
+      audit_admin_action!("migration_cleanup_requested", item: item, operation: "cleanup", result: state["status"], data: { force: boolean_param(:force) })
       render_json_dump(ok: true, public_id: item.public_id, migration_cleanup: state)
     rescue => e
       render_operation_error(e, operation: "cleanup", item: item, status: 422)
@@ -277,6 +291,7 @@ module ::MediaGallery
     def rollback_to_source
       item = load_item!
       state = ::MediaGallery::MigrationRollback.rollback!(item, requested_by: current_user.username, force: boolean_param(:force))
+      audit_admin_action!("migration_rollback_requested", item: item, operation: "rollback", result: state["status"], data: { force: boolean_param(:force) })
       render_json_dump(ok: true, public_id: item.public_id, migration_rollback: state)
     rescue => e
       render_operation_error(e, operation: "rollback", item: item, status: 422)
@@ -285,6 +300,7 @@ module ::MediaGallery
     def finalize_migration
       item = load_item!
       state = ::MediaGallery::MigrationFinalize.finalize!(item, requested_by: current_user.username, force: boolean_param(:force))
+      audit_admin_action!("migration_finalize_requested", item: item, operation: "finalize", result: state["status"], data: { force: boolean_param(:force) })
       render_json_dump(ok: true, public_id: item.public_id, migration_finalize: state)
     rescue => e
       render_operation_error(e, operation: "finalize", item: item, status: 422)
@@ -356,6 +372,7 @@ module ::MediaGallery
       end
 
       ::MediaGallery::OperationLogger.info("bulk_migration_enqueued", operation: "bulk_copy", data: { target_profile: target_profile, requested_count: items.length, queued_count: queued, skipped_count: skipped, requested_by: current_user.username })
+      audit_admin_action!("bulk_migration_requested", operation: "bulk_copy", result: "queued", data: { target_profile: target_profile, requested_count: items.length, queued_count: queued, skipped_count: skipped })
       render_json_dump(
         ok: true,
         target_profile: target_profile,
@@ -393,6 +410,7 @@ module ::MediaGallery
       ::Jobs.enqueue(:media_gallery_process_item, media_item_id: item.id, force_run: force)
 
       ::MediaGallery::OperationLogger.info("processing_retry_enqueued", item: item, operation: "retry_processing", data: { requested_by: current_user.username, force: force })
+      audit_admin_action!("processing_retry_requested", item: item, operation: "retry_processing", result: "queued", data: { force: force })
       render_json_dump(ok: true, public_id: item.public_id, status: item.status)
     rescue => e
       render_operation_error(e, operation: "retry_processing", item: item, status: 422)
@@ -415,6 +433,12 @@ module ::MediaGallery
     end
 
     private
+
+    def audit_admin_action!(event, item: nil, operation:, result: nil, data: {})
+      ::MediaGallery::OperationLogger.audit(event, item: item, operation: operation, user: current_user, request: request, result: result, data: data)
+    rescue => e
+      Rails.logger.warn("[media_gallery] admin audit failed event=#{event} error=#{e.class}: #{e.message}")
+    end
 
     def load_item!
       @current_item ||= begin

@@ -69,9 +69,45 @@ module ::MediaGallery
         },
         warnings: warnings,
         roles: role_previews,
+        safety_summary: migration_safety_summary(
+          item: item,
+          source: source,
+          target: target,
+          totals: {
+            source_bytes: total_source_bytes,
+            object_count: source_object_count,
+            target_existing_count: target_existing_count,
+            missing_on_target_count: source_object_count - target_existing_count
+          },
+          warnings: warnings
+        ),
         copy_state: ::MediaGallery::MigrationCopy.copy_state_for(item)
       }
     end
+
+    def migration_safety_summary(item:, source:, target:, totals:, warnings:)
+      rows = []
+      rows << safety_row("Objects to copy", totals[:object_count].to_i, "Object count includes main, thumbnail and HLS objects when present.", totals[:object_count].to_i > 0 ? "ok" : "warning")
+      rows << safety_row("Bytes to copy", totals[:source_bytes].to_i, "Approximate source bytes in the dry-run preview.", "ok")
+      rows << safety_row("Objects already on target", totals[:target_existing_count].to_i, "Existing objects will usually be skipped or verified instead of overwritten.", totals[:target_existing_count].to_i.positive? ? "warning" : "ok")
+      rows << safety_row("Missing on target", totals[:missing_on_target_count].to_i, "Objects still expected to be copied before switching.", totals[:missing_on_target_count].to_i.zero? ? "ok" : "warning")
+
+      if source[:profile_key].present? && target[:profile_key].present? && source[:profile_key].to_s == target[:profile_key].to_s
+        rows << safety_row("Source equals target", "yes", "Choose a different destination profile before executing migration.", "critical")
+      end
+      if source[:location_fingerprint_key].present? && source[:location_fingerprint_key].to_s == target[:location_fingerprint_key].to_s
+        rows << safety_row("Same storage location", "yes", "The source and target appear to point to the same storage location.", "critical")
+      end
+
+      severity = rows.any? { |r| r[:status] == "critical" } ? "critical" : (rows.any? { |r| r[:status] == "warning" } || Array(warnings).present? ? "warning" : "ok")
+      { status: severity, rows: rows, warnings: Array(warnings).map(&:to_s) }
+    end
+    private_class_method :migration_safety_summary
+
+    def safety_row(label, value, detail, status = "ok")
+      { label: label.to_s, value: value, detail: detail.to_s, status: status.to_s }
+    end
+    private_class_method :safety_row
 
     def source_summary_for(item)
       profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)

@@ -130,6 +130,7 @@ module ::MediaGallery
       )
 
       ::Jobs.enqueue(:media_gallery_forensics_identify_job, task_id: task_id)
+      ::MediaGallery::OperationLogger.audit("forensics_identify_queued", item: item, operation: "forensics_identify_queue", user: current_user, request: request, result: "queued", data: { task_id: task_id, max_samples: max_samples, max_offset_segments: max_offset })
 
       render_json_dump(
         ok: true,
@@ -183,6 +184,48 @@ module ::MediaGallery
       )
     rescue => e
       render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name }, status: 500
+    end
+
+    def preflight
+      public_id = params[:public_id].to_s.sub(/\.(json|html)\z/i, "").strip
+      item = MediaGallery::MediaItem.find_by(public_id: public_id)
+      return render json: { ok: false, error: "unknown_public_id" }, status: 422 if item.blank?
+
+      source_url = params[:source_url].to_s.strip.presence
+      return render json: { ok: false, error: "missing_source_url" }, status: 422 if source_url.blank?
+      return render json: { ok: false, error: "source_url_too_long" }, status: 422 if source_url.length > setting_max_source_url_length
+
+      uri = URI.parse(source_url) rescue nil
+      checks = []
+      begin
+        ensure_source_url_allowed!(uri, context: "source_url")
+        checks << { status: "ok", label: "URL policy", message: "Source URL is allowed by the current F11 policy." }
+      rescue => e
+        checks << { status: "critical", label: "URL policy", message: source_url_validation_message(e.message) }
+      end
+
+      if uri&.path.to_s.downcase.end_with?(".m3u8")
+        begin
+          tmp = localize_hls_playlist_to_tempfile!(uri, media_item: item)
+          body = File.read(tmp.path) rescue ""
+          tmp.close! rescue nil
+          checks << { status: body.lstrip.start_with?("#EXTM3U") ? "ok" : "warning", label: "Playlist", message: body.lstrip.start_with?("#EXTM3U") ? "Playlist can be resolved and localized." : "Playlist resolved but did not look like M3U8." }
+        rescue => e
+          if e.message.to_s == "unsupported_hls_url" && !setting_forensics_allow_remote_hls_playlist_fetch?
+            checks << { status: "warning", label: "Playlist", message: source_url_validation_message("remote_hls_playlist_fetch_disabled") }
+          else
+            checks << { status: "critical", label: "Playlist", message: e.message.to_s.truncate(300) }
+          end
+        end
+      else
+        checks << { status: "ok", label: "Mode", message: "Direct media URL mode will be used. Full FFmpeg analysis is not run during preflight." }
+      end
+
+      status = checks.any? { |row| row[:status] == "critical" } ? "critical" : (checks.any? { |row| row[:status] == "warning" } ? "warning" : "ok")
+      ::MediaGallery::OperationLogger.audit("forensics_identify_preflight", item: item, operation: "forensics_preflight", user: current_user, request: request, result: status, data: { source_kind: uri&.path.to_s.downcase.end_with?(".m3u8") ? "hls_playlist" : "direct_media" })
+      render_json_dump(ok: status != "critical", status: status, public_id: item.public_id, checks: checks)
+    rescue => e
+      render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name }, status: 422
     end
 
     # POST /admin/plugins/media-gallery/forensics-identify/:public_id(.json)
@@ -355,6 +398,7 @@ module ::MediaGallery
       end
 
       begin
+        ::MediaGallery::OperationLogger.audit("forensics_identify_run", item: item, operation: "forensics_identify", user: current_user, request: request, result: result.dig("meta", "decision"), data: { source_mode: result.dig("meta", "source_mode"), auto_extend: auto_extend })
         render_json_dump(result)
       rescue => e
         debug_id = "mgfi_render_#{SecureRandom.hex(6)}"

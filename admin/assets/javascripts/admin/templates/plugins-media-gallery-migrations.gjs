@@ -1036,6 +1036,26 @@ export default RouteTemplate(
                 </div>
               {{/if}}
 
+              {{#if @controller.selectedPlanSafetyRows.length}}
+                <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
+                  <div class="mg-migrations__panel-copy">
+                    <h3>Migration safety summary</h3>
+                    <span class="mg-migrations__muted">Read this dry-run summary before executing copy, switch or cleanup actions.</span>
+                  </div>
+                  <span class="mg-migrations__badge">{{@controller.selectedPlanSafetyStatusLabel}}</span>
+                </div>
+                <div class="mg-migrations__summary-grid" style="margin-bottom: 1rem;">
+                  {{#each @controller.selectedPlanSafetyRows as |row|}}
+                    <div class="mg-migrations__summary-card">
+                      <div class="mg-migrations__summary-label">{{row.label}}</div>
+                      <div class="mg-migrations__summary-title">{{row.value}}</div>
+                      <span class={{row.badgeClass}}>{{row.statusLabel}}</span>
+                      {{#if row.detail}}<span class="mg-migrations__muted">{{row.detail}}</span>{{/if}}
+                    </div>
+                  {{/each}}
+                </div>
+              {{/if}}
+
               {{#if @controller.selectedPlanError}}
                 <div class="alert alert-warning" style="margin-top: 1rem;">{{@controller.selectedPlanError}}</div>
               {{/if}}

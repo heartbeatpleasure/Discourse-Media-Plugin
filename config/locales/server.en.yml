@@ -628,3 +628,9 @@ en:
     media_gallery_protected_video_hls_only_title: "Media gallery HLS-only video mode"
     media_gallery_block_direct_media_navigation_title: "Media gallery block direct media navigation"
     media_gallery_block_direct_media_navigation: "When enabled, tokenized play/stream/HLS endpoints reject clear browser address-bar/new-tab requests, including direct .m3u8 or .ts opens that do not originate from the site player context. Normal same-origin player requests continue to work. This only applies while requests pass through Discourse; final S3/R2 presigned redirect URLs cannot be controlled after the redirect."
+
+    # Media Gallery iteration 2 setting/help text.
+    media_gallery_temp_cleanup_enabled_title: "Media Gallery temp workspace cleanup"
+    media_gallery_temp_cleanup_enabled: "Automatically remove old plugin-created temporary processing, verification and forensic workspace folders. Only known Media Gallery temp directory prefixes are considered."
+    media_gallery_temp_cleanup_retention_hours_title: "Media Gallery temp cleanup retention hours"
+    media_gallery_temp_cleanup_retention_hours: "How old a plugin-created temp/workspace directory must be before cleanup may remove it. Default 24 hours."

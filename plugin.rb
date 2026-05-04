@@ -41,6 +41,7 @@ after_initialize do
   require_relative "lib/media_gallery/operation_coordinator"
   require_relative "lib/media_gallery/orphan_inspector"
   require_relative "lib/media_gallery/storage_health"
+  require_relative "lib/media_gallery/storage_safety"
   require_relative "lib/media_gallery/storage_reconciler"
   require_relative "lib/media_gallery/migration_preview"
   require_relative "lib/media_gallery/migration_run_history"
@@ -51,6 +52,7 @@ after_initialize do
   require_relative "lib/media_gallery/migration_rollback"
   require_relative "lib/media_gallery/migration_finalize"
   require_relative "lib/media_gallery/processing_workspace"
+  require_relative "lib/media_gallery/temp_workspace_cleanup"
   require_relative "lib/media_gallery/source_acquirer"
   require_relative "lib/media_gallery/text_sanitizer"
   require_relative "lib/media_gallery/asset_store"
@@ -61,6 +63,7 @@ after_initialize do
   require_relative "lib/media_gallery/security"
   require_relative "lib/media_gallery/ffmpeg"
   require_relative "lib/media_gallery/hls"
+  require_relative "lib/media_gallery/hls_integrity_verifier"
   require_relative "lib/media_gallery/fingerprinting"
   require_relative "lib/media_gallery/type_detector"
   require_relative "lib/media_gallery/upload_path"
@@ -107,6 +110,7 @@ after_initialize do
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_health_watchdog.rb", __dir__)
+  require_dependency File.expand_path("jobs/scheduled/media_gallery_temp_workspace_cleanup.rb", __dir__)
 
   Discourse::Application.routes.append do
     # Admin UI page (served by the admin Ember app)
@@ -138,6 +142,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#show"
     post "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#identify", defaults: { format: :json }
     post "/admin/plugins/media-gallery/forensics-identify/:public_id/queue" => "media_gallery/admin_forensics_identify#queue", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/forensics-identify/:public_id/preflight" => "media_gallery/admin_forensics_identify#preflight", defaults: { format: :json }
     get "/admin/plugins/media-gallery/forensics-identify/status/:task_id" => "media_gallery/admin_forensics_identify#status", defaults: { format: :json }
 
     # Admin-only helper to find media items by public_id/title/id.
@@ -171,6 +176,7 @@ after_initialize do
     post "/admin/plugins/media-gallery/media-items/:public_id/switch-to-target" => "media_gallery/admin_media_items#switch_to_target", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/cleanup-source" => "media_gallery/admin_media_items#cleanup_source", defaults: { format: :json }
     get "/admin/plugins/media-gallery/media-items/:public_id/verify-target" => "media_gallery/admin_media_items#verify_target", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/media-items/:public_id/verify-hls-integrity" => "media_gallery/admin_media_items#verify_hls_integrity", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/rollback-to-source" => "media_gallery/admin_media_items#rollback_to_source", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/finalize-migration" => "media_gallery/admin_media_items#finalize_migration", defaults: { format: :json }
     post "/admin/plugins/media-gallery/media-items/:public_id/clear-queued-state" => "media_gallery/admin_media_items#clear_queued_state", defaults: { format: :json }

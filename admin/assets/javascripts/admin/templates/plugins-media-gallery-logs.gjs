@@ -387,6 +387,9 @@ export default RouteTemplate(
                 <option value="general">General</option>
                 <option value="playback">Playback</option>
                 <option value="request_security">Request security</option>
+                <option value="audit">Audit</option>
+                <option value="migration">Migration</option>
+                <option value="forensics">Forensics</option>
               </select>
             </div>
 
@@ -406,6 +409,10 @@ export default RouteTemplate(
                 <option value="request_blocked">Request blocked</option>
                 <option value="revoke_denied">Revoke denied</option>
                 <option value="stream_denied">Stream denied</option>
+                <option value="forensics_identify_preflight">Forensics identify preflight</option>
+                <option value="migration_copy_requested">Migration copy requested</option>
+                <option value="migration_switch_requested">Migration switch requested</option>
+                <option value="hls_integrity_verify_run">HLS integrity verify run</option>
               </select>
             </div>
           </div>

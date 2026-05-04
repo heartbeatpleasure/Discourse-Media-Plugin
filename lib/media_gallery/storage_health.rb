@@ -22,6 +22,7 @@ module ::MediaGallery
         config: summary[:config],
         location_fingerprint_key: summary[:location_fingerprint_key],
         validation_errors: errors,
+        safety_review: (::MediaGallery::StorageSafety.profile_review(profile) rescue nil),
       }
 
       if summary[:backend].blank?

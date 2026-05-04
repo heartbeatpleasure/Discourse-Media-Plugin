@@ -304,6 +304,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isDeleting = false;
   @tracked isRetrying = false;
   @tracked isBlockingOwner = false;
+  @tracked isVerifyingHlsIntegrity = false;
+  @tracked hlsIntegrityResult = null;
   @tracked availableSearchProfiles = [];
 
   searchAbortController = null;
@@ -329,6 +331,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
 
     this.selectedPublicId = "";
     this.selectedItem = null;
+    this.hlsIntegrityResult = null;
     this.isLoadingSelection = false;
     this.selectionError = "";
     this.noticeMessage = "";
@@ -1139,6 +1142,35 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         this.selectionAbortController = null;
       }
       this.isLoadingSelection = false;
+    }
+  }
+
+  get hlsIntegrityChecks() {
+    return Array.isArray(this.hlsIntegrityResult?.checks) ? this.hlsIntegrityResult.checks : [];
+  }
+
+  get hlsIntegrityStatusLabel() {
+    const status = String(this.hlsIntegrityResult?.status || "");
+    return status ? titleize(status) : "";
+  }
+
+  @action
+  async verifyHlsIntegrity() {
+    if (!this.selectedPublicId || this.isVerifyingHlsIntegrity) {
+      return;
+    }
+    this.isVerifyingHlsIntegrity = true;
+    this.selectionError = "";
+    this.noticeMessage = "";
+    try {
+      const json = await this._fetchJson(`/admin/plugins/media-gallery/media-items/${encodeURIComponent(this.selectedPublicId)}/verify-hls-integrity.json`, { method: "POST" });
+      this.hlsIntegrityResult = json?.verification || null;
+      this.noticeTone = json?.ok ? "success" : "danger";
+      this.noticeMessage = this.hlsIntegrityResult?.summary || "HLS integrity verification completed.";
+    } catch (e) {
+      this.selectionError = e?.message || String(e);
+    } finally {
+      this.isVerifyingHlsIntegrity = false;
     }
   }
 

@@ -228,6 +228,18 @@ module ::MediaGallery
         examples: example_items(failed_scope.order(updated_at: :desc).limit(5), now: now)
       )
 
+      temp_summary = (::MediaGallery::TempWorkspaceCleanup.summary rescue {})
+      stale_temp_count = temp_summary[:stale_count].to_i
+      items << issue(
+        id: "stale_temp_workspaces",
+        label: "Stale temp workspaces",
+        severity: stale_temp_count.positive? ? "warning" : "ok",
+        count: stale_temp_count,
+        message: stale_temp_count.positive? ? "#{stale_temp_count} old Media Gallery temp/workspace director#{stale_temp_count == 1 ? 'y' : 'ies'} found." : "No stale Media Gallery temp workspaces found.",
+        detail: "Cleanup is #{temp_summary[:enabled] == false ? 'disabled' : 'enabled'}; retention is #{temp_summary[:retention_hours] || 24} hours. Approx stale bytes: #{temp_summary[:stale_bytes].to_i}.",
+        examples: Array(temp_summary[:examples]).first(5)
+      )
+
       section(
         id: "processing",
         title: "Processing health",
@@ -257,6 +269,22 @@ module ::MediaGallery
             availability_ms: health[:availability_ms],
           }.compact
         )
+
+        safety = health[:safety_review].is_a?(Hash) ? health[:safety_review] : (::MediaGallery::StorageSafety.profile_review(profile_key) rescue nil)
+        safety_checks = Array(safety && safety[:checks]).select { |row| row[:severity].to_s != "ok" }
+        if safety_checks.present?
+          sev = safety_checks.any? { |row| row[:severity].to_s == "critical" } ? "critical" : "warning"
+          items << issue(
+            id: "storage_profile_safety_#{profile_key}",
+            label: "#{health[:label].presence || profile_key} safety",
+            severity: sev,
+            count: safety_checks.length,
+            message: "Storage profile has #{safety_checks.length} safety warning#{'s' if safety_checks.length != 1}.",
+            detail: safety_checks.map { |row| row[:message] }.join("; "),
+            examples: safety_checks.first(5),
+            metadata: { profile_key: profile_key, backend: health[:backend] }
+          )
+        end
       end
 
       if full_storage

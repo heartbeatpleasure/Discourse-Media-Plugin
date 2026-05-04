@@ -753,6 +753,20 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     };
   }
 
+  get selectedPlanSafetyRows() {
+    return safeArray(this.selectedPlan?.safety_summary?.rows).map((row) => ({
+      label: row?.label || "Check",
+      value: normalizeText(row?.value),
+      detail: normalizeText(row?.detail, ""),
+      badgeClass: badgeClassForStatus(row?.status || "ok"),
+      statusLabel: titleCase(row?.status || "ok"),
+    }));
+  }
+
+  get selectedPlanSafetyStatusLabel() {
+    return titleCase(this.selectedPlan?.safety_summary?.status || "ok");
+  }
+
   get selectedPlanRoleCards() {
     return safeArray(this.selectedPlan?.roles).map((entry) => {
       const summary = entry?.summary || {};

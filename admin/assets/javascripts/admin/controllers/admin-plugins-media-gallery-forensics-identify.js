@@ -234,6 +234,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked resultJson = "";
   @tracked error = "";
   @tracked statusMessage = "";
+  @tracked preflightResult = null;
+  @tracked isPreflighting = false;
   @tracked activeTaskId = null;
 
   // Overlay/session code lookup (fed from the main search bar)
@@ -1212,6 +1214,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   clear() {
     this.error = "";
     this.statusMessage = "";
+    this.preflightResult = null;
     this.activeTaskId = null;
     if (this._statusPollTimer) {
       clearTimeout(this._statusPollTimer);
@@ -1346,6 +1349,54 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       this.error = e?.message || String(e);
       this.statusMessage = "";
       this.isRunning = false;
+    }
+  }
+
+  get preflightChecks() {
+    return Array.isArray(this.preflightResult?.checks) ? this.preflightResult.checks : [];
+  }
+
+  get preflightStatusLabel() {
+    const status = String(this.preflightResult?.status || "");
+    return status ? status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()) : "";
+  }
+
+  @action
+  async preflightSource() {
+    this.error = "";
+    this.statusMessage = "";
+    this.preflightResult = null;
+
+    if (!this.publicId) {
+      this.error = i18n("admin.media_gallery.forensics_identify.error_missing_public_id");
+      return;
+    }
+    if (!this.sourceUrl) {
+      this.error = "Paste a source URL before validating.";
+      return;
+    }
+
+    this.isPreflighting = true;
+    const form = new FormData();
+    form.append("source_url", this.sourceUrl);
+
+    try {
+      const response = await fetch(`/admin/plugins/media-gallery/forensics-identify/${encodeURIComponent(this.publicId)}/preflight.json`, {
+        method: "POST",
+        body: form,
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": document.querySelector("meta[name='csrf-token']")?.content || "" },
+      });
+      const json = await response.json();
+      if (!response.ok) {
+        throw new Error(json?.error || json?.errors?.join(" ") || `HTTP ${response.status}`);
+      }
+      this.preflightResult = json;
+      this.statusMessage = json?.ok ? "Source validation passed." : "Source validation found warnings or errors.";
+    } catch (e) {
+      this.error = e?.message || String(e);
+    } finally {
+      this.isPreflighting = false;
     }
   }
 
