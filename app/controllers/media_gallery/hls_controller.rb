@@ -649,12 +649,16 @@ module ::MediaGallery
     end
 
     def set_playlist_headers!
-      response.headers["Cache-Control"] = "no-store"
+      response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
+      response.headers["Pragma"] = "no-cache"
+      response.headers["Expires"] = "0"
+      response.headers["Vary"] = "Cookie"
       response.headers["X-Content-Type-Options"] = "nosniff"
     end
 
     def set_segment_headers!(segment)
-      response.headers["Cache-Control"] = "no-store"
+      response.headers["Cache-Control"] = "no-store, private, max-age=0"
+      response.headers["Vary"] = "Cookie"
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Content-Type"] = segment_content_type(segment)
     end
@@ -662,6 +666,8 @@ module ::MediaGallery
     def set_key_headers!
       response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
       response.headers["Pragma"] = "no-cache"
+      response.headers["Expires"] = "0"
+      response.headers["Vary"] = "Cookie"
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Content-Type"] = "application/octet-stream"
     end

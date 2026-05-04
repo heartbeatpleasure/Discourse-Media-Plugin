@@ -21,7 +21,8 @@ module ::MediaGallery
       backup_retention = backup_retention_status
       aes128_backfill = aes128_backfill_status
       aes128_required_readiness = aes128_required_readiness_status
-      controls = security_controls(download, environment, baseline, aes128_backfill, aes128_required_readiness)
+      aes128_final_qa = aes128_final_qa_status
+      controls = security_controls(download, environment, baseline, aes128_backfill, aes128_required_readiness, aes128_final_qa)
       counts = controls.each_with_object(Hash.new(0)) { |control, memo| memo[control[:status].to_s] += 1 }
 
       {
@@ -50,13 +51,14 @@ module ::MediaGallery
         backup_retention: backup_retention,
         aes128_backfill: aes128_backfill,
         aes128_required_readiness: aes128_required_readiness,
+        aes128_final_qa: aes128_final_qa,
         rate_limit_tuning: rate_limit_tuning_status,
         recent_events: recent_security_events,
         links: admin_links,
       }
     end
 
-    def security_controls(download, environment, baseline, aes128_backfill = {}, aes128_required_readiness = {})
+    def security_controls(download, environment, baseline, aes128_backfill = {}, aes128_required_readiness = {}, aes128_final_qa = {})
       [
         control(
           "Request origin protection",
@@ -95,6 +97,12 @@ module ::MediaGallery
           aes128_required_readiness_control_status(aes128_required_readiness),
           aes128_required_readiness_control_summary(aes128_required_readiness),
           aes128_required_readiness_control_action(aes128_required_readiness)
+        ),
+        control(
+          "AES final QA hardening",
+          aes128_final_qa_control_status(aes128_final_qa),
+          aes128_final_qa_control_summary(aes128_final_qa),
+          aes128_final_qa_control_action(aes128_final_qa)
         ),
         control(
           "Watermark and fingerprinting",

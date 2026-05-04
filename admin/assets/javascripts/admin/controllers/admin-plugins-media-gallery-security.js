@@ -411,6 +411,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
   @tracked rateLimitTuning = {};
   @tracked aesBackfill = {};
   @tracked aesRequiredReadiness = {};
+  @tracked aesFinalQa = {};
   @tracked generatedAt = "";
   @tracked hasLoaded = false;
 
@@ -436,6 +437,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.rateLimitTuning = {};
     this.aesBackfill = {};
     this.aesRequiredReadiness = {};
+    this.aesFinalQa = {};
     this.generatedAt = "";
     this.hasLoaded = false;
   }
@@ -465,6 +467,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.rateLimitTuning = data?.rate_limit_tuning || {};
     this.aesBackfill = data?.aes128_backfill || {};
     this.aesRequiredReadiness = data?.aes128_required_readiness || {};
+    this.aesFinalQa = data?.aes128_final_qa || {};
     this.recentEvents = data?.recent_events || {};
     this.topEventTypes = Array.isArray(data?.recent_events?.top_event_types)
       ? data.recent_events.top_event_types.map(decorateEvent)
@@ -802,6 +805,30 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
   }
 
 
+  get aesFinalQaFact() {
+    const q = this.aesFinalQa || {};
+    const ready = !!q.ready_for_final_signoff;
+    const status = String(q.status || (ready ? "ok" : "manual"));
+    const attention = Number(q.attention_count || 0);
+    const warnings = Number(q.warning_count || 0);
+    const manual = Number(q.manual_count || 0);
+    const checkCount = Array.isArray(q.checks) ? q.checks.length : 0;
+    const value = ready ? "Ready for sign-off" : attention > 0 ? "Needs fixes" : "Manual QA";
+
+    return {
+      key: "aes_final_qa",
+      label: "AES final QA",
+      value,
+      detail: checkCount > 0
+        ? `${formatNumber(checkCount)} checks · attention ${formatNumber(attention)} · warning ${formatNumber(warnings)} · manual ${formatNumber(manual)}`
+        : normalizeText(q.recommendation, "Final AES QA report is unavailable."),
+      statusText: ready ? "Ready" : attention > 0 ? "Review" : titleize(status),
+      statusChipClass: statusChipClass(ready ? "ok" : attention > 0 ? "attention" : status),
+      statusDotClass: statusDotClass(ready ? "ok" : attention > 0 ? "attention" : status),
+    };
+  }
+
+
   get environmentFacts() {
     const status = this.environment?.status || "info";
     return [
@@ -868,6 +895,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
       },
       this.aesBackfillFact,
       this.aesRequiredReadinessFact,
+      this.aesFinalQaFact,
       {
         key: "f08_hard",
         label: "Hard stream limits",

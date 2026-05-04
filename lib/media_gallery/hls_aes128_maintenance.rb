@@ -365,11 +365,211 @@ module ::MediaGallery
       end
     end
 
-    def setting_bool(name)
-      return false unless SiteSetting.respond_to?(name)
+
+    def final_qa_report(limit: MAX_SAMPLE_BLOCKERS)
+      readiness = required_readiness_report(limit: limit)
+      checks = []
+
+      hls_enabled = setting_bool(:media_gallery_hls_enabled)
+      hls_only_enabled = setting_bool(:media_gallery_protected_video_hls_only)
+      aes_enabled = setting_bool(:media_gallery_hls_aes128_enabled)
+      aes_required = setting_bool(:media_gallery_hls_aes128_required) && aes_enabled
+      key_limit = setting_int(:media_gallery_hls_key_requests_per_token_per_minute)
+      playlist_limit = setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute)
+      segment_limit = setting_int(:media_gallery_hls_segment_requests_per_token_per_minute)
+      bind_user = setting_bool(:media_gallery_bind_stream_to_user)
+      bind_session = setting_bool(:media_gallery_bind_stream_to_session)
+      bind_ip = setting_bool(:media_gallery_bind_stream_to_ip)
+      block_direct = setting_bool(:media_gallery_block_direct_media_navigation, default: true)
+      fingerprint_enabled = setting_bool(:media_gallery_fingerprint_enabled)
+      watermark_enabled = setting_bool(:media_gallery_watermark_enabled)
+      key_denial_logging = setting_bool(:media_gallery_log_hls_aes128_key_denials)
+      forensic_policy = setting_string(:media_gallery_forensics_http_source_url_policy, default: "deny_all")
+      key_rotation = setting_int(:media_gallery_hls_aes128_key_rotation_segments)
+
+      checks << qa_check(
+        code: "hls_enabled",
+        title: "HLS enabled",
+        status: hls_enabled ? "ok" : "attention",
+        summary: hls_enabled ? "HLS delivery is enabled." : "HLS delivery is disabled.",
+        action: hls_enabled ? "Keep HLS enabled for AES playback." : "Enable media_gallery_hls_enabled before AES QA."
+      )
+
+      checks << qa_check(
+        code: "aes_enabled",
+        title: "AES packaging enabled",
+        status: aes_enabled ? "ok" : "attention",
+        summary: aes_enabled ? "New/reprocessed HLS packages can be AES-128 encrypted." : "AES-128 packaging is disabled.",
+        action: aes_enabled ? "Use staging uploads/backfill to validate encrypted playback." : "Enable media_gallery_hls_aes128_enabled before required-mode QA."
+      )
+
+      checks << qa_check(
+        code: "required_readiness",
+        title: "Required-mode blockers",
+        status: readiness[:can_enable_required] ? "ok" : (aes_enabled ? "attention" : "manual"),
+        summary: readiness[:can_enable_required] ? "No required-mode blockers were found." : Array(readiness[:blockers]).map { |b| b[:code] || b["code"] }.presence&.join(", ") || "Required-mode readiness has not passed.",
+        action: readiness[:recommendation].to_s.presence || "Resolve readiness blockers before enabling AES required mode."
+      )
+
+      checks << qa_check(
+        code: "hls_only_fallback",
+        title: "Direct stream fallback",
+        status: (hls_only_enabled || aes_required) ? "ok" : "warning",
+        summary: if aes_required
+          "AES required mode blocks direct stream fallback."
+        elsif hls_only_enabled
+          "HLS-only mode blocks direct stream fallback for protected video."
+        else
+          "Direct stream fallback can still be used while required mode is off."
+        end,
+        action: (hls_only_enabled || aes_required) ? "Validate playback errors do not fall back to direct MP4." : "Enable HLS-only or AES required mode before final production enforcement."
+      )
+
+      checks << qa_check(
+        code: "rate_limits",
+        title: "HLS/key rate limits",
+        status: key_limit.positive? && playlist_limit.positive? && segment_limit.positive? ? "ok" : "attention",
+        summary: "playlist #{playlist_limit}/min · segment #{segment_limit}/min · key #{key_limit}/min",
+        action: "Keep limits high enough for normal playback but non-zero for abuse control."
+      )
+
+      checks << qa_check(
+        code: "token_binding",
+        title: "Token binding",
+        status: bind_user && bind_session ? "ok" : "warning",
+        summary: "user #{bind_user ? 'on' : 'off'} · session #{bind_session ? 'on' : 'off'} · IP #{bind_ip ? 'on' : 'off'}",
+        action: bind_user && bind_session ? "IP binding is optional depending on user networks." : "Enable at least user and session binding for final AES QA."
+      )
+
+      checks << qa_check(
+        code: "direct_navigation",
+        title: "Direct media navigation",
+        status: block_direct ? "ok" : "warning",
+        summary: block_direct ? "Fetch-metadata direct navigation blocking is enabled." : "Direct navigation to tokenized media URLs is allowed.",
+        action: block_direct ? "Retest after CDN/proxy changes." : "Enable direct media navigation blocking before production hardening."
+      )
+
+      checks << qa_check(
+        code: "forensic_signals",
+        title: "Forensic deterrence",
+        status: fingerprint_enabled ? "ok" : (watermark_enabled ? "warning" : "manual"),
+        summary: "fingerprint #{fingerprint_enabled ? 'on' : 'off'} · watermark #{watermark_enabled ? 'on' : 'off'}",
+        action: fingerprint_enabled ? "Run one AES-HLS identify regression test before sign-off." : "Enable fingerprinting if forensic attribution is required."
+      )
+
+      checks << qa_check(
+        code: "key_denial_logging",
+        title: "AES key denial diagnostics",
+        status: key_denial_logging ? "ok" : "manual",
+        summary: key_denial_logging ? "Denied AES key requests are logged." : "Denied AES key requests are not logged by default.",
+        action: key_denial_logging ? "Disable later if logs are too noisy." : "Enable temporarily during final QA if browser/key issues appear."
+      )
+
+      checks << qa_check(
+        code: "forensics_source_policy",
+        title: "Forensics source URL policy",
+        status: forensic_policy == "deny_all" ? "ok" : "warning",
+        summary: forensic_policy,
+        action: forensic_policy == "deny_all" ? "Strict production policy is active." : "Use deny_all in production after HTTP/staging identify tests are finished."
+      )
+
+      checks << qa_check(
+        code: "key_rotation_v1",
+        title: "Key rotation v1 scope",
+        status: key_rotation.to_i == 0 ? "ok" : "warning",
+        summary: key_rotation.to_i == 0 ? "One AES key per video/package." : "Non-zero key rotation is configured but not part of the v1 QA scope.",
+        action: key_rotation.to_i == 0 ? "Keep rotation off until a dedicated key-rotation iteration exists." : "Reset key rotation to 0 for the current implementation."
+      )
+
+      checks << qa_check(
+        code: "manual_browser_matrix",
+        title: "Manual browser matrix",
+        status: "manual",
+        summary: "Chrome/Edge hls.js, Firefox hls.js and Safari/iOS native HLS must still be manually verified.",
+        action: "Run the final QA checklist on at least one AES-ready video and one legacy/non-AES video before enabling required mode in production."
+      )
+
+      statuses = checks.map { |check| check[:status].to_s }
+      status = if statuses.include?("attention")
+        "attention"
+      elsif statuses.include?("warning") || statuses.include?("manual")
+        readiness[:can_enable_required] ? "partial" : "manual"
+      else
+        "ok"
+      end
+
+      attention_count = statuses.count("attention")
+      warning_count = statuses.count("warning")
+      manual_count = statuses.count("manual")
+      ready_for_final_signoff = attention_count.zero? && readiness[:can_enable_required]
+
+      {
+        generated_at: Time.now.utc.iso8601,
+        status: status,
+        ready_for_final_signoff: ready_for_final_signoff,
+        aes_required_enabled: aes_required,
+        attention_count: attention_count,
+        warning_count: warning_count,
+        manual_count: manual_count,
+        checks: checks,
+        recommendation: final_qa_recommendation(ready_for_final_signoff: ready_for_final_signoff, aes_required: aes_required, attention_count: attention_count, warning_count: warning_count, manual_count: manual_count),
+      }
+    rescue => e
+      {
+        generated_at: Time.now.utc.iso8601,
+        status: "attention",
+        ready_for_final_signoff: false,
+        attention_count: 1,
+        warning_count: 0,
+        manual_count: 0,
+        checks: [qa_check(code: "final_qa_failed", title: "Final QA check failed", status: "attention", summary: "#{e.class}: #{e.message}", action: "Fix the final QA report error before changing AES required settings.")],
+        recommendation: "Final QA report failed. Check Rails logs before changing AES settings.",
+      }
+    end
+
+
+    def qa_check(code:, title:, status:, summary:, action:)
+      {
+        code: code.to_s,
+        title: title.to_s,
+        status: status.to_s,
+        label: status.to_s.tr("_", " ").capitalize,
+        summary: summary.to_s,
+        action: action.to_s,
+      }
+    end
+
+    def final_qa_recommendation(ready_for_final_signoff:, aes_required:, attention_count:, warning_count:, manual_count:)
+      if ready_for_final_signoff && aes_required
+        "AES required mode is enabled and automated QA blockers were not found. Keep monitoring playback errors and key denials."
+      elsif ready_for_final_signoff
+        "Automated blockers are clear. Complete the manual browser/identify QA checklist on staging, then enable AES required mode."
+      elsif attention_count.to_i.positive?
+        "Resolve #{attention_count} attention item(s) before final AES sign-off."
+      else
+        "Review warning/manual QA items before production sign-off."
+      end
+    end
+
+    def setting_int(name, default: 0)
+      return default unless SiteSetting.respond_to?(name)
+      SiteSetting.public_send(name).to_i
+    rescue
+      default
+    end
+
+    def setting_string(name, default: "")
+      return default unless SiteSetting.respond_to?(name)
+      SiteSetting.public_send(name).to_s
+    rescue
+      default
+    end
+
+    def setting_bool(name, default: false)
+      return default unless SiteSetting.respond_to?(name)
       ActiveModel::Type::Boolean.new.cast(SiteSetting.public_send(name))
     rescue
-      false
+      default
     end
 
     def store_for_role(item, role)
