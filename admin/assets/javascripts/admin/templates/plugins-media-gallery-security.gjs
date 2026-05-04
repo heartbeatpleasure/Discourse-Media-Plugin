@@ -1,1005 +1,766 @@
-import Controller from "@ember/controller";
-import { action } from "@ember/object";
-import { tracked } from "@glimmer/tracking";
-import { ajax } from "discourse/lib/ajax";
-
-function normalizeText(value, fallback = "—") {
-  if (value === null || value === undefined || value === "") {
-    return fallback;
-  }
-
-  const text = String(value).trim();
-  return text ? text : fallback;
-}
-
-function titleize(value) {
-  return normalizeText(value)
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function formatNumber(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) ? new Intl.NumberFormat().format(number) : "0";
-}
-
-function formatDateTime(value) {
-  if (!value) {
-    return "—";
-  }
-
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
-}
-
-function parseBoolish(value) {
-  if (value === true || value === false) {
-    return value;
-  }
-
-  const text = String(value ?? "")
-    .trim()
-    .toLowerCase();
-
-  if (["true", "1", "yes", "on", "enabled"].includes(text)) {
-    return true;
-  }
-
-  if (["false", "0", "no", "off", "disabled"].includes(text)) {
-    return false;
-  }
-
-  return null;
-}
-
-function formatDays(value) {
-  const number = Number(value || 0);
-  if (!Number.isFinite(number)) {
-    return "—";
-  }
-  if (number === 0) {
-    return "Unlimited";
-  }
-  return `${formatNumber(number)} ${number === 1 ? "day" : "days"}`;
-}
-
-function toneForStatus(status) {
-  switch (String(status || "").toLowerCase()) {
-    case "ok":
-    case "good":
-    case "success":
-      return "success";
-    case "partial":
-    case "manual":
-    case "warning":
-    case "medium":
-      return "warning";
-    case "attention":
-    case "danger":
-    case "critical":
-    case "error":
-      return "danger";
-    default:
-      return "info";
-  }
-}
-
-function statusChipClass(status) {
-  return `mg-security__status-chip is-${toneForStatus(status)}`;
-}
-
-function statusDotClass(status) {
-  return `mg-security__status-dot is-${toneForStatus(status)}`;
-}
-
-function yesNo(value) {
-  return value ? "Yes" : "No";
-}
-
-function evaluateSetting(setting) {
-  const key = setting?.key;
-  const present = Boolean(setting?.present);
-  const rawValue = setting?.value;
-
-  if (!present) {
-    return {
-      displayValue: "Unavailable",
-      status: "attention",
-      statusText: "Missing",
-      note: "This setting is not available in the current plugin build.",
-    };
-  }
-
-  const boolValue = parseBoolish(rawValue);
-  const numericValue = Number(rawValue);
-
-  switch (key) {
-    case "media_gallery_protected_video_hls_only":
-      return {
-        displayValue: boolValue ? "Enabled" : "Disabled",
-        status: boolValue ? "ok" : "attention",
-        statusText: boolValue ? "OK" : "Check",
-        note: boolValue
-          ? "Direct video stream fallback is blocked for protected playback."
-          : "Protected video can still fall back to direct stream mode.",
-      };
-    case "media_gallery_hls_enabled":
-      return {
-        displayValue: boolValue ? "Enabled" : "Disabled",
-        status: boolValue ? "ok" : "attention",
-        statusText: boolValue ? "OK" : "Check",
-        note: boolValue
-          ? "Segmented HLS delivery is available for video playback."
-          : "Protected video controls are weaker when HLS is disabled.",
-      };
-    case "media_gallery_hls_aes128_enabled":
-      return {
-        displayValue: boolValue ? "Enabled" : "Disabled",
-        status: boolValue ? "ok" : "info",
-        statusText: boolValue ? "On" : "Off",
-        note: boolValue
-          ? "New/reprocessed HLS packages are encrypted with AES-128."
-          : "AES-128 is available but disabled; current HLS behavior is unchanged.",
-      };
-    case "media_gallery_hls_aes128_required":
-      return {
-        displayValue: boolValue ? "Required" : "Not required",
-        status: boolValue ? "ok" : "warning",
-        statusText: boolValue ? "Enforced" : "Migration",
-        note: boolValue
-          ? "Only AES-ready HLS packages may play when the backend setting is active."
-          : "Legacy/non-AES HLS can still play while backfill is in progress.",
-      };
-    case "media_gallery_hls_aes128_key_rotation_segments":
-      return {
-        displayValue: Number.isFinite(numericValue) ? String(numericValue) : normalizeText(rawValue),
-        status: numericValue === 0 ? "ok" : "warning",
-        statusText: numericValue === 0 ? "v1 OK" : "Reserved",
-        note: numericValue === 0
-          ? "Current v1 uses one AES key per video/package."
-          : "Non-zero key rotation is reserved for a later implementation.",
-      };
-    case "media_gallery_log_hls_aes128_key_denials":
-      return {
-        displayValue: boolValue ? "Enabled" : "Disabled",
-        status: boolValue ? "ok" : "info",
-        statusText: boolValue ? "Logging" : "Quiet",
-        note: boolValue
-          ? "Denied AES key requests are logged for QA/troubleshooting."
-          : "Enable during AES QA if key request denials need diagnosis.",
-      };
-    case "media_gallery_fingerprint_enabled":
-      return {
-        displayValue: boolValue ? "Enabled" : "Disabled",
-        status: boolValue ? "ok" : "warning",
-        statusText: boolValue ? "OK" : "Partial",
-        note: boolValue
-          ? "Per-user fingerprinting is enabled for new protected media."
-          : "Fingerprinting is available but currently disabled.",
-      };
-    case "media_gallery_watermark_enabled":
-      return {
-        displayValue: boolValue ? "Enabled" : "Disabled",
-        status: boolValue ? "ok" : "warning",
-        statusText: boolValue ? "OK" : "Partial",
-        note: boolValue
-          ? "Visible watermarking is enabled."
-          : "Visible watermarking is available but currently disabled.",
-      };
-    case "media_gallery_watermark_user_can_toggle":
-      return {
-        displayValue: boolValue ? "Allowed" : "Blocked",
-        status: boolValue ? "warning" : "ok",
-        statusText: boolValue ? "Attention" : "OK",
-        note: boolValue
-          ? "Users may disable the visible watermark."
-          : "Users cannot disable the visible watermark.",
-      };
-    case "media_gallery_block_direct_media_navigation":
-      return {
-        displayValue: boolValue ? "Enabled" : "Disabled",
-        status: boolValue ? "ok" : "warning",
-        statusText: boolValue ? "OK" : "Partial",
-        note: boolValue
-          ? "Clear top-level navigation to tokenized media URLs is blocked."
-          : "Copied media URLs may open directly while their token remains valid.",
-      };
-    case "media_gallery_bind_stream_to_user":
-    case "media_gallery_bind_stream_to_session":
-      return {
-        displayValue: boolValue ? "Enabled" : "Disabled",
-        status: boolValue ? "ok" : "warning",
-        statusText: boolValue ? "OK" : "Partial",
-        note: boolValue
-          ? "Binding is active for issued playback tokens."
-          : "Binding is available but currently disabled.",
-      };
-    case "media_gallery_hls_playlist_requests_per_token_per_minute":
-    case "media_gallery_hls_segment_requests_per_token_per_minute":
-    case "media_gallery_hls_key_requests_per_token_per_minute":
-      return {
-        displayValue: Number.isFinite(numericValue) ? `${formatNumber(numericValue)} req/min` : normalizeText(rawValue),
-        status: numericValue > 0 ? "ok" : "attention",
-        statusText: numericValue > 0 ? "OK" : "Check",
-        note: numericValue > 0
-          ? "A per-token rate limit is configured."
-          : "Set a positive value to limit abusive request bursts.",
-      };
-    case "media_gallery_management_search_slow_log_ms":
-      return {
-        displayValue: Number.isFinite(numericValue) ? `${formatNumber(numericValue)} ms` : normalizeText(rawValue),
-        status: numericValue > 0 ? "ok" : "info",
-        statusText: numericValue > 0 ? "Logging" : "Off",
-        note: numericValue > 0
-          ? "Slow Management searches are logged with phase timing for diagnostics."
-          : "Slow-search logging is disabled.",
-      };
-    case "media_gallery_forensics_playback_session_retention_days":
-    case "media_gallery_forensics_export_retention_days":
-    case "media_gallery_forensics_export_archive_retention_days": {
-      const status = numericValue >= 90 ? "ok" : numericValue > 0 ? "warning" : "attention";
-      const statusText = numericValue >= 90 ? "OK" : numericValue > 0 ? "Custom" : "Check";
-      const note = numericValue >= 90
-        ? "Retention meets the current 90-day baseline."
-        : numericValue > 0
-          ? "Retention is shorter than the 90-day baseline."
-          : "Retention is unlimited or unset; review your policy.";
-      return {
-        displayValue: formatDays(numericValue),
-        status,
-        statusText,
-        note,
-      };
-    }
-    default:
-      return {
-        displayValue: normalizeText(rawValue),
-        status: "info",
-        statusText: "Info",
-        note: "Configuration value shown for reference.",
-      };
-  }
-}
-
-function decorateControl(control) {
-  const status = control?.status || "info";
-  return {
-    ...control,
-    key: control?.title || `${status}-${Math.random()}`,
-    label: normalizeText(control?.label || status),
-    statusText: normalizeText(control?.label || status),
-    statusChipClass: statusChipClass(status),
-    statusDotClass: statusDotClass(status),
-    summary: normalizeText(control?.summary),
-    action: normalizeText(control?.action),
-  };
-}
-
-function decorateSetting(setting) {
-  const evaluation = evaluateSetting(setting);
-  return {
-    ...setting,
-    key: setting?.key || setting?.label,
-    label: normalizeText(setting?.label),
-    recommended: normalizeText(setting?.recommended),
-    displayValue: evaluation.displayValue,
-    note: evaluation.note,
-    statusText: evaluation.statusText,
-    statusChipClass: statusChipClass(evaluation.status),
-    statusDotClass: statusDotClass(evaluation.status),
-  };
-}
-
-function decorateProfile(profile) {
-  return {
-    ...profile,
-    key: profile?.profile_key || profile?.label,
-    label: normalizeText(profile?.label || profile?.profile_key),
-    profileKey: normalizeText(profile?.profile_key),
-    backendLabel: titleize(profile?.backend),
-    deliveryModeLabel: titleize(profile?.delivery_mode),
-    endpoint: normalizeText(profile?.config?.endpoint, "—"),
-    bucket: normalizeText(profile?.config?.bucket, "—"),
-    prefix: normalizeText(profile?.config?.prefix, "—"),
-    rootPath: normalizeText(profile?.config?.local_asset_root_path, "—"),
-  };
-}
-
-function decorateEvent(entry) {
-  return {
-    key: `${entry?.event_type || "event"}-${entry?.count || 0}`,
-    label: titleize(entry?.event_type || "event"),
-    count: formatNumber(entry?.count),
-  };
-}
-
-function decorateBaselineCheck(check) {
-  const status = check?.status || "info";
-  return {
-    ...check,
-    key: check?.key || check?.label,
-    label: normalizeText(check?.label),
-    current: normalizeText(check?.current),
-    recommended: normalizeText(check?.recommended),
-    note: normalizeText(check?.note),
-    statusText: normalizeText(check?.status_label || status),
-    statusChipClass: statusChipClass(status),
-    statusDotClass: statusDotClass(status),
-  };
-}
-
-function decoratePath(row) {
-  const status = row?.status || "info";
-  return {
-    ...row,
-    key: row?.label || row?.path,
-    label: normalizeText(row?.label),
-    path: normalizeText(row?.path),
-    purpose: normalizeText(row?.purpose),
-    recommendation: normalizeText(row?.recommendation),
-    retention: normalizeText(row?.retention),
-    note: normalizeText(row?.note),
-    statusText: normalizeText(row?.status_label || status),
-    statusChipClass: statusChipClass(status),
-    statusDotClass: statusDotClass(status),
-  };
-}
-
-function decorateFailureReason(row) {
-  return {
-    key: row?.reason || "unknown",
-    label: titleize(row?.reason || "unknown"),
-    count: formatNumber(row?.count),
-  };
-}
-
-function decorateCounter(row) {
-  return {
-    key: row?.event_type || "event",
-    label: titleize(row?.event_type || "event"),
-    count: formatNumber(row?.count),
-  };
-}
-
-function decorateTuningRow(row) {
-  const status = row?.status || "info";
-  return {
-    key: row?.key || "tuning",
-    label: normalizeText(row?.label),
-    value: formatNumber(row?.value),
-    detail: normalizeText(row?.detail),
-    statusText: normalizeText(row?.status_label || status),
-    statusChipClass: statusChipClass(status),
-    statusDotClass: statusDotClass(status),
-  };
-}
-
-function decorateTuningThreshold(row) {
-  const status = row?.status || "info";
-  return {
-    key: row?.key || "threshold",
-    label: normalizeText(row?.label),
-    value: normalizeText(row?.value),
-    detail: normalizeText(row?.detail),
-    statusText: normalizeText(row?.status_label || status),
-    statusChipClass: statusChipClass(status),
-    statusDotClass: statusDotClass(status),
-  };
-}
-
-function normalizeSecurityPayload(payload) {
-  return payload?.security || payload?.security_status || payload?.data || payload || {};
-}
-
-export default class AdminPluginsMediaGallerySecurityController extends Controller {
-  @tracked isLoading = false;
-  @tracked error = "";
-  @tracked summary = {};
-  @tracked controls = [];
-  @tracked settings = [];
-  @tracked storage = {};
-  @tracked download = {};
-  @tracked aes128Backfill = {};
-  @tracked profiles = [];
-  @tracked forensics = {};
-  @tracked recentEvents = {};
-  @tracked topEventTypes = [];
-  @tracked eventCounters = [];
-  @tracked links = [];
-  @tracked environment = {};
-  @tracked baselineChecks = [];
-  @tracked processingFailures = {};
-  @tracked backupRetention = {};
-  @tracked backupPaths = [];
-  @tracked rateLimitTuning = {};
-  @tracked generatedAt = "";
-  @tracked hasLoaded = false;
-
-  resetState() {
-    this.isLoading = false;
-    this.error = "";
-    this.summary = {};
-    this.controls = [];
-    this.settings = [];
-    this.storage = {};
-    this.download = {};
-    this.aes128Backfill = {};
-    this.profiles = [];
-    this.forensics = {};
-    this.recentEvents = {};
-    this.topEventTypes = [];
-    this.eventCounters = [];
-    this.links = [];
-    this.environment = {};
-    this.baselineChecks = [];
-    this.processingFailures = {};
-    this.backupRetention = {};
-    this.backupPaths = [];
-    this.rateLimitTuning = {};
-    this.generatedAt = "";
-    this.hasLoaded = false;
-  }
-
-  applySecurityStatus(payload) {
-    const data = normalizeSecurityPayload(payload);
-
-    if (data?.error_message) {
-      this.error = data.error_message;
-      this.hasLoaded = true;
-      return;
-    }
-
-    this.generatedAt = data?.generated_at || "";
-    this.summary = data?.summary || {};
-    this.controls = Array.isArray(data?.controls) ? data.controls.map(decorateControl) : [];
-    this.settings = Array.isArray(data?.settings) ? data.settings.map(decorateSetting) : [];
-    this.storage = data?.storage || {};
-    this.download = data?.download_prevention || {};
-    this.aes128Backfill = data?.aes128_backfill || {};
-    this.profiles = Array.isArray(data?.storage?.profiles) ? data.storage.profiles.map(decorateProfile) : [];
-    this.forensics = data?.forensics || {};
-    this.environment = data?.environment || {};
-    this.baselineChecks = Array.isArray(data?.baseline_checks) ? data.baseline_checks.map(decorateBaselineCheck) : [];
-    this.processingFailures = data?.processing_failures || {};
-    this.backupRetention = data?.backup_retention || {};
-    this.backupPaths = Array.isArray(data?.backup_retention?.paths) ? data.backup_retention.paths.map(decoratePath) : [];
-    this.rateLimitTuning = data?.rate_limit_tuning || {};
-    this.recentEvents = data?.recent_events || {};
-    this.topEventTypes = Array.isArray(data?.recent_events?.top_event_types)
-      ? data.recent_events.top_event_types.map(decorateEvent)
-      : [];
-    this.eventCounters = Array.isArray(data?.recent_events?.counters)
-      ? data.recent_events.counters.map(decorateCounter)
-      : [];
-    this.links = Array.isArray(data?.links) ? data.links : [];
-    this.hasLoaded = true;
-
-    if (!this.generatedAt && !this.controls.length && !this.settings.length && !this.profiles.length) {
-      this.error = "Security status response was empty. Refresh or check the JSON endpoint.";
-    }
-  }
-
-  get generatedAtLabel() {
-    return formatDateTime(this.generatedAt);
-  }
-
-  get summaryCards() {
-    const posture = String(this.summary?.posture || "");
-    const postureStatus = posture.toLowerCase().includes("attention")
-      ? "attention"
-      : posture.toLowerCase() === "partial"
-        ? "partial"
-        : "ok";
-
-    const level = String(this.summary?.download_prevention_level || "");
-    const levelStatus = level.toLowerCase() === "strong"
-      ? "ok"
-      : level.toLowerCase() === "medium"
-        ? "warning"
-        : level.toLowerCase() === "basic"
-          ? "info"
-          : "attention";
-
-    const attentionCount = Number(this.summary?.attention_count || 0);
-    const partialCount = Number(this.summary?.partial_count || 0) + Number(this.summary?.manual_count || 0);
-    const warningEvents = Number(this.recentEvents?.warning_or_danger_7d || 0);
-
-    return [
-      {
-        key: "posture",
-        label: "Overall posture",
-        value: normalizeText(this.summary?.posture),
-        secondary: "Read-only security status",
-        detail: "High-level summary of current security control posture.",
-        statusDotClass: statusDotClass(postureStatus),
-        statusTitle: posture || "Unknown",
-      },
-      {
-        key: "download",
-        label: "Download prevention",
-        value: normalizeText(this.summary?.download_prevention_level),
-        secondary: "HLS, fallback, watermark and fingerprint signals",
-        detail: "Combined deterrence level based on current protection settings.",
-        statusDotClass: statusDotClass(levelStatus),
-        statusTitle: level || "Unknown",
-      },
-      {
-        key: "controls",
-        label: "Controls",
-        value: formatNumber(this.summary?.controls_total),
-        secondary: `OK ${formatNumber(this.summary?.ok_count)} · Partial ${formatNumber(this.summary?.partial_count)} · Attention ${formatNumber(this.summary?.attention_count)}`,
-        detail: partialCount > 0 || attentionCount > 0 ? "Some controls depend on configuration or need review." : "All tracked controls currently report OK.",
-        statusDotClass: statusDotClass(attentionCount > 0 ? "attention" : partialCount > 0 ? "partial" : "ok"),
-        statusTitle: attentionCount > 0 ? "Attention present" : partialCount > 0 ? "Partial controls" : "All OK",
-      },
-      {
-        key: "events",
-        label: "Events last 7 days",
-        value: formatNumber(this.recentEvents?.total_7d),
-        secondary: `${formatNumber(this.recentEvents?.warning_or_danger_7d)} warning/danger`,
-        detail: "Recent logged media security events. Use Logs for event details.",
-        statusDotClass: statusDotClass(warningEvents > 0 ? "warning" : "ok"),
-        statusTitle: warningEvents > 0 ? "Warnings present" : "No warnings",
-      },
-    ];
-  }
-
-  get downloadFacts() {
-    const bindingCount = [this.download?.bind_to_user, this.download?.bind_to_session, this.download?.bind_to_ip].filter(Boolean).length;
-
-    return [
-      {
-        key: "hls",
-        label: "HLS enabled",
-        value: this.download?.hls_enabled ? "Enabled" : "Disabled",
-        detail: "Videos can be delivered as segmented HLS playlists.",
-        statusText: this.download?.hls_enabled ? "OK" : "Check",
-        statusChipClass: statusChipClass(this.download?.hls_enabled ? "ok" : "attention"),
-        statusDotClass: statusDotClass(this.download?.hls_enabled ? "ok" : "attention"),
-      },
-      {
-        key: "hls_only",
-        label: "HLS-only video",
-        value: this.download?.hls_only_available ? (this.download?.hls_only_enabled ? "Enabled" : "Disabled") : "Unavailable",
-        detail: this.download?.hls_only_enabled
-          ? "Direct video stream fallback is blocked."
-          : "Direct video stream fallback can still be used.",
-        statusText: this.download?.hls_only_enabled ? "Protected" : "Fallback allowed",
-        statusChipClass: statusChipClass(this.download?.hls_only_enabled ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.download?.hls_only_enabled ? "ok" : "warning"),
-      },
-      {
-        key: "hls_aes128",
-        label: "HLS AES-128",
-        value: this.download?.hls_aes128_required ? "Required" : this.download?.hls_aes128_enabled ? "Enabled" : "Disabled",
-        detail: this.download?.hls_aes128_required
-          ? "Only AES-ready HLS packages may play; direct stream fallback is blocked."
-          : this.download?.hls_aes128_enabled
-            ? `Encrypting new/reprocessed HLS packages; key limit ${formatNumber(this.download?.hls_key_requests_per_token_per_minute)} req/min.`
-            : "AES-128 hardening is available but currently off.",
-        statusText: this.download?.hls_aes128_required ? "Enforced" : this.download?.hls_aes128_enabled ? "Migration" : "Off",
-        statusChipClass: statusChipClass(this.download?.hls_aes128_required ? "ok" : this.download?.hls_aes128_enabled ? "warning" : "info"),
-        statusDotClass: statusDotClass(this.download?.hls_aes128_required ? "ok" : this.download?.hls_aes128_enabled ? "warning" : "info"),
-      },
-      {
-        key: "direct_navigation",
-        label: "Direct URL opening",
-        value: this.download?.block_direct_media_navigation ? "Blocked" : "Allowed",
-        detail: this.download?.block_direct_media_navigation
-          ? "Address-bar/new-tab navigation to tokenized media endpoints is blocked when browsers send Fetch Metadata headers."
-          : "Copied tokenized media URLs may open directly until their token expires.",
-        statusText: this.download?.block_direct_media_navigation ? "OK" : "Partial",
-        statusChipClass: statusChipClass(this.download?.block_direct_media_navigation ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.download?.block_direct_media_navigation ? "ok" : "warning"),
-      },
-      {
-        key: "fingerprint",
-        label: "Fingerprinting",
-        value: this.download?.fingerprint_enabled ? "Enabled" : "Disabled",
-        detail: this.download?.fingerprint_layout ? `Layout: ${this.download.fingerprint_layout}` : "Per-user segment fingerprinting signal.",
-        statusText: this.download?.fingerprint_enabled ? "On" : "Off",
-        statusChipClass: statusChipClass(this.download?.fingerprint_enabled ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.download?.fingerprint_enabled ? "ok" : "warning"),
-      },
-      {
-        key: "watermark",
-        label: "Watermarking",
-        value: this.download?.watermark_enabled ? "Enabled" : "Disabled",
-        detail: this.download?.watermark_user_can_toggle
-          ? "Users may be able to disable visible watermarking."
-          : "Users cannot disable visible watermarking.",
-        statusText: this.download?.watermark_enabled ? (this.download?.watermark_user_can_toggle ? "Partial" : "On") : "Off",
-        statusChipClass: statusChipClass(this.download?.watermark_enabled ? (this.download?.watermark_user_can_toggle ? "warning" : "ok") : "warning"),
-        statusDotClass: statusDotClass(this.download?.watermark_enabled ? (this.download?.watermark_user_can_toggle ? "warning" : "ok") : "warning"),
-      },
-      {
-        key: "ttl",
-        label: "Stream token TTL",
-        value: `${formatNumber(this.download?.stream_token_ttl_minutes)} min`,
-        detail: "Shorter token lifetime reduces replay window but can affect unstable clients.",
-        statusText: Number(this.download?.stream_token_ttl_minutes || 0) > 0 ? "Set" : "Check",
-        statusChipClass: statusChipClass(Number(this.download?.stream_token_ttl_minutes || 0) > 0 ? "ok" : "warning"),
-        statusDotClass: statusDotClass(Number(this.download?.stream_token_ttl_minutes || 0) > 0 ? "ok" : "warning"),
-      },
-      {
-        key: "binding",
-        label: "Token binding",
-        value: `${bindingCount}/3 active`,
-        detail: `User ${yesNo(this.download?.bind_to_user)} · Session ${yesNo(this.download?.bind_to_session)} · IP ${yesNo(this.download?.bind_to_ip)}`,
-        statusText: bindingCount >= 2 ? "Strong" : bindingCount === 1 ? "Partial" : "Off",
-        statusChipClass: statusChipClass(bindingCount >= 2 ? "ok" : bindingCount === 1 ? "warning" : "attention"),
-        statusDotClass: statusDotClass(bindingCount >= 2 ? "ok" : bindingCount === 1 ? "warning" : "attention"),
-      },
-      {
-        key: "heartbeat",
-        label: "Heartbeat / revoke",
-        value: this.download?.heartbeat_enabled ? "Heartbeat on" : "Heartbeat off",
-        detail: `Revoke ${yesNo(this.download?.revoke_enabled)} · User sessions ${formatNumber(this.download?.max_concurrent_sessions_per_user)} · Active tokens ${formatNumber(this.download?.max_active_tokens_per_user)}`,
-        statusText: this.download?.heartbeat_enabled && this.download?.revoke_enabled ? "OK" : "Partial",
-        statusChipClass: statusChipClass(this.download?.heartbeat_enabled && this.download?.revoke_enabled ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.download?.heartbeat_enabled && this.download?.revoke_enabled ? "ok" : "warning"),
-      },
-      {
-        key: "hls_limits",
-        label: "HLS rate limits",
-        value: `${formatNumber(this.download?.hls_playlist_requests_per_token_per_minute)} / ${formatNumber(this.download?.hls_segment_requests_per_token_per_minute)} / ${formatNumber(this.download?.hls_key_requests_per_token_per_minute)} req/min`,
-        detail: "Playlist / segment / AES key requests allowed per token per minute.",
-        statusText:
-          Number(this.download?.hls_playlist_requests_per_token_per_minute || 0) > 0 &&
-          Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0 &&
-          Number(this.download?.hls_key_requests_per_token_per_minute || 0) > 0
-            ? "OK"
-            : "Check",
-        statusChipClass: statusChipClass(
-          Number(this.download?.hls_playlist_requests_per_token_per_minute || 0) > 0 &&
-            Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0 &&
-            Number(this.download?.hls_key_requests_per_token_per_minute || 0) > 0
-            ? "ok"
-            : "warning"
-        ),
-        statusDotClass: statusDotClass(
-          Number(this.download?.hls_playlist_requests_per_token_per_minute || 0) > 0 &&
-            Number(this.download?.hls_segment_requests_per_token_per_minute || 0) > 0 &&
-            Number(this.download?.hls_key_requests_per_token_per_minute || 0) > 0
-            ? "ok"
-            : "warning"
-        ),
-      },
-    ];
-  }
-
-  get forensicsFacts() {
-    return [
-      {
-        key: "exports",
-        label: "Export count",
-        value: formatNumber(this.forensics?.export_count),
-        detail: "Visible forensics export records.",
-        statusText: "Info",
-        statusChipClass: statusChipClass("info"),
-        statusDotClass: statusDotClass("info"),
-      },
-      {
-        key: "expired",
-        label: "Expired pending cleanup",
-        value: formatNumber(this.forensics?.expired_exports),
-        detail: "Exports older than configured retention.",
-        statusText: Number(this.forensics?.expired_exports || 0) > 0 ? "Cleanup" : "OK",
-        statusChipClass: statusChipClass(Number(this.forensics?.expired_exports || 0) > 0 ? "warning" : "ok"),
-        statusDotClass: statusDotClass(Number(this.forensics?.expired_exports || 0) > 0 ? "warning" : "ok"),
-      },
-      {
-        key: "latest",
-        label: "Latest export",
-        value: this.forensicsLatestExportLabel,
-        detail: "Most recent generated export.",
-        statusText: this.forensics?.latest_export_at ? "Found" : "None",
-        statusChipClass: statusChipClass(this.forensics?.latest_export_at ? "info" : "ok"),
-        statusDotClass: statusDotClass(this.forensics?.latest_export_at ? "info" : "ok"),
-      },
-      {
-        key: "delete",
-        label: "Manual delete",
-        value: this.forensics?.delete_action_available ? "Available" : "Unavailable",
-        detail: "Admin export delete action removes the DB record and stored files.",
-        statusText: this.forensics?.delete_action_available ? "OK" : "Check",
-        statusChipClass: statusChipClass(this.forensics?.delete_action_available ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.forensics?.delete_action_available ? "ok" : "warning"),
-      },
-      {
-        key: "retention",
-        label: "Retention",
-        value: formatDays(this.forensics?.export_retention_days),
-        detail: `Playback sessions ${formatDays(this.forensics?.playback_session_retention_days)} · archive ${formatDays(this.forensics?.archive_retention_days)}`,
-        statusText: Number(this.forensics?.export_retention_days || 0) > 0 ? "Set" : "Check",
-        statusChipClass: statusChipClass(Number(this.forensics?.export_retention_days || 0) > 0 ? "ok" : "warning"),
-        statusDotClass: statusDotClass(Number(this.forensics?.export_retention_days || 0) > 0 ? "ok" : "warning"),
-      },
-      {
-        key: "archive",
-        label: "Archive copy",
-        value: this.forensics?.archive_enabled ? "Enabled" : "Disabled",
-        detail: `CSV formula protection: ${yesNo(this.forensics?.csv_formula_protection)}`,
-        statusText: this.forensics?.archive_enabled ? "On" : "Off",
-        statusChipClass: statusChipClass(this.forensics?.archive_enabled ? "ok" : "info"),
-        statusDotClass: statusDotClass(this.forensics?.archive_enabled ? "ok" : "info"),
-      },
-    ];
-  }
-
-  get storageProfiles() {
-    const activeProfile = String(this.storage?.active_profile || "");
-    return this.profiles.map((profile) => {
-      const isActive = activeProfile && activeProfile === profile.profileKey;
-      const pathValue = profile.rootPath !== "—" ? profile.rootPath : profile.prefix;
-      return {
-        ...profile,
-        statusText: isActive ? "Active" : "Configured",
-        statusChipClass: statusChipClass(isActive ? "ok" : "info"),
-        statusDotClass: statusDotClass(isActive ? "ok" : "info"),
-        pathValue,
-      };
-    });
-  }
-
-  get environmentFacts() {
-    const status = this.environment?.status || "info";
-    return [
-      {
-        key: "base_url",
-        label: "Canonical base URL",
-        value: normalizeText(this.environment?.base_url),
-        detail: "Recommended: use a single HTTPS canonical URL.",
-        statusText: normalizeText(this.environment?.label || status),
-        statusChipClass: statusChipClass(status),
-        statusDotClass: statusDotClass(status),
-      },
-      {
-        key: "request_scheme",
-        label: "Current request scheme",
-        value: normalizeText(this.environment?.request_scheme).toUpperCase(),
-        detail: `Request host ${normalizeText(this.environment?.request_host)}; canonical host ${normalizeText(this.environment?.canonical_host)}.`,
-        statusText: this.environment?.https_ok ? "HTTPS" : "Review",
-        statusChipClass: statusChipClass(this.environment?.https_ok ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.environment?.https_ok ? "ok" : "warning"),
-      },
-      {
-        key: "host_match",
-        label: "Canonical host match",
-        value: this.environment?.host_matches ? "Matches" : "Review",
-        detail: normalizeText(this.environment?.action),
-        statusText: this.environment?.host_matches ? "OK" : "Check",
-        statusChipClass: statusChipClass(this.environment?.host_matches ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.environment?.host_matches ? "ok" : "warning"),
-      },
-    ];
-  }
-
-  get recentControlFacts() {
-    const hardStreamLimits = Number(this.download?.stream_requests_per_token_per_minute || 0) > 0 || Number(this.download?.stream_range_requests_per_token_per_minute || 0) > 0;
-    const f11Policy = normalizeText(this.download?.forensics_http_source_url_policy, "deny_all");
-    return [
-      {
-        key: "direct_navigation",
-        label: "Direct media URL opening",
-        value: this.download?.block_direct_media_navigation ? "Blocked" : "Allowed",
-        detail: "Blocks clear top-level browser navigation to tokenized play, stream and HLS endpoints. Final S3/R2 redirect URLs cannot be controlled after redirect.",
-        statusText: this.download?.block_direct_media_navigation ? "OK" : "Partial",
-        statusChipClass: statusChipClass(this.download?.block_direct_media_navigation ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.download?.block_direct_media_navigation ? "ok" : "warning"),
-      },
-      {
-        key: "f08_soft",
-        label: "Stream anomaly logging",
-        value: this.download?.log_stream_anomalies ? "Enabled" : "Disabled",
-        detail: `Soft thresholds: ${formatNumber(this.download?.stream_anomaly_requests_per_token_per_minute)} requests/min and ${formatNumber(this.download?.stream_anomaly_range_requests_per_token_per_minute)} range requests/min.`,
-        statusText: this.download?.log_stream_anomalies ? "OK" : "Check",
-        statusChipClass: statusChipClass(this.download?.log_stream_anomalies ? "ok" : "warning"),
-        statusDotClass: statusDotClass(this.download?.log_stream_anomalies ? "ok" : "warning"),
-      },
-      {
-        key: "aes_key_logging",
-        label: "AES key denial logging",
-        value: this.download?.log_hls_aes128_key_denials ? "Enabled" : "Disabled",
-        detail: `Key endpoint rate limit: ${formatNumber(this.download?.hls_key_requests_per_token_per_minute)} requests per token per minute.`,
-        statusText: this.download?.log_hls_aes128_key_denials ? "QA ready" : "Quiet",
-        statusChipClass: statusChipClass(this.download?.log_hls_aes128_key_denials ? "ok" : "info"),
-        statusDotClass: statusDotClass(this.download?.log_hls_aes128_key_denials ? "ok" : "info"),
-      },
-      {
-        key: "aes_backfill_health",
-        label: "AES backfill health",
-        value: `Ready ${formatNumber(this.aes128Backfill?.aes_ready_count)} / needs ${formatNumber(this.aes128Backfill?.needs_backfill_count)}`,
-        detail: `Queued ${formatNumber(this.aes128Backfill?.queued_count)} · processing ${formatNumber(this.aes128Backfill?.processing_count)} · failed ${formatNumber(this.aes128Backfill?.failed_count)} · stale ${formatNumber(this.aes128Backfill?.stale_count)}.`,
-        statusText: this.aes128Backfill?.error
-          ? "Error"
-          : Number(this.aes128Backfill?.failed_count || 0) > 0 || Number(this.aes128Backfill?.stale_count || 0) > 0
-            ? "Check"
-            : Number(this.aes128Backfill?.needs_backfill_count || 0) > 0 || Number(this.aes128Backfill?.queued_count || 0) > 0 || Number(this.aes128Backfill?.processing_count || 0) > 0
-              ? "Migration"
-              : "OK",
-        statusChipClass: statusChipClass(
-          this.aes128Backfill?.error || Number(this.aes128Backfill?.failed_count || 0) > 0 || Number(this.aes128Backfill?.stale_count || 0) > 0
-            ? "attention"
-            : Number(this.aes128Backfill?.needs_backfill_count || 0) > 0 || Number(this.aes128Backfill?.queued_count || 0) > 0 || Number(this.aes128Backfill?.processing_count || 0) > 0
-              ? "warning"
-              : "ok"
-        ),
-        statusDotClass: statusDotClass(
-          this.aes128Backfill?.error || Number(this.aes128Backfill?.failed_count || 0) > 0 || Number(this.aes128Backfill?.stale_count || 0) > 0
-            ? "attention"
-            : Number(this.aes128Backfill?.needs_backfill_count || 0) > 0 || Number(this.aes128Backfill?.queued_count || 0) > 0 || Number(this.aes128Backfill?.processing_count || 0) > 0
-              ? "warning"
-              : "ok"
-        ),
-      },
-      {
-        key: "f08_hard",
-        label: "Hard stream limits",
-        value: hardStreamLimits ? "Configured" : "Observe only",
-        detail: `Hard limits: ${formatNumber(this.download?.stream_requests_per_token_per_minute)} total/min and ${formatNumber(this.download?.stream_range_requests_per_token_per_minute)} range/min.`,
-        statusText: hardStreamLimits ? "Active" : "Safe default",
-        statusChipClass: statusChipClass(hardStreamLimits ? "warning" : "ok"),
-        statusDotClass: statusDotClass(hardStreamLimits ? "warning" : "ok"),
-      },
-      {
-        key: "f11_policy",
-        label: "Forensic HTTP policy",
-        value: f11Policy,
-        detail: "deny_all is strict production behavior; canonical_only is useful for HTTP test sites.",
-        statusText: f11Policy === "deny_all" ? "OK" : f11Policy === "canonical_only" ? "Test mode" : "Review",
-        statusChipClass: statusChipClass(f11Policy === "deny_all" ? "ok" : f11Policy === "canonical_only" ? "warning" : "attention"),
-        statusDotClass: statusDotClass(f11Policy === "deny_all" ? "ok" : f11Policy === "canonical_only" ? "warning" : "attention"),
-      },
-      {
-        key: "f12_thumbs",
-        label: "Thumbnail no-store",
-        value: this.download?.no_store_thumbnails ? "Enabled" : "Disabled",
-        detail: "No-store thumbnails reduce cache reuse but can increase thumbnail traffic.",
-        statusText: this.download?.no_store_thumbnails ? "OK" : "Optional",
-        statusChipClass: statusChipClass(this.download?.no_store_thumbnails ? "ok" : "info"),
-        statusDotClass: statusDotClass(this.download?.no_store_thumbnails ? "ok" : "info"),
-      },
-      {
-        key: "fail_closed",
-        label: "Upload content validation",
-        value: this.download?.fail_closed_on_unrecognized_media ? "Fail closed" : "Fallback allowed",
-        detail: "Rejects renamed PDFs/ZIPs/random bytes before the full FFmpeg processing pipeline.",
-        statusText: this.download?.fail_closed_on_unrecognized_media ? "OK" : "Review",
-        statusChipClass: statusChipClass(this.download?.fail_closed_on_unrecognized_media ? "ok" : "attention"),
-        statusDotClass: statusDotClass(this.download?.fail_closed_on_unrecognized_media ? "ok" : "attention"),
-      },
-    ];
-  }
-
-  get baselineRows() {
-    return this.baselineChecks;
-  }
-
-  get processingFailureFacts() {
-    const rows = Array.isArray(this.processingFailures?.top_reasons_30d)
-      ? this.processingFailures.top_reasons_30d.map(decorateFailureReason)
-      : [];
-
-    if (rows.length) {
-      return rows;
-    }
-
-    return [{ key: "none", label: "No recent processing failures", count: "0" }];
-  }
-
-  get rateLimitTuningFacts() {
-    const rows = Array.isArray(this.rateLimitTuning?.rows)
-      ? this.rateLimitTuning.rows.map(decorateTuningRow)
-      : [];
-
-    return rows.length
-      ? rows
-      : [{ key: "none", label: "No tuning events", value: "0", detail: "No recent rate-limit or anomaly signals found.", statusText: "OK", statusChipClass: statusChipClass("ok"), statusDotClass: statusDotClass("ok") }];
-  }
-
-  get rateLimitThresholdFacts() {
-    return Array.isArray(this.rateLimitTuning?.thresholds)
-      ? this.rateLimitTuning.thresholds.map(decorateTuningThreshold)
-      : [];
-  }
-
-  get rateLimitTuningStatusChipClass() {
-    return statusChipClass(this.rateLimitTuning?.status || "info");
-  }
-
-  get rateLimitTuningStatusDotClass() {
-    return statusDotClass(this.rateLimitTuning?.status || "info");
-  }
-
-  get rateLimitTuningStatusText() {
-    return titleize(this.rateLimitTuning?.status || "info");
-  }
-
-  get rateLimitTuningSummary() {
-    return normalizeText(this.rateLimitTuning?.summary, "Observe recent traffic before tightening enforcement thresholds.");
-  }
-
-  get processingFailureSummaryFacts() {
-    return [
-      {
-        key: "failed_7d",
-        label: "Failed last 7 days",
-        value: formatNumber(this.processingFailures?.failed_7d),
-        detail: "Media items currently failed and updated in the last 7 days.",
-        statusText: Number(this.processingFailures?.failed_7d || 0) > 0 ? "Review" : "OK",
-        statusChipClass: statusChipClass(Number(this.processingFailures?.failed_7d || 0) > 0 ? "warning" : "ok"),
-        statusDotClass: statusDotClass(Number(this.processingFailures?.failed_7d || 0) > 0 ? "warning" : "ok"),
-      },
-      {
-        key: "failed_30d",
-        label: "Failed last 30 days",
-        value: formatNumber(this.processingFailures?.failed_30d),
-        detail: "Grouped by sanitized failure reason, not raw user content.",
-        statusText: Number(this.processingFailures?.failed_30d || 0) > 0 ? "Info" : "OK",
-        statusChipClass: statusChipClass(Number(this.processingFailures?.failed_30d || 0) > 0 ? "info" : "ok"),
-        statusDotClass: statusDotClass(Number(this.processingFailures?.failed_30d || 0) > 0 ? "info" : "ok"),
-      },
-      {
-        key: "failed_total",
-        label: "Total failed items",
-        value: formatNumber(this.processingFailures?.total_failed),
-        detail: "All currently failed media items, regardless of age.",
-        statusText: "Info",
-        statusChipClass: statusChipClass("info"),
-        statusDotClass: statusDotClass("info"),
-      },
-    ];
-  }
-
-  get backupPathFacts() {
-    return this.backupPaths;
-  }
-
-  get eventCounterFacts() {
-    return this.eventCounters;
-  }
-
-  get quickLinks() {
-    const links = Array.isArray(this.links) ? [...this.links] : [];
-    const extras = [
-      { label: "Management", url: "/admin/plugins/media-gallery-management" },
-      { label: "Forensic identify", url: "/admin/plugins/media-gallery-forensics-identify" },
-    ];
-
-    extras.forEach((extra) => {
-      if (!links.some((link) => link?.url === extra.url)) {
-        links.push(extra);
+import RouteTemplate from "ember-route-template";
+import { on } from "@ember/modifier";
+
+export default RouteTemplate(
+  <template>
+    <style>
+      .media-gallery-security {
+        --mg-security-surface: var(--secondary);
+        --mg-security-surface-alt: var(--primary-very-low);
+        --mg-security-border: var(--primary-low);
+        --mg-security-muted: var(--primary-medium);
+        --mg-security-radius: 18px;
+        --mg-security-ok-bg: #ebf9ef;
+        --mg-security-ok-fg: #0b7a2a;
+        --mg-security-ok-border: #92d2a2;
+        --mg-security-warn-bg: #fff4e5;
+        --mg-security-warn-fg: #b45309;
+        --mg-security-warn-border: #fdba74;
+        --mg-security-danger-bg: #fee2e2;
+        --mg-security-danger-fg: #b91c1c;
+        --mg-security-danger-border: #fca5a5;
+        --mg-security-info-bg: #eef2ff;
+        --mg-security-info-fg: #4338ca;
+        --mg-security-info-border: #c7d2fe;
+        display: flex;
+        flex-direction: column;
+        gap: 1.2rem;
       }
-    });
 
-    return links;
-  }
+      .media-gallery-security h1,
+      .media-gallery-security h2,
+      .media-gallery-security h3,
+      .media-gallery-security p {
+        margin: 0;
+      }
 
-  get forensicsLatestExportLabel() {
-    return formatDateTime(this.forensics?.latest_export_at);
-  }
+      .mg-security__panel {
+        background: var(--mg-security-surface);
+        border: 1px solid var(--mg-security-border);
+        border-radius: var(--mg-security-radius);
+        padding: 1.1rem 1.2rem;
+        min-width: 0;
+        overflow: hidden;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
 
-  @action
-  async loadSecurityStatus() {
-    this.isLoading = true;
-    this.error = "";
+      .mg-security__header,
+      .mg-security__panel-header,
+      .mg-security__summary-head,
+      .mg-security__item-head,
+      .mg-security__profile-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+      }
 
-    try {
-      const data = await ajax("/admin/plugins/media-gallery/security.json");
-      this.applySecurityStatus(data);
-    } catch (e) {
-      this.error = e?.jqXHR?.responseJSON?.message || e?.message || "Security status could not be loaded.";
-      this.hasLoaded = true;
-    } finally {
-      this.isLoading = false;
-    }
-  }
-}
+      .mg-security__copy,
+      .mg-security__panel-copy,
+      .mg-security__item-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        min-width: 0;
+      }
+
+      .mg-security__panel-copy {
+        gap: 0.35rem;
+      }
+
+      .mg-security__actions,
+      .mg-security__link-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.65rem;
+      }
+
+      .mg-security__muted {
+        color: var(--mg-security-muted);
+      }
+
+      .mg-security__summary-grid,
+      .mg-security__controls,
+      .mg-security__facts,
+      .mg-security__settings-grid,
+      .mg-security__top-list,
+      .mg-security__storage-list {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .mg-security__summary-grid {
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      }
+
+      .mg-security__controls {
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+
+      .mg-security__facts {
+        grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+      }
+
+      .mg-security__settings-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mg-security__section-body {
+        margin-top: 1rem;
+      }
+
+      .mg-security__summary-card,
+      .mg-security__control,
+      .mg-security__fact,
+      .mg-security__setting,
+      .mg-security__profile,
+      .mg-security__top-item {
+        background: var(--mg-security-surface-alt);
+        border: 1px solid var(--mg-security-border);
+        border-radius: 16px;
+        min-width: 0;
+      }
+
+      .mg-security__summary-card,
+      .mg-security__control,
+      .mg-security__fact,
+      .mg-security__setting,
+      .mg-security__profile {
+        padding: 1rem 1.05rem;
+      }
+
+      .mg-security__summary-card,
+      .mg-security__control,
+      .mg-security__fact,
+      .mg-security__setting,
+      .mg-security__profile {
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+      }
+
+      .mg-security__eyebrow,
+      .mg-security__item-label,
+      .mg-security__meta-label {
+        color: var(--mg-security-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-security__summary-value {
+        font-size: 1.45rem;
+        line-height: 1.15;
+        font-weight: 700;
+      }
+
+      .mg-security__summary-secondary,
+      .mg-security__item-note,
+      .mg-security__setting-note,
+      .mg-security__setting-recommended,
+      .mg-security__meta-value,
+      .mg-security__top-empty {
+        color: var(--mg-security-muted);
+      }
+
+      .mg-security__status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        white-space: nowrap;
+        border-radius: 999px;
+        border: 1px solid var(--mg-security-border);
+        padding: 0.3rem 0.7rem;
+        font-size: var(--font-down-1);
+        font-weight: 700;
+      }
+
+      .mg-security__status-dot {
+        display: inline-flex;
+        flex: 0 0 auto;
+        width: 0.7rem;
+        height: 0.7rem;
+        border-radius: 999px;
+        border: 1px solid transparent;
+      }
+
+      .mg-security__status-chip .mg-security__status-dot {
+        width: 0.55rem;
+        height: 0.55rem;
+      }
+
+      .mg-security__status-chip.is-success,
+      .mg-security__status-dot.is-success {
+        background: var(--mg-security-ok-bg);
+        border-color: var(--mg-security-ok-border);
+        color: var(--mg-security-ok-fg);
+      }
+
+      .mg-security__status-chip.is-warning,
+      .mg-security__status-dot.is-warning {
+        background: var(--mg-security-warn-bg);
+        border-color: var(--mg-security-warn-border);
+        color: var(--mg-security-warn-fg);
+      }
+
+      .mg-security__status-chip.is-danger,
+      .mg-security__status-dot.is-danger {
+        background: var(--mg-security-danger-bg);
+        border-color: var(--mg-security-danger-border);
+        color: var(--mg-security-danger-fg);
+      }
+
+      .mg-security__status-chip.is-info,
+      .mg-security__status-dot.is-info {
+        background: var(--mg-security-info-bg);
+        border-color: var(--mg-security-info-border);
+        color: var(--mg-security-info-fg);
+      }
+
+      .mg-security__control-copy h3,
+      .mg-security__setting-title,
+      .mg-security__profile-title,
+      .mg-security__fact-value,
+      .mg-security__setting-value,
+      .mg-security__meta-value strong {
+        font-weight: 700;
+      }
+
+      .mg-security__fact-value,
+      .mg-security__setting-value {
+        font-size: 1.05rem;
+        line-height: 1.3;
+      }
+
+      .mg-security__environment .mg-security__item-head {
+        gap: 1.35rem;
+      }
+
+      .mg-security__environment .mg-security__item-copy {
+        flex: 1 1 auto;
+        min-width: 0;
+        gap: 0.55rem;
+        padding-right: 0.4rem;
+      }
+
+      .mg-security__environment .mg-security__fact-value {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
+      .mg-security__environment .mg-security__status-chip {
+        flex: 0 0 auto;
+      }
+
+      .mg-security__setting-value,
+      .mg-security__mono {
+        font-family: var(--d-font-family--monospace, monospace);
+        overflow-wrap: anywhere;
+      }
+
+      .mg-security__profile-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.85rem;
+      }
+
+      .mg-security__profile-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        min-width: 0;
+      }
+
+      .mg-security__profile-subtitle {
+        color: var(--mg-security-muted);
+      }
+
+      .mg-security__top-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.8rem 0.95rem;
+      }
+
+      .mg-security__top-empty {
+        border: 1px dashed var(--mg-security-border);
+        border-radius: 14px;
+        padding: 0.9rem 1rem;
+        background: var(--mg-security-surface-alt);
+      }
+
+      .mg-security__error {
+        color: var(--danger);
+        border: 1px solid var(--danger-low-mid);
+        background: var(--danger-low);
+        border-radius: 14px;
+        padding: 0.8rem 0.95rem;
+      }
+
+      @media (max-width: 1000px) {
+        .mg-security__settings-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-security__profile-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 700px) {
+        .mg-security__header,
+        .mg-security__panel-header,
+        .mg-security__summary-head,
+        .mg-security__item-head,
+        .mg-security__profile-head {
+          flex-direction: column;
+          align-items: stretch;
+        }
+      }
+    </style>
+
+    <div class="media-gallery-security">
+      <section class="mg-security__panel mg-security__header">
+        <div class="mg-security__copy">
+          <h1>Security status</h1>
+          <p class="mg-security__muted">
+            Read-only overview of active Media Gallery security, privacy and download-prevention controls. This page avoids listing internal open issues.
+          </p>
+          <p class="mg-security__muted">Last checked: {{@controller.generatedAtLabel}}</p>
+        </div>
+        <div class="mg-security__actions">
+          <button class="btn btn-primary" type="button" {{on "click" @controller.loadSecurityStatus}} disabled={{@controller.isLoading}}>
+            {{#if @controller.isLoading}}Refreshing…{{else}}Refresh{{/if}}
+          </button>
+          <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+        </div>
+      </section>
+
+      {{#if @controller.error}}
+        <div class="mg-security__error">{{@controller.error}}</div>
+      {{/if}}
+
+      <section class="mg-security__summary-grid" aria-label="Security summary">
+        {{#each @controller.summaryCards as |card|}}
+          <article class="mg-security__summary-card">
+            <div class="mg-security__summary-head">
+              <div class="mg-security__eyebrow">{{card.label}}</div>
+              <span class={{card.statusDotClass}} title={{card.statusTitle}} aria-label={{card.statusTitle}}></span>
+            </div>
+            <div class="mg-security__summary-value">{{card.value}}</div>
+            <div class="mg-security__summary-secondary">{{card.secondary}}</div>
+            <p class="mg-security__muted">{{card.detail}}</p>
+          </article>
+        {{/each}}
+      </section>
+
+      <section class="mg-security__panel mg-security__environment">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>HTTPS and canonical URL</h2>
+            <p class="mg-security__muted">Read-only warning signal for HTTPS, canonical host and reverse-proxy scheme handling.</p>
+          </div>
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.environmentFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Recommended security baseline</h2>
+            <p class="mg-security__muted">Current values compared with practical production recommendations. This is guidance only and does not change settings.</p>
+          </div>
+          <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery">Open settings</a>
+        </div>
+        <div class="mg-security__settings-grid mg-security__section-body">
+          {{#each @controller.baselineRows as |row|}}
+            <article class="mg-security__setting">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <h3 class="mg-security__setting-title">{{row.label}}</h3>
+                </div>
+                <span class={{row.statusChipClass}}>
+                  <span class={{row.statusDotClass}}></span>
+                  <span>{{row.statusText}}</span>
+                </span>
+              </div>
+              <div class="mg-security__setting-value">{{row.current}}</div>
+              <p class="mg-security__setting-note">{{row.note}}</p>
+              <p class="mg-security__setting-recommended">Recommended: {{row.recommended}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Control status</h2>
+            <p class="mg-security__muted">High-level controls and configuration-dependent protections. No detailed open-issue list is shown here.</p>
+          </div>
+        </div>
+        <div class="mg-security__controls mg-security__section-body">
+          {{#each @controller.controls as |control|}}
+            <article class="mg-security__control">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <h3>{{control.title}}</h3>
+                  <p>{{control.summary}}</p>
+                </div>
+                <span class={{control.statusChipClass}}>
+                  <span class={{control.statusDotClass}}></span>
+                  <span>{{control.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__muted">{{control.action}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Download prevention</h2>
+            <p class="mg-security__muted">Current protection signals that influence whether users receive HLS-only, fingerprinted or directly streamable media.</p>
+          </div>
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.downloadFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Additional security controls</h2>
+            <p class="mg-security__muted">Status of hardening controls that complement the recommended security baseline.</p>
+          </div>
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.recentControlFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Relevant settings</h2>
+            <p class="mg-security__muted">Read-only status of settings that affect media security, privacy, retention and download deterrence.</p>
+          </div>
+          <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery">Open settings</a>
+        </div>
+        <div class="mg-security__settings-grid mg-security__section-body">
+          {{#each @controller.settings as |setting|}}
+            <article class="mg-security__setting">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <h3 class="mg-security__setting-title">{{setting.label}}</h3>
+                </div>
+                <span class={{setting.statusChipClass}}>
+                  <span class={{setting.statusDotClass}}></span>
+                  <span>{{setting.statusText}}</span>
+                </span>
+              </div>
+              <div class="mg-security__setting-value">{{setting.displayValue}}</div>
+              <p class="mg-security__setting-note">{{setting.note}}</p>
+              <p class="mg-security__setting-recommended">Recommended: {{setting.recommended}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Storage profiles</h2>
+            <p class="mg-security__muted">Configured storage profiles without credentials or secret values.</p>
+          </div>
+          <a class="btn" href="/admin/plugins/media-gallery-migrations">Open storage tools</a>
+        </div>
+        <div class="mg-security__storage-list mg-security__section-body">
+          {{#each @controller.storageProfiles as |profile|}}
+            <article class="mg-security__profile">
+              <div class="mg-security__profile-head">
+                <div class="mg-security__item-copy">
+                  <h3 class="mg-security__profile-title">{{profile.label}}</h3>
+                  <p class="mg-security__profile-subtitle">{{profile.profileKey}} · {{profile.backendLabel}} · {{profile.deliveryModeLabel}}</p>
+                </div>
+                <span class={{profile.statusChipClass}}>
+                  <span class={{profile.statusDotClass}}></span>
+                  <span>{{profile.statusText}}</span>
+                </span>
+              </div>
+              <div class="mg-security__profile-grid">
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Backend</div>
+                  <div class="mg-security__meta-value"><strong>{{profile.backendLabel}}</strong></div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Delivery mode</div>
+                  <div class="mg-security__meta-value"><strong>{{profile.deliveryModeLabel}}</strong></div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Bucket</div>
+                  <div class="mg-security__meta-value mg-security__mono">{{profile.bucket}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Endpoint</div>
+                  <div class="mg-security__meta-value mg-security__mono">{{profile.endpoint}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Prefix / root</div>
+                  <div class="mg-security__meta-value mg-security__mono">{{profile.pathValue}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Status</div>
+                  <div class="mg-security__meta-value"><strong>{{profile.statusText}}</strong></div>
+                </div>
+              </div>
+            </article>
+          {{else}}
+            <div class="mg-security__top-empty">No configured storage profiles found.</div>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Forensics and exports</h2>
+            <p class="mg-security__muted">Retention, archive and export lifecycle status.</p>
+          </div>
+          <a class="btn" href="/admin/plugins/media-gallery-forensics-exports">Open exports</a>
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.forensicsFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Backup and retention visibility</h2>
+            <p class="mg-security__muted">Private paths and export/archive locations. Paths outside /shared may need separate backup or cleanup procedures.</p>
+          </div>
+        </div>
+        <div class="mg-security__storage-list mg-security__section-body">
+          {{#each @controller.backupPathFacts as |path|}}
+            <article class="mg-security__profile">
+              <div class="mg-security__profile-head">
+                <div class="mg-security__item-copy">
+                  <h3 class="mg-security__profile-title">{{path.label}}</h3>
+                  <p class="mg-security__profile-subtitle">{{path.purpose}} · retention {{path.retention}}</p>
+                </div>
+                <span class={{path.statusChipClass}}>
+                  <span class={{path.statusDotClass}}></span>
+                  <span>{{path.statusText}}</span>
+                </span>
+              </div>
+              <div class="mg-security__profile-grid">
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Path</div>
+                  <div class="mg-security__meta-value mg-security__mono">{{path.path}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Recommendation</div>
+                  <div class="mg-security__meta-value">{{path.recommendation}}</div>
+                </div>
+                <div class="mg-security__profile-meta">
+                  <div class="mg-security__meta-label">Status note</div>
+                  <div class="mg-security__meta-value">{{path.note}}</div>
+                </div>
+              </div>
+            </article>
+          {{else}}
+            <div class="mg-security__top-empty">No private path information available.</div>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Processing failure metrics</h2>
+            <p class="mg-security__muted">Failed media items grouped by sanitized reason codes. No raw user content is shown in this summary.</p>
+          </div>
+          <a class="btn" href="/admin/plugins/media-gallery-management?status=failed">Open failed items</a>
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.processingFailureSummaryFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+        <div class="mg-security__top-list mg-security__section-body">
+          {{#each @controller.processingFailureFacts as |reason|}}
+            <div class="mg-security__top-item">
+              <span>{{reason.label}}</span>
+              <strong>{{reason.count}}</strong>
+            </div>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Rate-limit and anomaly tuning</h2>
+            <p class="mg-security__muted">Seven-day signals for choosing safe thresholds. Observe normal traffic before enabling stricter blocking.</p>
+          </div>
+          <span class={{@controller.rateLimitTuningStatusChipClass}}>
+            <span class={{@controller.rateLimitTuningStatusDotClass}}></span>
+            <span>{{@controller.rateLimitTuningStatusText}}</span>
+          </span>
+        </div>
+        <p class="mg-security__muted mg-security__section-body">{{@controller.rateLimitTuningSummary}}</p>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.rateLimitTuningFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+        <div class="mg-security__facts mg-security__section-body">
+          {{#each @controller.rateLimitThresholdFacts as |fact|}}
+            <article class="mg-security__fact">
+              <div class="mg-security__item-head">
+                <div class="mg-security__item-copy">
+                  <div class="mg-security__item-label">{{fact.label}}</div>
+                  <div class="mg-security__fact-value">{{fact.value}}</div>
+                </div>
+                <span class={{fact.statusChipClass}}>
+                  <span class={{fact.statusDotClass}}></span>
+                  <span>{{fact.statusText}}</span>
+                </span>
+              </div>
+              <p class="mg-security__item-note">{{fact.detail}}</p>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Recent media security events</h2>
+            <p class="mg-security__muted">Top event types from the last 7 days. Use the logs page for details.</p>
+          </div>
+          <a class="btn" href="/admin/plugins/media-gallery-logs">Open logs</a>
+        </div>
+        <div class="mg-security__top-list mg-security__section-body">
+          {{#each @controller.topEventTypes as |event|}}
+            <div class="mg-security__top-item">
+              <span>{{event.label}}</span>
+              <strong>{{event.count}}</strong>
+            </div>
+          {{else}}
+            <div class="mg-security__top-empty">No recent media security events found.</div>
+          {{/each}}
+        </div>
+        <div class="mg-security__top-list mg-security__section-body">
+          {{#each @controller.eventCounterFacts as |event|}}
+            <div class="mg-security__top-item">
+              <span>{{event.label}}</span>
+              <strong>{{event.count}}</strong>
+            </div>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-security__panel">
+        <div class="mg-security__panel-header">
+          <div class="mg-security__panel-copy">
+            <h2>Quick links</h2>
+            <p class="mg-security__muted">Related read-only or admin tools.</p>
+          </div>
+        </div>
+        <div class="mg-security__link-row mg-security__section-body">
+          {{#each @controller.quickLinks as |link|}}
+            <a class="btn" href={{link.url}}>{{link.label}}</a>
+          {{/each}}
+        </div>
+      </section>
+    </div>
+  </template>
+);

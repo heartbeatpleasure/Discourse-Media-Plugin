@@ -23,6 +23,7 @@ module ::MediaGallery
       candidates = timed_phase!(timing, :query) { filtered_search_scope.limit(candidate_limit).to_a }
       hls_roles_by_item = timed_phase!(timing, :hls_manifest) { hls_roles_by_item_from_manifest(candidates) }
       active_key_ids_by_item = timed_phase!(timing, :aes_key_prefetch) { hls_aes128_active_key_ids_by_item(candidates) }
+      storage_profile_cache = timed_phase!(timing, :storage_profiles) { storage_profile_cache_for_items(candidates) }
 
       items = []
       timed_phase!(timing, :serialize) do
@@ -35,7 +36,7 @@ module ::MediaGallery
           aes_status = hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item, role: hls_role)
           next unless hls_aes128_filter_matches?(aes_status, hls_aes128_filter)
 
-          items << serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status)
+          items << serialize_search_item(item, has_hls: has_hls, hls_aes128_status: aes_status, storage_profile_cache: storage_profile_cache)
           break if items.length >= final_limit
         end
       end
@@ -868,8 +869,10 @@ module ::MediaGallery
       Array(raw).map(&:to_s).map(&:strip).reject(&:blank?).map(&:downcase).uniq
     end
 
-    def serialize_search_item(item, has_hls:, hls_aes128_status: nil)
+    def serialize_search_item(item, has_hls:, hls_aes128_status: nil, storage_profile_cache: nil)
       visibility = item.admin_visibility_state
+      profile_info = storage_profile_info_for_item(item, storage_profile_cache: storage_profile_cache)
+      duplicate_payload = duplicate_detection_payload(item, resolve_match: false)
       {
         id: item.id,
         public_id: item.public_id,
@@ -885,16 +888,16 @@ module ::MediaGallery
         error_message: item.error_message,
         thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
         managed_storage_backend: item.managed_storage_backend,
-        managed_storage_profile: managed_storage_profile_key_for(item),
-        managed_storage_profile_label: managed_storage_profile_label_for(item),
-        managed_storage_location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
+        managed_storage_profile: profile_info[:key],
+        managed_storage_profile_label: profile_info[:label],
+        managed_storage_location_fingerprint_key: profile_info[:location_fingerprint_key],
         delivery_mode: item.delivery_mode,
         has_hls: has_hls,
         hls_aes128: hls_aes128_status || hls_aes128_status_for(item, has_hls: has_hls),
-        hidden: item.admin_hidden?,
+        hidden: ActiveModel::Type::Boolean.new.cast(visibility["hidden"]),
         hidden_reason: visibility["reason"],
-        possible_duplicate: possible_duplicate_item?(item),
-        duplicate_detection: duplicate_detection_payload(item, resolve_match: false),
+        possible_duplicate: ActiveModel::Type::Boolean.new.cast(duplicate_payload[:possible_duplicate] || duplicate_payload["possible_duplicate"]),
+        duplicate_detection: duplicate_payload,
       }
     end
 
@@ -1406,6 +1409,34 @@ module ::MediaGallery
     rescue => e
       ::MediaGallery::OperationLogger.warn("hls_role_manifest_prefetch_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
       {}
+    end
+
+    def storage_profile_cache_for_items(items)
+      keys = Array(items).map { |item| managed_storage_profile_key_for(item) }.compact.uniq
+      keys.each_with_object({}) do |key, memo|
+        memo[key.to_s] = {
+          key: key.to_s,
+          label: ::MediaGallery::StorageSettingsResolver.profile_label_for_key(key),
+          location_fingerprint_key: ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(key),
+        }
+      end
+    rescue => e
+      ::MediaGallery::OperationLogger.warn("storage_profile_cache_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
+      {}
+    end
+
+    def storage_profile_info_for_item(item, storage_profile_cache: nil)
+      key = managed_storage_profile_key_for(item).to_s
+      cached = storage_profile_cache.is_a?(Hash) ? storage_profile_cache[key] : nil
+      return cached if cached.is_a?(Hash)
+
+      {
+        key: key.presence,
+        label: managed_storage_profile_label_for(item),
+        location_fingerprint_key: managed_storage_location_fingerprint_key_for(item),
+      }
+    rescue
+      { key: nil, label: nil, location_fingerprint_key: nil }
     end
 
     def hls_role_from_manifest(item)
