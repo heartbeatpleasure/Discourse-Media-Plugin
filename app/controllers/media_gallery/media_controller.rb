@@ -482,6 +482,13 @@ module ::MediaGallery
           SiteSetting.respond_to?(:media_gallery_protected_video_hls_only) &&
           SiteSetting.media_gallery_protected_video_hls_only
 
+      aes128_status =
+        if video_media
+          MediaGallery::Hls.aes128_status_for(item)
+        else
+          { "enabled" => false, "required" => false, "ready" => false }
+        end
+
       if hls_only_required && force_stream
         log_security_event(
           event_type: "hls_only_force_stream_blocked",
@@ -670,7 +677,8 @@ module ::MediaGallery
             heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
             heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds,
             hls_only: hls_only_required,
-            stream_fallback_allowed: !hls_only_required
+            stream_fallback_allowed: !hls_only_required,
+            aes128: aes128_status
           },
           overlay: overlay_payload
         )
@@ -693,7 +701,8 @@ module ::MediaGallery
             heartbeat_interval_seconds: MediaGallery::Security.heartbeat_interval_seconds,
             heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds,
             hls_only: hls_only_required,
-            stream_fallback_allowed: !hls_only_required
+            stream_fallback_allowed: !hls_only_required,
+            aes128: aes128_status
           },
           overlay: overlay_payload
         )

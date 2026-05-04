@@ -34,6 +34,102 @@ module ::MediaGallery
       SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled
     end
 
+    # AES-128 HLS hardening helpers.
+    #
+    # Iteratie 1 intentionally exposes settings and read-only status helpers only.
+    # Packaging, key storage, key endpoints and playback enforcement are added in
+    # later iterations so enabling these settings cannot silently change current
+    # playback behavior before the full AES path exists.
+    def aes128_setting_enabled?
+      SiteSetting.respond_to?(:media_gallery_hls_aes128_enabled) &&
+        ActiveModel::Type::Boolean.new.cast(SiteSetting.media_gallery_hls_aes128_enabled)
+    rescue
+      false
+    end
+
+    def aes128_enabled?
+      enabled? && aes128_setting_enabled?
+    rescue
+      false
+    end
+
+    def aes128_required?
+      aes128_enabled? &&
+        SiteSetting.respond_to?(:media_gallery_hls_aes128_required) &&
+        ActiveModel::Type::Boolean.new.cast(SiteSetting.media_gallery_hls_aes128_required)
+    rescue
+      false
+    end
+
+    def aes128_key_rotation_segments
+      value =
+        if SiteSetting.respond_to?(:media_gallery_hls_aes128_key_rotation_segments)
+          SiteSetting.media_gallery_hls_aes128_key_rotation_segments.to_i
+        else
+          0
+        end
+
+      value = 0 if value.negative?
+      value = 1000 if value > 1000
+      value
+    rescue
+      0
+    end
+
+    def aes128_key_denial_logging_enabled?
+      SiteSetting.respond_to?(:media_gallery_log_hls_aes128_key_denials) &&
+        ActiveModel::Type::Boolean.new.cast(SiteSetting.media_gallery_log_hls_aes128_key_denials)
+    rescue
+      false
+    end
+
+    def aes128_encryption_meta_for(item, role: nil)
+      role ||= managed_role_for(item)
+      return nil unless role.is_a?(Hash)
+
+      encryption = role["encryption"]
+      return nil unless encryption.is_a?(Hash)
+
+      encryption = encryption.deep_stringify_keys
+      return nil unless encryption["method"].to_s.casecmp("AES-128").zero?
+
+      encryption
+    rescue
+      nil
+    end
+
+    def aes128_ready?(item, role: nil)
+      encryption = aes128_encryption_meta_for(item, role: role)
+      return false unless encryption.is_a?(Hash)
+
+      ActiveModel::Type::Boolean.new.cast(encryption["ready"]) &&
+        encryption["key_id"].to_s.present? &&
+        encryption["scheme"].to_s.present?
+    rescue
+      false
+    end
+
+    def aes128_status_for(item, role: nil)
+      role ||= managed_role_for(item)
+      encryption = aes128_encryption_meta_for(item, role: role)
+
+      {
+        "enabled" => aes128_enabled?,
+        "required" => aes128_required?,
+        "ready" => aes128_ready?(item, role: role),
+        "method" => encryption.is_a?(Hash) ? encryption["method"].to_s.presence : nil,
+        "scheme" => encryption.is_a?(Hash) ? encryption["scheme"].to_s.presence : nil,
+        "key_rotation_segments" => aes128_key_rotation_segments,
+      }.compact
+    rescue
+      {
+        "enabled" => false,
+        "required" => false,
+        "ready" => false,
+        "key_rotation_segments" => 0,
+      }
+    end
+
     def segment_duration_seconds
       s = 0
       begin
@@ -543,6 +639,9 @@ module ::MediaGallery
         generated_at: hls_meta["generated_at"]
       }
 
+      encryption = sanitized_aes128_encryption_meta(hls_meta["encryption"])
+      role[:encryption] = encryption if encryption.present?
+
       packaged_root ||= packaged_root_for(item, hls_meta)
       if packaged_root.present? && File.exist?(File.join(packaged_root, "fingerprint_meta.json"))
         role[:fingerprint_meta_key] = File.join(key_prefix, "fingerprint_meta.json")
@@ -557,6 +656,27 @@ module ::MediaGallery
       role.deep_stringify_keys
     end
     private_class_method :build_role_for_store
+
+    def sanitized_aes128_encryption_meta(encryption)
+      return nil unless encryption.is_a?(Hash)
+
+      encryption = encryption.deep_stringify_keys
+      method = encryption["method"].to_s
+      return nil unless method.casecmp("AES-128").zero?
+
+      {
+        "method" => "AES-128",
+        "scheme" => encryption["scheme"].to_s.presence,
+        "key_id" => encryption["key_id"].to_s.presence,
+        "iv_hex" => encryption["iv_hex"].to_s.presence,
+        "ready" => ActiveModel::Type::Boolean.new.cast(encryption["ready"]),
+        "generated_at" => encryption["generated_at"].to_s.presence,
+        "key_rotation_segments" => encryption["key_rotation_segments"].to_i,
+      }.compact
+    rescue
+      nil
+    end
+    private_class_method :sanitized_aes128_encryption_meta
 
     def build_root_for_package(workspace: nil)
       if workspace.present?

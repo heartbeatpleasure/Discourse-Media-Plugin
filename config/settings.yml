@@ -616,6 +616,35 @@ plugins:
     max: 20000
     client: false
 
+  # HLS AES-128 content hardening (iterative rollout).
+  # This is not DRM: authorized clients still receive decryption keys for playback.
+  # Keep disabled until the packaging pipeline, key storage and key endpoint iterations are complete.
+  media_gallery_hls_aes128_enabled:
+    default: false
+    client: false
+
+  # When enabled in a later iteration, playback may require an AES-128-ready HLS package
+  # and direct stream fallback must stay blocked for protected video.
+  # This setting is intentionally inert until the AES playback enforcement iteration wires it in.
+  media_gallery_hls_aes128_required:
+    default: false
+    client: false
+
+  # Future key rotation control. 0 = one AES key per video/package.
+  # Non-zero values are reserved for a later implementation iteration.
+  media_gallery_hls_aes128_key_rotation_segments:
+    default: 0
+    type: integer
+    min: 0
+    max: 1000
+    client: false
+
+  # Optional troubleshooting: log AES-128 key-request denials once the key endpoint exists.
+  # Kept separate from generic HLS denials so QA can enable it without increasing all HLS noise.
+  media_gallery_log_hls_aes128_key_denials:
+    default: false
+    client: false
+
   # Debugging / forensics: log token denials (invalid/revoked/mismatch) for HLS endpoints.
   # Can be noisy when tokens are revoked at end of playback. Keep off unless needed.
   media_gallery_log_hls_denials:
