@@ -110,6 +110,42 @@ function stringifyValue(value, key = "") {
   return normalized.trim() ? normalized : "—";
 }
 
+function compactHlsPath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  const withoutQuery = raw.split("?")[0].split("#")[0];
+  const hlsIndex = withoutQuery.indexOf("/hls/");
+  if (hlsIndex >= 0) {
+    return withoutQuery.slice(hlsIndex + 5);
+  }
+
+  const parts = withoutQuery.split("/").filter(Boolean);
+  if (parts.length >= 2 && /^[0-9a-f-]{24,}$/i.test(parts[0]) && parts[1] === "hls") {
+    return parts.slice(2).join("/");
+  }
+
+  return parts.length ? parts.slice(-2).join("/") : withoutQuery;
+}
+
+function hlsStatusBadgeClass(status) {
+  switch (String(status || "").toLowerCase()) {
+    case "ok":
+    case "not_applicable":
+      return "mg-management__badge is-success";
+    case "warning":
+      return "mg-management__badge is-warning";
+    case "critical":
+    case "error":
+    case "failed":
+      return "mg-management__badge is-danger";
+    default:
+      return "mg-management__badge";
+  }
+}
+
 function friendlyProcessingError(message) {
   const raw = String(message || "").trim();
   if (!raw) {
@@ -1146,12 +1182,26 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   get hlsIntegrityChecks() {
-    return Array.isArray(this.hlsIntegrityResult?.checks) ? this.hlsIntegrityResult.checks : [];
+    return (Array.isArray(this.hlsIntegrityResult?.checks) ? this.hlsIntegrityResult.checks : []).map((check) => {
+      const status = String(check?.status || "");
+      const displayDetail = compactHlsPath(check?.detail || check?.key || "");
+
+      return {
+        ...check,
+        statusLabel: status ? titleize(status) : "Unknown",
+        statusBadgeClass: hlsStatusBadgeClass(status),
+        displayDetail,
+      };
+    });
   }
 
   get hlsIntegrityStatusLabel() {
     const status = String(this.hlsIntegrityResult?.status || "");
     return status ? titleize(status) : "";
+  }
+
+  get hlsIntegrityStatusBadgeClass() {
+    return hlsStatusBadgeClass(this.hlsIntegrityResult?.status);
   }
 
   @action

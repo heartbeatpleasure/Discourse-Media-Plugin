@@ -767,6 +767,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     return titleCase(this.selectedPlan?.safety_summary?.status || "ok");
   }
 
+  get selectedPlanSafetyStatusBadgeClass() {
+    return badgeClassForStatus(this.selectedPlan?.safety_summary?.status || "ok");
+  }
+
   get selectedPlanRoleCards() {
     return safeArray(this.selectedPlan?.roles).map((entry) => {
       const summary = entry?.summary || {};

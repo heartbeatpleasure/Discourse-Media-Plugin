@@ -238,7 +238,7 @@ module ::MediaGallery
     def verify_hls_integrity
       item = load_item!
       result = ::MediaGallery::HlsIntegrityVerifier.verify(item)
-      audit_admin_action!("hls_integrity_verify_run", item: item, operation: "verify_hls_integrity", result: result[:status], data: { checked_segments: result[:checked_segments], role_backend: result[:role_backend] })
+      audit_hls_integrity_verify!(item, result)
       render_json_dump(ok: result[:ok], verification: result)
     rescue => e
       render_operation_error(e, operation: "verify_hls_integrity", item: item, status: 422)
@@ -433,6 +433,31 @@ module ::MediaGallery
     end
 
     private
+
+    def audit_hls_integrity_verify!(item, result)
+      payload = {
+        checked_segments: result[:checked_segments],
+        role_backend: result[:role_backend],
+        status: result[:status],
+      }.compact
+
+      ::MediaGallery::OperationLogger.info("hls_integrity_verify_run", item: item, operation: "verify_hls_integrity", data: payload)
+
+      if defined?(::MediaGallery::LogEvents) && ::MediaGallery::LogEvents.respond_to?(:record)
+        ::MediaGallery::LogEvents.record(
+          event_type: "hls_integrity_verify_run",
+          severity: "info",
+          category: "audit",
+          request: request,
+          user: current_user,
+          media_item: item,
+          message: "Admin action: verify_hls_integrity",
+          details: payload.merge(actor_id: current_user&.id, actor_username: current_user&.username)
+        )
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] HLS integrity audit failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
+    end
 
     def audit_admin_action!(event, item: nil, operation:, result: nil, data: {})
       ::MediaGallery::OperationLogger.audit(event, item: item, operation: operation, user: current_user, request: request, result: result, data: data)

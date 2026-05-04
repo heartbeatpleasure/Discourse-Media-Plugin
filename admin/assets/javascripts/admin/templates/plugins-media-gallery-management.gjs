@@ -353,6 +353,19 @@ export default RouteTemplate(
       }
 
 
+      .mg-management__hls-card {
+        gap: 0.5rem;
+      }
+
+      .mg-management__hls-detail {
+        color: var(--mg-muted);
+        font-family: var(--d-font-family--monospace, monospace);
+        font-size: var(--font-down-1);
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+
       .mg-management__summary-card.is-wide {
         grid-column: 1 / -1;
       }
@@ -857,14 +870,14 @@ export default RouteTemplate(
                   <p class="mg-management__muted" style="margin-top: 0.3rem;">{{@controller.hlsIntegrityResult.summary}}</p>
                   <div class="mg-management__summary-card" style="margin-top: 1rem;">
                     <div class="mg-management__summary-label">Status</div>
-                    <div class="mg-management__summary-value">{{@controller.hlsIntegrityStatusLabel}}</div>
+                    <span class={{@controller.hlsIntegrityStatusBadgeClass}}>{{@controller.hlsIntegrityStatusLabel}}</span>
                   </div>
                   <div class="mg-management__summary-grid" style="margin-top: 1rem;">
                     {{#each @controller.hlsIntegrityChecks as |check|}}
-                      <div class="mg-management__summary-card">
+                      <div class="mg-management__summary-card mg-management__hls-card">
                         <div class="mg-management__summary-label">{{check.message}}</div>
-                        <div class="mg-management__summary-value">{{check.status}}</div>
-                        {{#if check.detail}}<div class="mg-management__muted">{{check.detail}}</div>{{/if}}
+                        <span class={{check.statusBadgeClass}}>{{check.statusLabel}}</span>
+                        {{#if check.displayDetail}}<div class="mg-management__hls-detail">{{check.displayDetail}}</div>{{/if}}
                       </div>
                     {{/each}}
                   </div>

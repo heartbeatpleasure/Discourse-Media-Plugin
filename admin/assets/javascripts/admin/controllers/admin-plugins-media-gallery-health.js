@@ -375,6 +375,44 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     return this.attentionIssues.length > 0;
   }
 
+  get operationalSafetyCards() {
+    const storageSection = this.sections.find((section) => section?.id === "storage") || {};
+    const processingSection = this.sections.find((section) => section?.id === "processing") || {};
+    const storageSafetyIssues = (storageSection.issues || []).filter((issue) =>
+      String(issue?.id || "").startsWith("storage_profile_safety_")
+    );
+    const staleTempIssue = (processingSection.issues || []).find((issue) => issue?.id === "stale_temp_workspaces");
+
+    const storageSeverity = storageSafetyIssues.length
+      ? storageSafetyIssues.reduce((highest, issue) => severityRank(issue.severity) > severityRank(highest) ? issue.severity : highest, "ok")
+      : "ok";
+
+    const storageMessages = storageSafetyIssues.map((issue) => issue.message || issue.label).filter(Boolean);
+
+    return [
+      {
+        label: "Storage profile safety",
+        value: storageSafetyIssues.length ? `${storageSafetyIssues.length} warning${storageSafetyIssues.length === 1 ? "" : "s"}` : "OK",
+        detail: storageMessages.length ? storageMessages.join(" • ") : "No storage profile safety warnings found.",
+        severity: storageSeverity,
+        badgeClass: badgeClass(storageSeverity),
+        severityLabel: severityLabel(storageSeverity),
+      },
+      {
+        label: "Temp/workspace cleanup",
+        value: staleTempIssue?.countLabel || "0",
+        detail: staleTempIssue?.detail || staleTempIssue?.message || "No stale Media Gallery temp workspaces found.",
+        severity: staleTempIssue?.severity || "ok",
+        badgeClass: badgeClass(staleTempIssue?.severity || "ok"),
+        severityLabel: severityLabel(staleTempIssue?.severity || "ok"),
+      },
+    ];
+  }
+
+  get hasOperationalSafetyCards() {
+    return this.operationalSafetyCards.length > 0;
+  }
+
   get hasIgnoredFindings() {
     return this.ignoredFindings.length > 0;
   }

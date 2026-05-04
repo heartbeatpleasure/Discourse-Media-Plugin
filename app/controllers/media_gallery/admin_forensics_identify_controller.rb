@@ -199,7 +199,7 @@ module ::MediaGallery
       checks = []
       begin
         ensure_source_url_allowed!(uri, context: "source_url")
-        checks << { status: "ok", label: "URL policy", message: "Source URL is allowed by the current F11 policy." }
+        checks << { status: "ok", label: "URL policy", message: "Source URL is allowed by the configured HTTP source URL policy." }
       rescue => e
         checks << { status: "critical", label: "URL policy", message: source_url_validation_message(e.message) }
       end

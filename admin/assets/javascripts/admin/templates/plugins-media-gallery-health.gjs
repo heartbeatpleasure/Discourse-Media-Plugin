@@ -729,6 +729,29 @@ export default RouteTemplate(
         </section>
       {{/if}}
 
+      {{#if @controller.hasOperationalSafetyCards}}
+        <section class="mg-health__panel">
+          <div class="mg-health__panel-header">
+            <div class="mg-health__panel-copy">
+              <h2>Operational safety checks</h2>
+              <p class="mg-health__muted">Read-only checks added for storage profile safety and stale Media Gallery temp/workspace cleanup.</p>
+            </div>
+            <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">These checks do not change files or settings. They summarize operational risks so admins can review storage configuration and old temporary workspaces.</span></span>
+          </div>
+
+          <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem;">
+            {{#each @controller.operationalSafetyCards as |card|}}
+              <article class="mg-health__alert-card">
+                <div class="mg-health__alert-label">{{card.label}}</div>
+                <div class="mg-health__alert-value">{{card.value}}</div>
+                <span class="mg-health__badge {{card.badgeClass}}" style="margin-top: 0.45rem;">{{card.severityLabel}}</span>
+                <p class="mg-health__muted" style="margin-top: 0.65rem;">{{card.detail}}</p>
+              </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
+
       {{#if @controller.hasAttentionIssues}}
         <section class="mg-health__panel">
           <div class="mg-health__panel-header">

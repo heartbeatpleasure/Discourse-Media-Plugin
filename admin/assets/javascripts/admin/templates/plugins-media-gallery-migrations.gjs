@@ -139,9 +139,9 @@ export default RouteTemplate(
         }
 
         .mg-migrations__badge.is-warning {
-          background: var(--tertiary-very-low);
-          color: var(--tertiary);
-          border-color: var(--tertiary-low);
+          background: #fff3cd;
+          color: #8a5a00;
+          border-color: #f0c36d;
         }
 
         .mg-migrations__badge.is-danger {
@@ -385,6 +385,12 @@ export default RouteTemplate(
         .mg-migrations__summary-card .mg-migrations__muted {
           display: block;
           margin-top: 0.4rem;
+        }
+
+        .mg-migrations__summary-card .mg-migrations__badge {
+          align-self: flex-start;
+          margin-top: 0.55rem;
+          margin-bottom: 0.2rem;
         }
 
         .mg-migrations__warning-list {
@@ -1042,7 +1048,7 @@ export default RouteTemplate(
                     <h3>Migration safety summary</h3>
                     <span class="mg-migrations__muted">Read this dry-run summary before executing copy, switch or cleanup actions.</span>
                   </div>
-                  <span class="mg-migrations__badge">{{@controller.selectedPlanSafetyStatusLabel}}</span>
+                  <span class={{@controller.selectedPlanSafetyStatusBadgeClass}}>{{@controller.selectedPlanSafetyStatusLabel}}</span>
                 </div>
                 <div class="mg-migrations__summary-grid" style="margin-bottom: 1rem;">
                   {{#each @controller.selectedPlanSafetyRows as |row|}}
