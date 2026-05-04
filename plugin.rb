@@ -63,6 +63,7 @@ after_initialize do
   require_relative "lib/media_gallery/security"
   require_relative "lib/media_gallery/ffmpeg"
   require_relative "lib/media_gallery/hls"
+  require_relative "lib/media_gallery/hls_aes128"
   require_relative "lib/media_gallery/hls_integrity_verifier"
   require_relative "lib/media_gallery/fingerprinting"
   require_relative "lib/media_gallery/type_detector"

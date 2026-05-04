@@ -267,7 +267,7 @@ module MediaGallery
 
     # Milestone 1: package a processed MP4 into a single HLS variant.
     # Produces: output_dir/index.m3u8 + output_dir/seg_XXXXX.ts
-    def self.package_hls_single_variant(input_path:, output_dir:, segment_seconds:)
+    def self.package_hls_single_variant(input_path:, output_dir:, segment_seconds:, hls_key_info_file: nil)
       FileUtils.mkdir_p(output_dir)
       seg = segment_seconds.to_i
       seg = 6 if seg <= 0
@@ -297,6 +297,13 @@ module MediaGallery
         "independent_segments",
         "-hls_list_size",
         "0",
+      ]
+
+      if hls_key_info_file.to_s.present?
+        cmd += ["-hls_key_info_file", hls_key_info_file.to_s]
+      end
+
+      cmd += [
         "-hls_segment_filename",
         segment_pattern,
         playlist_path,
@@ -322,7 +329,8 @@ module MediaGallery
       vf_b:,
       video_bitrate_kbps:,
       audio_bitrate_kbps: 128,
-      max_fps: nil
+      max_fps: nil,
+      hls_key_info_file: nil
     )
       seg = segment_seconds.to_i
       seg = 6 if seg <= 0
@@ -341,6 +349,7 @@ module MediaGallery
         vf: vf_a,
         video_bitrate_kbps: video_bitrate_kbps,
         audio_bitrate_kbps: audio_bitrate_kbps,
+        hls_key_info_file: hls_key_info_file,
       )
 
       package_hls_reencode_variant(
@@ -351,6 +360,7 @@ module MediaGallery
         vf: vf_b,
         video_bitrate_kbps: video_bitrate_kbps,
         audio_bitrate_kbps: audio_bitrate_kbps,
+        hls_key_info_file: hls_key_info_file,
       )
     end
 
@@ -361,7 +371,8 @@ module MediaGallery
       gop:,
       vf:,
       video_bitrate_kbps:,
-      audio_bitrate_kbps:
+      audio_bitrate_kbps:,
+      hls_key_info_file: nil
     )
       FileUtils.mkdir_p(output_dir)
 
@@ -426,6 +437,13 @@ module MediaGallery
           "independent_segments",
           "-hls_list_size",
           "0",
+        ]
+
+        if hls_key_info_file.to_s.present?
+          cmd += ["-hls_key_info_file", hls_key_info_file.to_s]
+        end
+
+        cmd += [
           "-hls_segment_filename",
           segment_pattern,
           playlist_path,
