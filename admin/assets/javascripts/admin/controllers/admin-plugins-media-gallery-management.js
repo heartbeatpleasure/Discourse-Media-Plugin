@@ -442,6 +442,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked searchInfo = "";
   @tracked lastSearchTimingMs = null;
   @tracked lastSearchTimingBreakdown = null;
+  @tracked showPerformanceTimings = false;
   @tracked hasSearched = false;
 
   @tracked selectedPublicId = "";
@@ -495,6 +496,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.searchInfo = "";
     this.lastSearchTimingMs = null;
     this.lastSearchTimingBreakdown = null;
+    this.showPerformanceTimings = false;
     this.hasSearched = false;
 
     this.selectedPublicId = "";
@@ -1206,16 +1208,21 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   _updateSearchInfo() {
-    const timing = Number(this.lastSearchTimingMs || 0);
-    const breakdown = this.lastSearchTimingBreakdown || {};
-    const parts = ["query", "hls_manifest", "aes_key_prefetch", "aes_status", "storage_profiles", "users", "serialize", "profiles"]
-      .map((key) => {
-        const value = Number(breakdown?.[key] || 0);
-        return value > 0 ? `${key.replace(/_/g, " ")} ${value}ms` : null;
-      })
-      .filter(Boolean)
-      .join(" · ");
-    const suffix = timing > 0 ? ` • server ${timing}ms${parts ? ` (${parts})` : ""}` : "";
+    let suffix = "";
+
+    if (this.showPerformanceTimings) {
+      const timing = Number(this.lastSearchTimingMs || 0);
+      const breakdown = this.lastSearchTimingBreakdown || {};
+      const parts = ["query", "hls_manifest", "aes_key_prefetch", "aes_status", "storage_profiles", "users", "serialize", "profiles"]
+        .map((key) => {
+          const value = Number(breakdown?.[key] || 0);
+          return value > 0 ? `${key.replace(/_/g, " ")} ${value}ms` : null;
+        })
+        .filter(Boolean)
+        .join(" · ");
+      suffix = timing > 0 ? ` • server ${timing}ms${parts ? ` (${parts})` : ""}` : "";
+    }
+
     this.searchInfo = `${this.searchResults.length} item(s) found${suffix}.`;
   }
 
@@ -1583,6 +1590,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         signal: controller.signal,
       });
       this.availableSearchProfiles = Array.isArray(json?.search_profiles) ? json.search_profiles : this.availableSearchProfiles;
+      this.showPerformanceTimings = !!json?.show_performance_timings;
       this.lastSearchTimingMs = Number(json?.timing_ms || 0) || null;
       this.lastSearchTimingBreakdown = json?.timing_breakdown_ms || null;
       this.searchResults = this._sortSearchResults(Array.isArray(json?.items) ? json.items : []);

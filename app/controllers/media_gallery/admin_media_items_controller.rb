@@ -64,6 +64,7 @@ module ::MediaGallery
         search_profiles: profiles,
         timing_ms: elapsed_ms,
         timing_breakdown_ms: timing,
+        show_performance_timings: admin_pages_show_performance_timings?,
         candidates_count: candidates.length,
         returned_count: items.length,
         candidate_limit: candidate_limit,
@@ -700,6 +701,13 @@ module ::MediaGallery
       end
     rescue
       2000
+    end
+
+    def admin_pages_show_performance_timings?
+      SiteSetting.respond_to?(:media_gallery_admin_pages_show_performance_timings) &&
+        SiteSetting.media_gallery_admin_pages_show_performance_timings
+    rescue
+      false
     end
 
     def audit_hls_integrity_verify!(item, result)

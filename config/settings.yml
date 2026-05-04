@@ -657,6 +657,12 @@ plugins:
     max: 100
     client: false
 
+  # Show detailed server-side performance timings on Media Gallery admin pages.
+  # Keep disabled in normal production use; slow-search logging below still works separately.
+  media_gallery_admin_pages_show_performance_timings:
+    default: false
+    client: false
+
   # Log slow Media Gallery management searches with phase timing. 0 disables slow-search logging.
   media_gallery_management_search_slow_log_ms:
     default: 2000
