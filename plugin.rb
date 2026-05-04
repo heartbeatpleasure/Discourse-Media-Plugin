@@ -81,6 +81,7 @@ after_initialize do
   require_relative "lib/media_gallery/health_check"
 
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/hls_aes128_key.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_fingerprint.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_playback_session.rb", __dir__)

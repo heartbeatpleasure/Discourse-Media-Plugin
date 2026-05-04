@@ -1,16 +1,19 @@
 # frozen_string_literal: true
 
+require "active_support/key_generator"
+require "active_support/message_encryptor"
+require "base64"
 require "fileutils"
 require "securerandom"
 require "time"
 
 module ::MediaGallery
-  # Small, side-effect-free helper for HLS AES-128 packaging preparation.
+  # Helper for HLS AES-128 packaging preparation and server-side key handling.
   #
-  # This module deliberately does not store keys and does not change playback.
-  # It only creates validated in-workspace key artifacts that FFmpeg can consume
-  # through -hls_key_info_file. Later iterations wire this into packaging,
-  # server-side key storage, playlist rewriting and the tokenized key endpoint.
+  # This module still does not change playback by itself. It provides validated
+  # key material helpers, FFmpeg keyinfo files and encrypted DB storage helpers.
+  # Later iterations wire these pieces into packaging, playlist rewriting and
+  # the tokenized key endpoint.
   module HlsAes128
     module_function
 
@@ -20,6 +23,7 @@ module ::MediaGallery
     KEY_BYTES = 16
     KEY_ID_PATTERN = /\A[a-zA-Z0-9_-]+\z/
     IV_HEX_PATTERN = /\A[0-9a-fA-F]{32}\z/
+    ENCRYPTOR_SALT = "media_gallery_hls_aes128_key_v1"
 
     def enabled?
       ::MediaGallery::Hls.respond_to?(:aes128_enabled?) && ::MediaGallery::Hls.aes128_enabled?
@@ -158,5 +162,63 @@ module ::MediaGallery
     rescue
       false
     end
+
+    def encrypt_key_bytes(key_bytes)
+      raise ArgumentError, "invalid_hls_aes128_key_bytes" unless valid_key_bytes?(key_bytes)
+
+      encryptor.encrypt_and_sign(Base64.strict_encode64(key_bytes))
+    end
+
+    def decrypt_key_ciphertext(ciphertext)
+      ciphertext = ciphertext.to_s
+      raise ArgumentError, "hls_aes128_key_ciphertext_missing" if ciphertext.blank?
+
+      key_bytes = Base64.strict_decode64(encryptor.decrypt_and_verify(ciphertext))
+      raise ArgumentError, "invalid_hls_aes128_key_bytes" unless valid_key_bytes?(key_bytes)
+
+      key_bytes
+    end
+
+    def store_key!(item:, material:, variant: ::MediaGallery::Hls::DEFAULT_VARIANT, ab: nil)
+      raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
+      raise ArgumentError, "hls_aes128_key_model_unavailable" unless defined?(::MediaGallery::HlsAes128Key)
+
+      material = material.to_h.deep_stringify_keys
+      ::MediaGallery::HlsAes128Key.store_key!(
+        media_item: item,
+        key_id: normalize_key_id(material["key_id"]),
+        variant: variant,
+        ab: ab,
+        key_bytes: material["key_bytes"],
+        iv_hex: normalize_iv_hex(material["iv_hex"]),
+        scheme: material["scheme"].to_s.presence || SCHEME_SINGLE_KEY_V1,
+        key_rotation_segments: material["key_rotation_segments"].to_i,
+        metadata: public_metadata_for(material).except("key_id", "iv_hex", "scheme", "key_rotation_segments")
+      )
+    end
+
+    def fetch_key_bytes(item:, key_id:, variant: ::MediaGallery::Hls::DEFAULT_VARIANT, ab: nil)
+      return nil if item.blank? || item.id.blank?
+      return nil unless defined?(::MediaGallery::HlsAes128Key)
+
+      ::MediaGallery::HlsAes128Key.fetch_key_bytes(
+        media_item: item,
+        key_id: normalize_key_id(key_id),
+        variant: variant,
+        ab: ab
+      )
+    rescue
+      nil
+    end
+
+    def encryptor
+      secret = Rails.application.secret_key_base.to_s.presence
+      raise "hls_aes128_secret_key_base_missing" if secret.blank?
+
+      key_len = ActiveSupport::MessageEncryptor.key_len("aes-256-gcm")
+      key = ActiveSupport::KeyGenerator.new(secret, iterations: 1000).generate_key(ENCRYPTOR_SALT, key_len)
+      ActiveSupport::MessageEncryptor.new(key, cipher: "aes-256-gcm")
+    end
+    private_class_method :encryptor
   end
 end

@@ -12,6 +12,7 @@ module ::MediaGallery
     belongs_to :thumbnail_upload, class_name: "::Upload", optional: true
 
     has_many :media_likes, class_name: "MediaGallery::MediaLike", dependent: :delete_all
+    has_many :hls_aes128_keys, class_name: "MediaGallery::HlsAes128Key", dependent: :delete_all
 
     STATUSES = %w[queued processing ready failed].freeze
     TYPES = %w[video audio image].freeze
