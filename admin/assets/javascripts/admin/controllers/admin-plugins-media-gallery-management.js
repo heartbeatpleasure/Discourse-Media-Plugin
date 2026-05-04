@@ -1101,7 +1101,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   _updateSearchInfo() {
     const timing = Number(this.lastSearchTimingMs || 0);
     const breakdown = this.lastSearchTimingBreakdown || {};
-    const parts = ["query", "hls_manifest", "aes_key_prefetch", "storage_profiles", "users", "serialize", "profiles"]
+    const parts = ["query", "hls_manifest", "aes_key_prefetch", "aes_status", "storage_profiles", "users", "serialize", "profiles"]
       .map((key) => {
         const value = Number(breakdown?.[key] || 0);
         return value > 0 ? `${key.replace(/_/g, " ")} ${value}ms` : null;

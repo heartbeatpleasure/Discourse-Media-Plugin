@@ -25,6 +25,13 @@ module ::MediaGallery
       active_key_ids_by_item = timed_phase!(timing, :aes_key_prefetch) { hls_aes128_active_key_ids_by_item(candidates) }
       storage_profile_info_by_item = timed_phase!(timing, :storage_profiles) { storage_profile_info_by_item_for_items(candidates) }
       usernames_by_id = timed_phase!(timing, :users) { usernames_by_id_for_items(candidates) }
+      aes_status_by_item = timed_phase!(timing, :aes_status) do
+        hls_aes128_search_status_by_item(
+          candidates,
+          hls_roles_by_item: hls_roles_by_item,
+          active_key_ids_by_item: active_key_ids_by_item
+        )
+      end
 
       items = []
       timed_phase!(timing, :serialize) do
@@ -34,7 +41,7 @@ module ::MediaGallery
           next if has_hls_filter == "true" && !has_hls
           next if has_hls_filter == "false" && has_hls
 
-          aes_status = hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item, role: hls_role)
+          aes_status = aes_status_by_item[item.id.to_i] || hls_aes128_status_for(item, has_hls: has_hls, active_key_ids_by_item: active_key_ids_by_item, role: hls_role)
           next unless hls_aes128_filter_matches?(aes_status, hls_aes128_filter)
 
           items << serialize_search_item(
@@ -1553,6 +1560,93 @@ module ::MediaGallery
     rescue => e
       ::MediaGallery::OperationLogger.warn("hls_aes128_key_prefetch_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
       {}
+    end
+
+    def hls_aes128_search_status_by_item(items, hls_roles_by_item:, active_key_ids_by_item:)
+      enabled = ::MediaGallery::Hls.aes128_enabled?
+      required = ::MediaGallery::Hls.aes128_required?
+      key_rotation_segments = ::MediaGallery::Hls.aes128_key_rotation_segments
+
+      Array(items).each_with_object({}) do |item, memo|
+        item_id = item.id.to_i
+        role = hls_roles_by_item.is_a?(Hash) ? hls_roles_by_item[item_id] : nil
+        role = role.deep_stringify_keys if role.is_a?(Hash)
+        has_hls = role.is_a?(Hash)
+        encryption = role&.dig("encryption")
+        encryption = encryption.deep_stringify_keys if encryption.is_a?(Hash)
+        encryption_present = encryption.is_a?(Hash) && encryption["method"].to_s.casecmp("AES-128").zero?
+        key_id = encryption_present ? encryption["key_id"].to_s.presence : nil
+        scheme = encryption_present ? encryption["scheme"].to_s.presence : nil
+        method = encryption_present ? encryption["method"].to_s.presence : nil
+        key_record_present = key_id.present? && hls_aes128_prefetched_key_present?(item_id, key_id, active_key_ids_by_item)
+        ready = hls_aes128_truthy?(encryption&.dig("ready")) && key_id.present? && scheme.present? && key_record_present
+        backfill_state = hls_aes128_backfill_state_for_search(item)
+        backfill_status = backfill_state["status"].to_s
+        backfill_in_progress = %w[queued processing].include?(backfill_status)
+        needs_backfill = has_hls && !ready && (enabled || required) && !encryption_present && !backfill_in_progress
+
+        status_label =
+          if ready
+            "ready"
+          elsif !has_hls
+            "no_hls"
+          elsif required || encryption_present
+            "not_ready"
+          else
+            "not_encrypted"
+          end
+
+        memo[item_id] = {
+          "enabled" => enabled,
+          "required" => required,
+          "ready" => ready,
+          "method" => method,
+          "scheme" => scheme,
+          "key_rotation_segments" => key_rotation_segments,
+          "has_hls" => has_hls,
+          "encrypted" => encryption_present,
+          "needs_backfill" => needs_backfill,
+          "key_id" => key_id,
+          "key_record_present" => key_record_present,
+          "status" => status_label,
+          "backfill" => backfill_state,
+        }.compact
+      end
+    rescue => e
+      ::MediaGallery::OperationLogger.warn("hls_aes128_search_status_prefetch_failed", operation: "management_search", data: { error_class: e.class.name, error_message: e.message }) if defined?(::MediaGallery::OperationLogger)
+      {}
+    end
+
+    def hls_aes128_prefetched_key_present?(item_id, key_id, active_key_ids_by_item)
+      return false if key_id.blank?
+
+      set = active_key_ids_by_item.is_a?(Hash) ? active_key_ids_by_item[item_id.to_i] : nil
+      set.respond_to?(:include?) && set.include?(key_id.to_s)
+    end
+
+    def hls_aes128_backfill_state_for_search(item)
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
+      state = meta[::MediaGallery::HlsAes128Backfill::STATE_KEY] if defined?(::MediaGallery::HlsAes128Backfill)
+      state = state.is_a?(Hash) ? state : {}
+      status = state["status"].to_s.presence
+      stale = defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.stale_state?(state) : false
+
+      {
+        "status" => status,
+        "queued_at" => state["queued_at"].presence,
+        "started_at" => state["started_at"].presence,
+        "finished_at" => state["finished_at"].presence,
+        "failed_at" => state["failed_at"].presence,
+        "cancelled_at" => state["cancelled_at"].presence,
+        "last_error" => state["last_error"].to_s.presence,
+        "stale" => stale,
+      }.compact
+    rescue
+      {}
+    end
+
+    def hls_aes128_truthy?(value)
+      value == true || value.to_s.casecmp("true").zero? || value.to_s == "1"
     end
 
     def hls_aes128_status_for(item, has_hls: nil, active_key_ids_by_item: nil, role: nil)
