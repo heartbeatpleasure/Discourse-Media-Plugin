@@ -141,10 +141,10 @@ module ::MediaGallery
       {
         can_view: can_view,
         view_reason: view_access_reason(user, view_block_matches, viewer_matches, can_view: can_view),
-        view_details: view_access_details(view_block_matches, viewer_matches),
+        view_details: view_access_details(user, view_block_matches, viewer_matches, can_view: can_view),
         can_upload: can_upload,
         upload_reason: upload_access_reason(user, view_block_matches, upload_block_matches, uploader_matches, can_upload: can_upload),
-        upload_details: upload_access_details(user, view_block_matches, upload_block_matches, uploader_matches),
+        upload_details: upload_access_details(user, view_block_matches, upload_block_matches, uploader_matches, can_upload: can_upload),
         can_report: can_report,
         report_reason: can_report ? "Allowed because the user can view media and reports are enabled." : report_access_reason(can_view),
         report_details: report_access_details(can_view),
@@ -212,26 +212,34 @@ module ::MediaGallery
       "Denied."
     end
 
-    def view_access_details(view_block_matches, viewer_matches)
-      [
+    def view_access_details(user, view_block_matches, viewer_matches, can_view: nil)
+      rows = [
         detail_row("Media gallery", SiteSetting.media_gallery_enabled ? "enabled" : "disabled"),
         detail_row("Viewer groups", viewer_groups.present? ? viewer_groups.join(", ") : "empty; all logged-in users may view"),
         detail_row("Viewer match", viewer_matches.present? ? viewer_matches.join(", ") : (viewer_groups.blank? ? "not required" : "no match")),
         detail_row("View-block groups", view_block_groups.present? ? view_block_groups.join(", ") : "none configured"),
         detail_row("View-block match", view_block_matches.present? ? view_block_matches.join(", ") : "no match"),
       ]
+      if view_block_matches.any? && can_view && (user.staff? || user.admin?)
+        rows << detail_row("Effective override", "staff/admin access overrides the view-block match for this user")
+      end
+      rows
     end
 
-    def upload_access_details(user, view_block_matches, upload_block_matches, uploader_matches)
-      [
+    def upload_access_details(user, view_block_matches, upload_block_matches, uploader_matches, can_upload: nil)
+      rows = [
         detail_row("Media gallery", SiteSetting.media_gallery_enabled ? "enabled" : "disabled"),
         detail_row("Uploader groups", uploader_groups.present? ? uploader_groups.join(", ") : "empty; all logged-in users may upload unless blocked"),
         detail_row("Uploader match", uploader_matches.present? ? uploader_matches.join(", ") : (uploader_groups.blank? ? "not required" : "no match")),
         detail_row("View-block match", view_block_matches.present? ? view_block_matches.join(", ") : "no match"),
         detail_row("Upload-block groups", upload_block_groups.present? ? upload_block_groups.join(", ") : "none configured"),
         detail_row("Upload-block match", upload_block_matches.present? ? upload_block_matches.join(", ") : "no match"),
-        detail_row("Staff/admin", user.staff? || user.admin? ? "yes; may upload unless blocked" : "no"),
+        detail_row("Staff/admin", user.staff? || user.admin? ? "yes" : "no"),
       ]
+      if can_upload && (user.staff? || user.admin?) && (view_block_matches.any? || upload_block_matches.any?)
+        rows << detail_row("Effective override", "staff/admin access overrides the configured block-group match for this user")
+      end
+      rows
     end
 
     def report_access_details(can_view)
@@ -307,6 +315,8 @@ module ::MediaGallery
         reports_submitted: report_involvement.dig(:submitted, :total).to_i,
         reports_against_media: report_involvement.dig(:on_user_media, :total).to_i,
         report_involvement: report_involvement,
+        moderation_trends: moderation_trends_payload(user),
+        false_report_signal: false_report_signal_payload(user, report_involvement.dig(:submitted)),
         likes_given: table_count(::MediaGallery::MediaLike, user_id: user.id),
         playback_sessions: table_count(::MediaGallery::MediaPlaybackSession, user_id: user.id),
         log_events_30d: log_events_count(user, 30.days.ago),
@@ -462,6 +472,144 @@ module ::MediaGallery
     def normalize_report_status(value)
       status = value.to_s.downcase.presence || "open"
       %w[open accepted rejected resolved].include?(status) ? status : "open"
+    end
+
+    def moderation_trends_payload(user)
+      {
+        submitted: report_trends_by_reporter(user),
+        on_user_media: report_trends_on_user_media(user),
+      }
+    rescue
+      { submitted: empty_trend_windows, on_user_media: empty_trend_windows }
+    end
+
+    def empty_trend_windows
+      [7, 30, 90].map { |days| empty_trend_window(days) }
+    end
+
+    def empty_trend_window(days)
+      empty_report_counts.merge(days: days, since: days.days.ago.iso8601)
+    end
+
+    def report_trends_by_reporter(user)
+      scope = ::MediaGallery::MediaItem
+        .where("jsonb_typeof(extra_metadata -> 'media_reports') = 'array'")
+        .where("extra_metadata -> 'media_reports' @> ?::jsonb", [{ reporter_user_id: user.id }].to_json)
+
+      build_trend_windows(scope) do |report, _item|
+        report["reporter_user_id"].to_i == user.id
+      end
+    rescue
+      empty_trend_windows
+    end
+
+    def report_trends_on_user_media(user)
+      scope = ::MediaGallery::MediaItem
+        .where(user_id: user.id)
+        .where("jsonb_typeof(extra_metadata -> 'media_reports') = 'array'")
+        .where("jsonb_array_length(extra_metadata -> 'media_reports') > 0")
+
+      build_trend_windows(scope) { |_report, _item| true }
+    rescue
+      empty_trend_windows
+    end
+
+    def build_trend_windows(scope)
+      windows = [7, 30, 90].to_h { |days| [days, empty_trend_window(days)] }
+      oldest = 90.days.ago
+
+      scope.find_each(batch_size: 200) do |item|
+        media_reports_for(item).each do |report|
+          next unless report.is_a?(Hash)
+          next if block_given? && !yield(report, item)
+
+          created_at = parse_report_time(report["created_at"])
+          next if created_at.blank? || created_at < oldest
+
+          status = normalize_report_status(report["status"])
+          windows.each do |days, counts|
+            next if created_at < days.days.ago
+
+            counts[:total] += 1
+            counts[status.to_sym] += 1
+            counts[:auto_hidden] += 1 if ActiveModel::Type::Boolean.new.cast(report["auto_hidden"])
+          end
+        end
+      end
+
+      [7, 30, 90].map { |days| windows[days] }
+    end
+
+    def false_report_signal_payload(user, submitted_counts = nil)
+      counts = submitted_counts || report_counts_by_reporter(user)
+      total = counts[:total].to_i
+      rejected = counts[:rejected].to_i
+      accepted = counts[:accepted].to_i
+      resolved = counts[:resolved].to_i
+      open = counts[:open].to_i
+      rejected_rate = total.positive? ? (rejected.to_f / total) : 0.0
+      recent_30 = report_trends_by_reporter(user).find { |window| window[:days].to_i == 30 } || empty_trend_window(30)
+      recent_rejected = recent_30[:rejected].to_i
+
+      severity = if total >= 5 && rejected_rate >= 0.6
+        "danger"
+      elsif rejected >= 2 || recent_rejected >= 2 || (total >= 3 && rejected_rate >= 0.4)
+        "warning"
+      elsif total.positive?
+        "success"
+      else
+        "info"
+      end
+
+      label = case severity
+      when "danger" then "High false-report risk"
+      when "warning" then "Watch reporting quality"
+      when "success" then "No repeated false-report pattern"
+      else "No report history"
+      end
+
+      {
+        severity: severity,
+        label: label,
+        total: total,
+        open: open,
+        accepted: accepted,
+        rejected: rejected,
+        resolved: resolved,
+        rejected_rate: rejected_rate.round(3),
+        recent_30d_rejected: recent_rejected,
+        explanation: false_report_signal_explanation(severity, total, rejected, rejected_rate, recent_rejected),
+      }
+    rescue
+      {
+        severity: "info",
+        label: "Signal unavailable",
+        total: 0,
+        rejected: 0,
+        rejected_rate: 0,
+        recent_30d_rejected: 0,
+        explanation: "The false-report signal could not be calculated for this user.",
+      }
+    end
+
+    def false_report_signal_explanation(severity, total, rejected, rejected_rate, recent_rejected)
+      rate_label = total.positive? ? "#{(rejected_rate * 100).round}% rejected" : "no report history"
+      case severity
+      when "danger"
+        "#{rejected} of #{total} submitted reports were rejected (#{rate_label}). Review whether this user is submitting poor-quality or abusive reports."
+      when "warning"
+        "#{rejected} rejected report(s) overall and #{recent_rejected} rejected in the last 30 days. Watch for repeated inaccurate reporting."
+      when "success"
+        "This user has report history, but rejected reports are not repeated enough to be concerning (#{rate_label})."
+      else
+        "This user has not submitted reports yet."
+      end
+    end
+
+    def parse_report_time(value)
+      Time.zone.parse(value.to_s)
+    rescue
+      nil
     end
 
     def reports_submitted_count(user)

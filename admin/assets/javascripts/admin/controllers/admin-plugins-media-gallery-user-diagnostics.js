@@ -193,6 +193,50 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     ];
   }
 
+
+  get moderationTrendSections() {
+    const trends = this.stats?.moderation_trends || {};
+    return [
+      { title: "Reports submitted trend", subtitle: "Reports created by this user", rows: this.moderationTrendRows(trends.submitted || []) },
+      { title: "Reports on user's media trend", subtitle: "Reports created on this user's uploads", rows: this.moderationTrendRows(trends.on_user_media || []) },
+    ];
+  }
+
+  moderationTrendRows(windows) {
+    return (Array.isArray(windows) ? windows : []).map((window) => ({
+      days: window.days ?? 0,
+      label: `${window.days ?? 0} days`,
+      total: window.total ?? 0,
+      open: window.open ?? 0,
+      accepted: window.accepted ?? 0,
+      rejected: window.rejected ?? 0,
+      resolved: window.resolved ?? 0,
+      autoHidden: window.auto_hidden ?? 0,
+    }));
+  }
+
+  get falseReportSignal() {
+    const signal = this.stats?.false_report_signal || {};
+    const severity = String(signal.severity || "info");
+    return {
+      ...signal,
+      className: severityClass(severity),
+      rejectedRateLabel: formatPercent(signal.rejected_rate),
+      recent30Label: `${signal.recent_30d_rejected ?? 0} rejected in 30d`,
+      label: signal.label || "No report history",
+      explanation: signal.explanation || "No false-report signal is available for this user.",
+    };
+  }
+
+  get falseReportSignalCards() {
+    const signal = this.falseReportSignal;
+    return [
+      { label: "Signal", value: signal.label, tone: signal.className, help: signal.explanation },
+      { label: "Rejected rate", value: signal.rejectedRateLabel, tone: signal.className, help: `${signal.rejected ?? 0} rejected of ${signal.total ?? 0} submitted reports.` },
+      { label: "Recent rejected", value: signal.recent30Label, tone: signal.className, help: "Rejected reports in the last 30 days." },
+    ];
+  }
+
   get recentActivityButtons() {
     const filters = [
       ["all", "All"],

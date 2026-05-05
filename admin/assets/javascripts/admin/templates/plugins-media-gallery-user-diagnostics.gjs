@@ -442,6 +442,38 @@ export default RouteTemplate(
         background: var(--danger-low);
       }
 
+
+      .mg-userdiag__trend-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 1rem;
+      }
+
+      .mg-userdiag__trend-window {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.5rem;
+        margin-top: 0.7rem;
+        padding: 0.7rem;
+        border: 1px solid var(--mg-border);
+        border-radius: 14px;
+        background: var(--mg-surface-alt);
+      }
+
+      .mg-userdiag__trend-window-title {
+        grid-column: 1 / -1;
+        font-weight: 700;
+      }
+
+      .mg-userdiag__mini-stat-label {
+        color: var(--mg-muted);
+        font-size: var(--font-down-2);
+      }
+
+      .mg-userdiag__mini-stat-value {
+        font-weight: 700;
+      }
+
       .mg-userdiag__filter-row {
         display: flex;
         flex-wrap: wrap;
@@ -710,6 +742,57 @@ export default RouteTemplate(
                     </div>
                   {{/each}}
                 </div>
+              </section>
+            {{/each}}
+          </div>
+        </section>
+
+        <section class="mg-userdiag__panel">
+          <div class="mg-userdiag__panel-header">
+            <div class="mg-userdiag__copy">
+              <h2>False-report signal</h2>
+              <p class="mg-userdiag__muted">A read-only quality signal based on rejected reports submitted by this user. It is informational and does not automatically restrict the user.</p>
+            </div>
+          </div>
+          <div class="mg-userdiag__grid">
+            {{#each @controller.falseReportSignalCards as |card|}}
+              <div class="mg-userdiag__card {{card.tone}}">
+                <div class="mg-userdiag__card-top">
+                  <div>
+                    <div class="mg-userdiag__card-label">{{card.label}}</div>
+                    <div class="mg-userdiag__card-value">{{card.value}}</div>
+                    <div class="mg-userdiag__card-reason">{{card.help}}</div>
+                  </div>
+                </div>
+              </div>
+            {{/each}}
+          </div>
+        </section>
+
+        <section class="mg-userdiag__panel">
+          <div class="mg-userdiag__panel-header">
+            <div class="mg-userdiag__copy">
+              <h2>Moderation trends</h2>
+              <p class="mg-userdiag__muted">Report activity over the last 7, 30, and 90 days. Totals include open and reviewed reports.</p>
+            </div>
+          </div>
+
+          <div class="mg-userdiag__trend-grid">
+            {{#each @controller.moderationTrendSections as |trendSection|}}
+              <section class="mg-userdiag__section">
+                <h3>{{trendSection.title}}</h3>
+                <p class="mg-userdiag__muted">{{trendSection.subtitle}}</p>
+                {{#each trendSection.rows as |window|}}
+                  <div class="mg-userdiag__trend-window">
+                    <div class="mg-userdiag__trend-window-title">{{window.label}}</div>
+                    <div><div class="mg-userdiag__mini-stat-label">Total</div><div class="mg-userdiag__mini-stat-value">{{window.total}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Open</div><div class="mg-userdiag__mini-stat-value">{{window.open}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Accepted</div><div class="mg-userdiag__mini-stat-value">{{window.accepted}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Rejected</div><div class="mg-userdiag__mini-stat-value">{{window.rejected}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Resolved</div><div class="mg-userdiag__mini-stat-value">{{window.resolved}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Auto-hidden</div><div class="mg-userdiag__mini-stat-value">{{window.autoHidden}}</div></div>
+                  </div>
+                {{/each}}
               </section>
             {{/each}}
           </div>

@@ -325,6 +325,28 @@ export default RouteTemplate(
         grid-column: 1 / -1;
       }
 
+
+      .mg-reports__trend-card.is-warning,
+      .mg-reports__summary-card.is-warning {
+        border-color: var(--tertiary-low);
+        background: var(--tertiary-very-low);
+      }
+
+      .mg-reports__trend-card.is-danger,
+      .mg-reports__summary-card.is-danger {
+        border-color: var(--danger-low-mid);
+        background: var(--danger-low);
+      }
+
+      .mg-reports__trend-details {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.45rem;
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+      }
+
       .mg-reports__section-title-row {
         display: flex;
         align-items: flex-start;
@@ -485,6 +507,47 @@ export default RouteTemplate(
 
         {{#if @controller.loadError}}
           <div class="mg-reports__flash is-danger" style="margin-top: 1rem;">{{@controller.loadError}}</div>
+        {{/if}}
+      </section>
+
+      <section class="mg-reports__panel">
+        <div class="mg-reports__panel-header">
+          <div>
+            <h2>Moderation overview</h2>
+            <p class="mg-reports__muted">Global report trends and repeated rejected-report signals. This is read-only and meant to guide review, not automate restrictions.</p>
+          </div>
+        </div>
+        <div class="mg-reports__summary-grid">
+          {{#each @controller.moderationTrendCards as |trend|}}
+            <div class="mg-reports__summary-card">
+              <div class="mg-reports__summary-label">{{trend.label}}</div>
+              <div class="mg-reports__summary-value">{{trend.total}} reports</div>
+              <div class="mg-reports__trend-details">
+                <span>Open {{trend.open}}</span>
+                <span>Accepted {{trend.accepted}}</span>
+                <span>Rejected {{trend.rejected}}</span>
+                <span>Resolved {{trend.resolved}}</span>
+                <span>Auto-hidden {{trend.autoHidden}}</span>
+              </div>
+            </div>
+          {{/each}}
+        </div>
+        {{#if @controller.falseReporterCards.length}}
+          <div class="mg-reports__summary-grid" style="margin-top: 0.85rem;">
+            {{#each @controller.falseReporterCards as |reporter|}}
+              <a class="mg-reports__summary-card mg-reports__trend-card {{reporter.className}}" href={{reporter.diagnosticsUrl}} target="_blank" rel="noopener noreferrer">
+                <div class="mg-reports__summary-label">Repeated rejected reports</div>
+                <div class="mg-reports__summary-value">{{reporter.label}}</div>
+                <div class="mg-reports__trend-details">
+                  <span>{{reporter.rejected}} rejected</span>
+                  <span>{{reporter.total}} total</span>
+                  <span>{{reporter.rejectedRateLabel}}</span>
+                </div>
+              </a>
+            {{/each}}
+          </div>
+        {{else}}
+          <p class="mg-reports__muted" style="margin-top: 0.85rem;">No repeated rejected-report signal found in the current report sample.</p>
         {{/if}}
       </section>
 

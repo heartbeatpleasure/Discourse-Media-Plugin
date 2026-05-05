@@ -13,8 +13,8 @@ module ::MediaGallery
     MAX_MANAGEMENT_LOG_ENTRIES = 50
 
     def index
-      reports = report_scope.flat_map { |item| report_payloads_for_item(item) }
-      reports = apply_status_filter(reports)
+      all_reports = report_scope.flat_map { |item| report_payloads_for_item(item) }
+      reports = apply_status_filter(all_reports)
       reports = apply_user_filter(reports)
       reports = apply_report_search_filter(reports)
       reports.sort_by! { |report| report[:created_at].to_s }
@@ -24,7 +24,9 @@ module ::MediaGallery
       render_json_dump(
         reports: reports.first(limit),
         count: reports.length,
-        limit: limit
+        limit: limit,
+        moderation_trends: moderation_trends_payload(all_reports),
+        false_reporters: false_reporters_payload(all_reports)
       )
     end
 
@@ -287,6 +289,77 @@ end
       else
         profile_key.to_s.presence
       end
+    end
+
+    def moderation_trends_payload(reports)
+      [7, 30, 90].map do |days|
+        since = days.days.ago
+        counts = empty_report_counts.merge(days: days, since: since.iso8601)
+        Array(reports).each do |report|
+          created_at = parse_report_time(report[:created_at] || report["created_at"])
+          next if created_at.blank? || created_at < since
+
+          status = normalize_report_status(report[:status] || report["status"])
+          counts[:total] += 1
+          counts[status.to_sym] += 1
+          counts[:auto_hidden] += 1 if ActiveModel::Type::Boolean.new.cast(report[:auto_hidden] || report["auto_hidden"])
+        end
+        counts
+      end
+    rescue
+      [7, 30, 90].map { |days| empty_report_counts.merge(days: days, since: days.days.ago.iso8601) }
+    end
+
+    def false_reporters_payload(reports)
+      grouped = Hash.new { |hash, key| hash[key] = { total: 0, rejected: 0, accepted: 0, resolved: 0, open: 0, username: nil, user_id: key } }
+      Array(reports).each do |report|
+        user_id = (report[:reporter_user_id] || report["reporter_user_id"]).to_i
+        next unless user_id.positive?
+
+        status = normalize_report_status(report[:status] || report["status"])
+        entry = grouped[user_id]
+        entry[:username] ||= report[:reporter_username] || report["reporter_username"]
+        entry[:total] += 1
+        entry[status.to_sym] += 1
+      end
+
+      grouped.values.map do |entry|
+        rejected_rate = entry[:total].positive? ? entry[:rejected].to_f / entry[:total] : 0.0
+        severity = if entry[:total] >= 5 && rejected_rate >= 0.6
+          "danger"
+        elsif entry[:rejected] >= 2 || (entry[:total] >= 3 && rejected_rate >= 0.4)
+          "warning"
+        else
+          "info"
+        end
+        entry.merge(rejected_rate: rejected_rate.round(3), severity: severity)
+      end.select { |entry| %w[warning danger].include?(entry[:severity]) }
+        .sort_by { |entry| [-entry[:rejected].to_i, -entry[:rejected_rate].to_f, entry[:username].to_s] }
+        .first(5)
+    rescue
+      []
+    end
+
+    def empty_report_counts
+      {
+        total: 0,
+        open: 0,
+        accepted: 0,
+        rejected: 0,
+        resolved: 0,
+        auto_hidden: 0,
+      }
+    end
+
+    def normalize_report_status(value)
+      status = value.to_s.downcase.presence || "open"
+      %w[open accepted rejected resolved].include?(status) ? status : "open"
+    end
+
+    def parse_report_time(value)
+      Time.zone.parse(value.to_s)
+    rescue
+      nil
     end
 
     def apply_status_filter(reports)

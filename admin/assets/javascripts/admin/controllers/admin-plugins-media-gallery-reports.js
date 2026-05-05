@@ -61,6 +61,14 @@ function formatBytes(value) {
   return `${size.toFixed(decimals)} ${units[unitIndex]}`;
 }
 
+function formatPercent(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) {
+    return "0%";
+  }
+  return `${Math.round(number * 100)}%`;
+}
+
 function decisionLabel(value) {
   switch (String(value || "")) {
     case "accept_hide":
@@ -81,6 +89,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   @tracked searchQuery = "";
   @tracked limit = "50";
   @tracked reports = [];
+  @tracked moderationTrends = [];
+  @tracked falseReporters = [];
   @tracked isLoading = false;
   @tracked loadError = "";
   @tracked noticeMessage = "";
@@ -110,6 +120,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.searchQuery = initialQuery || deepLinkedReportId || "";
     this.limit = "50";
     this.reports = [];
+    this.moderationTrends = [];
+    this.falseReporters = [];
     this.isLoading = false;
     this.loadError = "";
     this.noticeMessage = "";
@@ -260,9 +272,11 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         statusDetailBadgeClass:
           status === "accepted"
             ? "is-danger"
-            : status === "resolved"
-              ? "is-success"
-              : "",
+            : status === "rejected"
+              ? "is-warning"
+              : status === "resolved"
+                ? "is-success"
+                : "",
         hiddenLabel: media.hidden ? "Hidden" : "Visible",
         hiddenBadgeClass: media.hidden ? "is-danger" : "is-success",
         assetLabel: media.asset_deleted ? "Files deleted" : "Files present",
@@ -277,6 +291,28 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
                 : "—",
       };
     });
+  }
+
+  get moderationTrendCards() {
+    return (Array.isArray(this.moderationTrends) ? this.moderationTrends : []).map((window) => ({
+      label: `${window.days ?? 0} days`,
+      total: window.total ?? 0,
+      open: window.open ?? 0,
+      accepted: window.accepted ?? 0,
+      rejected: window.rejected ?? 0,
+      resolved: window.resolved ?? 0,
+      autoHidden: window.auto_hidden ?? 0,
+    }));
+  }
+
+  get falseReporterCards() {
+    return (Array.isArray(this.falseReporters) ? this.falseReporters : []).map((reporter) => ({
+      ...reporter,
+      label: reporter.username ? `${reporter.username} (#${reporter.user_id})` : `User #${reporter.user_id}`,
+      rejectedRateLabel: formatPercent(reporter.rejected_rate),
+      className: reporter.severity === "danger" ? "is-danger" : "is-warning",
+      diagnosticsUrl: reporter.user_id ? `/admin/plugins/media-gallery-user-diagnostics?user_id=${encodeParam(reporter.user_id)}` : "",
+    }));
   }
 
   get selectedSnapshotRows() {
@@ -361,6 +397,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         signal: this.abortController.signal,
       });
       this.reports = Array.isArray(data?.reports) ? data.reports : [];
+      this.moderationTrends = Array.isArray(data?.moderation_trends) ? data.moderation_trends : [];
+      this.falseReporters = Array.isArray(data?.false_reporters) ? data.false_reporters : [];
       if (this.requestedReportId && this.reports.some((report) => report.id === this.requestedReportId)) {
         this.selectedReportId = this.requestedReportId;
       } else if (!this.reports.some((report) => report.id === this.selectedReportId)) {
