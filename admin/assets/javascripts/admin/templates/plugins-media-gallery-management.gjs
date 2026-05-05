@@ -1001,13 +1001,13 @@ export default RouteTemplate(
                       <button class="btn" type="button" {{on "click" @controller.clearAesBackfill}} disabled={{@controller.selectedAesBackfillClearDisabled}}>
                         {{@controller.selectedAesBackfillClearLabel}}
                       </button>
-                      <button class="btn" type="button" {{on "click" @controller.cleanupAesMaintenance}} disabled={{@controller.selectedAesMaintenanceCleanupDisabled}}>
+                      <button class="btn" type="button" title="Safe maintenance cleanup for stale HLS/AES state and inactive key records" {{on "click" @controller.cleanupAesMaintenance}} disabled={{@controller.selectedAesMaintenanceCleanupDisabled}}>
                         {{@controller.selectedAesMaintenanceCleanupLabel}}
                       </button>
-                      <button class="btn btn-danger" type="button" {{on "click" @controller.rotateAesKey}} disabled={{@controller.selectedAesKeyRotationDisabled}}>
+                      <button class="btn btn-danger" type="button" title="Re-encrypt this HLS package with a fresh AES key" {{on "click" @controller.rotateAesKey}} disabled={{@controller.selectedAesKeyRotationDisabled}}>
                         {{@controller.selectedAesKeyRotationLabel}}
                       </button>
-                      <button class="btn btn-danger" type="button" {{on "click" @controller.queueClearHlsRollback}} disabled={{@controller.selectedClearRollbackDisabled}}>
+                      <button class="btn btn-danger" type="button" title="Repackage this item as normal, non-AES HLS" {{on "click" @controller.queueClearHlsRollback}} disabled={{@controller.selectedClearRollbackDisabled}}>
                         {{@controller.selectedClearRollbackButtonLabel}}
                       </button>
                       <button class="btn" type="button" {{on "click" @controller.restartClearHlsRollback}} disabled={{@controller.selectedClearRollbackRestartDisabled}}>

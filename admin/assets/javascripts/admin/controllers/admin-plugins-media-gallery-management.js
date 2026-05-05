@@ -748,7 +748,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   get selectedAesMaintenanceCleanupLabel() {
-    return this.isCleaningAes ? "Cleaning AES…" : "Clean AES state";
+    return this.isCleaningAes ? "Cleaning…" : "Clean HLS/AES state";
   }
 
   get selectedAesKeyRotationDisabled() {
@@ -781,9 +781,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       return "Rotation queued";
     }
     if (operation === "key_rotation" && status === "processing") {
-      return "Rotation processing";
+      return "Rotating key…";
     }
-    return "Rotate AES key";
+    return "Rotate key";
   }
 
   get selectedClearRollbackState() {
@@ -841,7 +841,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     if (state === "processing") {
       return "Normal HLS processing";
     }
-    return "Repackage as normal HLS";
+    return "Normal HLS";
   }
 
   get selectedClearRollbackRestartLabel() {
@@ -1978,8 +1978,16 @@ This cannot be undone.`)) {
       }
 
       const status = this.selectedAesBackfillStatus;
+      const operation = String(this.selectedAesBackfillState?.operation || "");
       const aesReady = !!this.selectedItem?.hls_aes128?.ready;
-      if (aesReady || !["queued", "processing"].includes(status)) {
+      if (!["queued", "processing"].includes(status)) {
+        return;
+      }
+
+      // A key rotation starts from an already AES-ready item. Do not stop polling
+      // only because aesReady is true; wait until the queued/processing rotation
+      // state changes to ready/failed/cancelled so the UI reflects the outcome.
+      if (aesReady && operation !== "key_rotation") {
         return;
       }
 
