@@ -236,6 +236,7 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-exports__badge-row">
+            <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
             <span class="mg-exports__badge is-info">
               {{i18n "admin.media_gallery.forensics_exports.count" count=@controller.exports.length}}
             </span>

@@ -144,7 +144,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       { label: "Can view", value: boolLabel(access.can_view), className: statusClass(access.can_view), reason: access.view_reason, details: Array.isArray(access.view_details) ? access.view_details : [] },
       { label: "Can upload", value: boolLabel(access.can_upload), className: statusClass(access.can_upload), reason: access.upload_reason, details: Array.isArray(access.upload_details) ? access.upload_details : [] },
       { label: "Can report", value: boolLabel(access.can_report), className: statusClass(access.can_report), reason: access.report_reason, details: Array.isArray(access.report_details) ? access.report_details : [] },
-      { label: "Instant auto-hide reporter", value: boolLabel(access.report_auto_hide_instant), className: access.report_auto_hide_instant ? "is-warning" : "", reason: access.report_auto_hide_instant_reason, details: Array.isArray(access.report_auto_hide_details) ? access.report_auto_hide_details : [] },
+      { label: "Instant auto-hide reporter", value: boolLabel(access.report_auto_hide_instant), className: access.report_auto_hide_instant ? "is-success" : "", reason: access.report_auto_hide_instant_reason, details: Array.isArray(access.report_auto_hide_details) ? access.report_auto_hide_details : [] },
       { label: "Report point weight", value: `${weight} per report`, className: weight > 0 ? "is-info" : "", reason: `Per media item threshold: ${threshold}. Only open reports on the same media item count.`, details: Array.isArray(access.report_score_details) ? access.report_score_details : [] },
     ];
   }
@@ -165,7 +165,9 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       { label: "Queued / processing", value: stats.uploads_processing ?? 0, url: managementUrl },
       { label: "Hidden uploads", value: stats.uploads_hidden ?? 0, url: managementUrl },
       { label: "Reports submitted", value: stats.reports_submitted ?? 0, url: reportsByUserUrl },
+      { label: "Open reports submitted", value: stats.report_involvement?.submitted?.open ?? 0, url: reportsByUserUrl },
       { label: "Reports on user's media", value: stats.reports_against_media ?? 0, url: reportsOnUserMediaUrl },
+      { label: "Open reports on user's media", value: stats.report_involvement?.on_user_media?.open ?? 0, url: reportsOnUserMediaUrl },
       { label: "Likes given", value: stats.likes_given ?? 0 },
       { label: "Playback sessions", value: stats.playback_sessions ?? 0 },
       { label: "Log events 30d", value: stats.log_events_30d ?? 0, url: logsUrl },
@@ -185,7 +187,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       { label: "Total", value: counts.total ?? 0, tone: "" },
       { label: "Open", value: counts.open ?? 0, tone: "is-warning" },
       { label: "Accepted", value: counts.accepted ?? 0, tone: "is-danger" },
-      { label: "Rejected", value: counts.rejected ?? 0, tone: "" },
+      { label: "Rejected", value: counts.rejected ?? 0, tone: "is-warning" },
       { label: "Resolved", value: counts.resolved ?? 0, tone: "is-success" },
       { label: "Auto-hidden", value: counts.auto_hidden ?? 0, tone: "is-warning" },
     ];
@@ -250,7 +252,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       ...report,
       createdAtLabel: formatDateTime(report.created_at),
       statusLabel: titleize(report.status),
-      statusClass: report.status === "open" ? "is-warning" : report.status === "accepted" ? "is-danger" : report.status === "resolved" ? "is-success" : "",
+      statusClass: report.status === "open" ? "is-warning" : report.status === "accepted" ? "is-danger" : report.status === "rejected" ? "is-warning" : report.status === "resolved" ? "is-success" : "",
       reportUrl: report.report_url || (report.id ? `/admin/plugins/media-gallery-reports?report_id=${encodeParam(report.id)}` : `/admin/plugins/media-gallery-reports?status=all&reporter_user_id=${encodeParam(this.selectedUser?.id)}`),
     }));
   }

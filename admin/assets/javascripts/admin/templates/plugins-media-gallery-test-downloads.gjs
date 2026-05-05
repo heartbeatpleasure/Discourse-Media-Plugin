@@ -531,6 +531,7 @@ export default RouteTemplate(
             <h1>{{i18n "admin.media_gallery.test_downloads.title"}}</h1>
             <p class="mg-test-downloads__muted">Browse videos visually, pick one from the list, then generate a forensic test download for a detected or manual user.</p>
           </div>
+          <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
         </div>
 
         <div class="mg-test-downloads__notice is-info">

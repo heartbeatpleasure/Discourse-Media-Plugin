@@ -438,6 +438,52 @@ module ::MediaGallery
         "Resolve backfill/key blockers before enabling AES required mode."
     end
 
+
+
+    def aes128_final_qa_status
+      if defined?(::MediaGallery::HlsAes128Maintenance) && ::MediaGallery::HlsAes128Maintenance.respond_to?(:final_qa_report)
+        ::MediaGallery::HlsAes128Maintenance.final_qa_report(limit: 10)
+      else
+        { status: "manual", ready_for_final_signoff: false, error: "HlsAes128Maintenance.final_qa_report unavailable" }
+      end
+    rescue => e
+      { status: "attention", ready_for_final_signoff: false, error: "#{e.class}: #{e.message}", recommendation: "Fix the final QA status error before production sign-off." }
+    end
+
+    def aes128_final_qa_control_status(report)
+      return "attention" if report[:error].present? || report["error"].present?
+      status = report[:status].presence || report["status"].presence
+      return status.to_s if status.present?
+      ActiveModel::Type::Boolean.new.cast(report[:ready_for_final_signoff] || report["ready_for_final_signoff"]) ? "ok" : "manual"
+    end
+
+    def aes128_final_qa_control_summary(report)
+      error = report[:error].presence || report["error"].presence
+      return "AES final QA status could not be checked: #{error}" if error.present?
+
+      total = (report[:total_count] || report["total_count"] || report[:check_count] || report["check_count"]).to_i
+      total = Array(report[:checks] || report["checks"]).length if total.zero?
+      attention = (report[:attention_count] || report["attention_count"]).to_i
+      warning = (report[:warning_count] || report["warning_count"] || report[:partial_count] || report["partial_count"]).to_i
+      manual = (report[:manual_count] || report["manual_count"]).to_i
+      ready = ActiveModel::Type::Boolean.new.cast(report[:ready_for_final_signoff] || report["ready_for_final_signoff"])
+
+      if ready
+        "Final AES QA is ready for sign-off: #{total} check(s), no blocking attention items."
+      else
+        "Final AES QA needs review: #{attention} attention, #{warning} warning/partial, #{manual} manual check(s)."
+      end
+    end
+
+    def aes128_final_qa_control_action(report)
+      recommendation = report[:recommendation].presence || report["recommendation"].presence
+      return recommendation if recommendation.present?
+
+      ActiveModel::Type::Boolean.new.cast(report[:ready_for_final_signoff] || report["ready_for_final_signoff"]) ?
+        "Complete final manual browser tests, then document production sign-off." :
+        "Review the final QA checks and resolve attention items before enabling or keeping AES required mode in production."
+    end
+
     def watermark_fingerprint_status
       watermark = setting_bool(:media_gallery_watermark_enabled)
       fingerprint = setting_bool(:media_gallery_fingerprint_enabled)

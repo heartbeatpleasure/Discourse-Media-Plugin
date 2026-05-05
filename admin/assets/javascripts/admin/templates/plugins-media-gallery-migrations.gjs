@@ -525,8 +525,13 @@ export default RouteTemplate(
     </style>
 
     <div class="media-gallery-admin-migrations">
-      <h1>{{i18n "admin.media_gallery.migrations.title"}}</h1>
-      <p class="mg-migrations__muted">{{i18n "admin.media_gallery.migrations.description"}}</p>
+      <div class="mg-migrations__panel-header">
+        <div>
+          <h1>{{i18n "admin.media_gallery.migrations.title"}}</h1>
+          <p class="mg-migrations__muted">{{i18n "admin.media_gallery.migrations.description"}}</p>
+        </div>
+        <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+      </div>
 
       {{#if @controller.storageError}}
         <div class="alert alert-error">{{@controller.storageError}}</div>

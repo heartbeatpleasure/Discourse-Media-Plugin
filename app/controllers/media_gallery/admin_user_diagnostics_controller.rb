@@ -140,10 +140,10 @@ module ::MediaGallery
 
       {
         can_view: can_view,
-        view_reason: view_access_reason(user, view_block_matches, viewer_matches),
+        view_reason: view_access_reason(user, view_block_matches, viewer_matches, can_view: can_view),
         view_details: view_access_details(view_block_matches, viewer_matches),
         can_upload: can_upload,
-        upload_reason: upload_access_reason(user, view_block_matches, upload_block_matches, uploader_matches),
+        upload_reason: upload_access_reason(user, view_block_matches, upload_block_matches, uploader_matches, can_upload: can_upload),
         upload_details: upload_access_details(user, view_block_matches, upload_block_matches, uploader_matches),
         can_report: can_report,
         report_reason: can_report ? "Allowed because the user can view media and reports are enabled." : report_access_reason(can_view),
@@ -164,9 +164,12 @@ module ::MediaGallery
       }
     end
 
-    def view_access_reason(user, view_block_matches, viewer_matches)
+    def view_access_reason(user, view_block_matches, viewer_matches, can_view: nil)
       return "Media gallery is disabled." unless SiteSetting.media_gallery_enabled
-      return "Denied because the user is in view-block group: #{view_block_matches.join(', ')}." if view_block_matches.any?
+      if view_block_matches.any?
+        return "Allowed because staff/admin users are not blocked by view-block groups, although this user matches: #{view_block_matches.join(', ')}." if can_view && (user.staff? || user.admin?)
+        return "Denied because the user is in view-block group: #{view_block_matches.join(', ')}."
+      end
 
       if viewer_groups.blank?
         return view_block_groups.blank? ?
@@ -179,10 +182,16 @@ module ::MediaGallery
       "Denied because the user does not match any configured viewer group."
     end
 
-    def upload_access_reason(user, view_block_matches, upload_block_matches, uploader_matches)
+    def upload_access_reason(user, view_block_matches, upload_block_matches, uploader_matches, can_upload: nil)
       return "Media gallery is disabled." unless SiteSetting.media_gallery_enabled
-      return "Denied because view-block also denies upload: #{view_block_matches.join(', ')}." if view_block_matches.any?
-      return "Denied because the user is in upload-block group: #{upload_block_matches.join(', ')}." if upload_block_matches.any?
+      if view_block_matches.any?
+        return "Allowed because staff/admin users are not blocked by view-block groups, although view-block would normally deny upload: #{view_block_matches.join(', ')}." if can_upload && (user.staff? || user.admin?)
+        return "Denied because view-block also denies upload: #{view_block_matches.join(', ')}."
+      end
+      if upload_block_matches.any?
+        return "Allowed because staff/admin users are not blocked by upload-block groups, although this user matches: #{upload_block_matches.join(', ')}." if can_upload && (user.staff? || user.admin?)
+        return "Denied because the user is in upload-block group: #{upload_block_matches.join(', ')}."
+      end
       return "Allowed because the user is staff/admin and is not view-blocked or upload-blocked." if user.staff? || user.admin?
 
       if uploader_groups.blank?
@@ -410,56 +419,49 @@ module ::MediaGallery
     end
 
     def report_counts_by_reporter(user)
-      sql = ActiveRecord::Base.sanitize_sql_array([
-        <<~SQL,
-          SELECT COALESCE(report.value ->> 'status', 'open') AS status,
-                 COALESCE(report.value ->> 'auto_hidden', 'false') AS auto_hidden,
-                 COUNT(*) AS count
-          FROM media_gallery_media_items
-          CROSS JOIN LATERAL jsonb_array_elements(extra_metadata -> 'media_reports') AS report(value)
-          WHERE jsonb_typeof(extra_metadata -> 'media_reports') = 'array'
-            AND report.value ->> 'reporter_user_id' = ?
-          GROUP BY status, auto_hidden
-        SQL
-        user.id.to_s,
-      ])
-      report_counts_from_sql(sql)
+      scope = ::MediaGallery::MediaItem
+        .where("jsonb_typeof(extra_metadata -> 'media_reports') = 'array'")
+        .where("extra_metadata -> 'media_reports' @> ?::jsonb", [{ reporter_user_id: user.id }].to_json)
+
+      count_reports_from_items(scope) do |report, _item|
+        report["reporter_user_id"].to_i == user.id
+      end
     rescue
       empty_report_counts
     end
 
     def report_counts_on_user_media(user)
-      sql = ActiveRecord::Base.sanitize_sql_array([
-        <<~SQL,
-          SELECT COALESCE(report.value ->> 'status', 'open') AS status,
-                 COALESCE(report.value ->> 'auto_hidden', 'false') AS auto_hidden,
-                 COUNT(*) AS count
-          FROM media_gallery_media_items
-          CROSS JOIN LATERAL jsonb_array_elements(extra_metadata -> 'media_reports') AS report(value)
-          WHERE jsonb_typeof(extra_metadata -> 'media_reports') = 'array'
-            AND user_id = ?
-          GROUP BY status, auto_hidden
-        SQL
-        user.id,
-      ])
-      report_counts_from_sql(sql)
+      scope = ::MediaGallery::MediaItem
+        .where(user_id: user.id)
+        .where("jsonb_typeof(extra_metadata -> 'media_reports') = 'array'")
+        .where("jsonb_array_length(extra_metadata -> 'media_reports') > 0")
+
+      count_reports_from_items(scope) { |_report, _item| true }
     rescue
       empty_report_counts
     end
 
-    def report_counts_from_sql(sql)
+    def count_reports_from_items(scope)
       counts = empty_report_counts
-      ActiveRecord::Base.connection.select_all(sql).each do |row|
-        count = row["count"].to_i
-        status = row["status"].to_s.presence || "open"
-        status = "open" unless %w[open accepted rejected resolved].include?(status)
-        counts[:total] += count
-        counts[status.to_sym] += count
-        counts[:auto_hidden] += count if ActiveModel::Type::Boolean.new.cast(row["auto_hidden"])
+      scope.find_each(batch_size: 200) do |item|
+        media_reports_for(item).each do |report|
+          next unless report.is_a?(Hash)
+          next if block_given? && !yield(report, item)
+
+          status = normalize_report_status(report["status"])
+          counts[:total] += 1
+          counts[status.to_sym] += 1
+          counts[:auto_hidden] += 1 if ActiveModel::Type::Boolean.new.cast(report["auto_hidden"])
+        end
       end
       counts
     rescue
       empty_report_counts
+    end
+
+    def normalize_report_status(value)
+      status = value.to_s.downcase.presence || "open"
+      %w[open accepted rejected resolved].include?(status) ? status : "open"
     end
 
     def reports_submitted_count(user)

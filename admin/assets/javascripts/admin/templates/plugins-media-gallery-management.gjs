@@ -603,8 +603,13 @@ export default RouteTemplate(
     </style>
 
     <div class="media-gallery-admin-management">
-      <h1>{{i18n "admin.media_gallery.management.title"}}</h1>
-      <p>{{i18n "admin.media_gallery.management.description"}}</p>
+      <div class="mg-management__panel-header">
+        <div class="mg-management__panel-copy">
+          <h1>{{i18n "admin.media_gallery.management.title"}}</h1>
+          <p>{{i18n "admin.media_gallery.management.description"}}</p>
+        </div>
+        <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+      </div>
 
       <section class="mg-management__panel">
         <div class="mg-management__panel-header">
@@ -956,7 +961,7 @@ export default RouteTemplate(
 
               <section class="mg-management__editor-section">
                 <h3>Actions</h3>
-                <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, add an admin note, toggle visibility, queue a retry for failed items, change uploader access, or remove the item.</p>
+                <p class="mg-management__muted" style="margin-top: 0.3rem;">Save metadata, add an admin note, toggle visibility, queue a retry for failed items, change the uploader/user access, or remove the item.</p>
                 <div class="mg-management__summary-card" style="margin-top: 1rem;">
                   <div class="mg-management__section-title-row">
                     <div>
@@ -1026,7 +1031,7 @@ export default RouteTemplate(
                   </div>
 
                   <div class="mg-management__action-group">
-                    <h4 class="mg-management__action-group-title">View access</h4>
+                    <h4 class="mg-management__action-group-title">User view access</h4>
                     <div class="mg-management__action-buttons">
                       <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "view-block")}} disabled={{@controller.ownerViewBlockDisabled}}>
                         Block view & upload
@@ -1038,7 +1043,7 @@ export default RouteTemplate(
                   </div>
 
                   <div class="mg-management__action-group">
-                    <h4 class="mg-management__action-group-title">Upload access</h4>
+                    <h4 class="mg-management__action-group-title">User upload access</h4>
                     <div class="mg-management__action-buttons">
                       <button class="btn btn-danger" type="button" {{on "click" (fn @controller.toggleOwnerMediaBlock "upload-block")}} disabled={{@controller.ownerUploadBlockDisabled}}>
                         Block upload only

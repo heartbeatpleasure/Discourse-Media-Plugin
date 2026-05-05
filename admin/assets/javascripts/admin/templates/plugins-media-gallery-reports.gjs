@@ -393,8 +393,13 @@ export default RouteTemplate(
     </style>
 
     <div class="media-gallery-admin-reports">
-      <h1>{{i18n "admin.media_gallery.reports.title"}}</h1>
-      <p>{{i18n "admin.media_gallery.reports.description"}}</p>
+      <div class="mg-reports__panel-header">
+        <div>
+          <h1>{{i18n "admin.media_gallery.reports.title"}}</h1>
+          <p>{{i18n "admin.media_gallery.reports.description"}}</p>
+        </div>
+        <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+      </div>
 
       <section class="mg-reports__panel">
         <div class="mg-reports__panel-header">

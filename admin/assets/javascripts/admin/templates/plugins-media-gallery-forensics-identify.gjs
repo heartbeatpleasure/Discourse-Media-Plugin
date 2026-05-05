@@ -798,6 +798,7 @@ export default RouteTemplate(
         <div class="mg-fi__panel-header">
           <h1>{{i18n "admin.media_gallery.forensics_identify.title"}}</h1>
           <p class="mg-fi__muted">Find a media item first, then run identify against an HLS playlist URL, an uploaded leak file, or use an overlay/session code match to fill the public_id.</p>
+          <div><a class="btn" href="/admin/plugins/media-gallery">Back to overview</a></div>
         </div>
 
         <div class="mg-fi__field is-full">

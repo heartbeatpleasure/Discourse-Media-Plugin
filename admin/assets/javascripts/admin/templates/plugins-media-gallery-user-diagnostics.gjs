@@ -427,6 +427,21 @@ export default RouteTemplate(
         padding: 0.75rem;
       }
 
+      .mg-userdiag__report-count-card.is-success {
+        border-color: var(--success-low-mid);
+        background: var(--success-low);
+      }
+
+      .mg-userdiag__report-count-card.is-warning {
+        border-color: var(--highlight-medium);
+        background: var(--highlight-low);
+      }
+
+      .mg-userdiag__report-count-card.is-danger {
+        border-color: var(--danger-low-mid);
+        background: var(--danger-low);
+      }
+
       .mg-userdiag__filter-row {
         display: flex;
         flex-wrap: wrap;
@@ -689,7 +704,7 @@ export default RouteTemplate(
                 <h3>{{reportSection.title}}</h3>
                 <div class="mg-userdiag__report-counts">
                   {{#each reportSection.rows as |row|}}
-                    <div class="mg-userdiag__report-count-card">
+                    <div class="mg-userdiag__report-count-card {{row.tone}}">
                       <div class="mg-userdiag__card-label">{{row.label}}</div>
                       <div class="mg-userdiag__card-value">{{row.value}}</div>
                     </div>
