@@ -17,16 +17,18 @@ module ::MediaGallery
 
     def enqueue_item!(item, requested_by:, force: false, operation: nil)
       raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
+
+      operation = normalized_operation(operation)
       validate_backfill_preconditions!(item, force: force, allow_already_ready: true, operation: operation)
 
       run_token = SecureRandom.hex(16)
       state = mark_queued!(item, requested_by: requested_by, force: force, run_token: run_token, operation: operation)
-      enqueue_backfill_job!(item, requested_by: requested_by, force: force, run_token: run_token)
+      enqueue_backfill_job!(item, requested_by: requested_by, force: force, run_token: run_token, operation: operation)
       state
     end
 
     def restart_item!(item, requested_by:)
-      enqueue_item!(item, requested_by: requested_by, force: true)
+      enqueue_item!(item, requested_by: requested_by, force: true, operation: "backfill")
     end
 
     def rotate_key!(item, requested_by:)
@@ -46,11 +48,11 @@ module ::MediaGallery
           "cancelled_at" => now,
           "cancelled_by" => requested_by.to_s.presence,
           "cancel_reason" => reason.to_s.presence,
-        ).except("last_error", "last_error_class", "failed_at")
+        ).except("last_error", "last_error_class", "failed_at", "run_token", "operation", "key_id", "scheme", "job_id", "job_class", "job_name")
       end
     end
 
-    def perform_item!(item, requested_by: nil, force: false, run_token: nil)
+    def perform_item!(item, requested_by: nil, force: false, run_token: nil, operation: nil)
       raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
 
       with_item_mutex(item) do
@@ -76,9 +78,9 @@ module ::MediaGallery
           return mark_skipped!(item, reason: "already_aes_ready", requested_by: requested_by, force: force)
         end
 
-        operation = current_state["operation"].to_s
-        validate_backfill_preconditions!(item, force: force, allow_already_ready: false, allow_in_progress: true, operation: operation.presence)
-        processing_state = mark_processing!(item, requested_by: requested_by, force: force, run_token: current_state["run_token"].presence || run_token, operation: operation.presence)
+        operation = normalized_operation(operation.presence || current_state["operation"])
+        validate_backfill_preconditions!(item, force: force, allow_already_ready: false, allow_in_progress: true, operation: operation)
+        processing_state = mark_processing!(item, requested_by: requested_by, force: force, run_token: current_state["run_token"].presence || run_token, operation: operation)
         append_backfill_management_log!(item, action: operation_action(operation, "processing"), requested_by: requested_by, changes: { "hls_aes128_backfill" => [current_state["status"], processing_state["status"]] })
 
         result = nil
@@ -114,7 +116,7 @@ module ::MediaGallery
       raise e
     end
 
-    def enqueue_backfill_job!(item, requested_by:, force: false, run_token: nil)
+    def enqueue_backfill_job!(item, requested_by:, force: false, run_token: nil, operation: nil)
       unless defined?(::Jobs::MediaGalleryHlsAes128BackfillItem)
         raise "hls_aes128_backfill_job_not_loaded"
       end
@@ -124,7 +126,8 @@ module ::MediaGallery
         media_item_id: item.id,
         requested_by: requested_by.to_s,
         force: !!force,
-        run_token: run_token.to_s.presence
+        run_token: run_token.to_s.presence,
+        operation: normalized_operation(operation)
       )
 
       update_state!(item) do |state|
@@ -140,7 +143,7 @@ module ::MediaGallery
         "hls_aes128_backfill_job_enqueued",
         item: item,
         operation: "hls_aes128_backfill",
-        data: { requested_by: requested_by.to_s, force: !!force, run_token_present: run_token.to_s.present?, job_id: job_id.to_s.presence }
+        data: { requested_by: requested_by.to_s, force: !!force, operation: normalized_operation(operation), run_token_present: run_token.to_s.present?, job_id: job_id.to_s.presence }
       ) if defined?(::MediaGallery::OperationLogger)
 
       job_id
@@ -151,6 +154,32 @@ module ::MediaGallery
         append_backfill_management_log!(item, action: operation_action(operation, "failed"), requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", failed_state&.dig("status") || "failed"], "error" => [nil, e.message.to_s.truncate(500)] })
       end
       raise e
+    end
+
+
+    def mark_superseded_by_clear_hls!(item, requested_by: nil)
+      raise ArgumentError, "media_item_missing" if item.blank? || item.id.blank?
+
+      update_state!(item) do |state|
+        now = Time.now.utc.iso8601
+        state.merge(
+          "status" => "cleared",
+          "cleared_at" => now,
+          "cleared_by" => requested_by.to_s.presence,
+          "clear_reason" => "clear_hls_rollback_succeeded",
+        ).except(
+          "last_error",
+          "last_error_class",
+          "failed_at",
+          "run_token",
+          "operation",
+          "key_id",
+          "scheme",
+          "job_id",
+          "job_class",
+          "job_name"
+        )
+      end
     end
 
     def state_for(item)
@@ -264,7 +293,7 @@ module ::MediaGallery
           "force" => !!force,
           "attempt_count" => state["attempt_count"].to_i,
           "run_token" => run_token.to_s.presence || state["run_token"].to_s.presence,
-          "operation" => operation.to_s.presence || state["operation"].to_s.presence,
+          "operation" => normalized_operation(operation),
         ).except("last_error", "last_error_class", "failed_at", "cancelled_at", "cancelled_by", "cancel_reason")
       end
     end
@@ -279,7 +308,7 @@ module ::MediaGallery
           "force" => !!force,
           "attempt_count" => state["attempt_count"].to_i + 1,
           "run_token" => run_token.to_s.presence || state["run_token"].to_s.presence,
-          "operation" => operation.to_s.presence || state["operation"].to_s.presence,
+          "operation" => normalized_operation(operation),
         ).except("last_error", "last_error_class", "failed_at", "cancelled_at", "cancelled_by", "cancel_reason")
       end
     end
@@ -400,6 +429,11 @@ module ::MediaGallery
       hls_meta.except("build_root", "cleanup_build_root_after_publish")
     rescue
       hls_meta
+    end
+
+
+    def normalized_operation(operation)
+      operation.to_s == "key_rotation" ? "key_rotation" : "backfill"
     end
 
     def operation_action(operation, suffix)

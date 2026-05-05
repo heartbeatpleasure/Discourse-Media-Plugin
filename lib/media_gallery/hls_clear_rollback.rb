@@ -81,6 +81,7 @@ module ::MediaGallery
           ::MediaGallery::HlsAes128Backfill.persist_hls_role_and_meta!(item, hls_role: hls_role, hls_meta: hls_meta)
           deactivated_keys = deactivate_aes_key_records!(item)
           result = mark_succeeded!(item, requested_by: requested_by, force: force, hls_role: hls_role, hls_meta: hls_meta, deactivated_keys: deactivated_keys)
+          ::MediaGallery::HlsAes128Backfill.mark_superseded_by_clear_hls!(item, requested_by: requested_by) if defined?(::MediaGallery::HlsAes128Backfill)
           append_management_log!(item, action: "hls_clear_rollback_succeeded", requested_by: requested_by, changes: { "hls_clear_rollback" => ["processing", result["status"]], "hls_aes128" => ["encrypted", "clear_hls"] })
           log_info("hls_clear_rollback_job_succeeded", item: item, requested_by: requested_by, force: force, data: { deactivated_keys: deactivated_keys })
         end

@@ -8,13 +8,14 @@ module Jobs
       item = ::MediaGallery::MediaItem.find_by(id: args[:media_item_id])
       return if item.blank?
 
-      Rails.logger.info("[media_gallery] AES backfill job executing item_id=#{item.id} run_token_present=#{args[:run_token].to_s.present?}")
+      Rails.logger.info("[media_gallery] AES backfill job executing item_id=#{item.id} operation=#{args[:operation].to_s.presence || 'backfill'} run_token_present=#{args[:run_token].to_s.present?}")
 
       ::MediaGallery::HlsAes128Backfill.perform_item!(
         item,
         requested_by: args[:requested_by].to_s.presence,
         force: ActiveModel::Type::Boolean.new.cast(args[:force]),
-        run_token: args[:run_token].to_s.presence
+        run_token: args[:run_token].to_s.presence,
+        operation: args[:operation].to_s.presence
       )
       Rails.logger.info("[media_gallery] AES backfill job finished item_id=#{item.id}")
     rescue => e
