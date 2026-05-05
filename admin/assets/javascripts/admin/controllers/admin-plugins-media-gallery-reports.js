@@ -91,6 +91,11 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   @tracked reports = [];
   @tracked moderationTrends = [];
   @tracked falseReporters = [];
+  @tracked showPerformanceTimings = false;
+  @tracked lastTimingMs = null;
+  @tracked lastTimingBreakdown = null;
+  @tracked totalReportCount = 0;
+  @tracked activeFilters = {};
   @tracked isLoading = false;
   @tracked loadError = "";
   @tracked noticeMessage = "";
@@ -112,7 +117,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     const reporterUserId = String(initialParams.get("reporter_user_id") || "").replace(/\D/g, "").slice(0, 20);
     const mediaOwnerUserId = String(initialParams.get("media_owner_user_id") || "").replace(/\D/g, "").slice(0, 20);
 
-    this.statusFilter = ["open", "accepted", "rejected", "resolved", "all"].includes(initialStatus)
+    this.statusFilter = ["open", "closed", "accepted", "rejected", "resolved", "all"].includes(initialStatus)
       ? initialStatus
       : deepLinkedReportId
         ? "all"
@@ -122,6 +127,11 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.reports = [];
     this.moderationTrends = [];
     this.falseReporters = [];
+    this.showPerformanceTimings = false;
+    this.lastTimingMs = null;
+    this.lastTimingBreakdown = null;
+    this.totalReportCount = 0;
+    this.activeFilters = {};
     this.isLoading = false;
     this.loadError = "";
     this.noticeMessage = "";
@@ -315,6 +325,51 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     }));
   }
 
+  get performanceTimingLabel() {
+    if (!this.showPerformanceTimings || !this.lastTimingBreakdown) {
+      return "";
+    }
+
+    const parts = [];
+    const order = ["scope", "filters", "sort", "serialize", "trends", "false_reporters"];
+    order.forEach((key) => {
+      const value = Number(this.lastTimingBreakdown?.[key]);
+      if (Number.isFinite(value)) {
+        parts.push(`${key.replace(/_/g, " ")} ${value}ms`);
+      }
+    });
+
+    return `server ${this.lastTimingMs || 0}ms${parts.length ? ` (${parts.join(" · ")})` : ""}`;
+  }
+
+  get activeHiddenFilterLabel() {
+    const parts = [];
+    if (String(this.reporterUserIdFilter || "").trim()) {
+      parts.push(`reporter user #${this.reporterUserIdFilter}`);
+    }
+    if (String(this.mediaOwnerUserIdFilter || "").trim()) {
+      parts.push(`media owner #${this.mediaOwnerUserIdFilter}`);
+    }
+    return parts.length ? `Additional filter active: ${parts.join(" · ")}` : "";
+  }
+
+  get reportsCountLabel() {
+    const shown = Array.isArray(this.reports) ? this.reports.length : 0;
+    const filtered = Number(this.totalReportCount || 0);
+    const total = Number(this.activeFilters?.total_count || 0);
+    const status = String(this.statusFilter || "open");
+    const base = `${filtered} report${filtered === 1 ? "" : "s"} found`;
+    const statusLabel = status === "all" ? "all statuses" : status;
+    const parts = [base, statusLabel];
+    if (shown !== filtered) {
+      parts.push(`showing ${shown}`);
+    }
+    if (total && total !== filtered) {
+      parts.push(`${total} total before filters`);
+    }
+    return parts.join(" · ");
+  }
+
   get selectedSnapshotRows() {
     const snapshot = this.selectedReport?.item_snapshot || {};
     return [
@@ -399,6 +454,11 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       this.reports = Array.isArray(data?.reports) ? data.reports : [];
       this.moderationTrends = Array.isArray(data?.moderation_trends) ? data.moderation_trends : [];
       this.falseReporters = Array.isArray(data?.false_reporters) ? data.false_reporters : [];
+      this.totalReportCount = Number(data?.count || 0);
+      this.activeFilters = { ...(data?.active_filters || {}), total_count: Number(data?.total_count || 0) };
+      this.showPerformanceTimings = !!data?.show_performance_timings;
+      this.lastTimingMs = Number(data?.timing_ms || 0) || null;
+      this.lastTimingBreakdown = data?.timing_breakdown_ms || null;
       if (this.requestedReportId && this.reports.some((report) => report.id === this.requestedReportId)) {
         this.selectedReportId = this.requestedReportId;
       } else if (!this.reports.some((report) => report.id === this.selectedReportId)) {

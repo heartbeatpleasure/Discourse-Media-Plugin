@@ -80,9 +80,14 @@ export default RouteTemplate(
         margin-bottom: 0.9rem;
       }
 
-      .mg-reports__muted {
+      .mg-reports__muted,
+      .mg-reports__performance {
         color: var(--mg-muted);
         font-size: var(--font-down-1);
+      }
+
+      .mg-reports__performance {
+        margin-top: 0.75rem;
       }
 
       .mg-reports__filters {
@@ -279,6 +284,12 @@ export default RouteTemplate(
         border-radius: 16px;
         background: var(--mg-surface-alt);
         padding: 0.95rem;
+      }
+
+      .mg-reports__summary-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.38rem;
       }
 
       .mg-reports__summary-label {
@@ -505,6 +516,13 @@ export default RouteTemplate(
           </div>
         </div>
 
+        {{#if @controller.activeHiddenFilterLabel}}
+          <div class="mg-reports__empty-state" style="margin-top: 1rem;">
+            <strong>{{@controller.activeHiddenFilterLabel}}</strong>
+            <span class="mg-reports__muted">This filter can be applied from User diagnostics links. Use Reset to clear it.</span>
+          </div>
+        {{/if}}
+
         {{#if @controller.loadError}}
           <div class="mg-reports__flash is-danger" style="margin-top: 1rem;">{{@controller.loadError}}</div>
         {{/if}}
@@ -557,6 +575,10 @@ export default RouteTemplate(
             <div>
               <h2>Reports</h2>
               <span class="mg-reports__muted">Open a report to review the media snapshot and take action.</span>
+              <div class="mg-reports__performance">{{@controller.reportsCountLabel}}</div>
+              {{#if @controller.performanceTimingLabel}}
+                <div class="mg-reports__performance">{{@controller.performanceTimingLabel}}</div>
+              {{/if}}
             </div>
           </div>
 
@@ -596,7 +618,7 @@ export default RouteTemplate(
           {{else}}
             <div class="mg-reports__empty-state">
               <strong>No reports found</strong>
-              <span class="mg-reports__muted">Try another status or search term.</span>
+              <span class="mg-reports__muted">{{@controller.reportsCountLabel}}. Try Reset if an old search, reporter, or owner filter is still active.</span>
             </div>
           {{/if}}
         </section>

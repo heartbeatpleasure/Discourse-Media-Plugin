@@ -64,6 +64,9 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   @tracked searchError = "";
   @tracked loadError = "";
   @tracked noticeMessage = "";
+  @tracked showPerformanceTimings = false;
+  @tracked lastTimingMs = null;
+  @tracked lastTimingBreakdown = null;
 
   resetState() {
     this.searchQuery = "";
@@ -79,6 +82,9 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     this.searchError = "";
     this.loadError = "";
     this.noticeMessage = "";
+    this.showPerformanceTimings = false;
+    this.lastTimingMs = null;
+    this.lastTimingBreakdown = null;
   }
 
   async loadInitial() {
@@ -134,6 +140,22 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     if (user.silenced) badges.push({ label: "Silenced", className: "is-warning" });
     if (!badges.length) badges.push({ label: "Regular user", className: "" });
     return badges;
+  }
+
+  get performanceTimingLabel() {
+    if (!this.showPerformanceTimings || !this.lastTimingBreakdown) {
+      return "";
+    }
+
+    const parts = [];
+    ["user", "access", "settings", "stats", "recent"].forEach((key) => {
+      const value = Number(this.lastTimingBreakdown?.[key]);
+      if (Number.isFinite(value)) {
+        parts.push(`${key} ${value}ms`);
+      }
+    });
+
+    return `server ${this.lastTimingMs || 0}ms${parts.length ? ` (${parts.join(" · ")})` : ""}`;
   }
 
   get mediaAccessCards() {
@@ -379,6 +401,9 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       this.settingsRows = Array.isArray(data?.settings) ? data.settings : [];
       this.stats = data?.stats || null;
       this.recent = data?.recent || { uploads: [], logs: [], reports: [] };
+      this.showPerformanceTimings = !!data?.show_performance_timings;
+      this.lastTimingMs = Number(data?.timing_ms || 0) || null;
+      this.lastTimingBreakdown = data?.timing_breakdown_ms || null;
       if (this.selectedUser?.id) {
         const url = new URL(window.location.href);
         url.searchParams.set("user_id", this.selectedUser.id);

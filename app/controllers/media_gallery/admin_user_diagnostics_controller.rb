@@ -19,15 +19,26 @@ module ::MediaGallery
     end
 
     def show
-      user = ::User.includes(:groups).find_by(id: params[:user_id].to_i)
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      timing = {}
+      user = timed_phase!(timing, :user) { ::User.includes(:groups).find_by(id: params[:user_id].to_i) }
       raise Discourse::NotFound if user.blank?
+
+      access = timed_phase!(timing, :access) { access_payload(user) }
+      settings = timed_phase!(timing, :settings) { settings_payload(user) }
+      stats = timed_phase!(timing, :stats) { stats_payload(user) }
+      recent = timed_phase!(timing, :recent) { recent_payload(user) }
+      timing[:total] = elapsed_ms_since(started_at)
 
       render_json_dump(
         user: user_payload(user),
-        access: access_payload(user),
-        settings: settings_payload(user),
-        stats: stats_payload(user),
-        recent: recent_payload(user),
+        access: access,
+        settings: settings,
+        stats: stats,
+        recent: recent,
+        timing_ms: timing[:total],
+        timing_breakdown_ms: timing,
+        show_performance_timings: admin_pages_show_performance_timings?,
       )
     rescue Discourse::NotFound
       raise
@@ -37,6 +48,38 @@ module ::MediaGallery
     end
 
     private
+
+    def timed_phase!(timing, key)
+      phase_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      yield
+    ensure
+      timing[key] = elapsed_ms_since(phase_started) if timing && key && phase_started
+    end
+
+    def elapsed_ms_since(started_at)
+      ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
+    rescue
+      0
+    end
+
+    def admin_pages_show_performance_timings?
+      SiteSetting.respond_to?(:media_gallery_admin_pages_show_performance_timings) &&
+        SiteSetting.media_gallery_admin_pages_show_performance_timings
+    rescue
+      false
+    end
+
+    def reports_with_media_reports_scope
+      ::MediaGallery::MediaItem
+        .where("jsonb_typeof(extra_metadata -> 'media_reports') = 'array'")
+        .where("jsonb_array_length(extra_metadata -> 'media_reports') > 0")
+        .order(updated_at: :desc)
+        .limit(1000)
+    end
+
+    def reporter_id_matches?(report, user)
+      report["reporter_user_id"].to_i == user.id
+    end
 
     def sanitized_query(value)
       ::MediaGallery::TextSanitizer.search_query(value, max_length: 120).to_s.strip
@@ -369,12 +412,7 @@ module ::MediaGallery
 
     def recent_reports_by_user(user)
       reports = []
-      ::MediaGallery::MediaItem
-        .where("jsonb_typeof(extra_metadata -> 'media_reports') = 'array'")
-        .where("extra_metadata -> 'media_reports' @> ?::jsonb", [{ reporter_user_id: user.id }].to_json)
-        .order(updated_at: :desc)
-        .limit(100)
-        .to_a.each do |item|
+      reports_with_media_reports_scope.limit(200).to_a.each do |item|
           media_reports_for(item).each do |report|
             next unless report["reporter_user_id"].to_i == user.id
 
@@ -429,12 +467,8 @@ module ::MediaGallery
     end
 
     def report_counts_by_reporter(user)
-      scope = ::MediaGallery::MediaItem
-        .where("jsonb_typeof(extra_metadata -> 'media_reports') = 'array'")
-        .where("extra_metadata -> 'media_reports' @> ?::jsonb", [{ reporter_user_id: user.id }].to_json)
-
-      count_reports_from_items(scope) do |report, _item|
-        report["reporter_user_id"].to_i == user.id
+      count_reports_from_items(reports_with_media_reports_scope) do |report, _item|
+        reporter_id_matches?(report, user)
       end
     rescue
       empty_report_counts
@@ -492,12 +526,8 @@ module ::MediaGallery
     end
 
     def report_trends_by_reporter(user)
-      scope = ::MediaGallery::MediaItem
-        .where("jsonb_typeof(extra_metadata -> 'media_reports') = 'array'")
-        .where("extra_metadata -> 'media_reports' @> ?::jsonb", [{ reporter_user_id: user.id }].to_json)
-
-      build_trend_windows(scope) do |report, _item|
-        report["reporter_user_id"].to_i == user.id
+      build_trend_windows(reports_with_media_reports_scope) do |report, _item|
+        reporter_id_matches?(report, user)
       end
     rescue
       empty_trend_windows

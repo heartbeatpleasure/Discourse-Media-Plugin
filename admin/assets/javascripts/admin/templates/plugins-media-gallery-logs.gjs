@@ -89,7 +89,8 @@ export default RouteTemplate(
         margin-top: 1rem;
       }
 
-      .mg-logs__muted {
+      .mg-logs__muted,
+      .mg-logs__performance {
         color: var(--mg-muted);
         font-size: var(--font-down-1);
       }
@@ -449,6 +450,11 @@ export default RouteTemplate(
                 <option value="migration_copy_requested">Migration copy requested</option>
                 <option value="migration_switch_requested">Migration switch requested</option>
                 <option value="hls_integrity_verify_run">HLS integrity verify run</option>
+                <option value="hls_aes128_key_rotation_requested">AES key rotation requested</option>
+                <option value="hls_aes128_key_rotation_succeeded">AES key rotation succeeded</option>
+                <option value="hls_aes128_key_rotation_failed">AES key rotation failed</option>
+                <option value="hls_aes128_backfill_job_succeeded">AES backfill job succeeded</option>
+                <option value="hls_aes128_backfill_job_failed">AES backfill job failed</option>
               </select>
             </div>
           </div>
@@ -496,6 +502,9 @@ export default RouteTemplate(
               {{@controller.searchInfo}}
               {{#if @controller.lastLoadedAt}}
                 · {{i18n "admin.media_gallery.logs.last_loaded"}} {{@controller.lastLoadedLabel}}
+              {{/if}}
+              {{#if @controller.performanceTimingLabel}}
+                <br /><span class="mg-logs__performance">{{@controller.performanceTimingLabel}}</span>
               {{/if}}
             </div>
           </div>

@@ -1107,6 +1107,40 @@ export default RouteTemplate(
                 </div>
               </section>
 
+
+              {{#if @controller.aesKeyRotationAuditEntries.length}}
+                <section class="mg-management__editor-section">
+                  <h3>AES key rotation audit</h3>
+                  <p class="mg-management__muted" style="margin-top: 0.3rem;">Recent key-rotation lifecycle entries for this media item.</p>
+                  <div class="mg-management__history-list" style="margin-top: 1rem;">
+                    {{#each @controller.aesKeyRotationAuditEntries as |entry|}}
+                      <article class="mg-management__history-card">
+                        <div class="mg-management__history-meta">
+                          <span>{{entry.prettyAt}}</span>
+                          <span>{{entry.admin_username}}</span>
+                          <strong>{{entry.actionLabel}}</strong>
+                          <span class="mg-management__badge {{entry.resultClass}}">{{entry.resultLabel}}</span>
+                        </div>
+                        {{#if entry.changeRows.length}}
+                          <div class="mg-management__history-list">
+                            {{#each entry.changeRows as |row|}}
+                              <div class="mg-management__history-row">
+                                <div class="mg-management__history-row-label">{{row.label}}</div>
+                                <div class="mg-management__history-row-values">
+                                  <span>{{row.from}}</span>
+                                  <span class="mg-management__history-arrow">→</span>
+                                  <span>{{row.to}}</span>
+                                </div>
+                              </div>
+                            {{/each}}
+                          </div>
+                        {{/if}}
+                      </article>
+                    {{/each}}
+                  </div>
+                </section>
+              {{/if}}
+
               <section class="mg-management__editor-section">
                 <h3>Admin history</h3>
                 <p class="mg-management__muted" style="margin-top: 0.3rem;">Track changes made by admins, including optional notes.</p>

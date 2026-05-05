@@ -413,6 +413,9 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
   @tracked aesRequiredReadiness = {};
   @tracked aesFinalQa = {};
   @tracked generatedAt = "";
+  @tracked showPerformanceTimings = false;
+  @tracked lastTimingMs = null;
+  @tracked lastTimingBreakdown = null;
   @tracked hasLoaded = false;
 
   resetState() {
@@ -439,6 +442,9 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     this.aesRequiredReadiness = {};
     this.aesFinalQa = {};
     this.generatedAt = "";
+    this.showPerformanceTimings = false;
+    this.lastTimingMs = null;
+    this.lastTimingBreakdown = null;
     this.hasLoaded = false;
   }
 
@@ -452,6 +458,9 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
     }
 
     this.generatedAt = data?.generated_at || "";
+    this.showPerformanceTimings = !!data?.show_performance_timings;
+    this.lastTimingMs = Number(data?.timing_ms || 0) || null;
+    this.lastTimingBreakdown = data?.timing_breakdown_ms || null;
     this.summary = data?.summary || {};
     this.controls = Array.isArray(data?.controls) ? data.controls.map(decorateControl) : [];
     this.settings = Array.isArray(data?.settings) ? data.settings.map(decorateSetting) : [];
@@ -485,6 +494,22 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
 
   get generatedAtLabel() {
     return formatDateTime(this.generatedAt);
+  }
+
+  get performanceTimingLabel() {
+    if (!this.showPerformanceTimings || !this.lastTimingBreakdown) {
+      return "";
+    }
+
+    const parts = [];
+    ["security_payload"].forEach((key) => {
+      const value = Number(this.lastTimingBreakdown?.[key]);
+      if (Number.isFinite(value)) {
+        parts.push(`${key.replace(/_/g, " ")} ${value}ms`);
+      }
+    });
+
+    return `server ${this.lastTimingMs || 0}ms${parts.length ? ` (${parts.join(" · ")})` : ""}`;
   }
 
   get summaryCards() {

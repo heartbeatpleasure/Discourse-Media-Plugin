@@ -5,13 +5,40 @@ module ::MediaGallery
     requires_plugin "Discourse-Media-Plugin"
 
     def index
-      render_json_dump(security_payload)
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      timing = {}
+      payload = timed_phase!(timing, :security_payload) { security_payload }
+      timing[:total] = elapsed_ms_since(started_at)
+      payload[:timing_ms] = timing[:total]
+      payload[:timing_breakdown_ms] = timing
+      payload[:show_performance_timings] = admin_pages_show_performance_timings?
+      render_json_dump(payload)
     rescue => e
       Rails.logger.error("[media_gallery] admin security status failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
       render_json_error("security_status_failed", status: 422, message: "Security status could not be loaded. Please check Rails logs and try again.")
     end
 
     private
+
+    def timed_phase!(timing, key)
+      phase_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      yield
+    ensure
+      timing[key] = elapsed_ms_since(phase_started) if timing && key && phase_started
+    end
+
+    def elapsed_ms_since(started_at)
+      ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
+    rescue
+      0
+    end
+
+    def admin_pages_show_performance_timings?
+      SiteSetting.respond_to?(:media_gallery_admin_pages_show_performance_timings) &&
+        SiteSetting.media_gallery_admin_pages_show_performance_timings
+    rescue
+      false
+    end
 
     def security_payload
       environment = environment_status

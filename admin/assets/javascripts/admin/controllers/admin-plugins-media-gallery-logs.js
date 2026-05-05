@@ -212,6 +212,9 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
   @tracked decoratedTopEventTypes = [];
   @tracked lastLoadedAt = null;
   @tracked hasLoadedOnce = false;
+  @tracked showPerformanceTimings = false;
+  @tracked lastTimingMs = null;
+  @tracked lastTimingBreakdown = null;
 
   _requestSequence = 0;
 
@@ -230,6 +233,9 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.decoratedTopEventTypes = [];
     this.lastLoadedAt = null;
     this.hasLoadedOnce = false;
+    this.showPerformanceTimings = false;
+    this.lastTimingMs = null;
+    this.lastTimingBreakdown = null;
   }
 
   buildQuery() {
@@ -283,6 +289,22 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     return this.lastLoadedAt ? formatDateTime(this.lastLoadedAt) : "";
   }
 
+  get performanceTimingLabel() {
+    if (!this.showPerformanceTimings || !this.lastTimingBreakdown) {
+      return "";
+    }
+
+    const parts = [];
+    ["search", "serialize", "summary", "filter_options"].forEach((key) => {
+      const value = Number(this.lastTimingBreakdown?.[key]);
+      if (Number.isFinite(value)) {
+        parts.push(`${key.replace(/_/g, " ")} ${value}ms`);
+      }
+    });
+
+    return `server ${this.lastTimingMs || 0}ms${parts.length ? ` (${parts.join(" · ")})` : ""}`;
+  }
+
   get searchInfo() {
     if (!this.hasLoadedOnce) {
       return "Loading recent log events…";
@@ -316,6 +338,9 @@ export default class AdminPluginsMediaGalleryLogsController extends Controller {
     this.decoratedTopEventTypes = topEventTypes.map((entry) => decorateTopEvent(entry));
     this.summary = data?.summary || {};
     this.error = String(data?.error || "").trim();
+    this.showPerformanceTimings = !!data?.show_performance_timings;
+    this.lastTimingMs = Number(data?.timing_ms || 0) || null;
+    this.lastTimingBreakdown = data?.timing_breakdown_ms || null;
     this.lastLoadedAt = new Date();
     this.hasLoadedOnce = true;
   }

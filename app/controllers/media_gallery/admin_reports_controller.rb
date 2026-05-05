@@ -13,20 +13,37 @@ module ::MediaGallery
     MAX_MANAGEMENT_LOG_ENTRIES = 50
 
     def index
-      all_reports = report_scope.flat_map { |item| report_payloads_for_item(item) }
-      reports = apply_status_filter(all_reports)
-      reports = apply_user_filter(reports)
-      reports = apply_report_search_filter(reports)
-      reports.sort_by! { |report| report[:created_at].to_s }
-      reports.reverse!
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      timing = {}
+
+      all_reports = timed_phase!(timing, :scope) { report_scope.flat_map { |item| report_payloads_for_item(item) } }
+      reports = timed_phase!(timing, :filters) do
+        filtered = apply_status_filter(all_reports)
+        filtered = apply_user_filter(filtered)
+        apply_report_search_filter(filtered)
+      end
+      timed_phase!(timing, :sort) do
+        reports.sort_by! { |report| report[:created_at].to_s }
+        reports.reverse!
+      end
 
       limit = bounded_limit
+      visible_reports = timed_phase!(timing, :serialize) { reports.first(limit) }
+      trends = timed_phase!(timing, :trends) { moderation_trends_payload(all_reports) }
+      false_reporters = timed_phase!(timing, :false_reporters) { false_reporters_payload(all_reports) }
+      timing[:total] = elapsed_ms_since(started_at)
+
       render_json_dump(
-        reports: reports.first(limit),
+        reports: visible_reports,
         count: reports.length,
+        total_count: all_reports.length,
         limit: limit,
-        moderation_trends: moderation_trends_payload(all_reports),
-        false_reporters: false_reporters_payload(all_reports)
+        moderation_trends: trends,
+        false_reporters: false_reporters,
+        timing_ms: timing[:total],
+        timing_breakdown_ms: timing,
+        show_performance_timings: admin_pages_show_performance_timings?,
+        active_filters: active_report_filters_payload
       )
     end
 
@@ -360,6 +377,36 @@ end
       Time.zone.parse(value.to_s)
     rescue
       nil
+    end
+
+
+    def timed_phase!(timing, key)
+      phase_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      yield
+    ensure
+      timing[key] = elapsed_ms_since(phase_started) if timing && key && phase_started
+    end
+
+    def elapsed_ms_since(started_at)
+      ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
+    rescue
+      0
+    end
+
+    def admin_pages_show_performance_timings?
+      SiteSetting.respond_to?(:media_gallery_admin_pages_show_performance_timings) &&
+        SiteSetting.media_gallery_admin_pages_show_performance_timings
+    rescue
+      false
+    end
+
+    def active_report_filters_payload
+      {
+        status: params[:status].to_s.strip.presence || "open",
+        q: params[:q].to_s.strip.presence,
+        reporter_user_id: params[:reporter_user_id].to_i.positive? ? params[:reporter_user_id].to_i : nil,
+        media_owner_user_id: params[:media_owner_user_id].to_i.positive? ? params[:media_owner_user_id].to_i : nil,
+      }.compact
     end
 
     def apply_status_filter(reports)

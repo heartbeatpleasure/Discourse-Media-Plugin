@@ -587,6 +587,9 @@ export default RouteTemplate(
             <h1>{{i18n "admin.media_gallery.health.title"}}</h1>
             <p class="mg-health__muted">{{i18n "admin.media_gallery.health.description"}}</p>
             <p class="mg-health__muted">Last checked: {{@controller.generatedAtLabel}}</p>
+            {{#if @controller.performanceTimingLabel}}
+              <p class="mg-health__performance">{{@controller.performanceTimingLabel}}</p>
+            {{/if}}
           </div>
           <div class="mg-health__actions">
             <span class="mg-health__status-row" title={{@controller.overallSeverityLabel}}>

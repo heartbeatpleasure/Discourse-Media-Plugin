@@ -5,8 +5,15 @@ module ::MediaGallery
     requires_plugin "Discourse-Media-Plugin"
 
     def index
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      timing = {}
       full_storage = ActiveModel::Type::Boolean.new.cast(params[:full_storage])
-      render_json_dump(::MediaGallery::HealthCheck.summary(full_storage: full_storage))
+      payload = timed_phase!(timing, :summary) { ::MediaGallery::HealthCheck.summary(full_storage: full_storage) }
+      timing[:total] = elapsed_ms_since(started_at)
+      payload[:timing_ms] = timing[:total]
+      payload[:timing_breakdown_ms] = timing
+      payload[:show_performance_timings] = admin_pages_show_performance_timings?
+      render_json_dump(payload)
     rescue => e
       Rails.logger.error("[media_gallery] admin health failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
       render_json_error("health_check_failed", status: 422, message: "Health check failed. Please check Rails logs and try again.")
@@ -62,6 +69,26 @@ module ::MediaGallery
     rescue => e
       Rails.logger.error("[media_gallery] storage reconciliation export failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
       render_json_error("storage_reconciliation_export_failed", status: 422, message: "Could not export the reconciliation report. Please check Rails logs and try again.")
+    end
+
+    def timed_phase!(timing, key)
+      phase_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      yield
+    ensure
+      timing[key] = elapsed_ms_since(phase_started) if timing && key && phase_started
+    end
+
+    def elapsed_ms_since(started_at)
+      ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
+    rescue
+      0
+    end
+
+    def admin_pages_show_performance_timings?
+      SiteSetting.respond_to?(:media_gallery_admin_pages_show_performance_timings) &&
+        SiteSetting.media_gallery_admin_pages_show_performance_timings
+    rescue
+      false
     end
 
     def notify_test

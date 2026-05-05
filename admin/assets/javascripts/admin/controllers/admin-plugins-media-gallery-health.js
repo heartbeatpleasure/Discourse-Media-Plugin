@@ -320,6 +320,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked ignoreExample = null;
   @tracked ignoreReason = "";
   @tracked ignoreExpiresInDays = "0";
+  @tracked showPerformanceTimings = false;
+  @tracked lastTimingMs = null;
+  @tracked lastTimingBreakdown = null;
 
   resetState() {
     this.isLoading = false;
@@ -339,6 +342,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.ignoreExample = null;
     this.ignoreReason = "";
     this.ignoreExpiresInDays = "0";
+    this.showPerformanceTimings = false;
+    this.lastTimingMs = null;
+    this.lastTimingBreakdown = null;
   }
 
   get overallSeverity() {
@@ -578,6 +584,16 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     return "Only storage profiles with a configured display name are listed here. The scan still checks every configured profile.";
   }
 
+  get performanceTimingLabel() {
+    if (!this.showPerformanceTimings || !this.lastTimingBreakdown) {
+      return "";
+    }
+
+    const value = Number(this.lastTimingBreakdown?.summary);
+    const parts = Number.isFinite(value) ? [`summary ${value}ms`] : [];
+    return `server ${this.lastTimingMs || 0}ms${parts.length ? ` (${parts.join(" · ")})` : ""}`;
+  }
+
   applyResponse(data) {
     this.data = data || {};
     this.summaryCards = Array.isArray(data?.summary_cards)
@@ -591,6 +607,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       ? data.ignored_findings.map(decorateIgnoredFinding)
       : [];
     this.reconciliation = data?.reconciliation || null;
+    this.showPerformanceTimings = !!data?.show_performance_timings;
+    this.lastTimingMs = Number(data?.timing_ms || 0) || null;
+    this.lastTimingBreakdown = data?.timing_breakdown_ms || null;
     this.reconciliationHistory = Array.isArray(data?.reconciliation_history)
       ? data.reconciliation_history.map(decorateHistoryEntry)
       : [];
@@ -800,6 +819,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.ignoreExample = null;
     this.ignoreReason = "";
     this.ignoreExpiresInDays = "0";
+    this.showPerformanceTimings = false;
+    this.lastTimingMs = null;
+    this.lastTimingBreakdown = null;
   }
 
   @action

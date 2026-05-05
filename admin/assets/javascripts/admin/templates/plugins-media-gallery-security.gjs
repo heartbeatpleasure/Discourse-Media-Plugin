@@ -77,8 +77,14 @@ export default RouteTemplate(
         gap: 0.65rem;
       }
 
-      .mg-security__muted {
+      .mg-security__muted,
+      .mg-security__performance {
         color: var(--mg-security-muted);
+      }
+
+      .mg-security__performance {
+        font-size: var(--font-down-1);
+        margin-top: 0.35rem;
       }
 
       .mg-security__summary-grid,
@@ -328,6 +334,9 @@ export default RouteTemplate(
             Read-only overview of active Media Gallery security, privacy and download-prevention controls. This page avoids listing internal open issues.
           </p>
           <p class="mg-security__muted">Last checked: {{@controller.generatedAtLabel}}</p>
+          {{#if @controller.performanceTimingLabel}}
+            <p class="mg-security__performance">{{@controller.performanceTimingLabel}}</p>
+          {{/if}}
         </div>
         <div class="mg-security__actions">
           <button class="btn btn-primary" type="button" {{on "click" @controller.loadSecurityStatus}} disabled={{@controller.isLoading}}>

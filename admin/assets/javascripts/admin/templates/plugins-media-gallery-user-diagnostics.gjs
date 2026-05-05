@@ -51,9 +51,15 @@ export default RouteTemplate(
       }
 
       .mg-userdiag__muted,
+      .mg-userdiag__performance,
       .mg-userdiag__hero-copy p,
       .mg-userdiag__section-description {
         color: var(--mg-muted);
+      }
+
+      .mg-userdiag__performance {
+        font-size: var(--font-down-1);
+        margin-top: 0.65rem;
       }
 
       .mg-userdiag__panel {
@@ -616,6 +622,9 @@ export default RouteTemplate(
                   <span class="mg-userdiag__badge {{badge.className}}">{{badge.label}}</span>
                 {{/each}}
               </div>
+              {{#if @controller.performanceTimingLabel}}
+                <div class="mg-userdiag__performance">{{@controller.performanceTimingLabel}}</div>
+              {{/if}}
             </div>
             <div class="mg-userdiag__actions">
               <a class="btn" href={{@controller.selectedUser.admin_url}}>Open admin user</a>
@@ -751,7 +760,7 @@ export default RouteTemplate(
           <div class="mg-userdiag__panel-header">
             <div class="mg-userdiag__copy">
               <h2>False-report signal</h2>
-              <p class="mg-userdiag__muted">A read-only quality signal based on rejected reports submitted by this user. It is informational and does not automatically restrict the user.</p>
+              <p class="mg-userdiag__muted">Informational reporting-quality indicator based on rejected reports submitted by this user. It does not automatically restrict the user.</p>
             </div>
           </div>
           <div class="mg-userdiag__grid">

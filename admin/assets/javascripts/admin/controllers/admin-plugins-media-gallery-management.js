@@ -1180,6 +1180,29 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     }));
   }
 
+  get aesKeyRotationAuditEntries() {
+    return this.historyEntries
+      .filter((entry) => String(entry?.action || "").startsWith("hls_aes128_key_rotation"))
+      .slice(0, 8)
+      .map((entry) => ({
+        ...entry,
+        resultLabel:
+          String(entry?.action || "").includes("succeeded")
+            ? "Completed"
+            : String(entry?.action || "").includes("failed")
+              ? "Failed"
+              : String(entry?.action || "").includes("processing")
+                ? "Processing"
+                : "Queued",
+        resultClass:
+          String(entry?.action || "").includes("succeeded")
+            ? "is-success"
+            : String(entry?.action || "").includes("failed")
+              ? "is-danger"
+              : "is-warning",
+      }));
+  }
+
   uploadTermsAcceptanceLabel(acceptance) {
     if (!acceptance?.accepted) {
       return "Not recorded";
