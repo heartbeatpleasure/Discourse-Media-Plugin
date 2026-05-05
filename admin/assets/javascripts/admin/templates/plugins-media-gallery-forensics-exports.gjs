@@ -34,6 +34,33 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
+      .mg-exports__hero {
+        background: var(--mg-surface);
+        border: 1px solid var(--mg-border);
+        border-radius: var(--mg-radius);
+        padding: 1.15rem 1.25rem;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
+      .mg-exports__hero-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 0;
+      }
+
+      .mg-exports__hero-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
       .mg-exports__panel-header {
         display: flex;
         align-items: flex-start;
@@ -228,20 +255,21 @@ export default RouteTemplate(
     </style>
 
     <div class="media-gallery-admin-forensics-exports">
-      <section class="mg-exports__panel">
-        <div class="mg-exports__panel-header">
-          <div class="mg-exports__panel-copy">
-            <h1>{{i18n "admin.media_gallery.forensics_exports.title"}}</h1>
-            <p class="mg-exports__muted">{{i18n "admin.media_gallery.forensics_exports.description"}}</p>
-          </div>
-
-          <div class="mg-exports__badge-row">
-            <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
-            <span class="mg-exports__badge is-info">
-              {{i18n "admin.media_gallery.forensics_exports.count" count=@controller.exports.length}}
-            </span>
-          </div>
+      <section class="mg-exports__hero">
+        <div class="mg-exports__hero-copy">
+          <h1>{{i18n "admin.media_gallery.forensics_exports.title"}}</h1>
+          <p class="mg-exports__muted">{{i18n "admin.media_gallery.forensics_exports.description"}}</p>
         </div>
+
+        <div class="mg-exports__hero-actions">
+          <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+          <span class="mg-exports__badge is-info">
+            {{i18n "admin.media_gallery.forensics_exports.count" count=@controller.exports.length}}
+          </span>
+        </div>
+      </section>
+
+      <section class="mg-exports__panel">
       </section>
 
       {{#if @controller.error}}

@@ -37,6 +37,33 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
+      .mg-fi__hero {
+        background: var(--mg-fi-surface);
+        border: 1px solid var(--mg-fi-border);
+        border-radius: var(--mg-fi-radius);
+        padding: 1.15rem 1.25rem;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
+      .mg-fi__hero-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 0;
+      }
+
+      .mg-fi__hero-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
       .mg-fi__panel-header {
         display: flex;
         flex-direction: column;
@@ -794,13 +821,17 @@ export default RouteTemplate(
     </style>
 
     <div class="media-gallery-forensics-identify">
-      <section class="mg-fi__panel">
-        <div class="mg-fi__panel-header">
+      <section class="mg-fi__hero">
+        <div class="mg-fi__hero-copy">
           <h1>{{i18n "admin.media_gallery.forensics_identify.title"}}</h1>
           <p class="mg-fi__muted">Find a media item first, then run identify against an HLS playlist URL, an uploaded leak file, or use an overlay/session code match to fill the public_id.</p>
-          <div><a class="btn" href="/admin/plugins/media-gallery">Back to overview</a></div>
         </div>
+        <div class="mg-fi__hero-actions">
+          <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+        </div>
+      </section>
 
+      <section class="mg-fi__panel">
         <div class="mg-fi__field is-full">
           <label>Search</label>
           <input

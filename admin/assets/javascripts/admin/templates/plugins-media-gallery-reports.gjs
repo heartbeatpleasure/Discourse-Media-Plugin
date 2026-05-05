@@ -34,6 +34,33 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
+      .mg-reports__hero {
+        background: var(--mg-surface);
+        border: 1px solid var(--mg-border);
+        border-radius: var(--mg-radius);
+        padding: 1.15rem 1.25rem;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
+      .mg-reports__hero-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 0;
+      }
+
+      .mg-reports__hero-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
       .mg-reports__panel.is-review-panel {
         overflow: visible;
       }
@@ -389,17 +416,28 @@ export default RouteTemplate(
         .mg-reports__report-card {
           grid-template-columns: 1fr;
         }
+
+        .mg-reports__hero {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .mg-reports__hero-actions {
+          justify-content: flex-start;
+        }
       }
     </style>
 
     <div class="media-gallery-admin-reports">
-      <div class="mg-reports__panel-header">
-        <div>
+      <section class="mg-reports__hero">
+        <div class="mg-reports__hero-copy">
           <h1>{{i18n "admin.media_gallery.reports.title"}}</h1>
-          <p>{{i18n "admin.media_gallery.reports.description"}}</p>
+          <p class="mg-reports__muted">{{i18n "admin.media_gallery.reports.description"}}</p>
         </div>
-        <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
-      </div>
+        <div class="mg-reports__hero-actions">
+          <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+        </div>
+      </section>
 
       <section class="mg-reports__panel">
         <div class="mg-reports__panel-header">

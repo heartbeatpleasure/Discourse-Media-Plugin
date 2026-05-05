@@ -34,6 +34,33 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
+      .mg-logs__hero {
+        background: var(--mg-surface);
+        border: 1px solid var(--mg-border);
+        border-radius: var(--mg-radius);
+        padding: 1.15rem 1.25rem;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
+      .mg-logs__hero-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: 0;
+      }
+
+      .mg-logs__hero-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
       .mg-logs__panel-header {
         display: flex;
         align-items: flex-start;
@@ -341,24 +368,33 @@ export default RouteTemplate(
         .mg-logs__stats {
           grid-template-columns: 1fr;
         }
+
+        .mg-logs__hero {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .mg-logs__hero-actions {
+          justify-content: flex-start;
+        }
       }
     </style>
 
     <div class="media-gallery-admin-logs">
-      <div class="mg-logs__panel">
-        <div class="mg-logs__panel-header">
-          <div class="mg-logs__panel-copy">
-            <h1>{{i18n "admin.media_gallery.logs.title"}}</h1>
-            <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.description"}}</p>
-          </div>
-          <div class="mg-logs__actions">
-            <a class="btn" href="/admin/plugins/media-gallery">{{i18n "admin.media_gallery.logs.back_to_overview"}}</a>
-            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.loadLogs}}>
-              {{if @controller.isLoading (i18n "admin.media_gallery.logs.refreshing") (i18n "admin.media_gallery.logs.refresh")}}
-            </button>
-          </div>
+      <section class="mg-logs__hero">
+        <div class="mg-logs__hero-copy">
+          <h1>{{i18n "admin.media_gallery.logs.title"}}</h1>
+          <p class="mg-logs__muted">{{i18n "admin.media_gallery.logs.description"}}</p>
         </div>
+        <div class="mg-logs__hero-actions">
+          <a class="btn" href="/admin/plugins/media-gallery">{{i18n "admin.media_gallery.logs.back_to_overview"}}</a>
+          <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.loadLogs}}>
+            {{if @controller.isLoading (i18n "admin.media_gallery.logs.refreshing") (i18n "admin.media_gallery.logs.refresh")}}
+          </button>
+        </div>
+      </section>
 
+      <section class="mg-logs__panel">
         <div class="mg-logs__filter-form">
           <input
             class="mg-logs__search-box"
@@ -464,7 +500,7 @@ export default RouteTemplate(
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
       {{#if @controller.error}}
         <div class="mg-logs__flash">{{@controller.error}}</div>

@@ -35,6 +35,16 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
+      .mg-health__hero {
+        background: var(--mg-health-surface);
+        border: 1px solid var(--mg-health-border);
+        border-radius: var(--mg-health-radius);
+        padding: 1.15rem 1.25rem;
+        min-width: 0;
+        overflow: visible;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
       .mg-health__header,
       .mg-health__panel-header {
         display: flex;
@@ -571,7 +581,7 @@ export default RouteTemplate(
     </style>
 
     <div class="media-gallery-health">
-      <section class="mg-health__panel">
+      <section class="mg-health__hero">
         <div class="mg-health__header">
           <div class="mg-health__header-copy">
             <h1>{{i18n "admin.media_gallery.health.title"}}</h1>

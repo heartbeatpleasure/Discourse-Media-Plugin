@@ -49,6 +49,37 @@ export default RouteTemplate(
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       }
 
+      .mg-management__hero {
+        background: var(--mg-surface);
+        border: 1px solid var(--mg-border);
+        border-radius: var(--mg-radius);
+        padding: 1.15rem 1.25rem;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        min-width: 0;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
+      .mg-management__hero-copy,
+      .mg-management__hero-actions {
+        display: flex;
+        min-width: 0;
+      }
+
+      .mg-management__hero-copy {
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+
+      .mg-management__hero-actions {
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
       .mg-management__panel-header {
         display: flex;
         align-items: flex-start;
@@ -599,17 +630,28 @@ export default RouteTemplate(
           width: 100%;
           max-width: 180px;
         }
+
+        .mg-management__hero {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .mg-management__hero-actions {
+          justify-content: flex-start;
+        }
       }
     </style>
 
     <div class="media-gallery-admin-management">
-      <div class="mg-management__panel-header">
-        <div class="mg-management__panel-copy">
+      <section class="mg-management__hero">
+        <div class="mg-management__hero-copy">
           <h1>{{i18n "admin.media_gallery.management.title"}}</h1>
-          <p>{{i18n "admin.media_gallery.management.description"}}</p>
+          <p class="mg-management__muted">{{i18n "admin.media_gallery.management.description"}}</p>
         </div>
-        <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
-      </div>
+        <div class="mg-management__hero-actions">
+          <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+        </div>
+      </section>
 
       <section class="mg-management__panel">
         <div class="mg-management__panel-header">
