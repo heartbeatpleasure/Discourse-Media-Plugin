@@ -1086,6 +1086,7 @@ module ::MediaGallery
         delivery_mode: item.delivery_mode,
         has_hls: ::MediaGallery::AssetManifest.role_for(item, "hls").is_a?(Hash),
         hls_aes128: hls_aes128_status_for(item),
+        hls_aes128_key_rotation_audit: hls_aes128_key_rotation_audit_for(item),
         hidden: item.admin_hidden?,
         visibility: visibility,
         processing: processing_metadata(item),
@@ -1820,6 +1821,7 @@ module ::MediaGallery
         "key_records" => records,
         "key_records_count" => records.length,
         "key_table_available" => hls_aes128_key_table_available?,
+        "key_rotation_audit" => hls_aes128_key_rotation_audit_for(item),
         "backfill" => (defined?(::MediaGallery::HlsAes128Backfill) ? ::MediaGallery::HlsAes128Backfill.state_for(item) : {}),
         "clear_rollback" => (defined?(::MediaGallery::HlsClearRollback) ? ::MediaGallery::HlsClearRollback.state_for(item) : {}),
       ).compact
@@ -1827,6 +1829,64 @@ module ::MediaGallery
       {
         "ready" => false,
         "status" => "error",
+        "error" => "#{e.class}: #{e.message}"
+      }
+    end
+
+    def hls_aes128_key_rotation_audit_for(item)
+      status = hls_aes128_status_for(item)
+      role = ::MediaGallery::Hls.managed_role_for(item)
+      role = role.deep_stringify_keys if role.is_a?(Hash)
+      encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
+      encryption = encryption.deep_stringify_keys if encryption.is_a?(Hash)
+
+      records = []
+      active_records_count = 0
+      if hls_aes128_key_table_available?
+        scope = ::MediaGallery::HlsAes128Key.where(media_item_id: item.id)
+        active_records_count = scope.where(active: true).count
+        records = scope.order(updated_at: :desc).limit(8).map(&:public_metadata)
+      end
+
+      history_entries = Array(item.admin_management_log)
+        .select { |entry| String(entry["action"] || entry[:action]).start_with?("hls_aes128_key_rotation") }
+        .first(12)
+
+      latest = history_entries.first
+      latest_action = latest.is_a?(Hash) ? latest["action"].to_s : ""
+      latest_result =
+        if latest_action.include?("succeeded")
+          "completed"
+        elsif latest_action.include?("failed")
+          "failed"
+        elsif latest_action.include?("processing")
+          "processing"
+        elsif latest_action.include?("requested")
+          "queued"
+        else
+          nil
+        end
+
+      {
+        "current_key_id" => status["key_id"].to_s.presence,
+        "current_scheme" => status["scheme"].to_s.presence || encryption&.dig("scheme").to_s.presence,
+        "current_key_record_present" => ActiveModel::Type::Boolean.new.cast(status["key_record_present"]),
+        "current_key_generated_at" => encryption&.dig("generated_at").to_s.presence,
+        "current_package_generated_at" => role&.dig("generated_at").to_s.presence,
+        "key_rotation_segments" => status["key_rotation_segments"],
+        "active_key_records_count" => active_records_count,
+        "recent_key_records" => records,
+        "entries" => history_entries,
+        "entries_count" => history_entries.length,
+        "latest_result" => latest_result,
+        "latest_at" => latest.is_a?(Hash) ? latest["at"].to_s.presence : nil,
+        "latest_admin_username" => latest.is_a?(Hash) ? latest["admin_username"].to_s.presence : nil,
+        "latest_error" => latest.is_a?(Hash) ? Array(latest.dig("changes", "error")).last.to_s.presence : nil,
+      }.compact
+    rescue => e
+      {
+        "entries" => [],
+        "entries_count" => 0,
         "error" => "#{e.class}: #{e.message}"
       }
     end

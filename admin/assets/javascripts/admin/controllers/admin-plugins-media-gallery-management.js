@@ -422,6 +422,16 @@ function formatHistoryChanges(entry) {
         label = "Uploader access";
       } else if (key === "quick_block_group") {
         label = "Quick block group";
+      } else if (key === "hls_package_generated_at") {
+        label = "HLS package generated";
+      } else if (key === "hls_aes128_key_generated_at") {
+        label = "AES key generated";
+      } else if (key === "hls_aes128_key_record_updated_at") {
+        label = "AES key record updated";
+      } else if (key === "hls_aes128_key_id") {
+        label = "AES key ID";
+      } else if (key === "hls_aes128_scheme") {
+        label = "AES scheme";
       }
 
       return {
@@ -1185,12 +1195,76 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     }));
   }
 
+  get aesKeyRotationAudit() {
+    return this.selectedItem?.hls_aes128_key_rotation_audit || {};
+  }
+
+  get shouldShowAesKeyRotationAudit() {
+    return !!this.selectedItem && (
+      this.selectedItem?.media_type === "video" ||
+      this.aesKeyRotationAuditEntries.length > 0 ||
+      !!this.aesKeyRotationAudit?.current_key_id
+    );
+  }
+
+  get aesKeyRotationAuditSummaryCards() {
+    const audit = this.aesKeyRotationAudit || {};
+    const latest = audit.latest_result ? titleize(audit.latest_result) : "No rotation yet";
+    const latestMeta = [audit.latest_at ? formatDateTime(audit.latest_at) : "", audit.latest_admin_username ? `by ${audit.latest_admin_username}` : ""]
+      .filter(Boolean)
+      .join(" · ");
+
+    return [
+      {
+        key: "latest",
+        label: "Latest result",
+        value: latest,
+        detail: latestMeta || "No key-rotation lifecycle entry recorded yet.",
+      },
+      {
+        key: "current-key",
+        label: "Current key",
+        value: audit.current_key_id || "—",
+        detail: audit.current_key_record_present ? "Active key record present" : "No active key record confirmed",
+      },
+      {
+        key: "package",
+        label: "Current HLS package",
+        value: audit.current_package_generated_at ? formatDateTime(audit.current_package_generated_at) : "—",
+        detail: audit.current_scheme || "Package generation is not recorded for this item.",
+      },
+      {
+        key: "records",
+        label: "AES key records",
+        value: String(audit.active_key_records_count ?? 0),
+        detail: audit.current_key_generated_at ? `Current key generated ${formatDateTime(audit.current_key_generated_at)}` : "Active key records for this item.",
+      },
+    ];
+  }
+
+  get aesKeyRotationLogsUrl() {
+    if (!this.selectedPublicId) {
+      return "/admin/plugins/media-gallery-logs";
+    }
+
+    const params = new URLSearchParams();
+    params.set("q", this.selectedPublicId);
+    params.set("category", "audit");
+    params.set("hours", "2160");
+    return `/admin/plugins/media-gallery-logs?${params.toString()}`;
+  }
+
   get aesKeyRotationAuditEntries() {
-    return this.historyEntries
-      .filter((entry) => String(entry?.action || "").startsWith("hls_aes128_key_rotation"))
-      .slice(0, 8)
+    const backendEntries = Array.isArray(this.aesKeyRotationAudit?.entries) ? this.aesKeyRotationAudit.entries : null;
+    const entries = backendEntries || this.historyEntries.filter((entry) => String(entry?.action || "").startsWith("hls_aes128_key_rotation"));
+
+    return entries
+      .slice(0, 12)
       .map((entry) => ({
         ...entry,
+        actionLabel: entry.actionLabel || formatHistoryAction(entry?.action),
+        prettyAt: entry.prettyAt || formatDateTime(entry?.at),
+        changeRows: entry.changeRows || formatHistoryChanges(entry),
         resultLabel:
           String(entry?.action || "").includes("succeeded")
             ? "Completed"

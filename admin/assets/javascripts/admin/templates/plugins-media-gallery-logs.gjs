@@ -451,6 +451,7 @@ export default RouteTemplate(
                 <option value="migration_switch_requested">Migration switch requested</option>
                 <option value="hls_integrity_verify_run">HLS integrity verify run</option>
                 <option value="hls_aes128_key_rotation_requested">AES key rotation requested</option>
+                <option value="hls_aes128_key_rotation_processing">AES key rotation processing</option>
                 <option value="hls_aes128_key_rotation_succeeded">AES key rotation succeeded</option>
                 <option value="hls_aes128_key_rotation_failed">AES key rotation failed</option>
                 <option value="hls_aes128_backfill_job_succeeded">AES backfill job succeeded</option>

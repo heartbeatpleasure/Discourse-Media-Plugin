@@ -394,6 +394,32 @@ export default RouteTemplate(
         padding: 0.95rem;
       }
 
+      .mg-management__section-heading-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .mg-management__audit-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.85rem;
+      }
+
+      .mg-management__audit-summary-card {
+        border: 1px solid var(--mg-border);
+        border-radius: 14px;
+        padding: 0.9rem;
+        background: var(--mg-surface);
+      }
+
+      .mg-management__audit-summary-card strong {
+        display: block;
+        margin-top: 0.25rem;
+      }
+
       .mg-management__editor-section.is-warning {
         background: var(--tertiary-very-low);
         border-color: var(--tertiary-low);
@@ -1108,36 +1134,60 @@ export default RouteTemplate(
               </section>
 
 
-              {{#if @controller.aesKeyRotationAuditEntries.length}}
+              {{#if @controller.shouldShowAesKeyRotationAudit}}
                 <section class="mg-management__editor-section">
-                  <h3>AES key rotation audit</h3>
-                  <p class="mg-management__muted" style="margin-top: 0.3rem;">Recent key-rotation lifecycle entries for this media item.</p>
-                  <div class="mg-management__history-list" style="margin-top: 1rem;">
-                    {{#each @controller.aesKeyRotationAuditEntries as |entry|}}
-                      <article class="mg-management__history-card">
-                        <div class="mg-management__history-meta">
-                          <span>{{entry.prettyAt}}</span>
-                          <span>{{entry.admin_username}}</span>
-                          <strong>{{entry.actionLabel}}</strong>
-                          <span class="mg-management__badge {{entry.resultClass}}">{{entry.resultLabel}}</span>
-                        </div>
-                        {{#if entry.changeRows.length}}
-                          <div class="mg-management__history-list">
-                            {{#each entry.changeRows as |row|}}
-                              <div class="mg-management__history-row">
-                                <div class="mg-management__history-row-label">{{row.label}}</div>
-                                <div class="mg-management__history-row-values">
-                                  <span>{{row.from}}</span>
-                                  <span class="mg-management__history-arrow">→</span>
-                                  <span>{{row.to}}</span>
-                                </div>
-                              </div>
-                            {{/each}}
-                          </div>
-                        {{/if}}
+                  <div class="mg-management__section-heading-row">
+                    <div>
+                      <h3>AES key rotation audit</h3>
+                      <p class="mg-management__muted" style="margin-top: 0.3rem;">Per-item key-rotation status, current package context, and recent lifecycle entries.</p>
+                    </div>
+                    <a class="btn" href={{@controller.aesKeyRotationLogsUrl}}>View item audit logs</a>
+                  </div>
+
+                  <div class="mg-management__audit-summary-grid" style="margin-top: 1rem;">
+                    {{#each @controller.aesKeyRotationAuditSummaryCards as |card|}}
+                      <article class="mg-management__audit-summary-card">
+                        <div class="mg-management__history-row-label">{{card.label}}</div>
+                        <strong>{{card.value}}</strong>
+                        <p class="mg-management__muted">{{card.detail}}</p>
                       </article>
                     {{/each}}
                   </div>
+
+                  {{#if @controller.aesKeyRotationAudit.error}}
+                    <div class="mg-management__empty-state" style="margin-top: 1rem;">{{@controller.aesKeyRotationAudit.error}}</div>
+                  {{/if}}
+
+                  {{#if @controller.aesKeyRotationAuditEntries.length}}
+                    <div class="mg-management__history-list" style="margin-top: 1rem;">
+                      {{#each @controller.aesKeyRotationAuditEntries as |entry|}}
+                        <article class="mg-management__history-card">
+                          <div class="mg-management__history-meta">
+                            <span>{{entry.prettyAt}}</span>
+                            <span>{{entry.admin_username}}</span>
+                            <strong>{{entry.actionLabel}}</strong>
+                            <span class="mg-management__badge {{entry.resultClass}}">{{entry.resultLabel}}</span>
+                          </div>
+                          {{#if entry.changeRows.length}}
+                            <div class="mg-management__history-list">
+                              {{#each entry.changeRows as |row|}}
+                                <div class="mg-management__history-row">
+                                  <div class="mg-management__history-row-label">{{row.label}}</div>
+                                  <div class="mg-management__history-row-values">
+                                    <span>{{row.from}}</span>
+                                    <span class="mg-management__history-arrow">→</span>
+                                    <span>{{row.to}}</span>
+                                  </div>
+                                </div>
+                              {{/each}}
+                            </div>
+                          {{/if}}
+                        </article>
+                      {{/each}}
+                    </div>
+                  {{else}}
+                    <div class="mg-management__empty-state" style="margin-top: 1rem;">No AES key rotations have been recorded for this item yet.</div>
+                  {{/if}}
                 </section>
               {{/if}}
 

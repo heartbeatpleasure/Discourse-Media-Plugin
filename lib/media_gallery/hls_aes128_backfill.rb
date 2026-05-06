@@ -80,8 +80,10 @@ module ::MediaGallery
 
         operation = normalized_operation(operation.presence || current_state["operation"])
         validate_backfill_preconditions!(item, force: force, allow_already_ready: false, allow_in_progress: true, operation: operation)
+        previous_rotation_context = operation == "key_rotation" ? hls_aes128_rotation_context(item) : {}
         processing_state = mark_processing!(item, requested_by: requested_by, force: force, run_token: current_state["run_token"].presence || run_token, operation: operation)
         append_backfill_management_log!(item, action: operation_action(operation, "processing"), requested_by: requested_by, changes: { "hls_aes128_backfill" => [current_state["status"], processing_state["status"]] })
+        record_key_rotation_log_event!(item, stage: "processing", requested_by: requested_by, force: force, previous_context: previous_rotation_context, state: processing_state) if operation == "key_rotation"
 
         result = nil
         ::MediaGallery::ProcessingWorkspace.open do |workspace|
@@ -95,8 +97,13 @@ module ::MediaGallery
 
           hls_role = ::MediaGallery::Hls.publish_packaged_video!(item, store: store, hls_meta: hls_meta)
           persist_hls_role_and_meta!(item, hls_role: hls_role, hls_meta: hls_meta)
+          item.reload if operation == "key_rotation"
           result = mark_succeeded!(item, requested_by: requested_by, force: force, hls_role: hls_role, hls_meta: hls_meta)
-          append_backfill_management_log!(item, action: operation_action(operation, "succeeded"), requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", result["status"]], "hls_aes128_key" => ["previous", result["key_id"].to_s.presence || "rotated"] })
+          next_rotation_context = operation == "key_rotation" ? hls_aes128_rotation_context(item) : {}
+          success_changes = { "hls_aes128_backfill" => ["processing", result["status"]], "hls_aes128_key" => ["previous", result["key_id"].to_s.presence || "rotated"] }
+          success_changes.merge!(hls_aes128_rotation_audit_changes(previous_rotation_context, next_rotation_context)) if operation == "key_rotation"
+          append_backfill_management_log!(item, action: operation_action(operation, "succeeded"), requested_by: requested_by, changes: success_changes)
+          record_key_rotation_log_event!(item, stage: "succeeded", requested_by: requested_by, force: force, previous_context: previous_rotation_context, next_context: next_rotation_context, state: result) if operation == "key_rotation"
           ::MediaGallery::OperationLogger.info(
             "hls_aes128_backfill_job_succeeded",
             item: item,
@@ -112,6 +119,7 @@ module ::MediaGallery
         failed_state = mark_failed!(item, error: e, requested_by: requested_by, force: force)
         operation = state_for(item)["operation"].to_s
         append_backfill_management_log!(item, action: operation_action(operation, "failed"), requested_by: requested_by, changes: { "hls_aes128_backfill" => ["processing", failed_state&.dig("status") || "failed"], "error" => [nil, e.message.to_s.truncate(500)] })
+        record_key_rotation_log_event!(item, stage: "failed", requested_by: requested_by, force: force, state: failed_state, error: e) if operation == "key_rotation"
       end
       raise e
     end
@@ -466,6 +474,94 @@ module ::MediaGallery
     rescue => e
       Rails.logger.warn("[media_gallery] AES backfill management history update failed item_id=#{item&.id} action=#{action} error=#{e.class}: #{e.message}")
       nil
+    end
+
+    def hls_aes128_rotation_context(item)
+      role = ::MediaGallery::Hls.managed_role_for(item)
+      role = role.deep_stringify_keys if role.is_a?(Hash)
+      encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
+      encryption = encryption.deep_stringify_keys if encryption.is_a?(Hash)
+      key_id = encryption.is_a?(Hash) ? encryption["key_id"].to_s.presence : nil
+      key_record = nil
+
+      if key_id.present? && defined?(::MediaGallery::HlsAes128Key) && ::MediaGallery::HlsAes128Key.table_exists?
+        key_record = ::MediaGallery::HlsAes128Key
+          .where(media_item_id: item.id, key_id: key_id, active: true)
+          .order(updated_at: :desc)
+          .first
+      end
+
+      {
+        "key_id" => key_id,
+        "scheme" => encryption.is_a?(Hash) ? encryption["scheme"].to_s.presence : nil,
+        "key_generated_at" => encryption.is_a?(Hash) ? encryption["generated_at"].to_s.presence : nil,
+        "key_record_updated_at" => key_record&.updated_at&.utc&.iso8601,
+        "package_generated_at" => role.is_a?(Hash) ? role["generated_at"].to_s.presence : nil,
+        "role_backend" => role.is_a?(Hash) ? role["backend"].to_s.presence : nil,
+      }.compact
+    rescue => e
+      { "error" => "#{e.class}: #{e.message}" }
+    end
+
+    def hls_aes128_rotation_audit_changes(previous_context, next_context)
+      previous_context = previous_context.is_a?(Hash) ? previous_context : {}
+      next_context = next_context.is_a?(Hash) ? next_context : {}
+
+      {
+        "hls_package_generated_at" => [previous_context["package_generated_at"], next_context["package_generated_at"]],
+        "hls_aes128_key_generated_at" => [previous_context["key_generated_at"], next_context["key_generated_at"]],
+        "hls_aes128_key_record_updated_at" => [previous_context["key_record_updated_at"], next_context["key_record_updated_at"]],
+        "hls_aes128_key_id" => [previous_context["key_id"], next_context["key_id"]],
+        "hls_aes128_scheme" => [previous_context["scheme"], next_context["scheme"]],
+      }.select do |_key, value|
+        value.is_a?(Array) && value.compact.present? && value.first.to_s != value.last.to_s
+      end
+    rescue
+      {}
+    end
+
+    def record_key_rotation_log_event!(item, stage:, requested_by:, force:, previous_context: nil, next_context: nil, state: nil, error: nil)
+      return unless defined?(::MediaGallery::LogEvents) && ::MediaGallery::LogEvents.respond_to?(:record)
+
+      stage = stage.to_s.presence || "updated"
+      severity = stage == "succeeded" ? "success" : stage == "failed" ? "danger" : "info"
+      current_key_id = if next_context.is_a?(Hash) && next_context["key_id"].present?
+        next_context["key_id"]
+      elsif state.is_a?(Hash)
+        state["key_id"]
+      end
+      role_backend = if next_context.is_a?(Hash) && next_context["role_backend"].present?
+        next_context["role_backend"]
+      elsif previous_context.is_a?(Hash)
+        previous_context["role_backend"]
+      end
+
+      details = {
+        requested_by: requested_by.to_s.presence,
+        force: !!force,
+        result: stage,
+        status: state.is_a?(Hash) ? state["status"].to_s.presence : nil,
+        previous_key_id: previous_context.is_a?(Hash) ? previous_context["key_id"] : nil,
+        current_key_id: current_key_id,
+        previous_package_generated_at: previous_context.is_a?(Hash) ? previous_context["package_generated_at"] : nil,
+        current_package_generated_at: next_context.is_a?(Hash) ? next_context["package_generated_at"] : nil,
+        previous_key_generated_at: previous_context.is_a?(Hash) ? previous_context["key_generated_at"] : nil,
+        current_key_generated_at: next_context.is_a?(Hash) ? next_context["key_generated_at"] : nil,
+        role_backend: role_backend,
+        error_class: error&.class&.name,
+        error_message: error&.message.to_s.presence&.truncate(500),
+      }.compact
+
+      ::MediaGallery::LogEvents.record(
+        event_type: "hls_aes128_key_rotation_#{stage}",
+        severity: severity,
+        category: "audit",
+        media_item: item,
+        message: "AES key rotation #{stage}",
+        details: details
+      )
+    rescue => e
+      Rails.logger.warn("[media_gallery] AES key rotation audit event failed item_id=#{item&.id} stage=#{stage} error=#{e.class}: #{e.message}")
     end
 
     def with_item_mutex(item, &blk)
