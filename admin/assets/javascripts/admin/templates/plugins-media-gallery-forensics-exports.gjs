@@ -230,6 +230,66 @@ export default RouteTemplate(
         gap: 0.35rem;
       }
 
+
+      .mg-exports__flash.is-success {
+        border-color: var(--success-low-mid);
+        background: var(--success-low);
+        color: var(--success);
+      }
+
+      .mg-exports__flash.is-danger {
+        border-color: var(--danger-low-mid);
+        background: var(--danger-low);
+        color: var(--danger);
+      }
+
+      .mg-exports__modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: rgba(0, 0, 0, 0.42);
+      }
+
+      .mg-exports__modal {
+        width: min(640px, 100%);
+        max-height: min(720px, calc(100vh - 3rem));
+        overflow: auto;
+        background: var(--mg-surface);
+        border: 1px solid var(--mg-border);
+        border-radius: 18px;
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+        padding: 1.15rem;
+        display: grid;
+        gap: 1rem;
+      }
+
+      .mg-exports__modal-header,
+      .mg-exports__modal-body {
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .mg-exports__modal-warning {
+        border: 1px solid var(--danger-low-mid);
+        border-radius: 14px;
+        background: var(--danger-low);
+        color: var(--primary);
+        padding: 0.85rem;
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .mg-exports__modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+      }
+
       @media (max-width: 860px) {
         .mg-exports__card-header {
           grid-template-columns: 1fr;
@@ -273,7 +333,11 @@ export default RouteTemplate(
       </section>
 
       {{#if @controller.error}}
-        <div class="mg-exports__flash">{{@controller.error}}</div>
+        <div class="mg-exports__flash is-danger">{{@controller.error}}</div>
+      {{/if}}
+
+      {{#if @controller.notice}}
+        <div class="mg-exports__flash is-success">{{@controller.notice}}</div>
       {{/if}}
 
       {{#if @controller.exports.length}}
@@ -388,6 +452,34 @@ export default RouteTemplate(
             <p class="mg-exports__muted">{{i18n "admin.media_gallery.forensics_exports.empty_description"}}</p>
           </div>
         </section>
+      {{/if}}
+
+      {{#if @controller.confirmModalOpen}}
+        <div class="mg-exports__modal-backdrop">
+          <div class="mg-exports__modal" role="dialog" aria-modal="true">
+            <div class="mg-exports__modal-header">
+              <h2>{{@controller.confirmModal.title}}</h2>
+              {{#if @controller.confirmModal.subtitle}}
+                <p class="mg-exports__muted">{{@controller.confirmModal.subtitle}}</p>
+              {{/if}}
+            </div>
+
+            <div class="mg-exports__modal-body">
+              {{#if @controller.confirmModalHasBody}}
+                <div class="mg-exports__modal-warning">
+                  {{#each @controller.confirmModal.body as |paragraph|}}
+                    <p>{{paragraph}}</p>
+                  {{/each}}
+                </div>
+              {{/if}}
+            </div>
+
+            <div class="mg-exports__modal-actions">
+              <button class="btn" type="button" {{on "click" @controller.cancelConfirmModal}}>Cancel</button>
+              <button class={{@controller.confirmModal.confirmClass}} type="button" {{on "click" @controller.submitConfirmModal}}>{{@controller.confirmModal.confirmLabel}}</button>
+            </div>
+          </div>
+        </div>
       {{/if}}
     </div>
   </template>

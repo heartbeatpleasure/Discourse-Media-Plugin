@@ -130,6 +130,35 @@ function compactHlsPath(value) {
   return parts.length ? parts.slice(-2).join("/") : withoutQuery;
 }
 
+function paragraphs(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  }
+
+  return String(value || "")
+    .split(/\n{2,}/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function itemConfirmRows(item, publicId) {
+  const rows = [];
+  const title = String(item?.title || "").trim();
+  if (title) {
+    rows.push({ label: "Title", value: title });
+  }
+  if (publicId) {
+    rows.push({ label: "Public ID", value: publicId, className: "is-code" });
+  }
+  if (item?.username) {
+    rows.push({ label: "Uploader", value: item.username });
+  }
+  if (item?.storage_profile_label || item?.storage_profile_key) {
+    rows.push({ label: "Storage profile", value: item.storage_profile_label || item.storage_profile_key });
+  }
+  return rows;
+}
+
 async function copyTextToClipboard(text) {
   const value = String(text || "");
   if (!value) {
@@ -493,7 +522,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked isCopyingDiagnostics = false;
   @tracked hlsIntegrityResult = null;
   @tracked availableSearchProfiles = [];
+  @tracked confirmModal = null;
 
+  confirmResolver = null;
   searchAbortController = null;
   selectionAbortController = null;
   backfillPollRunId = 0;
@@ -546,6 +577,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.isCleaningAes = false;
     this.isBulkAesBackfilling = false;
     this.availableSearchProfiles = [];
+    this.confirmModal = null;
+    this.confirmResolver = null;
   }
 
   async loadInitial() {
@@ -583,6 +616,59 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.searchAbortController?.abort?.();
     this.selectionAbortController?.abort?.();
     super.willDestroy(...arguments);
+  }
+
+  get confirmModalOpen() {
+    return !!this.confirmModal;
+  }
+
+  get confirmModalHasRows() {
+    return Array.isArray(this.confirmModal?.rows) && this.confirmModal.rows.length > 0;
+  }
+
+  get confirmModalHasBody() {
+    return Array.isArray(this.confirmModal?.body) && this.confirmModal.body.length > 0;
+  }
+
+  _confirmAction(config = {}) {
+    if (this.confirmModalOpen) {
+      return Promise.resolve(false);
+    }
+
+    this.confirmModal = {
+      title: config.title || "Confirm action",
+      subtitle: config.subtitle || "",
+      body: paragraphs(config.body),
+      rows: Array.isArray(config.rows) ? config.rows.filter((row) => row?.value) : [],
+      riskLabel: config.riskLabel || "",
+      confirmLabel: config.confirmLabel || "Confirm",
+      confirmClass: config.danger ? "btn btn-danger" : "btn btn-primary",
+    };
+
+    return new Promise((resolve) => {
+      this.confirmResolver = resolve;
+    });
+  }
+
+  _resolveConfirm(value) {
+    const resolver = this.confirmResolver;
+    this.confirmResolver = null;
+    this.confirmModal = null;
+    if (resolver) {
+      resolver(Boolean(value));
+    }
+  }
+
+  @action
+  cancelConfirmModal(event) {
+    event?.preventDefault?.();
+    this._resolveConfirm(false);
+  }
+
+  @action
+  submitConfirmModal(event) {
+    event?.preventDefault?.();
+    this._resolveConfirm(true);
   }
 
   get hasSelectedItem() {
@@ -1960,14 +2046,16 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       return;
     }
 
-    const title = String(this.selectedItem?.title || "").trim();
-    const label = title ? `${title}
-${this.selectedPublicId}` : this.selectedPublicId;
-    if (!window.confirm(`Delete media item:
-
-${label}
-
-This cannot be undone.`)) {
+    const ok = await this._confirmAction({
+      title: "Delete media item",
+      subtitle: "This removes the item and attempts storage cleanup through the shared cleanup service.",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "This cannot be undone. The admin history and cleanup outcome will be logged.",
+      confirmLabel: "Delete item",
+      danger: true,
+      riskLabel: "Destructive action",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2034,7 +2122,16 @@ This cannot be undone.`)) {
         break;
     }
 
-    if (!window.confirm(confirmText)) {
+    const ok = await this._confirmAction({
+      title: "Update uploader access",
+      subtitle: username,
+      body: confirmText,
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      confirmLabel: String(actionType || "").includes("unblock") ? "Restore access" : "Update access",
+      danger: !String(actionType || "").includes("unblock"),
+      riskLabel: String(actionType || "").includes("unblock") ? "Access restore" : "Access restriction",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2151,12 +2248,14 @@ This cannot be undone.`)) {
       return;
     }
 
-    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
-    if (!window.confirm(`Queue AES HLS backfill for:
-
-${title}
-
-This repackages the existing processed video into encrypted HLS. Normal playback should remain available while the job runs.`)) {
+    const ok = await this._confirmAction({
+      title: "Queue AES HLS backfill",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "This repackages the existing processed video into encrypted HLS. Normal playback should remain available while the job runs.",
+      confirmLabel: "Queue backfill",
+      riskLabel: "Async processing job",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2190,12 +2289,14 @@ This repackages the existing processed video into encrypted HLS. Normal playback
       return;
     }
 
-    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
-    if (!window.confirm(`Restart AES HLS backfill for:
-
-${title}
-
-This queues a fresh backfill job and supersedes earlier queued jobs created by the newer backfill flow.`)) {
+    const ok = await this._confirmAction({
+      title: "Restart AES HLS backfill",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "This queues a fresh backfill job and supersedes earlier queued jobs created by the newer backfill flow.",
+      confirmLabel: "Restart backfill",
+      riskLabel: "Async processing job",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2229,12 +2330,14 @@ This queues a fresh backfill job and supersedes earlier queued jobs created by t
       return;
     }
 
-    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
-    if (!window.confirm(`Clear AES HLS backfill status for:
-
-${title}
-
-Use this only for stuck queued/processing/failed states. It does not delete existing HLS media.`)) {
+    const ok = await this._confirmAction({
+      title: "Clear AES HLS backfill status",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "Use this only for stuck queued, processing, or failed states. It does not delete existing HLS media.",
+      confirmLabel: "Clear status",
+      riskLabel: "State reset",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2268,12 +2371,14 @@ Use this only for stuck queued/processing/failed states. It does not delete exis
       return;
     }
 
-    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
-    if (!window.confirm(`Clean AES HLS maintenance state for:
-
-${title}
-
-This removes safe temporary/unused AES state only: stale failed/queued metadata, inactive key records and leaked key/keyinfo artifacts if found. It does not remove active AES playback keys or media segments.`)) {
+    const ok = await this._confirmAction({
+      title: "Clean HLS/AES maintenance state",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "This removes safe temporary or unused AES state only: stale failed/queued metadata, inactive key records, and leaked key/keyinfo artifacts if found. It does not remove active AES playback keys or media segments.",
+      confirmLabel: "Clean state",
+      riskLabel: "Scoped maintenance cleanup",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2311,12 +2416,15 @@ This removes safe temporary/unused AES state only: stale failed/queued metadata,
       return;
     }
 
-    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
-    if (!window.confirm(`Rotate the AES key for this HLS item?
-
-${title}
-
-This repackages the existing processed video into a fresh encrypted HLS package with a new server-side AES key. Existing downloaded copies that already include the old key and old segments cannot be recalled, but future playback will use the new key/package.`)) {
+    const ok = await this._confirmAction({
+      title: "Rotate AES key",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "This repackages the existing processed video into a fresh encrypted HLS package with a new server-side AES key. Existing downloaded copies that already include the old key and old segments cannot be recalled, but future playback will use the new key/package.",
+      confirmLabel: "Rotate AES key",
+      danger: true,
+      riskLabel: "Sensitive HLS action",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2348,12 +2456,15 @@ This repackages the existing processed video into a fresh encrypted HLS package 
       return;
     }
 
-    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
-    if (!window.confirm(`Repackage this item as normal, non-AES HLS?
-
-${title}
-
-This removes AES protection for this item by repackaging the existing processed video into clear HLS. Do not use this while AES required mode is enabled.`)) {
+    const ok = await this._confirmAction({
+      title: "Repackage as normal HLS",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "This removes AES protection for this item by repackaging the existing processed video into clear, non-AES HLS. Do not use this while AES required mode is enabled.",
+      confirmLabel: "Repackage as normal HLS",
+      danger: true,
+      riskLabel: "Protection downgrade",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2385,10 +2496,14 @@ This removes AES protection for this item by repackaging the existing processed 
       return;
     }
 
-    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
-    if (!window.confirm(`Restart normal HLS rollback for:
-
-${title}`)) {
+    const ok = await this._confirmAction({
+      title: "Restart normal HLS rollback",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "This queues the normal, non-AES HLS rollback flow again for the selected item.",
+      confirmLabel: "Restart rollback",
+      riskLabel: "Async processing job",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2420,12 +2535,14 @@ ${title}`)) {
       return;
     }
 
-    const title = String(this.selectedItem?.title || this.selectedPublicId || "this item").trim();
-    if (!window.confirm(`Clear normal HLS rollback status for:
-
-${title}
-
-This does not change media files.`)) {
+    const ok = await this._confirmAction({
+      title: "Clear normal HLS rollback status",
+      rows: itemConfirmRows(this.selectedItem, this.selectedPublicId),
+      body: "This clears rollback state only. It does not change media files.",
+      confirmLabel: "Clear rollback status",
+      riskLabel: "State reset",
+    });
+    if (!ok) {
       return;
     }
 
@@ -2457,9 +2574,15 @@ This does not change media files.`)) {
       return;
     }
 
-    if (!window.confirm(`Queue AES HLS backfill for eligible No AES / needs-backfill videos in the current search filter?
-
-This is limited by the server bulk limit and should be tested on staging before broad production use.`)) {
+    const ok = await this._confirmAction({
+      title: "Queue bulk AES HLS backfill",
+      subtitle: "Current search filter",
+      body: "This queues AES HLS backfill for eligible No AES / needs-backfill videos in the current search filter. It is limited by the server bulk limit and should be tested on staging before broad production use.",
+      confirmLabel: "Queue bulk backfill",
+      danger: true,
+      riskLabel: "Bulk async processing",
+    });
+    if (!ok) {
       return;
     }
 

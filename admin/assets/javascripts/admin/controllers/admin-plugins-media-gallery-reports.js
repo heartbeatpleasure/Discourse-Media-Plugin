@@ -88,6 +88,34 @@ function decisionLabel(value) {
   }
 }
 
+function paragraphs(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  }
+
+  return String(value || "")
+    .split(/\n{2,}/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function reportConfirmRows(report) {
+  const rows = [];
+  if (report?.title) {
+    rows.push({ label: "Media", value: report.title });
+  }
+  if (report?.public_id) {
+    rows.push({ label: "Public ID", value: report.public_id, className: "is-code" });
+  }
+  if (report?.reporter_username) {
+    rows.push({ label: "Reporter", value: report.reporter_username });
+  }
+  if (report?.owner_username) {
+    rows.push({ label: "Uploader", value: report.owner_username });
+  }
+  return rows;
+}
+
 export default class AdminPluginsMediaGalleryReportsController extends Controller {
   @tracked statusFilter = "open";
   @tracked searchQuery = "";
@@ -110,7 +138,9 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   @tracked mediaOwnerUserIdFilter = "";
   @tracked isReviewing = false;
   @tracked reviewNote = "";
+  @tracked confirmModal = null;
 
+  confirmResolver = null;
   abortController = null;
 
   resetState() {
@@ -146,6 +176,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.mediaOwnerUserIdFilter = mediaOwnerUserId;
     this.isReviewing = false;
     this.reviewNote = "";
+    this.confirmModal = null;
+    this.confirmResolver = null;
   }
 
   reportIdFromUrl() {
@@ -164,6 +196,59 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   willDestroy() {
     this.abortController?.abort?.();
     super.willDestroy(...arguments);
+  }
+
+  get confirmModalOpen() {
+    return !!this.confirmModal;
+  }
+
+  get confirmModalHasRows() {
+    return Array.isArray(this.confirmModal?.rows) && this.confirmModal.rows.length > 0;
+  }
+
+  get confirmModalHasBody() {
+    return Array.isArray(this.confirmModal?.body) && this.confirmModal.body.length > 0;
+  }
+
+  _confirmAction(config = {}) {
+    if (this.confirmModalOpen) {
+      return Promise.resolve(false);
+    }
+
+    this.confirmModal = {
+      title: config.title || "Confirm action",
+      subtitle: config.subtitle || "",
+      body: paragraphs(config.body),
+      rows: Array.isArray(config.rows) ? config.rows.filter((row) => row?.value) : [],
+      riskLabel: config.riskLabel || "",
+      confirmLabel: config.confirmLabel || "Confirm",
+      confirmClass: config.danger ? "btn btn-danger" : "btn btn-primary",
+    };
+
+    return new Promise((resolve) => {
+      this.confirmResolver = resolve;
+    });
+  }
+
+  _resolveConfirm(value) {
+    const resolver = this.confirmResolver;
+    this.confirmResolver = null;
+    this.confirmModal = null;
+    if (resolver) {
+      resolver(Boolean(value));
+    }
+  }
+
+  @action
+  cancelConfirmModal(event) {
+    event?.preventDefault?.();
+    this._resolveConfirm(false);
+  }
+
+  @action
+  submitConfirmModal(event) {
+    event?.preventDefault?.();
+    this._resolveConfirm(true);
   }
 
   get selectedReport() {
@@ -530,9 +615,15 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     }
 
     if (decision === "accept_delete_asset") {
-      const ok = window.confirm(
-        "Delete the stored asset files for this media item? The report, media snapshot, checksum data, and audit history will be kept, but the playable/viewable files will be removed."
-      );
+      const ok = await this._confirmAction({
+        title: "Accept report and delete asset files",
+        subtitle: "The report snapshot, checksum data, and audit history will be kept.",
+        rows: reportConfirmRows(report),
+        body: "This removes the playable/viewable stored asset files for this media item. The action cannot be undone from the reports page.",
+        confirmLabel: "Delete asset files",
+        danger: true,
+        riskLabel: "Destructive asset action",
+      });
       if (!ok) {
         return;
       }
@@ -596,7 +687,15 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         break;
     }
 
-    const ok = window.confirm(confirmText);
+    const ok = await this._confirmAction({
+      title: "Update uploader access",
+      subtitle: report?.owner_username || "Uploader access",
+      rows: reportConfirmRows(report),
+      body: confirmText,
+      confirmLabel: String(action || "").includes("unblock") ? "Restore access" : "Update access",
+      danger: !String(action || "").includes("unblock"),
+      riskLabel: String(action || "").includes("unblock") ? "Access restore" : "Access restriction",
+    });
     if (!ok) {
       return;
     }

@@ -421,6 +421,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked cleanupIssue = null;
   @tracked cleanupExample = null;
   @tracked cleanupKeyInProgress = "";
+  @tracked reconciliationConfirmOpen = false;
   @tracked showPerformanceTimings = false;
   @tracked lastTimingMs = null;
   @tracked lastTimingBreakdown = null;
@@ -447,6 +448,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.cleanupIssue = null;
     this.cleanupExample = null;
     this.cleanupKeyInProgress = "";
+    this.reconciliationConfirmOpen = false;
     this.showPerformanceTimings = false;
     this.lastTimingMs = null;
     this.lastTimingBreakdown = null;
@@ -829,16 +831,28 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   @action
-  async runReconciliation(event) {
+  runReconciliation(event) {
     event?.preventDefault?.();
     if (this.isLoading) {
       return;
     }
 
-    const confirmed = window.confirm(
-      "Run storage reconciliation now? This is read-only, but it may take longer on large storage profiles."
-    );
-    if (!confirmed) {
+    this.reconciliationConfirmOpen = true;
+  }
+
+  @action
+  cancelRunReconciliation(event) {
+    event?.preventDefault?.();
+    if (this.isLoading) {
+      return;
+    }
+    this.reconciliationConfirmOpen = false;
+  }
+
+  @action
+  async submitRunReconciliation(event) {
+    event?.preventDefault?.();
+    if (this.isLoading) {
       return;
     }
 
@@ -853,6 +867,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       this.isFullStorage = false;
       this.applyResponse(data);
       this.notice = "Reconciliation completed. No files were changed; eligible findings can be cleaned one at a time after review.";
+      this.reconciliationConfirmOpen = false;
     } catch (error) {
       this.error = this.errorMessage(error);
     } finally {

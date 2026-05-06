@@ -1,7 +1,71 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
+import { tracked } from "@glimmer/tracking";
+
+function paragraphs(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  }
+
+  return String(value || "")
+    .split(/\n{2,}/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 
 export default class AdminPluginsMediaGalleryForensicsExportsController extends Controller {
+  @tracked error = "";
+  @tracked notice = "";
+  @tracked confirmModal = null;
+
+  confirmResolver = null;
+
+  get confirmModalOpen() {
+    return !!this.confirmModal;
+  }
+
+  get confirmModalHasBody() {
+    return Array.isArray(this.confirmModal?.body) && this.confirmModal.body.length > 0;
+  }
+
+  _confirmAction(config = {}) {
+    if (this.confirmModalOpen) {
+      return Promise.resolve(false);
+    }
+
+    this.confirmModal = {
+      title: config.title || "Confirm action",
+      subtitle: config.subtitle || "",
+      body: paragraphs(config.body),
+      confirmLabel: config.confirmLabel || "Confirm",
+      confirmClass: config.danger ? "btn btn-danger" : "btn btn-primary",
+    };
+
+    return new Promise((resolve) => {
+      this.confirmResolver = resolve;
+    });
+  }
+
+  _resolveConfirm(value) {
+    const resolver = this.confirmResolver;
+    this.confirmResolver = null;
+    this.confirmModal = null;
+    if (resolver) {
+      resolver(Boolean(value));
+    }
+  }
+
+  @action
+  cancelConfirmModal(event) {
+    event?.preventDefault?.();
+    this._resolveConfirm(false);
+  }
+
+  @action
+  submitConfirmModal(event) {
+    event?.preventDefault?.();
+    this._resolveConfirm(true);
+  }
   _csrfToken() {
     return document.querySelector('meta[name="csrf-token"]')?.content || "";
   }
@@ -58,10 +122,19 @@ export default class AdminPluginsMediaGalleryForensicsExportsController extends 
     }
 
     const label = String(exp?.displayName || exp?.filename || `export ${id}`);
-    // eslint-disable-next-line no-alert
-    if (!window.confirm(`Delete forensic export "${label}"? This removes the database record and stored export/archive files.`)) {
+    const ok = await this._confirmAction({
+      title: "Delete forensic export",
+      subtitle: label,
+      body: "This removes the database record and stored export/archive files. This cannot be undone.",
+      confirmLabel: "Delete export",
+      danger: true,
+    });
+    if (!ok) {
       return;
     }
+
+    this.error = "";
+    this.notice = "";
 
     try {
       const response = await fetch(`${base}/${encodeURIComponent(String(id))}`, {
@@ -80,10 +153,9 @@ export default class AdminPluginsMediaGalleryForensicsExportsController extends 
       }
 
       this.set("exports", (this.exports || []).filter((item) => String(item.id) !== String(id)));
+      this.notice = "Forensic export deleted.";
     } catch (e) {
-      const message = e?.message || String(e);
-      // eslint-disable-next-line no-alert
-      window.alert(message);
+      this.error = e?.message || String(e);
     }
   }
 
@@ -98,6 +170,9 @@ export default class AdminPluginsMediaGalleryForensicsExportsController extends 
     const filename = String(exp?.filename || `media_gallery_export_${id}.csv`);
     const fallbackName = gz ? (filename.endsWith('.gz') ? filename : `${filename}.gz`) : filename;
     const url = `${base}/${encodeURIComponent(String(id))}${gz ? '?gz=1' : ''}`;
+
+    this.error = "";
+    this.notice = "";
 
     try {
       const response = await fetch(url, {
@@ -125,10 +200,9 @@ export default class AdminPluginsMediaGalleryForensicsExportsController extends 
       anchor.click();
       anchor.remove();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      this.notice = "Download started.";
     } catch (e) {
-      const message = e?.message || String(e);
-      // eslint-disable-next-line no-alert
-      window.alert(message);
+      this.error = e?.message || String(e);
     }
   }
 }

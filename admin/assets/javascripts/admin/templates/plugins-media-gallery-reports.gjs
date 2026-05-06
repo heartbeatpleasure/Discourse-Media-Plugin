@@ -434,6 +434,86 @@ export default RouteTemplate(
         margin-bottom: 0;
       }
 
+
+      .mg-reports__modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: rgba(0, 0, 0, 0.42);
+      }
+
+      .mg-reports__modal {
+        width: min(680px, 100%);
+        max-height: min(760px, calc(100vh - 3rem));
+        overflow: auto;
+        background: var(--mg-surface);
+        border: 1px solid var(--mg-border);
+        border-radius: 18px;
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+        padding: 1.15rem;
+        display: grid;
+        gap: 1rem;
+      }
+
+      .mg-reports__modal-header,
+      .mg-reports__modal-body {
+        display: grid;
+        gap: 0.85rem;
+      }
+
+      .mg-reports__modal-row-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.7rem;
+      }
+
+      .mg-reports__modal-row {
+        border: 1px solid var(--mg-border);
+        border-radius: 14px;
+        background: var(--mg-surface-alt);
+        padding: 0.75rem;
+        min-width: 0;
+      }
+
+      .mg-reports__modal-label {
+        color: var(--mg-muted);
+        font-size: var(--font-down-1);
+        font-weight: 600;
+      }
+
+      .mg-reports__modal-value {
+        margin-top: 0.25rem;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-reports__modal-value.is-code {
+        font-family: var(--font-family-monospace);
+        font-size: var(--font-down-1);
+        font-weight: 600;
+      }
+
+      .mg-reports__modal-warning {
+        border: 1px solid var(--danger-low-mid);
+        border-radius: 14px;
+        background: var(--danger-low);
+        color: var(--primary);
+        padding: 0.85rem;
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .mg-reports__modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+      }
+
       @media (max-width: 1100px) {
         .mg-reports__grid,
         .mg-reports__filters {
@@ -770,6 +850,48 @@ export default RouteTemplate(
           {{/if}}
         </section>
       </div>
+
+      {{#if @controller.confirmModalOpen}}
+        <div class="mg-reports__modal-backdrop">
+          <div class="mg-reports__modal" role="dialog" aria-modal="true">
+            <div class="mg-reports__modal-header">
+              <h2>{{@controller.confirmModal.title}}</h2>
+              {{#if @controller.confirmModal.subtitle}}
+                <p class="mg-reports__muted">{{@controller.confirmModal.subtitle}}</p>
+              {{/if}}
+            </div>
+
+            <div class="mg-reports__modal-body">
+              {{#if @controller.confirmModalHasRows}}
+                <div class="mg-reports__modal-row-grid">
+                  {{#each @controller.confirmModal.rows as |row|}}
+                    <div class="mg-reports__modal-row">
+                      <div class="mg-reports__modal-label">{{row.label}}</div>
+                      <div class="mg-reports__modal-value {{row.className}}">{{row.value}}</div>
+                    </div>
+                  {{/each}}
+                </div>
+              {{/if}}
+
+              {{#if @controller.confirmModalHasBody}}
+                <div class="mg-reports__modal-warning">
+                  {{#if @controller.confirmModal.riskLabel}}
+                    <strong>{{@controller.confirmModal.riskLabel}}</strong>
+                  {{/if}}
+                  {{#each @controller.confirmModal.body as |paragraph|}}
+                    <p>{{paragraph}}</p>
+                  {{/each}}
+                </div>
+              {{/if}}
+            </div>
+
+            <div class="mg-reports__modal-actions">
+              <button class="btn" type="button" {{on "click" @controller.cancelConfirmModal}}>Cancel</button>
+              <button class={{@controller.confirmModal.confirmClass}} type="button" {{on "click" @controller.submitConfirmModal}}>{{@controller.confirmModal.confirmLabel}}</button>
+            </div>
+          </div>
+        </div>
+      {{/if}}
     </div>
   </template>
 );

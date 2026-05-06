@@ -1027,6 +1027,35 @@ export default RouteTemplate(
         </div>
       </section>
 
+
+      {{#if @controller.reconciliationConfirmOpen}}
+        <div class="mg-health__modal-backdrop">
+          <div class="mg-health__modal" role="dialog" aria-modal="true">
+            <div class="mg-health__modal-header">
+              <div>
+                <h2>Run storage reconciliation</h2>
+                <p class="mg-health__muted">This is a read-only check. It may take longer on large storage profiles.</p>
+              </div>
+            </div>
+
+            <div class="mg-health__modal-form">
+              <div class="mg-health__cleanup-warning">
+                <div class="mg-health__cleanup-warning-title">Read-only scan</div>
+                <div>Reconciliation compares media records, manifests, and configured storage profiles.</div>
+                <div>No files are changed by this scan. Any eligible cleanup still requires a separate reviewed action afterwards.</div>
+              </div>
+
+              <div class="mg-health__actions">
+                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelRunReconciliation}}>Cancel</button>
+                <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.submitRunReconciliation}}>
+                  {{if @controller.isLoading "Running…" "Run reconciliation"}}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      {{/if}}
+
       {{#if @controller.cleanupModalOpen}}
         <div class="mg-health__modal-backdrop">
           <div class="mg-health__modal mg-health__modal--cleanup" role="dialog" aria-modal="true">
