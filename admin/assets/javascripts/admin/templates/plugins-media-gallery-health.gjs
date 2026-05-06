@@ -6,1155 +6,1021 @@ import { i18n } from "discourse-i18n";
 export default RouteTemplate(
   <template>
     <style>
-        .media-gallery-admin-migrations {
-          --mg-surface: var(--secondary);
-          --mg-surface-alt: var(--primary-very-low);
-          --mg-border: var(--primary-low);
-          --mg-muted: var(--primary-medium);
-          --mg-radius: 18px;
-          --mg-gap: 1rem;
-          display: flex;
+      .media-gallery-health {
+        --mg-health-surface: var(--secondary);
+        --mg-health-surface-alt: var(--primary-very-low);
+        --mg-health-border: var(--primary-low);
+        --mg-health-muted: var(--primary-medium);
+        --mg-health-radius: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .media-gallery-health h1,
+      .media-gallery-health h2,
+      .media-gallery-health h3,
+      .media-gallery-health p,
+      .media-gallery-health ul {
+        margin: 0;
+      }
+
+      .mg-health__panel {
+        background: var(--mg-health-surface);
+        border: 1px solid var(--mg-health-border);
+        border-radius: var(--mg-health-radius);
+        padding: 1rem 1.125rem;
+        min-width: 0;
+        overflow: visible;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
+      .mg-health__hero {
+        background: var(--mg-health-surface);
+        border: 1px solid var(--mg-health-border);
+        border-radius: var(--mg-health-radius);
+        padding: 1.15rem 1.25rem;
+        min-width: 0;
+        overflow: visible;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      }
+
+      .mg-health__header,
+      .mg-health__panel-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+
+      .mg-health__header-copy,
+      .mg-health__panel-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        min-width: 0;
+      }
+
+      .mg-health__muted,
+      .mg-health__performance,
+      .mg-health__item-detail,
+      .mg-health__example-subtitle,
+      .mg-health__alert-label {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-health__performance {
+        margin-top: 0.35rem;
+      }
+
+      .mg-health__actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.75rem;
+      }
+
+      .mg-health__summary-grid,
+      .mg-health__sections,
+      .mg-health__issue-list,
+      .mg-health__example-list,
+      .mg-health__alert-grid {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .mg-health__summary-grid {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      }
+
+      .mg-health__summary-card,
+      .mg-health__alert-card {
+        background: var(--mg-health-surface-alt);
+        border: 1px solid var(--mg-health-border);
+        border-radius: 16px;
+        padding: 0.9rem 1rem;
+        min-width: 0;
+      }
+
+      .mg-health__alert-card {
+        position: relative;
+      }
+
+      .mg-health__alert-card > .mg-health__info {
+        position: absolute;
+        right: 0.75rem;
+        top: 0.75rem;
+      }
+
+      .mg-health__alert-card.has-help {
+        padding-right: 2.75rem;
+      }
+
+      .mg-health__operational-card {
+        position: relative;
+        padding-right: 5.2rem;
+      }
+
+      .mg-health__operational-card > .mg-health__badge {
+        position: absolute;
+        top: 0.85rem;
+        right: 0.85rem;
+        margin: 0;
+      }
+
+      .mg-health__operational-card .mg-health__alert-value {
+        margin-top: 0.2rem;
+      }
+
+      .mg-health__profile-list {
+        display: grid;
+        gap: 0.65rem;
+        margin-top: 1rem;
+      }
+
+      .mg-health__profile-chips {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .mg-health__profile-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        border: 1px solid var(--mg-health-border);
+        border-radius: 999px;
+        padding: 0.32rem 0.65rem;
+        background: var(--mg-health-surface-alt);
+        max-width: 100%;
+      }
+
+      .mg-health__profile-chip-name {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__profile-chip-meta {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-health__toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: end;
+        margin-top: 0.85rem;
+      }
+
+      .mg-health__export-panel {
+        margin-top: 1rem;
+        border: 1px solid var(--mg-health-border);
+        border-radius: 16px;
+        background: var(--mg-health-surface-alt);
+        padding: 0.95rem 1rem;
+      }
+
+      .mg-health__toolbar-field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        min-width: min(440px, 100%);
+      }
+
+      .mg-health__toolbar-field label {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+        font-weight: 700;
+      }
+
+      .mg-health__toolbar-field select,
+      .mg-health__modal textarea,
+      .mg-health__modal select {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--primary-low);
+        border-radius: 10px;
+        background: var(--secondary);
+      }
+
+      .mg-health__history-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 0.75rem;
+        margin-top: 1rem;
+      }
+
+      .mg-health__history-card {
+        border: 1px solid var(--mg-health-border);
+        border-radius: 14px;
+        background: var(--mg-health-surface-alt);
+        padding: 0.75rem;
+        min-width: 0;
+      }
+
+      .mg-health__history-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-weight: 700;
+      }
+
+      .mg-health__history-grid-small {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.4rem 0.65rem;
+        margin-top: 0.65rem;
+      }
+
+      .mg-health__history-kv {
+        min-width: 0;
+      }
+
+      .mg-health__history-kv-label {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-health__history-kv-value {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        background: rgba(0, 0, 0, 0.42);
+      }
+
+      .mg-health__modal {
+        width: min(760px, 100%);
+        max-height: min(760px, calc(100vh - 2rem));
+        overflow: auto;
+        border-radius: 18px;
+        background: var(--secondary);
+        border: 1px solid var(--primary-low);
+        box-shadow: 0 18px 70px rgba(0, 0, 0, 0.28);
+        padding: 1.15rem 1.25rem;
+      }
+
+      .mg-health__modal-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 1rem;
+      }
+
+      .mg-health__modal-close {
+        min-height: 0;
+        padding: 0.25rem 0.55rem;
+        font-size: 1.35rem;
+        line-height: 1;
+      }
+
+      .mg-health__modal-form {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .mg-health__modal-row {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 1rem;
+        align-items: start;
+      }
+
+      .mg-health__modal-row--compact {
+        align-items: center;
+      }
+
+      .mg-health__modal-row .mg-health__alert-label {
+        padding-top: 0.65rem;
+        font-weight: 700;
+      }
+
+      .mg-health__modal-row--compact .mg-health__alert-label {
+        padding-top: 0;
+      }
+
+      .mg-health__modal-field {
+        min-width: 0;
+      }
+
+      .mg-health__modal-form textarea {
+        min-height: 150px;
+        resize: vertical;
+        padding: 0.75rem 0.85rem;
+      }
+
+      .mg-health__modal-form select {
+        max-width: 460px;
+        min-height: 42px;
+        padding: 0.55rem 0.7rem;
+      }
+
+      .mg-health__summary-card {
+        position: relative;
+        padding-right: 2.6rem;
+      }
+
+      .mg-health__summary-card > .mg-health__status-dot {
+        position: absolute;
+        right: 1rem;
+        top: 1rem;
+      }
+
+      .mg-health__status-dot {
+        display: inline-flex;
+        width: 0.8rem;
+        height: 0.8rem;
+        border-radius: 999px;
+        flex: 0 0 auto;
+        border: 2px solid var(--secondary);
+        box-shadow: 0 0 0 1px var(--primary-low);
+        background: var(--primary-low-mid);
+      }
+
+      .mg-health__status-dot.is-success {
+        background: var(--success);
+        box-shadow: 0 0 0 1px var(--success-low-mid);
+      }
+
+      .mg-health__status-dot.is-warning {
+        background: #d98700;
+        box-shadow: 0 0 0 1px #ffc66d;
+      }
+
+      .mg-health__status-dot.is-danger {
+        background: var(--danger);
+        box-shadow: 0 0 0 1px var(--danger-low-mid);
+      }
+
+      .mg-health__status-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
+
+      .mg-health__summary-label {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+        margin-bottom: 0.25rem;
+      }
+
+      .mg-health__summary-value,
+      .mg-health__alert-value {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: 0.25rem 0.65rem;
+        font-size: var(--font-down-1);
+        line-height: 1.2;
+        white-space: nowrap;
+        background: var(--primary-very-low);
+        color: var(--primary-high);
+        border: 1px solid var(--primary-low);
+      }
+
+      .mg-health__badge.is-success,
+      .mg-health__icon.is-success {
+        background: var(--success-low);
+        color: var(--success);
+        border-color: var(--success-low-mid);
+      }
+
+      .mg-health__badge.is-warning,
+      .mg-health__icon.is-warning {
+        background: #fff3d6;
+        color: #9a5b00;
+        border-color: #ffc66d;
+      }
+
+      .mg-health__badge.is-danger,
+      .mg-health__icon.is-danger {
+        background: var(--danger-low);
+        color: var(--danger);
+        border-color: var(--danger-low-mid);
+      }
+
+      .mg-health__issue {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 0.75rem;
+        align-items: start;
+        border-top: 1px solid var(--mg-health-border);
+        padding-top: 0.85rem;
+      }
+
+      .mg-health__issue:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .mg-health__icon {
+        width: 1.8rem;
+        height: 1.8rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        border: 1px solid var(--primary-low);
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .mg-health__issue-title {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 700;
+      }
+
+      .mg-health__issue-message {
+        margin-top: 0.25rem;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__item-detail {
+        margin-top: 0.25rem;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__examples {
+        margin-top: 0.75rem;
+        display: grid;
+        gap: 0.5rem;
+      }
+
+      .mg-health__example {
+        background: var(--primary-very-low);
+        border: 1px solid var(--primary-low);
+        border-radius: 12px;
+        padding: 0.65rem 0.75rem;
+        min-width: 0;
+      }
+
+      .mg-health__example-title {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__example-subtitle {
+        margin-top: 0.2rem;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__example-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.55rem;
+      }
+
+      .mg-health__example-actions .btn {
+        font-size: var(--font-down-1);
+        min-height: 0;
+        padding: 0.35rem 0.6rem;
+      }
+
+      .mg-health__info {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.35rem;
+        height: 1.35rem;
+        border-radius: 999px;
+        border: 1px solid var(--primary-low-mid);
+        color: var(--primary-high);
+        background: var(--primary-very-low);
+        font-size: var(--font-down-1);
+        font-weight: 700;
+        cursor: help;
+        flex: 0 0 auto;
+      }
+
+      .mg-health__info-text {
+        display: none;
+        position: absolute;
+        right: 0;
+        top: calc(100% + 0.35rem);
+        z-index: 5;
+        width: min(360px, calc(100vw - 4rem));
+        padding: 0.75rem 0.85rem;
+        border-radius: 12px;
+        border: 1px solid var(--primary-low);
+        background: var(--secondary);
+        color: var(--primary);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+        font-weight: 400;
+        line-height: 1.35;
+      }
+
+      .mg-health__info:hover .mg-health__info-text,
+      .mg-health__info:focus .mg-health__info-text {
+        display: block;
+      }
+
+      .mg-health__notice {
+        border-radius: 12px;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid var(--success-low-mid);
+        background: var(--secondary);
+        color: var(--success);
+      }
+
+      .mg-health__error {
+        border-radius: 12px;
+        padding: 0.75rem 0.85rem;
+        border: 1px solid var(--danger-low-mid);
+        background: var(--danger-low);
+        color: var(--danger);
+      }
+
+      @media (max-width: 760px) {
+        .mg-health__header,
+        .mg-health__panel-header {
           flex-direction: column;
-          gap: 1rem;
         }
 
-        .media-gallery-admin-migrations p {
-          margin: 0;
+        .mg-health__actions {
+          justify-content: flex-start;
         }
 
-        .mg-migrations__grid,
-        .mg-migrations__storage-grid,
-        .mg-migrations__state-grid,
-        .mg-migrations__role-grid,
-        .mg-migrations__summary-grid {
-          display: grid;
-          gap: 1rem;
+        .mg-health__issue {
+          grid-template-columns: auto minmax(0, 1fr);
         }
 
-        .mg-migrations__storage-grid {
-          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        .mg-health__issue > .mg-health__badge {
+          grid-column: 2;
+          justify-self: start;
         }
 
-        .mg-migrations__grid {
-          grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.9fr);
-          align-items: start;
-        }
-
-        .mg-migrations__summary-grid {
-          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        }
-
-        .mg-migrations__state-grid,
-        .mg-migrations__role-grid {
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        }
-
-        .mg-migrations__panel {
-          background: var(--mg-surface);
-          border: 1px solid var(--mg-border);
-          border-radius: var(--mg-radius);
-          padding: 1rem 1.125rem;
-          min-width: 0;
-          overflow: hidden;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-        }
-
-        .mg-migrations__hero {
-          background: var(--mg-surface);
-          border: 1px solid var(--mg-border);
-          border-radius: var(--mg-radius);
-          padding: 1.15rem 1.25rem;
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 1rem;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-        }
-
-        .mg-migrations__hero-copy {
-          display: flex;
-          flex-direction: column;
+        .mg-health__modal-row {
+          grid-template-columns: 1fr;
           gap: 0.35rem;
-          min-width: 0;
         }
 
-        .mg-migrations__hero-actions {
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          flex-wrap: wrap;
-          gap: 0.65rem;
-        }
-
-        .mg-migrations__panel h2,
-        .mg-migrations__panel h3 {
-          margin: 0;
-        }
-
-        .mg-migrations__panel-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 0.75rem;
-          margin-bottom: 0.9rem;
-        }
-
-        .mg-migrations__panel-copy {
-          display: flex;
-          flex-direction: column;
-          gap: 0.25rem;
-        }
-
-        .mg-migrations__muted,
-        .mg-migrations__performance {
-          color: var(--mg-muted);
-          font-size: var(--font-down-1);
-        }
-
-        .mg-migrations__performance {
-          margin-top: 0.35rem;
-        }
-
-        .mg-migrations__panel-profile {
-          color: var(--primary-high);
-          font-size: var(--font-down-1);
-          font-weight: 600;
-        }
-
-        .mg-migrations__storage-selection {
-          display: grid;
-          gap: 0.35rem;
-          margin-bottom: 0.9rem;
-        }
-
-        .mg-migrations__storage-selection-label {
-          color: var(--mg-muted);
-          font-size: var(--font-down-1);
-          font-weight: 600;
-        }
-
-        .mg-migrations__storage-selection-value,
-        .mg-migrations__storage-selection select {
-          min-height: 42px;
-          border: 1px solid var(--mg-border);
-          border-radius: 12px;
-          background: var(--primary-very-low);
-          box-sizing: border-box;
-          width: 100%;
-        }
-
-        .mg-migrations__storage-selection-value {
-          display: flex;
-          align-items: center;
-          padding: 0 0.85rem;
-          font-weight: 600;
-        }
-
-        .mg-migrations__badge {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 999px;
-          padding: 0.25rem 0.65rem;
-          font-size: var(--font-down-1);
-          line-height: 1.2;
-          white-space: nowrap;
-          background: var(--primary-very-low);
-          color: var(--primary-high);
-          border: 1px solid var(--primary-low);
-        }
-
-        .mg-migrations__badge.is-success {
-          background: var(--success-low);
-          color: var(--success);
-          border-color: var(--success-low-mid);
-        }
-
-        .mg-migrations__badge.is-warning {
-          background: #fff3cd;
-          color: #8a5a00;
-          border-color: #f0c36d;
-        }
-
-        .mg-migrations__badge.is-danger {
-          background: var(--danger-low);
-          color: var(--danger);
-          border-color: var(--danger-low-mid);
-        }
-
-        .mg-migrations__row-list {
-          display: grid;
-          gap: 0.55rem;
-        }
-
-        .mg-migrations__summary-row {
-          display: flex;
-          justify-content: space-between;
-          gap: 1rem;
-          align-items: flex-start;
-          padding: 0.35rem 0;
-          border-top: 1px solid var(--primary-low);
-        }
-
-        .mg-migrations__summary-row:first-child {
-          border-top: 0;
+        .mg-health__modal-row .mg-health__alert-label {
           padding-top: 0;
         }
-
-        .mg-migrations__summary-label {
-          color: var(--mg-muted);
-          font-size: var(--font-down-1);
-          min-width: 0;
-        }
-
-        .mg-migrations__summary-value {
-          text-align: right;
-          font-weight: 600;
-          min-width: 0;
-          overflow-wrap: anywhere;
-        }
-
-        .mg-migrations__actions,
-        .mg-migrations__toggle-row,
-        .mg-migrations__inline-actions,
-        .mg-migrations__filters-actions,
-        .mg-migrations__bulk-toolbar {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.75rem;
-        }
-
-        .mg-migrations__inline-actions {
-          grid-area: action;
-          align-self: start;
-        }
-
-        .mg-migrations__filters {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 0.85rem;
-          align-items: end;
-        }
-
-        .mg-migrations__field {
-          display: flex;
-          flex-direction: column;
-          gap: 0.35rem;
-          min-width: 0;
-        }
-
-        .mg-migrations__field label {
-          font-weight: 600;
-          font-size: var(--font-down-1);
-        }
-
-        .mg-migrations__field input,
-        .mg-migrations__field select {
-          min-height: 42px;
-          box-sizing: border-box;
-          width: 100%;
-          border: 1px solid var(--mg-border);
-          border-radius: 12px;
-          background: var(--primary-very-low);
-        }
-
-        .mg-migrations__field.is-search {
-          grid-column: 1 / -1;
-        }
-
-        .mg-migrations__filters-footer {
-          display: flex;
-          flex-wrap: wrap;
-          justify-content: space-between;
-          gap: 0.75rem;
-          align-items: center;
-          margin-top: 1rem;
-        }
-
-        .mg-migrations__results-list {
-          display: grid;
-          gap: 0.85rem;
-        }
-
-        .mg-migrations__result-card {
-          display: grid;
-          grid-template-columns: auto 96px minmax(0, 1fr) auto;
-          grid-template-areas:
-            "select thumb main action"
-            "select badges badges badges";
-          gap: 0.75rem 0.95rem;
-          align-items: start;
-          padding: 0.85rem;
-          border: 1px solid var(--mg-border);
-          border-radius: 16px;
-          background: var(--primary-very-low);
-        }
-
-        .mg-migrations__result-card.is-selected {
-          border-color: var(--tertiary);
-          box-shadow: inset 0 0 0 1px var(--tertiary);
-          background: var(--secondary);
-        }
-
-        .mg-migrations__result-card.is-bulk-selected {
-          box-shadow: inset 0 0 0 1px var(--success-low-mid);
-        }
-
-        .mg-migrations__thumb,
-        .mg-migrations__selected-thumb {
-          display: block;
-          width: 100%;
-          height: 72px;
-          object-fit: cover;
-          border-radius: 12px;
-          background: var(--primary-very-low);
-        }
-
-        .mg-migrations__thumb {
-          grid-area: thumb;
-          align-self: start;
-        }
-
-        .mg-migrations__selected-thumb {
-          width: 140px;
-          height: 96px;
-          flex: 0 0 140px;
-        }
-
-        .mg-migrations__result-main,
-        .mg-migrations__selected-main {
-          min-width: 0;
-          display: flex;
-          flex-direction: column;
-          gap: 0.35rem;
-        }
-
-        .mg-migrations__result-main {
-          grid-area: main;
-          align-self: start;
-        }
-
-        .mg-migrations__result-title,
-        .mg-migrations__selected-title {
-          font-weight: 700;
-          font-size: var(--font-up-1);
-          line-height: 1.25;
-          overflow-wrap: anywhere;
-          word-break: break-word;
-        }
-
-        .mg-migrations__result-meta,
-        .mg-migrations__public-id,
-        .mg-migrations__state-detail,
-        .mg-migrations__state-meta,
-        .mg-migrations__role-locator,
-        .mg-migrations__json {
-          overflow-wrap: anywhere;
-          word-break: break-word;
-        }
-
-        .mg-migrations__public-id {
-          color: var(--mg-muted);
-          font-size: var(--font-down-1);
-        }
-
-        .mg-migrations__result-tags,
-        .mg-migrations__warning-list {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.35rem;
-        }
-
-        .mg-migrations__result-tags {
-          grid-area: badges;
-        }
-
-        .mg-migrations__selected-header {
-          display: flex;
-          gap: 1rem;
-          align-items: center;
-          min-width: 0;
-          margin-bottom: 1rem;
-        }
-
-        .mg-migrations__toggle-row label {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.45rem;
-          padding: 0.45rem 0.7rem;
-          border-radius: 999px;
-          background: var(--primary-very-low);
-          border: 1px solid var(--mg-border);
-          font-size: var(--font-down-1);
-        }
-
-        .mg-migrations__state-card,
-        .mg-migrations__role-card,
-        .mg-migrations__summary-card {
-          border: 1px solid var(--mg-border);
-          border-radius: 16px;
-          padding: 0.9rem;
-          background: var(--primary-very-low);
-          min-width: 0;
-        }
-
-        .mg-migrations__card-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 0.75rem;
-          margin-bottom: 0.55rem;
-        }
-
-        .mg-migrations__state-title,
-        .mg-migrations__role-title,
-        .mg-migrations__summary-title {
-          font-weight: 700;
-        }
-
-        .mg-migrations__state-card .mg-migrations__muted,
-        .mg-migrations__role-card .mg-migrations__muted,
-        .mg-migrations__summary-card .mg-migrations__muted {
-          display: block;
-          margin-top: 0.4rem;
-        }
-
-        .mg-migrations__summary-card .mg-migrations__badge {
-          align-self: flex-start;
-          margin-top: 0.55rem;
-          margin-bottom: 0.2rem;
-        }
-
-        .mg-migrations__summary-card .mg-migrations__badge.is-warning {
-          background: #fff3cd;
-          color: #8a5a00;
-          border-color: #f0c36d;
-        }
-
-        .mg-migrations__warning-list {
-          margin-top: 0.75rem;
-        }
-
-        .mg-migrations__warning-list .mg-migrations__badge {
-          max-width: 100%;
-        }
-
-
-        .mg-migrations__result-select {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          grid-area: select;
-        }
-
-        .mg-migrations__result-select input {
-          width: 18px;
-          height: 18px;
-        }
-
-        .mg-migrations__bulk-panel {
-          margin-top: 1rem;
-          border: 1px solid var(--danger-low-mid);
-          background: var(--danger-low);
-          border-radius: 16px;
-          padding: 1rem;
-        }
-
-        .mg-migrations__bulk-panel h3 {
-          margin: 0 0 0.35rem;
-        }
-
-        .mg-migrations__bulk-toolbar {
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 0.75rem;
-        }
-
-        .mg-migrations__bulk-confirm {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.5rem;
-          margin-top: 0.9rem;
-          font-weight: 600;
-        }
-
-        .mg-migrations__details {
-          margin-top: 1rem;
-          border: 1px solid var(--mg-border);
-          border-radius: 14px;
-          background: var(--primary-very-low);
-          overflow: hidden;
-        }
-
-        .mg-migrations__details summary {
-          cursor: pointer;
-          padding: 0.85rem 1rem;
-          font-weight: 700;
-          list-style: none;
-        }
-
-        .mg-migrations__details summary::-webkit-details-marker {
-          display: none;
-        }
-
-        .mg-migrations__details[open] summary {
-          border-bottom: 1px solid var(--mg-border);
-        }
-
-        .mg-migrations__json {
-          margin: 0;
-          padding: 1rem;
-          max-height: 360px;
-          overflow: auto;
-          white-space: pre-wrap;
-          background: transparent;
-          font-size: 0.9em;
-        }
-
-        .mg-migrations__empty {
-          border: 1px dashed var(--mg-border);
-          border-radius: 16px;
-          padding: 1.25rem;
-          color: var(--mg-muted);
-          text-align: center;
-          background: var(--primary-very-low);
-        }
-
-        @media (max-width: 1200px) {
-          .mg-migrations__grid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 820px) {
-          .mg-migrations__field.is-search {
-            grid-column: span 1;
-          }
-
-          .mg-migrations__filters {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-          }
-
-          .mg-migrations__result-card {
-            grid-template-columns: auto 72px minmax(0, 1fr);
-            grid-template-areas:
-              "select thumb main"
-              "badges badges badges"
-              "action action action";
-          }
-
-          .mg-migrations__selected-header {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-
-          .mg-migrations__selected-thumb {
-            width: 100%;
-            height: 180px;
-            flex-basis: auto;
-          }
-        }
+      }
     </style>
 
-    <div class="media-gallery-admin-migrations">
-      <section class="mg-migrations__hero">
-        <div class="mg-migrations__hero-copy">
-          <h1>{{i18n "admin.media_gallery.migrations.title"}}</h1>
-          <p class="mg-migrations__muted">{{i18n "admin.media_gallery.migrations.description"}}</p>
-        </div>
-        <div class="mg-migrations__hero-actions">
-          <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+    <div class="media-gallery-health">
+      <section class="mg-health__hero">
+        <div class="mg-health__header">
+          <div class="mg-health__header-copy">
+            <h1>{{i18n "admin.media_gallery.health.title"}}</h1>
+            <p class="mg-health__muted">{{i18n "admin.media_gallery.health.description"}}</p>
+            <p class="mg-health__muted">Last checked: {{@controller.generatedAtLabel}}</p>
+            {{#if @controller.performanceTimingLabel}}
+              <p class="mg-health__performance">{{@controller.performanceTimingLabel}}</p>
+            {{/if}}
+          </div>
+          <div class="mg-health__actions">
+            <span class="mg-health__status-row" title={{@controller.overallSeverityLabel}}>
+              <span class="mg-health__status-dot {{@controller.overallBadgeClass}}"></span>
+              <span>{{@controller.overallSeverityLabel}}</span>
+            </span>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.refresh}}>
+              {{if @controller.isLoading "Loading…" "Refresh"}}
+            </button>
+            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runFullStorage}}>
+              Run full storage check
+            </button>
+            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runReconciliation}}>
+              Run storage reconciliation
+            </button>
+            <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
+              Export reconciliation
+            </button>
+            <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
+          </div>
         </div>
       </section>
 
-      {{#if @controller.storageError}}
-        <div class="alert alert-error">{{@controller.storageError}}</div>
+      {{#if @controller.error}}
+        <div class="mg-health__error">{{@controller.error}}</div>
       {{/if}}
 
-      <div class="mg-migrations__storage-grid">
-        <section class="mg-migrations__panel">
-          <div class="mg-migrations__panel-header">
-            <div class="mg-migrations__panel-copy">
-              <h2>{{@controller.activeStorageCard.title}}</h2>
-              <span class="mg-migrations__panel-profile">{{@controller.activeStorageCard.profileName}}</span>
-              <span class="mg-migrations__muted">Quick health check and probe for this storage profile.</span>
-            </div>
-            <span class={{@controller.activeStorageCard.badgeClass}}>{{@controller.activeStorageCard.badgeLabel}}</span>
-          </div>
+      {{#if @controller.notice}}
+        <div class="mg-health__notice">{{@controller.notice}}</div>
+      {{/if}}
 
-          <div class="mg-migrations__storage-selection">
-            <span class="mg-migrations__storage-selection-label">{{@controller.activeStorageCard.selectionLabel}}</span>
-            <div class="mg-migrations__storage-selection-value">{{@controller.activeStorageCard.selectionValue}}</div>
-          </div>
+      <section class="mg-health__summary-grid">
+        {{#each @controller.summaryCards as |card|}}
+          <article class="mg-health__summary-card">
+            <div class="mg-health__summary-label">{{card.label}}</div>
+            <div class="mg-health__summary-value">{{card.value}}</div>
+            <span class="mg-health__status-dot {{card.badgeClass}}" title={{card.severityLabel}}></span>
+          </article>
+        {{/each}}
+      </section>
 
-          <div class="mg-migrations__actions" style="margin-bottom: 0.9rem;">
-            <button class="btn" type="button" {{on "click" (fn @controller.loadStorageHealth "active")}} disabled={{@controller.storageBusy}}>
-              {{i18n "admin.media_gallery.migrations.refresh_health"}}
-            </button>
-            <button class="btn" type="button" {{on "click" (fn @controller.runStorageProbe "active")}} disabled={{@controller.storageBusy}}>
-              {{i18n "admin.media_gallery.migrations.run_probe"}}
-            </button>
+      <section class="mg-health__panel">
+        <div class="mg-health__panel-header">
+          <div class="mg-health__panel-copy">
+            <h2>Storage reconciliation</h2>
+            <p class="mg-health__muted">Read-only reconciliation compares media records, manifests, and configured storage profiles. Cleanup is intentionally not available in this iteration.</p>
           </div>
+          <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">Run reconciliation manually when you want to review missing assets, orphan candidates, deleted media leftovers, and invalid storage references. Export downloads the latest stored report as JSON.</span></span>
+        </div>
 
-          <div class="mg-migrations__row-list">
-            {{#each @controller.activeStorageCard.rows as |row|}}
-              <div class="mg-migrations__summary-row">
-                <span class="mg-migrations__summary-label">{{row.label}}</span>
-                <span class="mg-migrations__summary-value">{{row.value}}</span>
+        {{#if @controller.hasReconciliation}}
+          <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 1rem;">
+            {{#each @controller.reconciliationStatsRows as |row|}}
+              <div class="mg-health__alert-card {{if row.help "has-help"}}">
+                <div class="mg-health__alert-label">{{row.label}}</div>
+                <div class="mg-health__alert-value">{{row.value}}</div>
+                {{#if row.help}}
+                  <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">{{row.help}}</span></span>
+                {{/if}}
               </div>
             {{/each}}
           </div>
 
-          {{#if @controller.activeStorageCard.validationErrors.length}}
-            <div class="mg-migrations__warning-list">
-              {{#each @controller.activeStorageCard.validationErrors as |warning|}}
-                <span class="mg-migrations__badge is-danger">{{warning}}</span>
-              {{/each}}
+          {{#if @controller.hasReconciliationProfiles}}
+            <div class="mg-health__profile-list">
+              <div class="mg-health__alert-label">Checked storage profiles</div>
+
+              {{#if @controller.hasReconciliationNamedProfiles}}
+                <div class="mg-health__profile-chips">
+                  {{#each @controller.reconciliationNamedProfiles as |profile|}}
+                    <span class="mg-health__profile-chip">
+                      <span class="mg-health__status-dot {{profile.statusClass}}" title={{profile.statusLabel}}></span>
+                      <span class="mg-health__profile-chip-name">{{profile.displayName}}</span>
+                      <span class="mg-health__profile-chip-meta">{{profile.objectsScannedLabel}} objects</span>
+                      {{#if profile.truncated}}
+                        <span class="mg-health__profile-chip-meta">limit reached</span>
+                      {{/if}}
+                    </span>
+                  {{/each}}
+                </div>
+              {{/if}}
+
+              <div class="mg-health__muted">{{@controller.reconciliationProfilesHelpText}}</div>
             </div>
           {{/if}}
 
-          {{#if @controller.activeStorageCard.probeTimings.length}}
-            <details class="mg-migrations__details">
-              <summary>Probe timings</summary>
-              <div class="mg-migrations__row-list" style="padding: 0 1rem 1rem;">
-                {{#each @controller.activeStorageCard.probeTimings as |timing|}}
-                  <div class="mg-migrations__summary-row">
-                    <span class="mg-migrations__summary-label">{{timing.label}}</span>
-                    <span class="mg-migrations__summary-value">{{timing.value}}</span>
-                  </div>
-                {{/each}}
+          <div class="mg-health__export-panel">
+            <div class="mg-health__alert-label">Export report</div>
+            <div class="mg-health__toolbar">
+              <div class="mg-health__toolbar-field">
+                <label>Export category</label>
+                <select value={{@controller.exportCategory}} disabled={{@controller.isLoading}} {{on "change" @controller.setExportCategory}}>
+                  {{#each @controller.reconciliationExportCategories as |category|}}
+                    <option value={{category.id}}>{{category.title}}</option>
+                  {{/each}}
+                </select>
               </div>
-            </details>
-          {{/if}}
-
-          {{#if @controller.activeStorageCard.probeNote}}
-            <p class="mg-migrations__muted" style="margin-top: 0.85rem;">{{@controller.activeStorageCard.probeNote}}</p>
-          {{/if}}
-        </section>
-
-        <section class="mg-migrations__panel">
-          <div class="mg-migrations__panel-header">
-            <div class="mg-migrations__panel-copy">
-              <h2>{{@controller.targetStorageCard.title}}</h2>
-              <span class="mg-migrations__panel-profile">{{@controller.targetStorageCard.profileName}}</span>
-              <span class="mg-migrations__muted">Quick health check and probe for this storage profile.</span>
+              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
+                Export JSON
+              </button>
+              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliationCsv}}>
+                Export CSV
+              </button>
             </div>
-            <span class={{@controller.targetStorageCard.badgeClass}}>{{@controller.targetStorageCard.badgeLabel}}</span>
+          </div>
+        {{else}}
+          <p class="mg-health__muted" style="margin-top: 1rem;">Storage reconciliation has not been run yet.</p>
+        {{/if}}
+      </section>
+
+      {{#if @controller.hasReconciliationHistory}}
+        <section class="mg-health__panel">
+          <div class="mg-health__panel-header">
+            <div class="mg-health__panel-copy">
+              <h2>Reconciliation history</h2>
+              <p class="mg-health__muted">Latest stored reconciliation runs. New and resolved counts compare each run with the previous run.</p>
+            </div>
+            <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">History is read-only and stored as lightweight summaries. It helps spot recurring or newly resolved storage issues without changing files.</span></span>
           </div>
 
-          <div class="mg-migrations__storage-selection">
-            <span class="mg-migrations__storage-selection-label">{{@controller.targetStorageCard.selectionLabel}}</span>
-            <select value={{@controller.selectedTargetProfileKey}} {{on "change" @controller.onTargetProfileChange}}>
-              {{#each @controller.targetProfileOptions as |profile|}}
-                <option value={{profile.profile_key}} selected={{profile.selected}}>{{profile.label}} · {{profile.backend}}</option>
-              {{/each}}
-            </select>
+          <div class="mg-health__history-grid">
+            {{#each @controller.decoratedReconciliationHistory as |run|}}
+              <article class="mg-health__history-card">
+                <div class="mg-health__history-title">
+                  <span>{{run.generatedAtLabel}}</span>
+                  <span class="mg-health__status-dot {{run.badgeClass}}" title={{run.severityLabel}}></span>
+                </div>
+                {{#if run.generatedAtRelativeLabel}}
+                  <div class="mg-health__muted" style="margin-top: 0.2rem;">{{run.generatedAtRelativeLabel}}</div>
+                {{/if}}
+                <div class="mg-health__history-grid-small">
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Active</div>
+                    <div class="mg-health__history-kv-value">{{run.activeFindingsLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Ignored</div>
+                    <div class="mg-health__history-kv-value">{{run.ignoredFindingsLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">New</div>
+                    <div class="mg-health__history-kv-value">{{run.newFindingsLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Resolved</div>
+                    <div class="mg-health__history-kv-value">{{run.resolvedFindingsLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Duration</div>
+                    <div class="mg-health__history-kv-value">{{run.durationLabel}}</div>
+                  </div>
+                  <div class="mg-health__history-kv">
+                    <div class="mg-health__history-kv-label">Objects</div>
+                    <div class="mg-health__history-kv-value">{{run.objectsScannedLabel}}</div>
+                  </div>
+                </div>
+                {{#if run.profilesLabel}}
+                  <div class="mg-health__example-subtitle" style="margin-top: 0.65rem;">Profiles: {{run.profilesLabel}}</div>
+                {{/if}}
+                {{#if run.truncatedProfilesLabel}}
+                  <div class="mg-health__example-subtitle" style="margin-top: 0.25rem;">Partial: {{run.truncatedProfilesLabel}}</div>
+                {{/if}}
+              </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
+
+      {{#if @controller.hasOperationalSafetyCards}}
+        <section class="mg-health__panel">
+          <div class="mg-health__panel-header">
+            <div class="mg-health__panel-copy">
+              <h2>Operational safety checks</h2>
+              <p class="mg-health__muted">Read-only checks added for storage profile safety and stale Media Gallery temp/workspace cleanup.</p>
+            </div>
+            <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">These checks do not change files or settings. They summarize operational risks so admins can review storage configuration and old temporary workspaces.</span></span>
           </div>
 
-          <div class="mg-migrations__actions" style="margin-bottom: 0.9rem;">
-            <button class="btn" type="button" {{on "click" (fn @controller.loadStorageHealth "target")}} disabled={{@controller.storageBusy}}>
-              {{i18n "admin.media_gallery.migrations.refresh_health"}}
-            </button>
-            <button class="btn" type="button" {{on "click" (fn @controller.runStorageProbe "target")}} disabled={{@controller.storageBusy}}>
-              {{i18n "admin.media_gallery.migrations.run_probe"}}
-            </button>
+          <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem;">
+            {{#each @controller.operationalSafetyCards as |card|}}
+              <article class="mg-health__alert-card mg-health__operational-card">
+                <span class="mg-health__badge {{card.badgeClass}}">{{card.severityLabel}}</span>
+                <div class="mg-health__alert-label">{{card.label}}</div>
+                <div class="mg-health__alert-value">{{card.value}}</div>
+                <p class="mg-health__muted" style="margin-top: 0.65rem;">{{card.detail}}</p>
+              </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
+
+      {{#if @controller.hasAttentionIssues}}
+        <section class="mg-health__panel">
+          <div class="mg-health__panel-header">
+            <div class="mg-health__panel-copy">
+              <h2>Issues requiring attention</h2>
+              <p class="mg-health__muted">These are the current warning or critical findings. Use the links and details below to investigate or fix them.</p>
+            </div>
+            <span class="mg-health__status-row" title={{@controller.overallSeverityLabel}}>
+              <span class="mg-health__status-dot {{@controller.overallBadgeClass}}"></span>
+              <span>{{@controller.overallSeverityLabel}}</span>
+            </span>
           </div>
 
-          <div class="mg-migrations__row-list">
-            {{#each @controller.targetStorageCard.rows as |row|}}
-              <div class="mg-migrations__summary-row">
-                <span class="mg-migrations__summary-label">{{row.label}}</span>
-                <span class="mg-migrations__summary-value">{{row.value}}</span>
+          <div class="mg-health__issue-list" style="margin-top: 1rem;">
+            {{#each @controller.attentionIssues as |issue|}}
+              <article class="mg-health__issue">
+                <span class="mg-health__icon {{issue.iconClass}}">{{issue.icon}}</span>
+                <div>
+                  <div class="mg-health__issue-title">
+                    <span>{{issue.label}}</span>
+                    <span class="mg-health__badge">{{issue.sectionTitle}}</span>
+                    {{#if issue.countLabel}}
+                      <span class="mg-health__badge">{{issue.countLabel}}</span>
+                    {{/if}}
+                  </div>
+                  <p class="mg-health__issue-message">{{issue.message}}</p>
+                  {{#if issue.hasDetail}}
+                    <p class="mg-health__item-detail">{{issue.detail}}</p>
+                  {{/if}}
+                  {{#if issue.hasExamples}}
+                    <div class="mg-health__examples">
+                      {{#each issue.examples as |example|}}
+                        <div class="mg-health__example">
+                          {{#if example.url}}
+                            <a class="mg-health__example-title" href={{example.url}} target="_blank" rel="noopener noreferrer">{{example.title}}</a>
+                          {{else}}
+                            <div class="mg-health__example-title">{{example.title}}</div>
+                          {{/if}}
+                          {{#if example.subtitle}}
+                            <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
+                          {{/if}}
+                          {{#if example.hasDetail}}
+                            <div class="mg-health__example-subtitle">{{example.detail}}</div>
+                          {{/if}}
+                          {{#if example.hasSuggestion}}
+                            <div class="mg-health__example-subtitle"><strong>Suggested action:</strong> {{example.suggestion}}</div>
+                          {{/if}}
+                          <div class="mg-health__example-actions">
+                            {{#if example.url}}
+                              <a class="btn" href={{example.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
+                            {{/if}}
+                            {{#if example.canIgnore}}
+                              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.ignoreFinding issue example)}}>Ignore finding</button>
+                            {{/if}}
+                          </div>
+                        </div>
+                      {{/each}}
+                    </div>
+                  {{/if}}
+                </div>
+                <span class="mg-health__badge {{issue.badgeClass}}">{{issue.severityLabel}}</span>
+              </article>
+            {{/each}}
+          </div>
+        </section>
+      {{/if}}
+
+      {{#if @controller.hasIgnoredFindings}}
+        <section class="mg-health__panel">
+          <div class="mg-health__panel-header">
+            <div class="mg-health__panel-copy">
+              <h2>Ignored findings</h2>
+              <p class="mg-health__muted">These findings no longer affect the health status. Restore them if they should be checked again.</p>
+            </div>
+            <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">Ignored storage findings are excluded from warning and critical status. They are not deleted; they are only suppressed for health reporting until an admin restores them.</span></span>
+          </div>
+          <div class="mg-health__examples" style="margin-top: 1rem;">
+            {{#each @controller.ignoredFindings as |finding|}}
+              <div class="mg-health__example">
+                {{#if finding.url}}
+                  <a class="mg-health__example-title" href={{finding.url}} target="_blank" rel="noopener noreferrer">{{finding.title}}</a>
+                {{else}}
+                  <div class="mg-health__example-title">{{finding.title}}</div>
+                {{/if}}
+                {{#if finding.subtitle}}
+                  <div class="mg-health__example-subtitle">{{finding.subtitle}}</div>
+                {{/if}}
+                {{#if finding.reason}}
+                  <div class="mg-health__example-subtitle">{{finding.reason}}</div>
+                {{/if}}
+                <div class="mg-health__example-subtitle">Expires: {{finding.expiresAtLabel}}</div>
+                <div class="mg-health__example-actions">
+                  {{#if finding.url}}
+                    <a class="btn" href={{finding.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
+                  {{/if}}
+                  <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.unignoreFinding finding)}}>Stop ignoring</button>
+                </div>
               </div>
             {{/each}}
           </div>
-
-          {{#if @controller.targetStorageCard.validationErrors.length}}
-            <div class="mg-migrations__warning-list">
-              {{#each @controller.targetStorageCard.validationErrors as |warning|}}
-                <span class="mg-migrations__badge is-danger">{{warning}}</span>
-              {{/each}}
-            </div>
-          {{/if}}
-
-          {{#if @controller.targetStorageCard.probeTimings.length}}
-            <details class="mg-migrations__details">
-              <summary>Probe timings</summary>
-              <div class="mg-migrations__row-list" style="padding: 0 1rem 1rem;">
-                {{#each @controller.targetStorageCard.probeTimings as |timing|}}
-                  <div class="mg-migrations__summary-row">
-                    <span class="mg-migrations__summary-label">{{timing.label}}</span>
-                    <span class="mg-migrations__summary-value">{{timing.value}}</span>
-                  </div>
-                {{/each}}
-              </div>
-            </details>
-          {{/if}}
-
-          {{#if @controller.targetStorageCard.probeNote}}
-            <p class="mg-migrations__muted" style="margin-top: 0.85rem;">{{@controller.targetStorageCard.probeNote}}</p>
-          {{/if}}
         </section>
-      </div>
+      {{/if}}
 
-      <section class="mg-migrations__panel">
-        <div class="mg-migrations__panel-header">
-          <div class="mg-migrations__panel-copy">
-            <h2>{{i18n "admin.media_gallery.migrations.find_media"}}</h2>
-            <span class="mg-migrations__muted">Find a media item, inspect its source/target state, then run copy, switch, or cleanup.</span>
+      <section class="mg-health__panel">
+        <div class="mg-health__panel-header">
+          <div class="mg-health__panel-copy">
+            <h2>Watchdog notifications</h2>
+            <p class="mg-health__muted">Critical or warning health issues are deduplicated before admins are notified.</p>
           </div>
+          <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">The scheduled watchdog runs hourly. It sends a group PM only when severity meets the configured threshold and the alert signature changed or the cooldown expired.</span></span>
         </div>
-
-        <div class="mg-migrations__filters">
-          <div class="mg-migrations__field is-search">
-            <label>{{i18n "admin.media_gallery.migrations.search_label"}}</label>
-            <input
-              type="text"
-              value={{@controller.searchQuery}}
-              placeholder={{i18n "admin.media_gallery.migrations.search_placeholder"}}
-              {{on "input" @controller.onSearchInput}}
-              {{on "keydown" @controller.onSearchKeydown}}
-            />
-          </div>
-
-          <div class="mg-migrations__field">
-            <label>{{i18n "admin.media_gallery.migrations.backend_filter"}}</label>
-            <select value={{@controller.backendFilter}} {{on "change" @controller.onBackendFilterChange}}>
-              <option value="all">all</option>
-              <option value="local">local</option>
-              <option value="s3">s3</option>
-            </select>
-          </div>
-
-          <div class="mg-migrations__field">
-            <label>Storage profile</label>
-            <select value={{@controller.profileFilter}} {{on "change" @controller.onProfileFilterChange}}>
-              <option value="all">all</option>
-              {{#each @controller.searchProfileOptions as |profile|}}
-                <option value={{profile.value}} selected={{profile.selected}}>{{profile.label}}</option>
-              {{/each}}
-            </select>
-          </div>
-
-          <div class="mg-migrations__field">
-            <label>{{i18n "admin.media_gallery.migrations.status_filter"}}</label>
-            <select value={{@controller.statusFilter}} {{on "change" @controller.onStatusFilterChange}}>
-              <option value="all">all</option>
-              <option value="queued">queued</option>
-              <option value="processing">processing</option>
-              <option value="ready">ready</option>
-              <option value="failed">failed</option>
-            </select>
-          </div>
-
-          <div class="mg-migrations__field">
-            <label>Type</label>
-            <select value={{@controller.mediaTypeFilter}} {{on "change" @controller.onMediaTypeFilterChange}}>
-              <option value="all">all</option>
-              <option value="audio">audio</option>
-              <option value="image">image</option>
-              <option value="video">video</option>
-            </select>
-          </div>
-
-          <div class="mg-migrations__field">
-            <label>{{i18n "admin.media_gallery.migrations.hls_filter"}}</label>
-            <select value={{@controller.hlsFilter}} {{on "change" @controller.onHlsFilterChange}}>
-              <option value="all">all</option>
-              <option value="yes">yes</option>
-              <option value="no">no</option>
-            </select>
-          </div>
-
-          <div class="mg-migrations__field">
-            <label>{{i18n "admin.media_gallery.migrations.limit_label"}}</label>
-            <select value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
-              <option value="20">20</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-            </select>
-          </div>
-
-          <div class="mg-migrations__field">
-            <label>{{i18n "admin.media_gallery.migrations.sort_label"}}</label>
-            <select value={{@controller.sortBy}} {{on "change" @controller.onSortByChange}}>
-              <option value="created_at_desc">newest</option>
-              <option value="created_at_asc">oldest</option>
-              <option value="title_asc">title A-Z</option>
-              <option value="title_desc">title Z-A</option>
-              <option value="backend_asc">backend A-Z</option>
-              <option value="backend_desc">backend Z-A</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="mg-migrations__filters-footer">
-          <div class="mg-migrations__filters-actions">
-            <button class="btn btn-primary" type="button" {{on "click" @controller.search}} disabled={{@controller.isSearching}}>
-              {{if @controller.isSearching "Searching…" (i18n "admin.media_gallery.migrations.search_button")}}
-            </button>
-            <button class="btn" type="button" {{on "click" @controller.resetFilters}} disabled={{@controller.isSearching}}>
-              Reset
-            </button>
-          </div>
-          <div class="mg-migrations__muted">
-            <span>{{@controller.searchInfo}}</span>
-            {{#if @controller.performanceTimingLabel}}
-              <br /><span class="mg-migrations__performance">{{@controller.performanceTimingLabel}}</span>
-            {{/if}}
-          </div>
-        </div>
-
-        {{#if @controller.bulkActionMessage}}
-          <div class="alert alert-info" style="margin-top: 0.85rem;">{{@controller.bulkActionMessage}}</div>
-        {{/if}}
-        {{#if @controller.bulkActionError}}
-          <div class="alert alert-error" style="margin-top: 0.85rem;">{{@controller.bulkActionError}}</div>
-        {{/if}}
-        {{#if @controller.searchError}}
-          <div class="alert alert-error" style="margin-top: 0.85rem;">{{@controller.searchError}}</div>
-        {{/if}}
-
-        <div class="mg-migrations__bulk-panel">
-          <h3>Migrate multiple selected items</h3>
-          <p class="mg-migrations__muted">Queue migration work for the items you explicitly selected below.</p>
-          <div class="mg-migrations__bulk-toolbar" style="margin-top: 0.85rem;">
-            <div class="mg-migrations__muted">{{@controller.bulkSelectionCount}} item(s) selected</div>
-            <div class="mg-migrations__filters-actions">
-              <button class="btn" type="button" {{on "click" @controller.selectAllVisible}} disabled={{@controller.selectAllVisibleDisabled}}>
-                {{if @controller.allVisibleSelected "All visible selected" "Select all visible"}}
-              </button>
-              <button class="btn" type="button" {{on "click" @controller.clearBulkSelection}} disabled={{@controller.clearBulkSelectionDisabled}}>
-                Clear selection
-              </button>
+        <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 1rem;">
+          {{#each @controller.alertStateRows as |row|}}
+            <div class="mg-health__alert-card">
+              <div class="mg-health__alert-label">{{row.label}}</div>
+              <div class="mg-health__alert-value">{{row.value}}</div>
             </div>
-          </div>
-          <label class="mg-migrations__bulk-confirm">
-            <input type="checkbox" checked={{@controller.bulkFullMigration}} {{on "change" @controller.onBulkFullMigrationChange}} />
-            Run the full migration sequence automatically after copy.
-          </label>
-          <label class="mg-migrations__bulk-confirm">
-            <input type="checkbox" checked={{@controller.bulkConfirm}} {{on "change" @controller.onBulkConfirmChange}} />
-            I understand this queues {{@controller.bulkModeLabel}} work for all selected items.
-          </label>
-          <div class="mg-migrations__filters-actions" style="margin-top: 0.9rem;">
-            <button class="btn btn-danger" type="button" {{on "click" @controller.bulkMigrate}} disabled={{@controller.bulkMigrateDisabled}}>
-              {{if @controller.isBulkMigrating "Queueing selected items…" (if @controller.bulkFullMigration "Queue full migration for selected items" "Queue copy for selected items")}}
-            </button>
-          </div>
+          {{/each}}
         </div>
       </section>
 
-      <div class="mg-migrations__grid">
-        <section class="mg-migrations__panel">
-          <div class="mg-migrations__panel-header">
-            <div class="mg-migrations__panel-copy">
-              <h2>{{i18n "admin.media_gallery.migrations.results"}}</h2>
-              <span class="mg-migrations__muted">Use “Use” for one item. Use the checkboxes for bulk selection.</span>
+      {{#if @controller.ignoreModalOpen}}
+        <div class="mg-health__modal-backdrop">
+          <div class="mg-health__modal" role="dialog" aria-modal="true">
+            <div class="mg-health__modal-header">
+              <div>
+                <h2>Ignore finding</h2>
+                <p class="mg-health__muted">Ignoring suppresses this finding from Health status. It does not delete or change any media files.</p>
+              </div>
+            </div>
+
+            <div class="mg-health__modal-form">
+              <div>
+                <strong>{{@controller.ignoreTargetTitle}}</strong>
+              </div>
+
+              <div class="mg-health__modal-row">
+                <label class="mg-health__alert-label" for="media-gallery-health-ignore-reason">Reason</label>
+                <div class="mg-health__modal-field">
+                  <textarea id="media-gallery-health-ignore-reason" value={{@controller.ignoreReason}} maxlength="500" {{on "input" @controller.setIgnoreReason}}></textarea>
+                </div>
+              </div>
+
+              <div class="mg-health__modal-row mg-health__modal-row--compact">
+                <label class="mg-health__alert-label" for="media-gallery-health-ignore-expiry">Expires</label>
+                <div class="mg-health__modal-field">
+                  <select id="media-gallery-health-ignore-expiry" value={{@controller.ignoreExpiresInDays}} {{on "change" @controller.setIgnoreExpiry}}>
+                    <option value="0">Never</option>
+                    <option value="7">In 7 days</option>
+                    <option value="30">In 30 days</option>
+                    <option value="90">In 90 days</option>
+                    <option value="365">In 365 days</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="mg-health__actions">
+                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelIgnoreFinding}}>Cancel</button>
+                <button class="btn btn-primary" type="button" disabled={{@controller.ignoreSubmitDisabled}} {{on "click" @controller.submitIgnoreFinding}}>
+                  Ignore finding
+                </button>
+              </div>
             </div>
           </div>
+        </div>
+      {{/if}}
 
-          {{#if @controller.hasSearchResults}}
-            <div class="mg-migrations__results-list">
-              {{#each @controller.resultCards key="public_id" as |item|}}
-                <article class={{item.cardClass}}>
-                  <div class="mg-migrations__result-select">
-                    <input type="checkbox" checked={{item.isBulkSelected}} {{on "change" (fn @controller.toggleBulkSelection item)}} />
-                  </div>
-                  <img class="mg-migrations__thumb" src={{item.thumbnailUrl}} alt="" />
-
-                  <div class="mg-migrations__result-main">
-                    <div class="mg-migrations__result-title">{{item.titleLabel}}</div>
-                    <div class="mg-migrations__public-id">{{item.publicIdLabel}}</div>
-                    <div class="mg-migrations__result-meta mg-migrations__muted">{{item.metaLabel}}</div>
-                  </div>
-
-                  <div class="mg-migrations__inline-actions">
-                    <button class="btn btn-small" type="button" {{on "click" (fn @controller.selectItem item)}}>
-                      {{if item.isSelected "Selected" (i18n "admin.media_gallery.migrations.select_button")}}
-                    </button>
-                  </div>
-
-                  <div class="mg-migrations__result-tags">
-                    <span class={{item.statusClass}}>{{item.statusLabel}}</span>
-                    <span class={{item.mediaTypeClass}}>{{item.mediaTypeLabel}}</span>
-                    <span class="mg-migrations__badge">{{item.profileLabel}}</span>
-                    <span class={{item.hlsClass}}>{{item.hasHlsLabel}}</span>
-                  </div>
-                </article>
-              {{/each}}
-            </div>
-          {{else}}
-            <div class="mg-migrations__empty">No matching media items found.</div>
-          {{/if}}
-        </section>
-
-        <section class="mg-migrations__panel">
-          <div class="mg-migrations__panel-header">
-            <div class="mg-migrations__panel-copy">
-              <h2>{{i18n "admin.media_gallery.migrations.selected_item"}}</h2>
-              <span class="mg-migrations__muted">Keep the overview readable; open the raw JSON only when you need the full payload.</span>
-            </div>
-          </div>
-
-          {{#if @controller.hasSelectedItem}}
-            <div class="mg-migrations__selected-header">
-              <img class="mg-migrations__selected-thumb" src={{@controller.selectedThumbnailUrl}} alt="" />
-              <div class="mg-migrations__selected-main">
-                <div class="mg-migrations__selected-title">{{@controller.selectedDisplayTitle}}</div>
-                <div class="mg-migrations__public-id">{{@controller.selectedPublicId}}</div>
-                <div class="mg-migrations__summary-grid">
-                  {{#each @controller.selectedSummaryRows as |row|}}
-                    <div class="mg-migrations__summary-card">
-                      <div class="mg-migrations__summary-label">{{row.label}}</div>
-                      <div class="mg-migrations__summary-title">{{row.value}}</div>
-                    </div>
-                  {{/each}}
-                </div>
+      <div class="mg-health__sections">
+        {{#each @controller.sections as |section|}}
+          <section class="mg-health__panel">
+            <div class="mg-health__panel-header">
+              <div class="mg-health__panel-copy">
+                <h2>{{section.title}}</h2>
+                <p class="mg-health__muted">{{section.description}}</p>
+              </div>
+              <div class="mg-health__actions">
+                {{#if section.hasHelp}}
+                  <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">{{section.help}}</span></span>
+                {{/if}}
+                <span class="mg-health__badge {{section.badgeClass}}">{{section.severityLabel}}</span>
               </div>
             </div>
 
-            <div class="mg-migrations__panel" style="padding: 0.9rem; background: var(--primary-very-low); margin-bottom: 1rem;">
-              <div class="mg-migrations__panel-header" style="margin-bottom: 0.75rem;">
-                <div class="mg-migrations__panel-copy">
-                  <h3>Actions</h3>
-                  <span class="mg-migrations__muted">Copy first, then switch. Cleanup only after the target is verified. Current state refreshes automatically every 5 seconds while copy or cleanup is still running.</span>
-                </div>
-              </div>
-
-              <div class="mg-migrations__toggle-row" style="margin-bottom: 0.9rem;">
-                <label><input type="checkbox" checked={{@controller.autoSwitch}} {{on "change" @controller.onAutoSwitchChange}} /> auto switch after copy</label>
-                <label><input type="checkbox" checked={{@controller.autoCleanup}} {{on "change" @controller.onAutoCleanupChange}} /> auto cleanup</label>
-                <label><input type="checkbox" checked={{@controller.forceAction}} {{on "change" @controller.onForceActionChange}} /> force</label>
-              </div>
-
-              <div class="mg-migrations__actions">
-                <button class="btn" type="button" {{on "click" @controller.refreshSelected}} disabled={{@controller.isLoadingSelection}}>
-                  {{if @controller.isLoadingSelection "Refreshing…" (i18n "admin.media_gallery.migrations.refresh_selected")}}
-                </button>
-                <button class="btn" type="button" {{on "click" @controller.copyToTarget}} disabled={{@controller.copyDisabled}}>
-                  {{if @controller.isCopying "Copying…" (i18n "admin.media_gallery.migrations.copy_button")}}
-                </button>
-                <button class="btn" type="button" {{on "click" @controller.verifyTarget}} disabled={{@controller.verifyDisabled}}>
-                  {{if @controller.isVerifying "Verifying…" "Verify target"}}
-                </button>
-                <button class="btn" type="button" {{on "click" @controller.switchToTarget}} disabled={{@controller.switchDisabled}}>
-                  {{if @controller.isSwitching "Switching…" (i18n "admin.media_gallery.migrations.switch_button")}}
-                </button>
-                <button class="btn" type="button" {{on "click" @controller.cleanupSource}} disabled={{@controller.cleanupDisabled}}>
-                  {{if @controller.isCleaning "Cleaning…" @controller.cleanupActionLabel}}
-                </button>
-                <button class="btn" type="button" {{on "click" @controller.rollbackToSource}} disabled={{@controller.rollbackDisabled}}>
-                  {{if @controller.isRollingBack "Rolling back…" "Rollback"}}
-                </button>
-                <button class="btn" type="button" {{on "click" @controller.finalizeMigration}} disabled={{@controller.finalizeDisabled}}>
-                  {{if @controller.isFinalizing "Finalizing…" "Finalize"}}
-                </button>
-                <button class="btn" type="button" {{on "click" @controller.clearQueuedState}} disabled={{@controller.clearQueuedStateDisabled}}>
-                  Clear queued state
-                </button>
-              </div>
-            </div>
-
-            {{#if @controller.lastActionMessage}}
-              <div class="alert alert-info" style="margin-bottom: 1rem;">{{@controller.lastActionMessage}}</div>
-            {{/if}}
-            {{#if @controller.actionError}}
-              <div class="alert alert-error" style="margin-bottom: 1rem;">{{@controller.actionError}}</div>
-            {{/if}}
-            {{#if @controller.selectedError}}
-              <div class="alert alert-error" style="margin-bottom: 1rem;">{{@controller.selectedError}}</div>
-            {{/if}}
-
-            <div class="mg-migrations__panel-header">
-              <div class="mg-migrations__panel-copy">
-                <h3>Current state</h3>
-                <span class="mg-migrations__muted">Processing, copy, switch, and cleanup are shown separately so you can see exactly where the item is in the migration flow.</span>
-              </div>
-            </div>
-            <div class="mg-migrations__state-grid">
-              {{#each @controller.selectedStateCards as |state|}}
-                <div class="mg-migrations__state-card">
-                  <div class="mg-migrations__card-header">
-                    <span class="mg-migrations__state-title">{{state.title}}</span>
-                    <span class={{state.badgeClass}}>{{state.statusLabel}}</span>
-                  </div>
-                  <div class="mg-migrations__state-detail">{{state.detail}}</div>
-                  <span class="mg-migrations__muted mg-migrations__state-meta">{{state.meta}}</span>
-                  {{#if state.error}}
-                    <span class="mg-migrations__muted" style="color: var(--danger);">{{state.error}}</span>
-                  {{/if}}
-                </div>
-              {{/each}}
-            </div>
-
-            {{#if @controller.hasSelectedHistory}}
-              <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
-                <div class="mg-migrations__panel-copy">
-                  <h3>Previous migration runs</h3>
-                  <span class="mg-migrations__muted">After finalize, the completed run moves here so the current action state is clean for the next migration.</span>
-                </div>
-              </div>
-              <div class="mg-migrations__state-grid">
-                {{#each @controller.selectedHistoryEntries as |entry|}}
-                  <div class="mg-migrations__state-card">
-                    <div class="mg-migrations__card-header">
-                      <span class="mg-migrations__state-title">{{entry.title}}</span>
-                      {{#if entry.reason}}
-                        <span class="mg-migrations__badge">{{entry.reason}}</span>
+            <div class="mg-health__issue-list" style="margin-top: 1rem;">
+              {{#each section.issues as |issue|}}
+                <article class="mg-health__issue">
+                  <span class="mg-health__icon {{issue.iconClass}}">{{issue.icon}}</span>
+                  <div>
+                    <div class="mg-health__issue-title">
+                      <span>{{issue.label}}</span>
+                      {{#if issue.countLabel}}
+                        <span class="mg-health__badge">{{issue.countLabel}}</span>
                       {{/if}}
                     </div>
-                    <div class="mg-migrations__state-detail">{{entry.meta}}</div>
-                    <div class="mg-migrations__warning-list" style="margin-top: 0.75rem;">
-                      {{#each entry.badges as |badge|}}
-                        <span class={{badge.className}}>{{badge.label}}</span>
-                      {{/each}}
-                    </div>
-                  </div>
-                {{/each}}
-              </div>
-            {{/if}}
-
-            <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
-              <div class="mg-migrations__panel-copy">
-                <h3>Current assets</h3>
-                <span class="mg-migrations__muted">This shows which managed or legacy roles are currently resolvable for the item.</span>
-              </div>
-            </div>
-            <div class="mg-migrations__role-grid">
-              {{#each @controller.selectedRoleCards as |role|}}
-                <div class="mg-migrations__role-card">
-                  <div class="mg-migrations__card-header">
-                    <span class="mg-migrations__role-title">{{role.name}}</span>
-                    <span class={{role.badgeClass}}>{{role.existsLabel}}</span>
-                  </div>
-                  <div>{{role.summaryLabel}}</div>
-                  <span class="mg-migrations__muted">{{role.contentType}}</span>
-                  <span class="mg-migrations__muted mg-migrations__role-locator">{{role.locator}}</span>
-                </div>
-              {{/each}}
-            </div>
-
-            <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
-              <div class="mg-migrations__panel-copy">
-                <h3>Migration preview</h3>
-                <span class="mg-migrations__muted">Load the dry-run preview only when you need to inspect source and target object coverage.</span>
-              </div>
-              <button class="btn" type="button" {{on "click" @controller.loadSelectedPlan}} disabled={{@controller.loadPlanDisabled}}>
-                {{if @controller.isLoadingPlan "Loading preview…" "Load preview"}}
-              </button>
-            </div>
-
-            {{#if @controller.selectedPlanHint}}
-              <p class="mg-migrations__muted" style="margin-bottom: 0.75rem;">{{@controller.selectedPlanHint}}</p>
-            {{/if}}
-
-            {{#if @controller.selectedPlanSummary}}
-              <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
-                <div class="mg-migrations__panel-copy">
-                  <h3>Migration summary</h3>
-                  <span class="mg-migrations__muted">Dry-run preview of the move from the current profile to the configured target profile.</span>
-                </div>
-              </div>
-
-              <div class="mg-migrations__summary-grid" style="margin-bottom: 1rem;">
-                <div class="mg-migrations__summary-card">
-                  <div class="mg-migrations__summary-label">Source</div>
-                  <div class="mg-migrations__summary-title">{{@controller.selectedPlanSummary.sourceLabel}}</div>
-                </div>
-                <div class="mg-migrations__summary-card">
-                  <div class="mg-migrations__summary-label">Target</div>
-                  <div class="mg-migrations__summary-title">{{@controller.selectedPlanSummary.targetLabel}}</div>
-                </div>
-                <div class="mg-migrations__summary-card">
-                  <div class="mg-migrations__summary-label">Objects</div>
-                  <div class="mg-migrations__summary-title">{{@controller.selectedPlanSummary.objectCountLabel}}</div>
-                  <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.objectCountCaption}}</span>
-                  <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.sourceBytesLabel}}</span>
-                </div>
-                <div class="mg-migrations__summary-card">
-                  <div class="mg-migrations__summary-label">Target readiness</div>
-                  <div class="mg-migrations__summary-title">{{@controller.selectedPlanSummary.targetExistingLabel}}</div>
-                  <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.targetExistingCaption}}</span>
-                  <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.targetExistingBytesLabel}}</span>
-                  <div class="mg-migrations__warning-list" style="margin-top: 0.65rem;">
-                    <span class={{@controller.selectedPlanSummary.missingBadgeClass}}>{{@controller.selectedPlanSummary.missingCountLabel}} missing</span>
-                  </div>
-                  <span class="mg-migrations__muted">{{@controller.selectedPlanSummary.switchReadinessLabel}}</span>
-                </div>
-              </div>
-
-              {{#if @controller.selectedPlanSummary.warnings.length}}
-                <div class="mg-migrations__warning-list">
-                  {{#each @controller.selectedPlanSummary.warnings as |warning|}}
-                    <span class="mg-migrations__badge is-warning">{{warning}}</span>
-                  {{/each}}
-                </div>
-              {{/if}}
-
-              {{#if @controller.selectedPlanSafetyRows.length}}
-                <div class="mg-migrations__panel-header" style="margin-top: 1.1rem;">
-                  <div class="mg-migrations__panel-copy">
-                    <h3>Migration safety summary</h3>
-                    <span class="mg-migrations__muted">Read this dry-run summary before executing copy, switch or cleanup actions.</span>
-                  </div>
-                  <span class={{@controller.selectedPlanSafetyStatusBadgeClass}}>{{@controller.selectedPlanSafetyStatusLabel}}</span>
-                </div>
-                <div class="mg-migrations__summary-grid" style="margin-bottom: 1rem;">
-                  {{#each @controller.selectedPlanSafetyRows as |row|}}
-                    <div class="mg-migrations__summary-card">
-                      <div class="mg-migrations__summary-label">{{row.label}}</div>
-                      <div class="mg-migrations__summary-title">{{row.value}}</div>
-                      <span class={{row.badgeClass}}>{{row.statusLabel}}</span>
-                      {{#if row.detail}}<span class="mg-migrations__muted">{{row.detail}}</span>{{/if}}
-                    </div>
-                  {{/each}}
-                </div>
-              {{/if}}
-
-              {{#if @controller.selectedPlanError}}
-                <div class="alert alert-warning" style="margin-top: 1rem;">{{@controller.selectedPlanError}}</div>
-              {{/if}}
-
-              <div class="mg-migrations__role-grid" style="margin-top: 1rem;">
-                {{#each @controller.selectedPlanRoleCards as |role|}}
-                  <div class="mg-migrations__role-card">
-                    <div class="mg-migrations__card-header">
-                      <span class="mg-migrations__role-title">{{role.name}}</span>
-                      <span class={{role.missingBadgeClass}}>{{role.missingCountLabel}} missing</span>
-                    </div>
-                    <div>{{role.backendLabel}}</div>
-                    <span class="mg-migrations__muted">{{role.objectCountLabel}} objects • {{role.sourceBytesLabel}}</span>
-                    <span class="mg-migrations__muted">{{role.targetExistingLabel}} already on target</span>
-                    {{#if role.warnings.length}}
-                      <div class="mg-migrations__warning-list">
-                        {{#each role.warnings as |warning|}}
-                          <span class="mg-migrations__badge is-warning">{{warning}}</span>
+                    <p class="mg-health__issue-message">{{issue.message}}</p>
+                    {{#if issue.hasDetail}}
+                      <p class="mg-health__item-detail">{{issue.detail}}</p>
+                    {{/if}}
+                    {{#if issue.hasExamples}}
+                      <div class="mg-health__examples">
+                        {{#each issue.examples as |example|}}
+                          <div class="mg-health__example">
+                            {{#if example.url}}
+                              <a class="mg-health__example-title" href={{example.url}} target="_blank" rel="noopener noreferrer">{{example.title}}</a>
+                            {{else}}
+                              <div class="mg-health__example-title">{{example.title}}</div>
+                            {{/if}}
+                            {{#if example.subtitle}}
+                              <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
+                            {{/if}}
+                            {{#if example.hasDetail}}
+                              <div class="mg-health__example-subtitle">{{example.detail}}</div>
+                            {{/if}}
+                            {{#if example.hasSuggestion}}
+                              <div class="mg-health__example-subtitle"><strong>Suggested action:</strong> {{example.suggestion}}</div>
+                            {{/if}}
+                            <div class="mg-health__example-actions">
+                              {{#if example.url}}
+                                <a class="btn" href={{example.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
+                              {{/if}}
+                              {{#if example.canIgnore}}
+                                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.ignoreFinding issue example)}}>Ignore finding</button>
+                              {{/if}}
+                            </div>
+                          </div>
                         {{/each}}
                       </div>
                     {{/if}}
                   </div>
-                {{/each}}
-              </div>
-            {{else if @controller.selectedPlanError}}
-              <div class="alert alert-warning" style="margin-top: 1rem;">{{@controller.selectedPlanError}}</div>
-            {{/if}}
-
-            {{#if @controller.selectedPlanLoaded}}
-              <details class="mg-migrations__details">
-                <summary>{{i18n "admin.media_gallery.migrations.plan"}} JSON</summary>
-                <pre class="mg-migrations__json">{{@controller.rawPlanJson}}</pre>
-              </details>
-            {{/if}}
-
-            <details class="mg-migrations__details">
-              <summary>{{i18n "admin.media_gallery.migrations.diagnostics"}} JSON</summary>
-              <pre class="mg-migrations__json">{{@controller.rawDiagnosticsJson}}</pre>
-            </details>
-          {{else}}
-            <div class="mg-migrations__empty">{{i18n "admin.media_gallery.migrations.no_selection"}}</div>
-          {{/if}}
-        </section>
+                  <span class="mg-health__badge {{issue.badgeClass}}">{{issue.severityLabel}}</span>
+                </article>
+              {{/each}}
+            </div>
+          </section>
+        {{/each}}
       </div>
     </div>
   </template>
