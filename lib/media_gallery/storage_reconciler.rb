@@ -493,8 +493,19 @@ module ::MediaGallery
       groups.each do |group|
         public_id = group[:public_id].to_s
         item = items[public_id]
-        next if item.blank?
 
+        if item.blank?
+          if public_id_like?(public_id) && group[:classification].to_s == "unknown_storage_prefix"
+            group[:classification] = "untracked_media_prefix"
+            group[:issue_type] = "untracked_media_storage_prefix"
+            group[:label] = "Untracked media storage prefix"
+            group[:title] = "Untracked media files for #{public_id}"
+            group[:media_item_exists] = false
+          end
+          next
+        end
+
+        group[:media_item_exists] = true
         current_profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
         group[:title] = item.title.to_s.presence || "Untitled media"
         group[:status] = item.status.to_s.presence
@@ -561,6 +572,7 @@ module ::MediaGallery
         classification: group[:classification],
         current_profile_key: group[:current_profile_key],
         current_profile_label: group[:current_profile_label],
+        media_item_exists: group[:media_item_exists],
         migration_cleanup_status: group[:migration_cleanup_status],
         migration_cleanup_mode: group[:migration_cleanup_mode],
         migration_cleanup_pending: group[:migration_cleanup_pending],
@@ -616,6 +628,14 @@ module ::MediaGallery
           hint: "Deletes this HLS prefix only when the media record no longer exists.",
           risk: "medium"
         }
+      when "untracked_media_prefix"
+        {
+          available: group[:status].to_s.blank?,
+          kind: "delete_prefix",
+          label: "Clean untracked media prefix",
+          hint: "Deletes only this UUID-scoped media prefix after confirming no active media item exists.",
+          risk: "medium"
+        }
       else
         { available: false }
       end
@@ -636,6 +656,9 @@ module ::MediaGallery
         "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} were found on #{found}. The active playback profile for this media item is #{current}. This commonly means migration source cleanup is pending or incomplete.#{cleanup_text}#{sample_text}"
       when "hls_media_prefix"
         "#{object_count} HLS storage object#{'s' if object_count != 1} under #{prefix} are not referenced by any sampled media item or manifest. This often comes from deleted media or an incomplete cleanup path.#{sample_text}"
+      when "untracked_media_prefix"
+        found = group[:profile_display_label].presence || group[:profile_label].presence || group[:profile_key].presence || "this storage profile"
+        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} were found on #{found}, but no active Media Gallery item exists for this public_id. This is usually a deleted-media or old test/import leftover.#{sample_text}"
       when "hls_temporary_prefix"
         "#{object_count} HLS temporary storage object#{'s' if object_count != 1} under #{prefix} look like leftover packaging workspace files.#{sample_text}"
       when "hls_old_package_prefix"
@@ -651,6 +674,8 @@ module ::MediaGallery
         "Open the item in Migration manager and verify whether source cleanup is pending, failed, or intentionally deferred. Do not delete until the active target profile and playback are verified."
       when "hls_media_prefix"
         "Check whether this public_id still exists in Media management or was deleted through frontend, Reports, or Management. Use a scoped cleanup only after confirming it is not the active package."
+      when "untracked_media_prefix"
+        "No active media item was found for this UUID-scoped storage prefix. If this came from a deleted test/upload item, use the scoped cleanup button; otherwise verify the prefix manually before deleting."
       when "hls_temporary_prefix", "hls_old_package_prefix"
         "Review age and recent HLS jobs. These should normally be cleared by HLS artifact cleanup after the safe retention window."
       else
@@ -816,7 +841,7 @@ module ::MediaGallery
       label
     end
 
-    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, cleanup_available: nil, cleanup_kind: nil, cleanup_label: nil, cleanup_hint: nil, cleanup_risk: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
+    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, media_item_exists: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, cleanup_available: nil, cleanup_kind: nil, cleanup_label: nil, cleanup_hint: nil, cleanup_risk: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
       public_id ||= item&.public_id
       title ||= item&.title.to_s.presence || (public_id.present? ? "Untitled media" : label)
       status ||= item&.status
@@ -828,6 +853,9 @@ module ::MediaGallery
       else
         "#{issue_type}:#{Digest::SHA1.hexdigest([category, label, detail, profile_key, backend].join('|'))}"
       end
+
+      has_media_item = !media_item_exists.nil? ? !!media_item_exists : item.present?
+      management_url = public_id.present? && has_media_item ? management_url_for(public_id) : nil
 
       {
         key: key,
@@ -850,6 +878,7 @@ module ::MediaGallery
         classification: classification,
         current_profile_key: current_profile_key,
         current_profile_label: current_profile_label,
+        media_item_exists: media_item_exists,
         migration_cleanup_status: migration_cleanup_status,
         migration_cleanup_mode: migration_cleanup_mode,
         migration_cleanup_pending: migration_cleanup_pending,
@@ -861,7 +890,7 @@ module ::MediaGallery
         missing: missing,
         detail: detail,
         suggestion: suggestion,
-        url: public_id.present? ? management_url_for(public_id) : nil,
+        url: management_url,
         can_ignore: can_ignore,
       }.compact
     end

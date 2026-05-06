@@ -123,6 +123,8 @@ function classificationLabel(value) {
       return "old HLS package folder";
     case "unknown_storage_prefix":
       return "unknown storage prefix";
+    case "untracked_media_prefix":
+      return "deleted/untracked media prefix";
     case "unsampled_media_prefix":
       return "existing media outside item sample";
     default:
@@ -150,6 +152,12 @@ function storageContextRows(example) {
     rows.push({
       label: "Active playback",
       value: activeProfile,
+      className: "is-compact",
+    });
+  } else if (example?.classification === "untracked_media_prefix" || example?.media_item_exists === false) {
+    rows.push({
+      label: "Active media item",
+      value: "Not found in Media Gallery",
       className: "is-compact",
     });
   }
@@ -182,6 +190,12 @@ function storageContextRows(example) {
     rows.push({
       label: "Meaning",
       value: `Old/source files were found on ${foundProfile}. Playback currently uses ${activeProfile}.`,
+      className: "is-wide is-note",
+    });
+  } else if (example?.classification === "untracked_media_prefix" && foundProfile) {
+    rows.push({
+      label: "Meaning",
+      value: `Files were found on ${foundProfile}, but the matching Media Gallery item no longer exists. Treat this as deleted/untracked media until verified.`,
       className: "is-wide is-note",
     });
   }

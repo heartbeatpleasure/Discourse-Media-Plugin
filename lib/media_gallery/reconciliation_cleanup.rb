@@ -12,6 +12,7 @@ module ::MediaGallery
       hls_old_package_prefix
       migration_source_leftovers
       hls_media_prefix
+      untracked_media_prefix
     ].freeze
 
     def cleanup_finding!(finding_key:, confirm:, actor: nil, request: nil)
@@ -145,6 +146,8 @@ module ::MediaGallery
       when "migration_source_leftovers"
         # Prefix may be the whole public_id or a subfolder when it is on a non-current storage profile.
         true
+      when "untracked_media_prefix"
+        raise UnsafeCleanup, "Only the exact UUID-scoped media prefix can be cleaned for untracked media." unless prefix == public_id
       else
         raise UnsafeCleanup, "Unsupported cleanup classification."
       end
@@ -157,6 +160,8 @@ module ::MediaGallery
       case classification.to_s
       when "hls_media_prefix"
         raise UnsafeCleanup, "The media item still exists; clean it from Management instead." if item.present?
+      when "untracked_media_prefix"
+        raise UnsafeCleanup, "The media item now exists. Run reconciliation again and clean it from Management if needed." if item.present?
       when "migration_source_leftovers"
         raise UnsafeCleanup, "Migration-source cleanup requires the media item to still exist." if item.blank?
         current_profile = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
