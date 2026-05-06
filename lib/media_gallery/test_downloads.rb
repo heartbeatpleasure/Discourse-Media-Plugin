@@ -215,10 +215,16 @@ module ::MediaGallery
 
       entries = []
       last_extinf = nil
+      media_sequence = 0
 
       raw.to_s.each_line do |line|
         l = line.to_s.strip
         next if l.blank?
+
+        if l.start_with?("#EXT-X-MEDIA-SEQUENCE:")
+          media_sequence = [l.sub("#EXT-X-MEDIA-SEQUENCE:", "").to_i, 0].max
+          next
+        end
 
         if l.start_with?("#EXTINF:")
           dur_s = l.sub("#EXTINF:", "").split(",").first.to_s
@@ -233,7 +239,9 @@ module ::MediaGallery
         entries << {
           filename: filename,
           duration: last_extinf.to_f > 0.0 ? last_extinf.to_f : nil,
+          media_sequence: media_sequence,
         }
+        media_sequence += 1
         last_extinf = nil
       end
 
@@ -307,6 +315,9 @@ module ::MediaGallery
       duration_by_name = template_entries.each_with_object({}) do |entry, acc|
         acc[entry[:filename].to_s] = entry[:duration].to_f
       end
+      media_sequence_by_name = template_entries.each_with_object({}) do |entry, acc|
+        acc[entry[:filename].to_s] = entry[:media_sequence].to_i if entry.key?(:media_sequence)
+      end
 
       selection = resolve_segment_selection(
         seg_names: seg_names,
@@ -333,6 +344,7 @@ module ::MediaGallery
           filename: filename,
           ab: ab.to_s,
           segment_index: seg_idx,
+          media_sequence: media_sequence_by_name.key?(filename.to_s) ? media_sequence_by_name[filename.to_s].to_i : seg_idx,
           duration: duration_by_name[filename.to_s].to_f,
         }
       end
@@ -378,28 +390,45 @@ module ::MediaGallery
       generation_error = nil
       verification = nil
       staged_entries = []
+      aes128_summary = nil
 
       Dir.mktmpdir("media_gallery_test_download") do |stage_dir|
         staged_entries = stage_selected_segments!(item: item, selection: selected, stage_dir: stage_dir)
         verification = verify_staged_selection!(selection: selected, staged_entries: staged_entries)
         raise "artifact_provenance_guard_failed: staged_selection_mismatch" unless verification["verified"]
 
-        playlist_path = File.join(stage_dir, "artifact.m3u8")
-        build_local_hls_playlist!(playlist_path: playlist_path, staged_entries: staged_entries)
-        begin
-          File.write(concat_list, staged_entries.map { |entry| "file '#{entry[:path].to_s.gsub("'", %q('\\''))}'" }.join("\n") + "\n")
+        aes128_context = aes128_context_for(item: item, selection: selected, stage_dir: stage_dir)
+        aes128_summary = aes128_summary_for(aes128_context)
+        if aes128_context.present?
+          verification["hls_aes128_context_present"] = true
+          verification["hls_aes128_key_file_present"] = File.exist?(aes128_context[:key_path].to_s)
+        end
 
-          ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
-            concat_file_path: concat_list,
-            output_path: output_path,
-          )
-        rescue => e
-          generation_error = "#{e.class}: #{e.message}"
+        playlist_path = File.join(stage_dir, "artifact.m3u8")
+        build_local_hls_playlist!(playlist_path: playlist_path, staged_entries: staged_entries, aes128_context: aes128_context)
+
+        if aes128_context.present?
+          generation_method = "hls_aes128_playlist_decrypt_remux"
           ::MediaGallery::Ffmpeg.remux_local_hls_to_mp4(
             playlist_path: playlist_path,
             output_path: output_path,
           )
-          generation_method = "hls_playlist_fallback"
+        else
+          begin
+            File.write(concat_list, staged_entries.map { |entry| "file '#{entry[:path].to_s.gsub("'", %q('\\''))}'" }.join("\n") + "\n")
+
+            ::MediaGallery::Ffmpeg.concat_ts_segments_to_mp4(
+              concat_file_path: concat_list,
+              output_path: output_path,
+            )
+          rescue => e
+            generation_error = "#{e.class}: #{e.message}"
+            ::MediaGallery::Ffmpeg.remux_local_hls_to_mp4(
+              playlist_path: playlist_path,
+              output_path: output_path,
+            )
+            generation_method = "hls_playlist_fallback"
+          end
         end
       end
 
@@ -430,10 +459,12 @@ module ::MediaGallery
         "generation_method" => generation_method,
         "generation_method_fallback_error" => generation_error,
         "segment_indices" => Array(selected[:segment_entries]).map { |entry| entry[:segment_index].to_i },
+        "segment_media_sequences" => Array(selected[:segment_entries]).map { |entry| entry[:media_sequence].to_i },
         "segment_filenames" => Array(selected[:segment_entries]).map { |entry| entry[:filename].to_s },
         "segment_variants" => Array(selected[:segment_entries]).map { |entry| entry[:ab].to_s },
         "segment_durations" => Array(selected[:segment_entries]).map { |entry| entry[:duration].to_f.round(6) },
         "segment_source_locators" => Array(staged_entries).map { |entry| entry[:source_locator].to_s },
+        "hls_aes128" => aes128_summary,
         "artifact_realism" => artifact_realism[:details],
         "provenance" => provenance,
         "verification" => verification,
@@ -631,7 +662,93 @@ module ::MediaGallery
     end
     private_class_method :managed_hls_access_for
 
-    def build_local_hls_playlist!(playlist_path:, staged_entries:)
+    def aes128_context_for(item:, selection:, stage_dir:)
+      encryption = aes128_encryption_for_test_download(item: item, variant: selection[:variant])
+      return nil unless encryption.present?
+
+      key_id = ::MediaGallery::HlsAes128.normalize_key_id(encryption["key_id"].to_s)
+      key_bytes = ::MediaGallery::HlsAes128.fetch_key_bytes(
+        item: item,
+        key_id: key_id,
+        variant: selection[:variant],
+      )
+      raise "hls_aes128_key_missing_for_test_download" unless ::MediaGallery::HlsAes128.valid_key_bytes?(key_bytes)
+
+      key_file = ::MediaGallery::HlsAes128.key_uri_placeholder(key_id)
+      key_path = ::MediaGallery::PathSecurity.safe_join!(stage_dir, key_file)
+      File.binwrite(key_path, key_bytes.b)
+      File.chmod(0o600, key_path) rescue nil
+
+      {
+        enabled: true,
+        method: "AES-128",
+        key_id: key_id,
+        key_uri: key_file,
+        key_path: key_path,
+        iv_hex: ::MediaGallery::HlsAes128.normalize_iv_hex(encryption["iv_hex"]),
+        scheme: encryption["scheme"].to_s.presence || ::MediaGallery::HlsAes128::SCHEME_SINGLE_KEY_V1,
+        source: encryption["source"].to_s.presence || "packaged_metadata",
+      }.compact
+    end
+    private_class_method :aes128_context_for
+
+    def aes128_summary_for(aes128_context)
+      return nil unless aes128_context.present?
+
+      {
+        "enabled" => true,
+        "method" => aes128_context[:method].to_s,
+        "scheme" => aes128_context[:scheme].to_s.presence,
+        "key_id" => aes128_context[:key_id].to_s.presence,
+        "iv_mode" => aes128_context[:iv_hex].present? ? "fixed" : "media_sequence_per_segment",
+        "source" => aes128_context[:source].to_s.presence,
+      }.compact
+    end
+    private_class_method :aes128_summary_for
+
+    def aes128_encryption_for_test_download(item:, variant:)
+      role = managed_hls_access_for(item)&.dig(:role)
+      encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(item, role: role)
+      if encryption.present?
+        encryption = encryption.deep_stringify_keys
+        encryption["source"] ||= "packaged_metadata"
+        return encryption if encryption["key_id"].to_s.present?
+      end
+
+      key_from_playlist = parse_aes128_key_from_template_playlist(item, variant: variant)
+      return nil unless key_from_playlist.present?
+
+      key_from_playlist
+    rescue
+      nil
+    end
+    private_class_method :aes128_encryption_for_test_download
+
+    def parse_aes128_key_from_template_playlist(item, variant:)
+      raw = template_playlist_raw(item, variant: variant)
+      raw.to_s.each_line do |line|
+        l = line.to_s.strip
+        next unless l.match?(/\A#EXT-X-KEY:/i) && l.match?(/METHOD=AES-128/i)
+
+        uri = l[/URI="([^"]+)"/, 1].to_s
+        key_id = ::MediaGallery::HlsAes128.key_id_from_placeholder_uri(uri)
+        next if key_id.blank?
+
+        iv_hex = l[/IV=0x([0-9a-fA-F]{32})/, 1]
+        return {
+          "method" => "AES-128",
+          "scheme" => ::MediaGallery::HlsAes128::SCHEME_SINGLE_KEY_V1,
+          "key_id" => key_id,
+          "iv_hex" => iv_hex.to_s.presence,
+          "source" => "template_playlist",
+        }.compact
+      end
+
+      nil
+    end
+    private_class_method :parse_aes128_key_from_template_playlist
+
+    def build_local_hls_playlist!(playlist_path:, staged_entries:, aes128_context: nil)
       entries = Array(staged_entries)
       raise "no_staged_segments" if entries.blank?
 
@@ -645,7 +762,16 @@ module ::MediaGallery
       body << "#EXT-X-TARGETDURATION:#{target_duration}"
       body << "#EXT-X-MEDIA-SEQUENCE:0"
 
+      fixed_iv_hex = aes128_context.present? ? aes128_context[:iv_hex].to_s.presence : nil
+      if aes128_context.present? && fixed_iv_hex.present?
+        body << aes128_key_tag_for(aes128_context, iv_hex: fixed_iv_hex)
+      end
+
       entries.each do |entry|
+        if aes128_context.present? && fixed_iv_hex.blank?
+          body << aes128_key_tag_for(aes128_context, iv_hex: aes128_iv_hex_for_segment(entry))
+        end
+
         dur = entry[:duration].to_f
         dur = ::MediaGallery::Hls.segment_duration_seconds.to_f if dur <= 0.0
         body << format("#EXTINF:%.6f,", dur)
@@ -657,6 +783,20 @@ module ::MediaGallery
       playlist_path
     end
     private_class_method :build_local_hls_playlist!
+
+    def aes128_key_tag_for(aes128_context, iv_hex:)
+      key_uri = File.basename(aes128_context[:key_uri].to_s.presence || aes128_context[:key_path].to_s)
+      iv = ::MediaGallery::HlsAes128.normalize_iv_hex(iv_hex)
+      "#EXT-X-KEY:METHOD=AES-128,URI=\"#{key_uri}\",IV=0x#{iv}"
+    end
+    private_class_method :aes128_key_tag_for
+
+    def aes128_iv_hex_for_segment(entry)
+      media_sequence = entry.key?(:media_sequence) ? entry[:media_sequence].to_i : entry[:segment_index].to_i
+      media_sequence = 0 if media_sequence.negative?
+      format("%032x", media_sequence)
+    end
+    private_class_method :aes128_iv_hex_for_segment
 
     def verify_staged_selection!(selection:, staged_entries:)
       expected = Array(selection[:segment_entries])
@@ -712,6 +852,7 @@ module ::MediaGallery
           path: dest,
           filename: filename,
           segment_index: entry[:segment_index].to_i,
+          media_sequence: entry.key?(:media_sequence) ? entry[:media_sequence].to_i : entry[:segment_index].to_i,
           duration: entry[:duration].to_f,
           ab: ab,
           source_locator: source_locator,
