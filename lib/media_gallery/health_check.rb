@@ -19,6 +19,8 @@ module ::MediaGallery
     IGNORED_FINDINGS_KEY = "ignored_findings"
     SEVERITY_ORDER = { "ok" => 0, "warning" => 1, "critical" => 2 }.freeze
     VALID_NOTIFY_SEVERITIES = %w[warning critical].freeze
+    RECONCILIATION_EXPANDED_OBJECT_LIMIT = 20_000
+    RECONCILIATION_EXPANDED_ORPHAN_SAMPLE_LIMIT = 500
 
     def summary(full_storage: false)
       started_at = Time.zone.now
@@ -395,12 +397,12 @@ module ::MediaGallery
       if Array(cached.dig("stats", "truncated_profiles")).present?
         items << issue(
           id: "reconciliation_scan_truncated",
-          label: "Bounded storage scan",
+          label: cached["scan_mode"].to_s == "expanded" ? "Expanded storage scan limit" : "Bounded storage scan",
           severity: "warning",
           count: Array(cached.dig("stats", "truncated_profiles")).length,
           message: "One or more storage profiles reached the scan limit.",
-          detail: "Profiles: #{truncated_profile_names(cached).join(', ')}. Increase the reconciliation object limit only after considering performance impact.",
-          metadata: { checked_at: cached["generated_at"], read_only: true }
+          detail: reconciliation_truncated_scan_detail(cached),
+          metadata: { checked_at: cached["generated_at"], read_only: true, scan_mode: cached["scan_mode"] }
         )
       end
 
@@ -422,20 +424,31 @@ module ::MediaGallery
       )
     end
 
-    def run_reconciliation!
+    def run_reconciliation!(scan_mode: "bounded")
+      configured_item_limit = setting_int(:media_gallery_health_reconciliation_item_limit, 500)
+      configured_object_limit = setting_int(:media_gallery_health_reconciliation_object_limit, 2000)
+      configured_orphan_sample_limit = setting_int(:media_gallery_health_reconciliation_orphan_sample_limit, 50)
+      expanded = scan_mode.to_s == "expanded"
+
       report = ::MediaGallery::StorageReconciler.run(
-        item_limit: setting_int(:media_gallery_health_reconciliation_item_limit, 500),
-        object_limit: setting_int(:media_gallery_health_reconciliation_object_limit, 2000),
-        orphan_sample_limit: setting_int(:media_gallery_health_reconciliation_orphan_sample_limit, 50)
+        item_limit: configured_item_limit,
+        object_limit: expanded ? [configured_object_limit, RECONCILIATION_EXPANDED_OBJECT_LIMIT].max : configured_object_limit,
+        orphan_sample_limit: expanded ? [configured_orphan_sample_limit, RECONCILIATION_EXPANDED_ORPHAN_SAMPLE_LIMIT].max : configured_orphan_sample_limit
       )
+      report[:scan_mode] = expanded ? "expanded" : "bounded"
+      report[:limits] ||= {}
+      report[:limits][:configured_object_limit] = configured_object_limit
+      report[:limits][:configured_orphan_sample_limit] = configured_orphan_sample_limit
       store_reconciliation!(report)
       record_log_event(
         event_type: "media_gallery_storage_reconciliation_run",
         severity: report[:severity].to_s == "critical" ? "error" : (report[:severity].to_s == "warning" ? "warning" : "info"),
-        message: "Media Gallery storage reconciliation completed.",
+        message: expanded ? "Media Gallery expanded storage reconciliation completed." : "Media Gallery storage reconciliation completed.",
         details: {
           severity: report[:severity],
+          scan_mode: report[:scan_mode],
           duration_ms: report[:duration_ms],
+          limits: report[:limits],
           stats: report[:stats],
           counts: Array(report[:categories]).to_h { |category| [category[:id], category[:count]] },
         }
@@ -706,6 +719,21 @@ module ::MediaGallery
       return names if names.present?
 
       Array(cached.dig("stats", "truncated_profiles")).map(&:to_s).reject(&:blank?)
+    end
+
+    def reconciliation_truncated_scan_detail(cached)
+      names = truncated_profile_names(cached).join(', ')
+      limits = cached["limits"] || {}
+      object_limit = limits["object_limit"].presence || "n/a"
+      configured_limit = limits["configured_object_limit"].presence
+      scan_mode = cached["scan_mode"].to_s.presence || "bounded"
+
+      if scan_mode == "expanded"
+        "Profiles: #{names}. The expanded reconciliation still reached its temporary scan limit of #{object_limit} objects. Increase the reconciliation object limit setting only if you accept the extra runtime, or review this storage profile in smaller batches."
+      else
+        configured_text = configured_limit.present? && configured_limit.to_s != object_limit.to_s ? " configured" : ""
+        "Profiles: #{names}. The latest reconciliation stopped at the#{configured_text} object limit of #{object_limit}. Use Run storage reconciliation → Run deeper scan for a temporary high-limit scan, or raise the reconciliation object limit setting after considering performance impact."
+      end
     end
 
     def reconciliation_category_message(category, active_count, ignored_count)

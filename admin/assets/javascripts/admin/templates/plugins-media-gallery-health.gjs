@@ -207,6 +207,12 @@ export default RouteTemplate(
         background: var(--secondary);
       }
 
+      .mg-health__toolbar-field select {
+        min-height: 2.75rem;
+        padding: 0.55rem 0.75rem;
+        line-height: 1.35;
+      }
+
       .mg-health__history-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -1045,10 +1051,19 @@ export default RouteTemplate(
                 <div>No files are changed by this scan. Any eligible cleanup still requires a separate reviewed action afterwards.</div>
               </div>
 
+              <div class="mg-health__cleanup-warning">
+                <div class="mg-health__cleanup-warning-title">Scan depth</div>
+                <div><strong>Run bounded scan</strong> uses the configured object limit and is safest for routine checks.</div>
+                <div><strong>Run deeper scan</strong> temporarily raises the object scan limit for this run only. Use it when HLS segment counts make the normal scan hit the limit.</div>
+              </div>
+
               <div class="mg-health__actions">
                 <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelRunReconciliation}}>Cancel</button>
-                <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.submitRunReconciliation}}>
-                  {{if @controller.isLoading "Running…" "Run reconciliation"}}
+                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.submitRunReconciliation}}>
+                  {{if @controller.isLoading "Running…" "Run bounded scan"}}
+                </button>
+                <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.submitRunExpandedReconciliation}}>
+                  {{if @controller.isLoading "Running…" "Run deeper scan"}}
                 </button>
               </div>
             </div>

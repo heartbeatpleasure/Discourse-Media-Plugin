@@ -41,8 +41,11 @@ module ::MediaGallery
 
 
     def reconcile
-      ::MediaGallery::HealthCheck.run_reconciliation!
-      render_json_dump(::MediaGallery::HealthCheck.summary(full_storage: false))
+      scan_mode = params[:scan_mode].to_s == "expanded" || ActiveModel::Type::Boolean.new.cast(params[:expanded_scan]) ? "expanded" : "bounded"
+      ::MediaGallery::HealthCheck.run_reconciliation!(scan_mode: scan_mode)
+      payload = ::MediaGallery::HealthCheck.summary(full_storage: false)
+      payload[:reconciliation_scan_mode] = scan_mode
+      render_json_dump(payload)
     rescue => e
       Rails.logger.error("[media_gallery] storage reconciliation failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
       render_json_error("storage_reconciliation_failed", status: 422, message: "Storage reconciliation failed. Please check Rails logs and try again.")

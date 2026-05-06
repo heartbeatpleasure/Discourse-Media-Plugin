@@ -436,6 +436,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked cleanupExample = null;
   @tracked cleanupKeyInProgress = "";
   @tracked reconciliationConfirmOpen = false;
+  @tracked reconciliationRunMode = "";
   @tracked showPerformanceTimings = false;
   @tracked lastTimingMs = null;
   @tracked lastTimingBreakdown = null;
@@ -863,30 +864,45 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.reconciliationConfirmOpen = false;
   }
 
-  @action
-  async submitRunReconciliation(event) {
+  async runReconciliationRequest(scanMode = "bounded", event = null) {
     event?.preventDefault?.();
     if (this.isLoading) {
       return;
     }
 
+    const expanded = scanMode === "expanded";
     this.isLoading = true;
+    this.reconciliationRunMode = scanMode;
     this.error = "";
     this.notice = "";
 
     try {
       const data = await ajax("/admin/plugins/media-gallery/health/reconcile.json", {
         type: "POST",
+        data: { scan_mode: scanMode },
       });
       this.isFullStorage = false;
       this.applyResponse(data);
-      this.notice = "Reconciliation completed. No files were changed; eligible findings can be cleaned one at a time after review.";
+      this.notice = expanded
+        ? "Deeper reconciliation completed with a temporary high object limit. No files were changed; eligible findings can be cleaned one at a time after review."
+        : "Reconciliation completed. No files were changed; eligible findings can be cleaned one at a time after review.";
       this.reconciliationConfirmOpen = false;
     } catch (error) {
       this.error = this.errorMessage(error);
     } finally {
+      this.reconciliationRunMode = "";
       this.isLoading = false;
     }
+  }
+
+  @action
+  submitRunReconciliation(event) {
+    return this.runReconciliationRequest("bounded", event);
+  }
+
+  @action
+  submitRunExpandedReconciliation(event) {
+    return this.runReconciliationRequest("expanded", event);
   }
 
   @action
