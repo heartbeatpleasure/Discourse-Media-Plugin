@@ -568,7 +568,8 @@ end
         item,
         mode: "report_asset_delete_keep_audit_record",
         actor: current_user,
-        request: request
+        request: request,
+        trigger_event_type: "report_accept_delete_asset"
       )
     end
 

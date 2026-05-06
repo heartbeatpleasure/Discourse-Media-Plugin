@@ -216,6 +216,9 @@ function decorateExample(example) {
   if (currentProfile) {
     subtitleParts.push(`current profile: ${currentProfile}`);
   }
+  if (example?.migration_cleanup_status) {
+    subtitleParts.push(`cleanup: ${example.migration_cleanup_status}`);
+  }
   if (example?.role) {
     subtitleParts.push(`role: ${example.role}`);
   }

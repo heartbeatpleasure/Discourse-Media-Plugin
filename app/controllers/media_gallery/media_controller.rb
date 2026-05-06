@@ -364,8 +364,11 @@ module ::MediaGallery
           item,
           mode: "user_hard_delete",
           actor: current_user,
-          request: request
+          request: request,
+          trigger_event_type: "user_media_item_deleted"
         )
+
+        audit_user_delete!(item, delete_summary: delete_summary)
 
         # Finally delete DB record (also deletes likes via dependent: :delete_all)
         item.destroy!
@@ -385,6 +388,42 @@ module ::MediaGallery
         "[media_gallery] destroy failed request_id=#{request.request_id} public_id=#{params[:public_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}"
       )
       render_json_error("internal_error", status: 500)
+    end
+
+
+    def audit_user_delete!(item, delete_summary:)
+      partial = Array(delete_summary&.dig("warnings")).present?
+      owner_delete = item&.user_id.to_i == current_user&.id.to_i
+      details = {
+        public_id: item&.public_id.to_s,
+        title_present: item&.title.to_s.present?,
+        delete_source: owner_delete ? "frontend_owner_delete" : "frontend_staff_delete",
+        cleanup_status: delete_summary&.dig("status"),
+        cleanup_warnings_count: Array(delete_summary&.dig("warnings")).length,
+        partial: partial,
+      }.compact
+
+      ::MediaGallery::OperationLogger.info(
+        "user_media_item_deleted",
+        item: item,
+        operation: "delete",
+        data: details.merge(actor_id: current_user&.id, actor_username: current_user&.username)
+      )
+
+      if defined?(::MediaGallery::LogEvents) && ::MediaGallery::LogEvents.respond_to?(:record)
+        ::MediaGallery::LogEvents.record(
+          event_type: "user_media_item_deleted",
+          severity: partial ? "warning" : "info",
+          category: "audit",
+          request: request,
+          user: current_user,
+          media_item: item,
+          message: owner_delete ? "User action: delete own media" : "User endpoint: staff deleted media",
+          details: details
+        )
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] user delete audit failed public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
     end
 
     # POST /media/:public_id/retry

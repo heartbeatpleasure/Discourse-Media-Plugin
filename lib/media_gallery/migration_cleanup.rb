@@ -33,6 +33,8 @@ module ::MediaGallery
       state = build_queued_state(context: context, requested_by: requested_by, force: force, run_token: token, auto_finalize: auto_finalize)
       ::MediaGallery::OperationErrors.clear_failure!(state)
       save_cleanup_state!(item, state)
+      update_switch_cleanup_status!(item, state)
+      record_cleanup_event!(item, "migration_cleanup_enqueued", state, severity: "info")
 
       ::MediaGallery::OperationLogger.info("migration_cleanup_enqueued", item: item, operation: "cleanup", data: {
         cleanup_mode: state["cleanup_mode"],
@@ -93,6 +95,8 @@ module ::MediaGallery
       state = build_cleaning_state(context: context, run_token: run_token.presence || current_state["run_token"], force: force, inactive_objects: inactive_objects, auto_finalize: auto_finalize)
       ::MediaGallery::OperationErrors.clear_failure!(state)
       save_cleanup_state!(item, state)
+      update_switch_cleanup_status!(item, state)
+      record_cleanup_event!(item, "migration_cleanup_started", state, severity: "info")
 
       ::MediaGallery::OperationLogger.info("migration_cleanup_started", item: item, operation: "cleanup", data: {
         cleanup_mode: state["cleanup_mode"],
@@ -138,6 +142,8 @@ module ::MediaGallery
       state["role_results"] = role_results
       ::MediaGallery::OperationErrors.clear_failure!(state)
       save_cleanup_state!(item, state)
+      update_switch_cleanup_status!(item, state)
+      record_cleanup_event!(item, "migration_cleanup_completed", state, severity: "info")
 
       ::MediaGallery::OperationLogger.info("migration_cleanup_completed", item: item, operation: "cleanup", data: {
         cleanup_mode: state["cleanup_mode"],
@@ -158,7 +164,11 @@ module ::MediaGallery
       state["status"] = "failed"
       state["finished_at"] = Time.now.utc.iso8601
       ::MediaGallery::OperationErrors.apply_failure!(state, e, operation: "cleanup")
-      save_cleanup_state!(item, state) if item&.persisted?
+      if item&.persisted?
+        save_cleanup_state!(item, state)
+        update_switch_cleanup_status!(item, state)
+      end
+      record_cleanup_event!(item, "migration_cleanup_failed", state, severity: "danger")
       ::MediaGallery::OperationLogger.error("migration_cleanup_failed", item: item, operation: "cleanup", data: { error: state["last_error"], error_code: state["last_error_code"], cleanup_mode: state["cleanup_mode"], source_profile_key: state["source_profile_key"], target_profile_key: state["target_profile_key"] })
       raise e
     end
@@ -174,6 +184,84 @@ module ::MediaGallery
       meta[CLEANUP_STATE_KEY] = state
       item.update_columns(extra_metadata: meta, updated_at: Time.now)
     end
+
+    def update_switch_cleanup_status!(item, cleanup_state)
+      return unless item&.persisted? && cleanup_state.is_a?(Hash)
+
+      meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
+      switch_state = meta[::MediaGallery::MigrationSwitch::SWITCH_STATE_KEY]
+      return unless switch_state.is_a?(Hash) && switch_state.present?
+
+      status = cleanup_state["status"].to_s.presence || "unknown"
+      switch_state["cleanup_mode"] = cleanup_state["cleanup_mode"].to_s.presence || switch_state["cleanup_mode"]
+      switch_state["cleanup_status"] = status
+      switch_state["cleanup_pending"] = !%w[cleaned finalized cleared].include?(status)
+      switch_state["cleanup_status_updated_at"] = cleanup_state["updated_at"] || cleanup_state["finished_at"] || cleanup_state["started_at"] || cleanup_state["queued_at"] || Time.now.utc.iso8601
+      switch_state["cleanup_object_count"] = cleanup_state["object_count"] if cleanup_state.key?("object_count")
+      switch_state["cleanup_deleted_current"] = cleanup_state["deleted_current"] if cleanup_state.key?("deleted_current")
+      switch_state["cleanup_deleted_versions"] = cleanup_state["deleted_versions"] if cleanup_state.key?("deleted_versions")
+      switch_state["cleanup_remaining_source_count"] = cleanup_state["remaining_source_count"] if cleanup_state.key?("remaining_source_count")
+      switch_state["cleanup_last_error"] = cleanup_state["last_error"] if cleanup_state["last_error"].present?
+      switch_state["cleanup_last_error_code"] = cleanup_state["last_error_code"] if cleanup_state["last_error_code"].present?
+
+      meta[::MediaGallery::MigrationSwitch::SWITCH_STATE_KEY] = switch_state
+      item.update_columns(extra_metadata: meta, updated_at: Time.now)
+    rescue => e
+      Rails.logger.warn("[media_gallery] migration switch cleanup status update failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
+    end
+    private_class_method :update_switch_cleanup_status!
+
+    def record_cleanup_event!(item, event_type, state, severity:)
+      return unless defined?(::MediaGallery::LogEvents) && ::MediaGallery::LogEvents.respond_to?(:record)
+
+      details = {
+        status: state["status"],
+        cleanup_mode: state["cleanup_mode"],
+        source_profile_key: state["source_profile_key"],
+        target_profile_key: state["target_profile_key"],
+        object_count: state["object_count"],
+        progress_index: state["progress_index"],
+        progress_total: state["progress_total"],
+        deleted_current: state["deleted_current"],
+        deleted_versions: state["deleted_versions"],
+        deleted_delete_markers: state["deleted_delete_markers"],
+        remaining_source_count: state["remaining_source_count"],
+        requested_by: state["requested_by"],
+        force: state["force"],
+        auto_finalize: state["auto_finalize"],
+        last_error_code: state["last_error_code"],
+        last_error: state["last_error"],
+      }.compact
+
+      ::MediaGallery::LogEvents.record(
+        event_type: event_type,
+        severity: severity,
+        category: "storage",
+        media_item: item,
+        message: migration_cleanup_event_message(event_type, state),
+        details: details
+      )
+    rescue => e
+      Rails.logger.warn("[media_gallery] migration cleanup log event failed event=#{event_type} item_id=#{item&.id} error=#{e.class}: #{e.message}")
+    end
+    private_class_method :record_cleanup_event!
+
+    def migration_cleanup_event_message(event_type, state)
+      label = state["cleanup_mode"].to_s == "inactive_target_after_rollback" ? "inactive target cleanup" : "source cleanup"
+      case event_type.to_s
+      when "migration_cleanup_enqueued"
+        "Migration #{label} queued."
+      when "migration_cleanup_started"
+        "Migration #{label} started."
+      when "migration_cleanup_completed"
+        "Migration #{label} completed."
+      when "migration_cleanup_failed"
+        "Migration #{label} failed."
+      else
+        "Migration #{label} updated."
+      end
+    end
+    private_class_method :migration_cleanup_event_message
 
     def build_queued_state(context:, requested_by:, force:, run_token:, auto_finalize:)
       {

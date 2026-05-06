@@ -492,10 +492,18 @@ module ::MediaGallery
         group[:current_profile_key] = current_profile_key.presence
         group[:current_profile_label] = profile_label_for_key(current_profile_key) if current_profile_key.present?
 
+        cleanup_state = ::MediaGallery::MigrationCleanup.cleanup_state_for(item) rescue {}
+        switch_state = ::MediaGallery::MigrationSwitch.switch_state_for(item) rescue {}
+        cleanup_status = cleanup_state["status"].to_s.presence || switch_state["cleanup_status"].to_s.presence
+        cleanup_mode = cleanup_state["cleanup_mode"].to_s.presence || switch_state["cleanup_mode"].to_s.presence
+
         if current_profile_key.present? && current_profile_key != profile_key.to_s
           group[:classification] = "migration_source_leftovers"
           group[:issue_type] = "migration_source_storage_leftovers"
           group[:label] = "Possible migration/source storage leftovers"
+          group[:migration_cleanup_status] = cleanup_status
+          group[:migration_cleanup_mode] = cleanup_mode
+          group[:migration_cleanup_pending] = switch_state["cleanup_pending"] unless switch_state["cleanup_pending"].nil?
         elsif !context[:scanned_public_ids].include?(public_id)
           group[:classification] = "unsampled_media_prefix"
           register_unsampled_media_storage!(context, profile_key, group)
@@ -535,6 +543,9 @@ module ::MediaGallery
         classification: group[:classification],
         current_profile_key: group[:current_profile_key],
         current_profile_label: group[:current_profile_label],
+        migration_cleanup_status: group[:migration_cleanup_status],
+        migration_cleanup_mode: group[:migration_cleanup_mode],
+        migration_cleanup_pending: group[:migration_cleanup_pending],
         label: group[:label],
         detail: detail,
         suggestion: suggestion,
@@ -551,7 +562,9 @@ module ::MediaGallery
       case group[:classification].to_s
       when "migration_source_leftovers"
         current = group[:current_profile_label].presence || group[:current_profile_key].presence || "another profile"
-        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} are on this profile, while the media item currently resolves to #{current}. This commonly means migration source cleanup is pending or incomplete.#{sample_text}"
+        cleanup_status = group[:migration_cleanup_status].to_s.presence
+        cleanup_text = cleanup_status.present? ? " Current cleanup status: #{cleanup_status}." : ""
+        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} are on this profile, while the media item currently resolves to #{current}. This commonly means migration source cleanup is pending or incomplete.#{cleanup_text}#{sample_text}"
       when "hls_media_prefix"
         "#{object_count} HLS storage object#{'s' if object_count != 1} under #{prefix} are not referenced by any sampled media item or manifest. This often comes from deleted media or an incomplete cleanup path.#{sample_text}"
       when "hls_temporary_prefix"
@@ -734,7 +747,7 @@ module ::MediaGallery
       label
     end
 
-    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
+    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
       public_id ||= item&.public_id
       title ||= item&.title.to_s.presence || (public_id.present? ? "Untitled media" : label)
       status ||= item&.status
@@ -768,6 +781,9 @@ module ::MediaGallery
         classification: classification,
         current_profile_key: current_profile_key,
         current_profile_label: current_profile_label,
+        migration_cleanup_status: migration_cleanup_status,
+        migration_cleanup_mode: migration_cleanup_mode,
+        migration_cleanup_pending: migration_cleanup_pending,
         missing: missing,
         detail: detail,
         suggestion: suggestion,

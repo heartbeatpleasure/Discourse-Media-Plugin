@@ -4,6 +4,7 @@ require "fileutils"
 require "securerandom"
 require "time"
 require "json"
+require "set"
 require "digest"
 require "tmpdir"
 
@@ -409,8 +410,11 @@ module ::MediaGallery
 
       store.ensure_available!
 
+      hls_prefix = File.join(item.public_id.to_s, "hls")
+      published_keys = []
+
       each_packaged_file(packaged_root) do |abs_path, rel_path|
-        key = File.join(item.public_id.to_s, "hls", rel_path)
+        key = File.join(hls_prefix, rel_path)
         store.put_file!(
           abs_path,
           key: key,
@@ -421,13 +425,55 @@ module ::MediaGallery
             "role" => "hls"
           }
         )
+        published_keys << key
       end
 
+      prune_unpublished_hls_objects!(store, prefix: hls_prefix, keep_keys: published_keys)
       mirror_packaged_video_to_legacy_root!(item, packaged_root: packaged_root) if store.backend.to_s != "local"
       build_role_for_store(item, backend: store.backend, hls_meta: hls_meta, packaged_root: packaged_root)
     ensure
       cleanup_packaged_root!(hls_meta)
     end
+
+
+    def prune_unpublished_hls_objects!(store, prefix:, keep_keys:)
+      return false if store.blank? || prefix.blank?
+      return false unless store.respond_to?(:list_prefix) && store.respond_to?(:delete)
+
+      keep = Array(keep_keys).map { |key| normalize_storage_key(key) }.reject(&:blank?).to_set
+      return false if keep.blank?
+
+      existing = Array(store.list_prefix(prefix.to_s)).map { |key| normalize_storage_key(key) }.reject(&:blank?)
+      stale = existing.reject { |key| keep.include?(key) }
+      return true if stale.blank?
+
+      deleted = 0
+      failed = []
+      stale.each do |key|
+        if store.delete(key)
+          deleted += 1
+        else
+          failed << key
+        end
+      end
+
+      if failed.present?
+        Rails.logger.warn("[media_gallery] HLS stale object prune partial prefix=#{prefix} deleted=#{deleted} failed=#{failed.length} sample=#{failed.first(5).join(',')}")
+        return false
+      end
+
+      Rails.logger.info("[media_gallery] HLS stale object prune completed prefix=#{prefix} deleted=#{deleted}") if deleted.positive?
+      true
+    rescue => e
+      Rails.logger.warn("[media_gallery] HLS stale object prune failed prefix=#{prefix} error=#{e.class}: #{e.message}")
+      false
+    end
+    private_class_method :prune_unpublished_hls_objects!
+
+    def normalize_storage_key(key)
+      key.to_s.tr("\\", "/").sub(%r{\A/+}, "")
+    end
+    private_class_method :normalize_storage_key
 
     def master_key_for(item, role: nil)
       role ||= managed_role_for(item)
@@ -834,6 +880,7 @@ module ::MediaGallery
       end
 
       FileUtils.mv(tmp_root, final_root)
+      cleanup_old_hls_swap_root!(old_root, item_root: item_root) if old_root.present?
       true
     rescue => e
       begin
@@ -844,6 +891,18 @@ module ::MediaGallery
       raise e
     end
     private_class_method :swap_in_packaged_hls!
+
+
+    def cleanup_old_hls_swap_root!(old_root, item_root:)
+      return false if old_root.blank? || !Dir.exist?(old_root)
+
+      ::MediaGallery::PathSecurity.remove_tree_under!(old_root, item_root.to_s)
+      true
+    rescue => e
+      Rails.logger.warn("[media_gallery] failed to cleanup old HLS swap root=#{old_root} error=#{e.class}: #{e.message}")
+      false
+    end
+    private_class_method :cleanup_old_hls_swap_root!
 
     def format_template(template, variant:, segment: nil, ab: nil)
       format(template.to_s, variant: variant.to_s, segment: segment.to_s, ab: ab.to_s)

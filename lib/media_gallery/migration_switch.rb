@@ -43,7 +43,11 @@ module ::MediaGallery
         "source_bytes" => (plan.dig(:totals, :source_bytes) || plan.dig("totals", "source_bytes") || 0).to_i,
         "verification_missing_on_target_count" => (plan.dig(:totals, :missing_on_target_count) || plan.dig("totals", "missing_on_target_count") || 0).to_i,
         "warnings" => Array(plan[:warnings] || plan["warnings"]),
-        "auto_cleanup" => !!auto_cleanup
+        "auto_cleanup" => !!auto_cleanup,
+        "cleanup_mode" => "source_after_switch",
+        "cleanup_status" => "pending",
+        "cleanup_pending" => true,
+        "cleanup_status_updated_at" => switched_at
       }
       ::MediaGallery::OperationErrors.clear_failure!(switch_state)
 
@@ -64,7 +68,12 @@ module ::MediaGallery
 
       if auto_cleanup
         cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: requested_by, force: false)
-        switch_state["cleanup_enqueued_at"] = cleanup_state["queued_at"] if cleanup_state.is_a?(Hash)
+        if cleanup_state.is_a?(Hash)
+          switch_state["cleanup_enqueued_at"] = cleanup_state["queued_at"]
+          switch_state["cleanup_status"] = cleanup_state["status"].to_s.presence || "queued"
+          switch_state["cleanup_pending"] = true
+          switch_state["cleanup_status_updated_at"] = cleanup_state["queued_at"] || Time.now.utc.iso8601
+        end
         meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
         meta[SWITCH_STATE_KEY] = switch_state
         item.update_columns(extra_metadata: meta, updated_at: Time.now)

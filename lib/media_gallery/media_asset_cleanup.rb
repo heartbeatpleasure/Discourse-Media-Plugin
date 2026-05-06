@@ -8,10 +8,10 @@ module ::MediaGallery
 
     ROLE_NAMES = %w[main thumbnail hls].freeze
 
-    def cleanup_item!(item, mode:, actor: nil, request: nil, note: nil, delete_uploads: true, delete_item_prefixes: true, delete_filesystem_paths: true)
+    def cleanup_item!(item, mode:, actor: nil, request: nil, note: nil, trigger_event_type: nil, delete_uploads: true, delete_item_prefixes: true, delete_filesystem_paths: true)
       raise ArgumentError, "media_item_missing" if item.blank?
 
-      summary = build_summary(item, mode: mode, actor: actor, note: note)
+      summary = build_summary(item, mode: mode, actor: actor, note: note, trigger_event_type: trigger_event_type)
       roles = roles_for_cleanup(item)
 
       delete_managed_roles!(item, roles, summary)
@@ -26,7 +26,7 @@ module ::MediaGallery
 
     private
 
-    def build_summary(item, mode:, actor:, note: nil)
+    def build_summary(item, mode:, actor:, note: nil, trigger_event_type: nil)
       {
         "schema_version" => 1,
         "mode" => mode.to_s.presence || "media_asset_cleanup",
@@ -38,6 +38,7 @@ module ::MediaGallery
         "actor_id" => actor&.id,
         "actor_username" => actor&.username,
         "note_present" => note.to_s.present?,
+        "trigger_event_type" => trigger_event_type.to_s.presence || default_trigger_event_type(mode),
         "started_at" => Time.now.utc.iso8601,
         "managed_assets" => [],
         "storage_prefixes" => [],
@@ -386,6 +387,39 @@ module ::MediaGallery
       summary
     end
 
+
+
+    def default_trigger_event_type(mode)
+      case mode.to_s
+      when "admin_hard_delete"
+        "admin_media_item_deleted"
+      when "user_hard_delete"
+        "user_media_item_deleted"
+      when "report_asset_delete_keep_audit_record"
+        "report_accept_delete_asset"
+      else
+        nil
+      end
+    end
+
+    def cleanup_context_label(summary)
+      case summary["mode"].to_s
+      when "admin_hard_delete"
+        "after admin delete"
+      when "user_hard_delete"
+        "after user delete"
+      when "report_asset_delete_keep_audit_record"
+        "after report asset delete"
+      else
+        "for media asset cleanup"
+      end
+    end
+
+    def cleanup_log_message(summary)
+      suffix = summary["status"].to_s == "complete" ? "completed" : "completed with warnings"
+      "Storage cleanup #{cleanup_context_label(summary)} #{suffix}."
+    end
+
     def log_cleanup_result!(item, summary, actor:, request:)
       event = summary["status"] == "complete" ? "media_asset_cleanup_completed" : "media_asset_cleanup_partial"
       severity = summary["status"] == "complete" ? "info" : "warning"
@@ -412,9 +446,10 @@ module ::MediaGallery
           request: request,
           user: actor,
           media_item: item,
-          message: summary["status"] == "complete" ? "Media asset cleanup completed." : "Media asset cleanup completed with warnings.",
+          message: cleanup_log_message(summary),
           details: {
             mode: summary["mode"],
+            trigger_event_type: summary["trigger_event_type"],
             status: summary["status"],
             counts: summary["counts"],
             warnings: summary["warnings"].first(20),

@@ -191,7 +191,8 @@ module ::MediaGallery
           mode: "admin_hard_delete",
           actor: current_user,
           request: request,
-          note: note
+          note: note,
+          trigger_event_type: "admin_media_item_deleted"
         )
         log_admin_delete!(item, note: note, delete_summary: delete_summary)
         item.destroy!
@@ -2127,7 +2128,17 @@ module ::MediaGallery
         objects_copied
         objects_skipped
         objects_deleted
+        deleted_current
+        deleted_versions
+        deleted_delete_markers
+        remaining_source_count
         cleanup_mode
+        cleanup_status
+        cleanup_pending
+        cleanup_status_updated_at
+        cleanup_object_count
+        cleanup_deleted_current
+        cleanup_remaining_source_count
         last_error_code
         last_error_human
         last_error_detail

@@ -98,6 +98,7 @@ function toneForStatus(status) {
     case "processing":
     case "cleaning":
     case "pending_cleanup":
+    case "pending":
     case "incomplete":
     case "warning":
     case "attention":
@@ -654,6 +655,23 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     const rollback = diagnostics.migration_rollback || {};
     const finalize = diagnostics.migration_finalize || {};
 
+    const cleanupStatus = cleanup.status || switchState.cleanup_status || (switchState.status === "switched" ? "pending" : "idle");
+    const cleanupMode = cleanup.cleanup_mode || switchState.cleanup_mode || (switchState.status === "rolled_back" ? "inactive_target_after_rollback" : "source_after_switch");
+    const cleanupIsInactiveTarget = cleanupMode === "inactive_target_after_rollback" || switchState.status === "rolled_back";
+    const cleanupPending = switchState.cleanup_pending === true || cleanupStatus === "pending";
+    const cleanupDetail = cleanup.current_role
+      ? `Role: ${prettyLabel(cleanup.current_role)}`
+      : cleanupPending
+        ? (cleanupIsInactiveTarget ? "Inactive target cleanup pending after rollback" : "Source cleanup pending after switch")
+        : (cleanupIsInactiveTarget ? "Inactive target cleanup not started" : "Source cleanup not started");
+    const cleanupMeta = cleanup.progress_total
+      ? `${cleanup.progress_index || 0} / ${cleanup.progress_total} role groups`
+      : cleanupStatus === "cleaned"
+        ? `${cleanup.deleted_current || switchState.cleanup_deleted_current || 0} current objects deleted`
+        : cleanupStatus === "pending"
+          ? "Old source files are intentionally kept until cleanup is run"
+          : `${cleanup.object_count || switchState.cleanup_object_count || 0} objects to purge`;
+
     return [
       this.selectedProcessingCard,
       buildStateCard({
@@ -679,10 +697,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       }),
       buildStateCard({
         title: "Cleanup",
-        status: cleanup.status || "idle",
-        detail: cleanup.current_role ? `Role: ${prettyLabel(cleanup.current_role)}` : ((cleanup.cleanup_mode === "inactive_target_after_rollback" || switchState.status === "rolled_back") ? "Inactive target cleanup not started" : "Source cleanup not started"),
-        meta: cleanup.progress_total ? `${cleanup.progress_index || 0} / ${cleanup.progress_total} role groups` : `${cleanup.object_count || 0} objects to purge`,
-        error: cleanup.last_error_human || cleanup.last_error,
+        status: cleanupStatus,
+        detail: cleanupDetail,
+        meta: cleanupMeta,
+        error: cleanup.last_error_human || cleanup.last_error || switchState.cleanup_last_error,
       }),
       buildStateCard({
         title: "Rollback",
@@ -1452,8 +1470,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
           auto_cleanup: this.autoCleanup,
         }),
       });
-      this.lastActionMessage = "Switch completed.";
       await this.refreshSelected({ includeSearchRefresh: false });
+      this.lastActionMessage = this.autoCleanup
+        ? "Switch completed. Source cleanup is queued."
+        : "Switch completed. Source cleanup is pending; run Cleanup source after verifying playback.";
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
@@ -1474,8 +1494,15 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         headers: this._actionHeaders(),
         body: JSON.stringify({ force: this.forceAction }),
       });
-      this.lastActionMessage = "Cleanup queued/completed.";
       await this.refreshSelected({ includeSearchRefresh: false });
+      const cleanupStatus = this.selectedDiagnostics?.migration_cleanup?.status;
+      if (cleanupStatus === "cleaned") {
+        this.lastActionMessage = "Cleanup completed. Old source files were removed.";
+      } else if (cleanupStatus === "failed") {
+        this.actionError = this.selectedDiagnostics?.migration_cleanup?.last_error_human || this.selectedDiagnostics?.migration_cleanup?.last_error || "Cleanup failed.";
+      } else {
+        this.lastActionMessage = "Cleanup queued. State will refresh while it runs.";
+      }
     } catch (e) {
       this.actionError = e?.message || String(e);
     } finally {
