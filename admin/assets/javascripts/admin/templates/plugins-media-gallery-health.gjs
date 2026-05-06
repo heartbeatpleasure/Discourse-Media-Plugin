@@ -272,6 +272,24 @@ export default RouteTemplate(
         box-shadow: 0 18px 70px rgba(0, 0, 0, 0.28);
         padding: 1.15rem 1.25rem;
       }
+      .mg-health__modal--cleanup {
+        width: min(880px, 100%);
+        max-height: min(900px, calc(100vh - 1rem));
+      }
+
+      .mg-health__cleanup-warning {
+        border: 1px solid var(--danger-low-mid);
+        border-radius: 14px;
+        background: var(--danger-low);
+        padding: 0.8rem 0.9rem;
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .mg-health__cleanup-warning-title {
+        font-weight: 700;
+      }
+
 
       .mg-health__modal-header {
         display: flex;
@@ -489,17 +507,31 @@ export default RouteTemplate(
 
       .mg-health__example-meta {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-        gap: 0.45rem;
-        margin-top: 0.55rem;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 0.5rem;
+        margin-top: 0.6rem;
       }
 
       .mg-health__example-meta-row {
         min-width: 0;
+        grid-column: span 3;
         border: 1px solid var(--mg-health-border);
         border-radius: 10px;
         background: var(--secondary);
-        padding: 0.45rem 0.55rem;
+        padding: 0.45rem 0.6rem;
+      }
+
+      .mg-health__example-meta-row.is-compact {
+        grid-column: span 3;
+      }
+
+      .mg-health__example-meta-row.is-wide {
+        grid-column: 1 / -1;
+      }
+
+      .mg-health__example-meta-row.is-note {
+        background: transparent;
+        border-style: dashed;
       }
 
       .mg-health__example-meta-row.is-emphasis {
@@ -511,12 +543,20 @@ export default RouteTemplate(
         color: var(--mg-health-muted);
         font-size: var(--font-down-1);
         font-weight: 700;
+        line-height: 1.25;
       }
 
       .mg-health__example-meta-value {
-        margin-top: 0.1rem;
-        font-weight: 700;
+        margin-top: 0.12rem;
+        font-size: var(--font-0);
+        font-weight: 600;
+        line-height: 1.35;
         overflow-wrap: anywhere;
+      }
+
+      .mg-health__example-meta-row.is-note .mg-health__example-meta-value {
+        font-weight: 500;
+        color: var(--primary-high);
       }
 
       .mg-health__example-actions {
@@ -613,6 +653,16 @@ export default RouteTemplate(
 
         .mg-health__modal-row .mg-health__alert-label {
           padding-top: 0;
+        }
+
+        .mg-health__example-meta {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-health__example-meta-row,
+        .mg-health__example-meta-row.is-compact,
+        .mg-health__example-meta-row.is-wide {
+          grid-column: 1 / -1;
         }
       }
     </style>
@@ -955,6 +1005,53 @@ export default RouteTemplate(
         </div>
       </section>
 
+      {{#if @controller.cleanupModalOpen}}
+        <div class="mg-health__modal-backdrop">
+          <div class="mg-health__modal mg-health__modal--cleanup" role="dialog" aria-modal="true">
+            <div class="mg-health__modal-header">
+              <div>
+                <h2>Clean scoped reconciliation finding</h2>
+                <p class="mg-health__muted">This removes only the single reviewed storage scope selected below. It is not a bulk cleanup.</p>
+              </div>
+            </div>
+
+            <div class="mg-health__modal-form">
+              <div>
+                <strong>{{@controller.cleanupTargetTitle}}</strong>
+                {{#if @controller.cleanupTargetSubtitle}}
+                  <div class="mg-health__example-subtitle">{{@controller.cleanupTargetSubtitle}}</div>
+                {{/if}}
+              </div>
+
+              {{#if @controller.hasCleanupModalRows}}
+                <div class="mg-health__example-meta">
+                  {{#each @controller.cleanupModalRows as |row|}}
+                    <div class="mg-health__example-meta-row {{row.className}} {{if row.emphasis "is-emphasis"}}">
+                      <div class="mg-health__example-meta-label">{{row.label}}</div>
+                      <div class="mg-health__example-meta-value">{{row.value}}</div>
+                    </div>
+                  {{/each}}
+                </div>
+              {{/if}}
+
+              <div class="mg-health__cleanup-warning">
+                <div class="mg-health__cleanup-warning-title">Confirm cleanup</div>
+                <div>Risk: {{@controller.cleanupTargetRiskLabel}}</div>
+                <div>{{@controller.cleanupTargetHint}}</div>
+                <div>This action deletes only this scoped finding and then reruns reconciliation. It cannot be undone.</div>
+              </div>
+
+              <div class="mg-health__actions">
+                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelCleanupReconciliationFinding}}>Cancel</button>
+                <button class="btn btn-danger" type="button" disabled={{@controller.cleanupSubmitDisabled}} {{on "click" @controller.submitCleanupReconciliationFinding}}>
+                  {{if @controller.isLoading "Cleaning…" "Clean selected finding"}}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      {{/if}}
+
       {{#if @controller.ignoreModalOpen}}
         <div class="mg-health__modal-backdrop">
           <div class="mg-health__modal" role="dialog" aria-modal="true">
@@ -1047,7 +1144,7 @@ export default RouteTemplate(
                             {{#if example.hasMetaRows}}
                               <div class="mg-health__example-meta">
                                 {{#each example.metaRows as |row|}}
-                                  <div class="mg-health__example-meta-row {{if row.emphasis "is-emphasis"}}">
+                                  <div class="mg-health__example-meta-row {{row.className}} {{if row.emphasis "is-emphasis"}}">
                                     <div class="mg-health__example-meta-label">{{row.label}}</div>
                                     <div class="mg-health__example-meta-value">{{row.value}}</div>
                                   </div>

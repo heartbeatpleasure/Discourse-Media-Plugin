@@ -134,51 +134,66 @@ function classificationLabel(value) {
 function storageContextRows(example) {
   const rows = [];
   const foundProfile = example?.profile_display_label || example?.profile_label || example?.profile_key;
-  const foundBackend = example?.backend ? String(example.backend) : "";
-  const foundValue = [foundProfile, foundBackend ? `backend: ${foundBackend}` : ""].filter(Boolean).join(" · ");
+  const activeProfile = example?.current_profile_label || example?.current_profile_key;
+  const classification = classificationLabel(example?.classification);
+  const objectCount = Number(example?.object_count || 0);
 
-  if (foundValue) {
+  if (foundProfile) {
     rows.push({
-      label: "Found on storage profile",
-      value: foundValue,
+      label: "Found on",
+      value: foundProfile,
       emphasis: true,
+      className: "is-compact",
     });
   }
 
-  const activeProfile = example?.current_profile_label || example?.current_profile_key;
   if (activeProfile) {
     rows.push({
-      label: "Active playback profile",
+      label: "Active playback",
       value: activeProfile,
       emphasis: true,
+      className: "is-compact",
+    });
+  }
+
+  if (classification) {
+    rows.push({
+      label: "Finding type",
+      value: classification,
+      className: "is-compact",
+    });
+  }
+
+  if (objectCount > 0) {
+    rows.push({
+      label: "Objects",
+      value: `${formatNumber(objectCount)} object${objectCount === 1 ? "" : "s"}`,
+      className: "is-compact",
+    });
+  }
+
+  if (example?.migration_cleanup_status) {
+    rows.push({
+      label: "Migration cleanup",
+      value: example.migration_cleanup_status,
+      className: "is-compact",
+    });
+  }
+
+  if (example?.group_prefix) {
+    rows.push({
+      label: "Storage prefix",
+      value: example.group_prefix,
+      className: "is-wide",
     });
   }
 
   if (example?.classification === "migration_source_leftovers" && foundProfile && activeProfile) {
     rows.push({
       label: "Meaning",
-      value: "This finding is on the old/source profile; playback currently resolves to the active profile.",
+      value: `Old/source files were found on ${foundProfile}. Playback currently uses ${activeProfile}.`,
+      className: "is-wide is-note",
     });
-  }
-
-  if (example?.group_prefix) {
-    rows.push({ label: "Storage prefix", value: example.group_prefix });
-  }
-
-  if (example?.object_count) {
-    rows.push({
-      label: "Objects in group",
-      value: `${formatNumber(example.object_count)} object${Number(example.object_count) === 1 ? "" : "s"}`,
-    });
-  }
-
-  const classification = classificationLabel(example?.classification);
-  if (classification) {
-    rows.push({ label: "Classification", value: classification });
-  }
-
-  if (example?.migration_cleanup_status) {
-    rows.push({ label: "Migration cleanup", value: example.migration_cleanup_status });
   }
 
   return rows.filter((row) => row.value);
@@ -256,13 +271,13 @@ function decorateExample(example) {
   if (example?.object_count) {
     subtitleParts.push(`${formatNumber(example.object_count)} object${Number(example.object_count) === 1 ? "" : "s"}`);
   }
-  if (example?.group_prefix) {
+  if (example?.group_prefix && !example?.object_count) {
     subtitleParts.push(`prefix: ${example.group_prefix}`);
   }
   if (example?.role) {
     subtitleParts.push(`role: ${example.role}`);
   }
-  if (example?.storage_key) {
+  if (example?.storage_key && !example?.group_prefix) {
     subtitleParts.push(`key: ${example.storage_key}`);
   }
   if (example?.error) {
@@ -404,6 +419,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked ignoreExample = null;
   @tracked ignoreReason = "";
   @tracked ignoreExpiresInDays = "0";
+  @tracked cleanupModalOpen = false;
+  @tracked cleanupIssue = null;
+  @tracked cleanupExample = null;
   @tracked cleanupKeyInProgress = "";
   @tracked showPerformanceTimings = false;
   @tracked lastTimingMs = null;
@@ -427,6 +445,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.ignoreExample = null;
     this.ignoreReason = "";
     this.ignoreExpiresInDays = "0";
+    this.cleanupModalOpen = false;
+    this.cleanupIssue = null;
+    this.cleanupExample = null;
     this.cleanupKeyInProgress = "";
     this.showPerformanceTimings = false;
     this.lastTimingMs = null;
@@ -538,6 +559,34 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
 
   get ignoreSubmitDisabled() {
     return this.isLoading || !this.ignoreExample?.key;
+  }
+
+  get cleanupTargetTitle() {
+    return stringify(this.cleanupExample?.title || "this finding");
+  }
+
+  get cleanupTargetSubtitle() {
+    return String(this.cleanupExample?.subtitle || this.cleanupExample?.group_prefix || this.cleanupExample?.key || "");
+  }
+
+  get cleanupTargetHint() {
+    return String(this.cleanupExample?.cleanupHint || "This deletes only the scoped reconciliation finding selected here.");
+  }
+
+  get cleanupTargetRiskLabel() {
+    return String(this.cleanupExample?.cleanupRisk || "medium");
+  }
+
+  get cleanupSubmitDisabled() {
+    return this.isLoading || !this.cleanupExample?.key;
+  }
+
+  get cleanupModalRows() {
+    return Array.isArray(this.cleanupExample?.metaRows) ? this.cleanupExample.metaRows : [];
+  }
+
+  get hasCleanupModalRows() {
+    return this.cleanupModalRows.length > 0;
   }
 
   get reconciliationGeneratedAtLabel() {
@@ -905,19 +954,34 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   @action
-  async cleanupReconciliationFinding(issue, example, event) {
+  cleanupReconciliationFinding(issue, example, event) {
     event?.preventDefault?.();
     if (!example?.canCleanup || !example?.key || this.isLoading) {
       return;
     }
 
-    const title = example.title || example.public_id || example.key;
-    const hint = example.cleanupHint ? `\n\n${example.cleanupHint}` : "";
-    const risk = example.cleanupRisk ? `\nRisk: ${example.cleanupRisk}` : "";
-    const confirmed = window.confirm(
-      `Clean this single storage reconciliation finding?\n\n${title}${risk}${hint}\n\nThis action deletes only the scoped prefix/finding selected here and then reruns reconciliation. It cannot be undone.`
-    );
-    if (!confirmed) {
+    this.cleanupIssue = issue || null;
+    this.cleanupExample = example || null;
+    this.cleanupModalOpen = true;
+  }
+
+  @action
+  cancelCleanupReconciliationFinding(event) {
+    event?.preventDefault?.();
+    if (this.isLoading) {
+      return;
+    }
+
+    this.cleanupModalOpen = false;
+    this.cleanupIssue = null;
+    this.cleanupExample = null;
+  }
+
+  @action
+  async submitCleanupReconciliationFinding(event) {
+    event?.preventDefault?.();
+    const example = this.cleanupExample;
+    if (!example?.canCleanup || !example?.key || this.isLoading) {
       return;
     }
 
@@ -939,6 +1003,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       this.notice = status === "complete"
         ? "Scoped cleanup completed and reconciliation was refreshed."
         : "Scoped cleanup completed with warnings. Reconciliation was refreshed; check Logs for details.";
+      this.cleanupModalOpen = false;
+      this.cleanupIssue = null;
+      this.cleanupExample = null;
     } catch (error) {
       this.error = this.errorMessage(error);
     } finally {
@@ -973,10 +1040,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.ignoreExample = null;
     this.ignoreReason = "";
     this.ignoreExpiresInDays = "0";
-    this.cleanupKeyInProgress = "";
-    this.showPerformanceTimings = false;
-    this.lastTimingMs = null;
-    this.lastTimingBreakdown = null;
   }
 
   @action
