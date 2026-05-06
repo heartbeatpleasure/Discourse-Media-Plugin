@@ -59,6 +59,7 @@ after_initialize do
   require_relative "lib/media_gallery/local_asset_store"
   require_relative "lib/media_gallery/s3_asset_store"
   require_relative "lib/media_gallery/asset_manifest"
+  require_relative "lib/media_gallery/media_asset_cleanup"
   require_relative "lib/media_gallery/delivery_resolver"
   require_relative "lib/media_gallery/security"
   require_relative "lib/media_gallery/ffmpeg"

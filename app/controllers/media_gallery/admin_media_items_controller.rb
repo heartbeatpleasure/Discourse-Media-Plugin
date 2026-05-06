@@ -186,12 +186,13 @@ module ::MediaGallery
       delete_summary = nil
 
       item.with_lock do
-        upload_ids = [item.original_upload_id, item.processed_upload_id, item.thumbnail_upload_id].compact.uniq
-        uploads = upload_ids.present? ? ::Upload.where(id: upload_ids).to_a : []
-
-        delete_summary = build_delete_summary_for(item)
-        delete_managed_assets_safely!(item, delete_summary: delete_summary)
-        uploads.each { |upload| destroy_upload_safely!(upload, delete_summary: delete_summary) }
+        delete_summary = ::MediaGallery::MediaAssetCleanup.cleanup_item!(
+          item,
+          mode: "admin_hard_delete",
+          actor: current_user,
+          request: request,
+          note: note
+        )
         log_admin_delete!(item, note: note, delete_summary: delete_summary)
         item.destroy!
       end

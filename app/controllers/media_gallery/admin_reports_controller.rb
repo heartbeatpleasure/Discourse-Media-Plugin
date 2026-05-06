@@ -564,16 +564,12 @@ end
     end
 
     def delete_reported_asset!(item)
-      delete_summary = build_delete_summary_for(item)
-      upload_ids = [item.original_upload_id, item.processed_upload_id, item.thumbnail_upload_id].compact.uniq
-      uploads = upload_ids.present? ? ::Upload.where(id: upload_ids).to_a : []
-
-      delete_managed_assets_safely!(item, delete_summary: delete_summary)
-      uploads.each { |upload| destroy_upload_safely!(upload, delete_summary: delete_summary) }
-
-      partial = Array(delete_summary["warnings"]).present?
-      delete_summary["status"] = partial ? "partial" : "complete"
-      delete_summary
+      ::MediaGallery::MediaAssetCleanup.cleanup_item!(
+        item,
+        mode: "report_asset_delete_keep_audit_record",
+        actor: current_user,
+        request: request
+      )
     end
 
     def build_delete_summary_for(item)

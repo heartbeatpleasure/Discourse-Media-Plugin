@@ -357,31 +357,27 @@ module ::MediaGallery
       item = find_item_by_public_id!(params[:public_id])
       raise Discourse::NotFound unless can_manage_item?(item)
 
+      delete_summary = nil
+
       item.with_lock do
-        public_id = item.public_id.to_s
-
-        upload_ids =
-          [
-            item.original_upload_id,
-            item.processed_upload_id,
-            item.thumbnail_upload_id
-          ].compact.uniq
-
-        uploads = upload_ids.present? ? ::Upload.where(id: upload_ids).to_a : []
-
-        # Remove managed assets (safe no-op if not present)
-        delete_managed_assets_safely!(item)
-
-        # Remove uploads (safe no-op if already deleted)
-        uploads.each do |u|
-          destroy_upload_safely!(u)
-        end
+        delete_summary = ::MediaGallery::MediaAssetCleanup.cleanup_item!(
+          item,
+          mode: "user_hard_delete",
+          actor: current_user,
+          request: request
+        )
 
         # Finally delete DB record (also deletes likes via dependent: :delete_all)
         item.destroy!
       end
 
-      render_json_dump(success: true)
+      partial = Array(delete_summary&.dig("warnings")).present?
+      render_json_dump(
+        success: true,
+        partial: partial,
+        delete_summary: delete_summary,
+        message: partial ? "Media deleted. Some storage cleanup steps reported warnings." : "Media deleted. Storage cleanup completed."
+      )
     rescue Discourse::NotFound
       raise
     rescue => e
