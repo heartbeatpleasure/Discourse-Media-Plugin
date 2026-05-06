@@ -562,6 +562,11 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     if (userId) {
       this.userIdFilter = userId;
     }
+
+    const mediaType = String(params.get("media_type") || "").trim();
+    if (["audio", "image", "video"].includes(mediaType)) {
+      this.mediaTypeFilter = mediaType;
+    }
   }
 
   willDestroy() {

@@ -6,7 +6,7 @@ module ::MediaGallery
 
     SEARCH_LIMIT = 20
     RECENT_LIMIT = 8
-    UPLOADED_MEDIA_LIMIT = 100
+    UPLOADED_MEDIA_LIMIT = 50
 
     def search
       query = sanitized_query(params[:q])

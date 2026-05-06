@@ -731,45 +731,7 @@ export default RouteTemplate(
           </div>
         </section>
 
-        <section class="mg-userdiag__panel">
-          <div class="mg-userdiag__panel-header">
-            <div class="mg-userdiag__copy">
-              <h2>Uploaded media</h2>
-              <p class="mg-userdiag__muted">{{@controller.uploadedMediaCountLabel}}</p>
-            </div>
-            {{#if @controller.uploadedMediaManagementUrl}}
-              <a class="btn" href={{@controller.uploadedMediaManagementUrl}} target="_blank" rel="noopener noreferrer">Open full list in Management</a>
-            {{/if}}
-          </div>
 
-          {{#if @controller.hasUploadedMediaItems}}
-            <div class="mg-userdiag__list">
-              {{#each @controller.uploadedMediaItems as |item|}}
-                <article class="mg-userdiag__upload-card">
-                  {{#if item.thumbnail_url}}
-                    <img class="mg-userdiag__media-thumb" loading="lazy" src={{item.thumbnail_url}} alt="thumbnail" />
-                  {{else}}
-                    <div class="mg-userdiag__media-thumb-placeholder">No thumbnail</div>
-                  {{/if}}
-                  <div class="mg-userdiag__upload-main">
-                    <div class="mg-userdiag__result-title">{{item.title}}</div>
-                    <div class="mg-userdiag__muted">{{item.public_id}} · {{item.createdAtLabel}}</div>
-                    <div class="mg-userdiag__muted">{{item.tagsLabel}}</div>
-                  </div>
-                  <a class="btn mg-userdiag__upload-action" href={{item.management_url}} target="_blank" rel="noopener noreferrer">Manage</a>
-                  <div class="mg-userdiag__upload-badges">
-                    <span class="mg-userdiag__badge">{{item.statusLabel}}</span>
-                    <span class="mg-userdiag__badge">{{item.typeLabel}}</span>
-                    <span class="mg-userdiag__badge">{{item.containsLabel}}</span>
-                    <span class="mg-userdiag__badge {{item.visibilityClass}}">{{item.visibilityLabel}}</span>
-                  </div>
-                </article>
-              {{/each}}
-            </div>
-          {{else}}
-            <div class="mg-userdiag__empty">No uploaded media found for this user.</div>
-          {{/if}}
-        </section>
 
         <section class="mg-userdiag__panel">
           <div class="mg-userdiag__panel-header">
@@ -970,6 +932,46 @@ export default RouteTemplate(
               {{/if}}
             </div>
           </section>
+          {{/if}}
+        </section>
+
+        <section class="mg-userdiag__panel">
+          <div class="mg-userdiag__panel-header">
+            <div class="mg-userdiag__copy">
+              <h2>Uploaded media</h2>
+              <p class="mg-userdiag__muted">{{@controller.uploadedMediaCountLabel}}</p>
+            </div>
+            {{#if @controller.uploadedMediaManagementUrl}}
+              <a class="btn" href={{@controller.uploadedMediaManagementUrl}} target="_blank" rel="noopener noreferrer">Open user's videos in Management</a>
+            {{/if}}
+          </div>
+
+          {{#if @controller.hasUploadedMediaItems}}
+            <div class="mg-userdiag__list">
+              {{#each @controller.uploadedMediaItems as |item|}}
+                <article class="mg-userdiag__upload-card">
+                  {{#if item.thumbnail_url}}
+                    <img class="mg-userdiag__media-thumb" loading="lazy" src={{item.thumbnail_url}} alt="thumbnail" />
+                  {{else}}
+                    <div class="mg-userdiag__media-thumb-placeholder">No thumbnail</div>
+                  {{/if}}
+                  <div class="mg-userdiag__upload-main">
+                    <div class="mg-userdiag__result-title">{{item.title}}</div>
+                    <div class="mg-userdiag__muted">{{item.public_id}} · {{item.createdAtLabel}}</div>
+                    <div class="mg-userdiag__muted">{{item.tagsLabel}}</div>
+                  </div>
+                  <a class="btn mg-userdiag__upload-action" href={{item.management_url}} target="_blank" rel="noopener noreferrer">Manage</a>
+                  <div class="mg-userdiag__upload-badges">
+                    <span class="mg-userdiag__badge">{{item.statusLabel}}</span>
+                    <span class="mg-userdiag__badge">{{item.typeLabel}}</span>
+                    <span class="mg-userdiag__badge">{{item.containsLabel}}</span>
+                    <span class="mg-userdiag__badge {{item.visibilityClass}}">{{item.visibilityLabel}}</span>
+                  </div>
+                </article>
+              {{/each}}
+            </div>
+          {{else}}
+            <div class="mg-userdiag__empty">No uploaded media found for this user.</div>
           {{/if}}
         </section>
       {{else}}

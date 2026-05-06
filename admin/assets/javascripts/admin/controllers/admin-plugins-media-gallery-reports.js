@@ -18,6 +18,10 @@ function formatDateTime(value) {
   }).format(date);
 }
 
+function encodeParam(value) {
+  return encodeURIComponent(String(value || "").trim());
+}
+
 function titleize(value) {
   return String(value || "")
     .replace(/_/g, " ")
@@ -357,7 +361,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     const shown = Array.isArray(this.reports) ? this.reports.length : 0;
     const filtered = Number(this.totalReportCount || 0);
     const total = Number(this.activeFilters?.total_count || 0);
-    const status = String(this.statusFilter || "open");
+    const status = String(this.activeFilters?.status || this.statusFilter || "open");
     const base = `${filtered} report${filtered === 1 ? "" : "s"} found`;
     const statusLabel = status === "all" ? "all statuses" : status;
     const parts = [base, statusLabel];

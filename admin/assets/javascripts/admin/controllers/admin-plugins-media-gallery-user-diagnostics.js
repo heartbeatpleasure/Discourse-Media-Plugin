@@ -78,7 +78,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   @tracked access = null;
   @tracked settingsRows = [];
   @tracked stats = null;
-  @tracked uploadedMedia = { items: [], total: 0, limit: 100, truncated: false };
+  @tracked uploadedMedia = { items: [], total: 0, limit: 50, truncated: false };
   @tracked recent = { uploads: [], logs: [], reports: [] };
   @tracked recentActivityFilter = "all";
   @tracked isSearching = false;
@@ -97,7 +97,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     this.access = null;
     this.settingsRows = [];
     this.stats = null;
-    this.uploadedMedia = { items: [], total: 0, limit: 100, truncated: false };
+    this.uploadedMedia = { items: [], total: 0, limit: 50, truncated: false };
     this.recent = { uploads: [], logs: [], reports: [] };
     this.recentActivityFilter = "all";
     this.isSearching = false;
@@ -325,7 +325,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
 
   get uploadedMediaManagementUrl() {
     const userId = this.selectedUser?.id;
-    return userId ? `/admin/plugins/media-gallery-management?user_id=${encodeParam(userId)}` : "";
+    return userId ? `/admin/plugins/media-gallery-management?user_id=${encodeParam(userId)}&media_type=video` : "";
   }
 
   get recentActivityButtons() {
@@ -460,7 +460,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       this.access = data?.access || null;
       this.settingsRows = Array.isArray(data?.settings) ? data.settings : [];
       this.stats = data?.stats || null;
-      this.uploadedMedia = data?.uploaded_media || { items: data?.recent?.uploads || [], total: data?.recent?.uploads?.length || 0, limit: 100, truncated: false };
+      this.uploadedMedia = data?.uploaded_media || { items: data?.recent?.uploads || [], total: data?.recent?.uploads?.length || 0, limit: 50, truncated: false };
       this.recent = data?.recent || { uploads: [], logs: [], reports: [] };
       this.showPerformanceTimings = !!data?.show_performance_timings;
       this.lastTimingMs = Number(data?.timing_ms || 0) || null;
