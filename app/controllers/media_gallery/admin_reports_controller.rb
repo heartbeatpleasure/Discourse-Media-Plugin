@@ -437,15 +437,52 @@ end
       return reports if q.blank?
 
       reports.select do |report|
-        [
-          report[:id],
-          report[:reason_label],
-          report[:message],
-          report[:reporter_username],
-          report.dig(:media, :public_id),
-          report.dig(:media, :title),
-          report.dig(:media, :uploader_username),
-        ].compact.any? { |value| value.to_s.downcase.include?(q) }
+        searchable_report_values(report).compact.any? { |value| value.to_s.downcase.include?(q) }
+      end
+    end
+
+    def searchable_report_values(report)
+      status = normalize_report_status(report[:status])
+      decision = report[:decision].to_s
+      closed = status == "open" ? nil : "closed"
+
+      [
+        report[:id],
+        status,
+        closed,
+        status == "open" ? "needs review" : "reviewed",
+        report_status_label(status),
+        decision,
+        report_decision_label(decision),
+        report[:reason],
+        report[:reason_label],
+        report[:message],
+        report[:reporter_username],
+        report.dig(:media, :public_id),
+        report.dig(:media, :title),
+        report.dig(:media, :uploader_username),
+        report.dig(:item_snapshot, :public_id),
+        report.dig(:item_snapshot, :title),
+        report.dig(:item_snapshot, :uploader_username),
+      ]
+    end
+
+    def report_status_label(status)
+      status == "open" ? "open" : "closed #{status}"
+    end
+
+    def report_decision_label(decision)
+      case decision.to_s
+      when "accept_hide"
+        "accepted hidden accept hide"
+      when "accept_delete_asset"
+        "accepted files deleted accept delete asset"
+      when "reject"
+        "rejected reject"
+      when "resolve"
+        "resolved resolve without action"
+      else
+        nil
       end
     end
 

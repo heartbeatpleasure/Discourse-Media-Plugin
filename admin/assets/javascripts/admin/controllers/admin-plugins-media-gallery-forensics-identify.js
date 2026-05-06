@@ -243,6 +243,25 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked lookupBusy = false;
   @tracked lookupError = "";
   @tracked lookupCode = "";
+  @tracked showPerformanceTimings = false;
+  @tracked lastSearchTimingMs = null;
+  @tracked lastSearchTimingBreakdown = null;
+
+  get performanceTimingLabel() {
+    if (!this.showPerformanceTimings || !this.lastSearchTimingBreakdown) {
+      return "";
+    }
+
+    const parts = [];
+    ["query", "hls_manifest", "aes_key_prefetch", "storage_profiles", "users", "aes_status", "serialize", "profiles"].forEach((key) => {
+      const value = Number(this.lastSearchTimingBreakdown?.[key]);
+      if (Number.isFinite(value)) {
+        parts.push(`${key.replace(/_/g, " ")} ${value}ms`);
+      }
+    });
+
+    return `server ${this.lastSearchTimingMs || 0}ms${parts.length ? ` (${parts.join(" · ")})` : ""}`;
+  }
 
   get decoratedSearchResults() {
     const items = Array.isArray(this.searchResults) ? [...this.searchResults] : [];
@@ -1121,6 +1140,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
         this.searchResults = [];
       } else {
         const json = await searchResponse.json();
+        this.showPerformanceTimings = !!json?.show_performance_timings;
+        this.lastSearchTimingMs = Number(json?.timing_ms || 0) || null;
+        this.lastSearchTimingBreakdown = json?.timing_breakdown_ms || null;
         this.searchResults = Array.isArray(json?.items) ? json.items : [];
       }
 

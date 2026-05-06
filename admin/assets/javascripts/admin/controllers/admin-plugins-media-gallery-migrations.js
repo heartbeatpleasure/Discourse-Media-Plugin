@@ -224,6 +224,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked targetProbe = null;
   @tracked storageError = "";
   @tracked storageBusy = false;
+  @tracked showPerformanceTimings = false;
+  @tracked lastSearchTimingMs = null;
+  @tracked lastSearchTimingBreakdown = null;
 
   autoRefreshTimer = null;
   autoRefreshIntervalMs = 5000;
@@ -304,6 +307,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.targetProbe = null;
     this.storageError = "";
     this.storageBusy = false;
+    this.showPerformanceTimings = false;
+    this.lastSearchTimingMs = null;
+    this.lastSearchTimingBreakdown = null;
   }
 
   async loadInitial() {
@@ -322,6 +328,22 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.selectionAbortController?.abort?.();
     this.storageAbortController?.abort?.();
     super.willDestroy(...arguments);
+  }
+
+  get performanceTimingLabel() {
+    if (!this.showPerformanceTimings || !this.lastSearchTimingBreakdown) {
+      return "";
+    }
+
+    const parts = [];
+    ["query", "hls_manifest", "aes_key_prefetch", "storage_profiles", "users", "aes_status", "serialize", "profiles"].forEach((key) => {
+      const value = Number(this.lastSearchTimingBreakdown?.[key]);
+      if (Number.isFinite(value)) {
+        parts.push(`${key.replace(/_/g, " ")} ${value}ms`);
+      }
+    });
+
+    return `server ${this.lastSearchTimingMs || 0}ms${parts.length ? ` (${parts.join(" · ")})` : ""}`;
   }
 
   get sortedResults() {
@@ -1179,6 +1201,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       }
       const json = await response.json();
       this.availableSearchProfiles = Array.isArray(json?.search_profiles) ? json.search_profiles : this.availableSearchProfiles;
+      this.showPerformanceTimings = !!json?.show_performance_timings;
+      this.lastSearchTimingMs = Number(json?.timing_ms || 0) || null;
+      this.lastSearchTimingBreakdown = json?.timing_breakdown_ms || null;
       this.searchResults = Array.isArray(json?.items) ? json.items : [];
       const visibleIds = new Set(this.searchResults.map((row) => row.public_id));
       this.selectedBulkPublicIds = this.selectedBulkPublicIds.filter((publicId) => visibleIds.has(publicId));

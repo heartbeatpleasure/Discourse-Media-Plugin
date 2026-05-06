@@ -105,9 +105,14 @@ export default RouteTemplate(
           gap: 0.25rem;
         }
 
-        .mg-migrations__muted {
+        .mg-migrations__muted,
+        .mg-migrations__performance {
           color: var(--mg-muted);
           font-size: var(--font-down-1);
+        }
+
+        .mg-migrations__performance {
+          margin-top: 0.35rem;
         }
 
         .mg-migrations__panel-profile {
@@ -792,7 +797,12 @@ export default RouteTemplate(
               Reset
             </button>
           </div>
-          <span class="mg-migrations__muted">{{@controller.searchInfo}}</span>
+          <div class="mg-migrations__muted">
+            <span>{{@controller.searchInfo}}</span>
+            {{#if @controller.performanceTimingLabel}}
+              <br /><span class="mg-migrations__performance">{{@controller.performanceTimingLabel}}</span>
+            {{/if}}
+          </div>
         </div>
 
         {{#if @controller.bulkActionMessage}}

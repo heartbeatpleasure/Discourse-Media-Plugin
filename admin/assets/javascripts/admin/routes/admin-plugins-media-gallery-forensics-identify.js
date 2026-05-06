@@ -43,6 +43,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends Disc
     controller.lookupMatches = [];
     controller.lookupBusy = false;
     controller.lookupError = "";
+    controller.showPerformanceTimings = false;
+    controller.lastSearchTimingMs = null;
+    controller.lastSearchTimingBreakdown = null;
 
     controller.search();
   }

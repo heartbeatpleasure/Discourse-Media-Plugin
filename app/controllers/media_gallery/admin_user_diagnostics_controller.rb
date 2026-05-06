@@ -6,6 +6,7 @@ module ::MediaGallery
 
     SEARCH_LIMIT = 20
     RECENT_LIMIT = 8
+    UPLOADED_MEDIA_LIMIT = 100
 
     def search
       query = sanitized_query(params[:q])
@@ -27,6 +28,7 @@ module ::MediaGallery
       access = timed_phase!(timing, :access) { access_payload(user) }
       settings = timed_phase!(timing, :settings) { settings_payload(user) }
       stats = timed_phase!(timing, :stats) { stats_payload(user) }
+      uploaded_media = timed_phase!(timing, :uploaded_media) { uploaded_media_payload(user) }
       recent = timed_phase!(timing, :recent) { recent_payload(user) }
       timing[:total] = elapsed_ms_since(started_at)
 
@@ -35,6 +37,7 @@ module ::MediaGallery
         access: access,
         settings: settings,
         stats: stats,
+        uploaded_media: uploaded_media,
         recent: recent,
         timing_ms: timing[:total],
         timing_breakdown_ms: timing,
@@ -365,6 +368,29 @@ module ::MediaGallery
         log_events_30d: log_events_count(user, 30.days.ago),
         last_upload_at: item_scope.maximum(:created_at)&.iso8601,
         last_report_at: last_report_at_for(user)&.iso8601,
+      }
+    end
+
+    def uploaded_media_payload(user)
+      scope = ::MediaGallery::MediaItem
+        .where(user_id: user.id)
+        .order(created_at: :desc)
+
+      total = safe_count(scope)
+      items = scope.limit(UPLOADED_MEDIA_LIMIT).map { |item| media_item_payload(item) }
+
+      {
+        items: items,
+        total: total,
+        limit: UPLOADED_MEDIA_LIMIT,
+        truncated: total > UPLOADED_MEDIA_LIMIT,
+      }
+    rescue
+      {
+        items: [],
+        total: 0,
+        limit: UPLOADED_MEDIA_LIMIT,
+        truncated: false,
       }
     end
 

@@ -72,6 +72,7 @@ export default RouteTemplate(
       }
 
       .mg-fi__muted,
+      .mg-fi__performance,
       .mg-fi__helper,
       .mg-fi__meta-label,
       .mg-fi__result-subtitle,
@@ -80,6 +81,10 @@ export default RouteTemplate(
       .mg-fi__empty {
         color: var(--mg-fi-muted);
         font-size: var(--font-down-1);
+      }
+
+      .mg-fi__performance {
+        margin-top: 0.35rem;
       }
 
       .mg-fi__filters-grid,
@@ -914,7 +919,12 @@ export default RouteTemplate(
               Recent items
             </button>
           </div>
-          <span class="mg-fi__muted">{{@controller.searchResultsCount}} result(s)</span>
+          <div class="mg-fi__muted">
+            <span>{{@controller.searchResultsCount}} result(s)</span>
+            {{#if @controller.performanceTimingLabel}}
+              <br /><span class="mg-fi__performance">{{@controller.performanceTimingLabel}}</span>
+            {{/if}}
+          </div>
         </div>
 
         {{#if @controller.searchError}}

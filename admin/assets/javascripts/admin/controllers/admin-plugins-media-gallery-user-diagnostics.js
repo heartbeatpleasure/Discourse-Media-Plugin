@@ -50,6 +50,27 @@ function titleize(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function formatPercent(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) {
+    return "0%";
+  }
+  return `${Math.round(number * 100)}%`;
+}
+
+function decorateUploadItem(item) {
+  return {
+    ...item,
+    createdAtLabel: formatDateTime(item?.created_at),
+    statusLabel: titleize(item?.status),
+    typeLabel: titleize(item?.media_type),
+    containsLabel: titleize(item?.gender),
+    tagsLabel: Array.isArray(item?.tags) && item.tags.length ? item.tags.join(", ") : "No tags",
+    visibilityLabel: item?.hidden ? "Hidden" : "Visible",
+    visibilityClass: item?.hidden ? "is-danger" : "is-success",
+  };
+}
+
 export default class AdminPluginsMediaGalleryUserDiagnosticsController extends Controller {
   @tracked searchQuery = "";
   @tracked searchResults = [];
@@ -57,6 +78,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   @tracked access = null;
   @tracked settingsRows = [];
   @tracked stats = null;
+  @tracked uploadedMedia = { items: [], total: 0, limit: 100, truncated: false };
   @tracked recent = { uploads: [], logs: [], reports: [] };
   @tracked recentActivityFilter = "all";
   @tracked isSearching = false;
@@ -75,6 +97,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     this.access = null;
     this.settingsRows = [];
     this.stats = null;
+    this.uploadedMedia = { items: [], total: 0, limit: 100, truncated: false };
     this.recent = { uploads: [], logs: [], reports: [] };
     this.recentActivityFilter = "all";
     this.isSearching = false;
@@ -148,7 +171,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     }
 
     const parts = [];
-    ["user", "access", "settings", "stats", "recent"].forEach((key) => {
+    ["user", "access", "settings", "stats", "uploaded_media", "recent"].forEach((key) => {
       const value = Number(this.lastTimingBreakdown?.[key]);
       if (Number.isFinite(value)) {
         parts.push(`${key} ${value}ms`);
@@ -259,6 +282,52 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     ];
   }
 
+  get hasFalseReportHistory() {
+    return Number(this.falseReportSignal?.total || 0) > 0;
+  }
+
+  get falseReportSignalBreakdownRows() {
+    const signal = this.falseReportSignal;
+    return [
+      { label: "Submitted", value: signal.total ?? 0, tone: "" },
+      { label: "Open", value: signal.open ?? 0, tone: "is-warning" },
+      { label: "Accepted", value: signal.accepted ?? 0, tone: "is-danger" },
+      { label: "Rejected", value: signal.rejected ?? 0, tone: "is-warning" },
+      { label: "Resolved", value: signal.resolved ?? 0, tone: "is-success" },
+    ];
+  }
+
+  get falseReportSignalCriteria() {
+    return "Warning: 2+ rejected reports overall or in 30 days, or at least 40% rejected after 3+ submitted reports. Danger: 5+ submitted reports and at least 60% rejected.";
+  }
+
+  get falseReportSignalReportsUrl() {
+    const userId = this.selectedUser?.id;
+    return userId ? `/admin/plugins/media-gallery-reports?status=all&reporter_user_id=${encodeParam(userId)}` : "";
+  }
+
+  get uploadedMediaItems() {
+    return (this.uploadedMedia?.items || []).map(decorateUploadItem);
+  }
+
+  get hasUploadedMediaItems() {
+    return this.uploadedMediaItems.length > 0;
+  }
+
+  get uploadedMediaCountLabel() {
+    const total = Number(this.uploadedMedia?.total || 0);
+    const shown = this.uploadedMediaItems.length;
+    if (this.uploadedMedia?.truncated) {
+      return `Showing latest ${shown} of ${total} uploaded media items. Open Management for the full filtered list.`;
+    }
+    return `${total} uploaded media item${total === 1 ? "" : "s"}.`;
+  }
+
+  get uploadedMediaManagementUrl() {
+    const userId = this.selectedUser?.id;
+    return userId ? `/admin/plugins/media-gallery-management?user_id=${encodeParam(userId)}` : "";
+  }
+
   get recentActivityButtons() {
     const filters = [
       ["all", "All"],
@@ -290,16 +359,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   }
 
   get recentUploads() {
-    return (this.recent?.uploads || []).map((item) => ({
-      ...item,
-      createdAtLabel: formatDateTime(item.created_at),
-      statusLabel: titleize(item.status),
-      typeLabel: titleize(item.media_type),
-      containsLabel: titleize(item.gender),
-      tagsLabel: Array.isArray(item.tags) && item.tags.length ? item.tags.join(", ") : "No tags",
-      visibilityLabel: item.hidden ? "Hidden" : "Visible",
-      visibilityClass: item.hidden ? "is-danger" : "is-success",
-    }));
+    return (this.recent?.uploads || []).map(decorateUploadItem);
   }
 
   get recentLogs() {
@@ -400,6 +460,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       this.access = data?.access || null;
       this.settingsRows = Array.isArray(data?.settings) ? data.settings : [];
       this.stats = data?.stats || null;
+      this.uploadedMedia = data?.uploaded_media || { items: data?.recent?.uploads || [], total: data?.recent?.uploads?.length || 0, limit: 100, truncated: false };
       this.recent = data?.recent || { uploads: [], logs: [], reports: [] };
       this.showPerformanceTimings = !!data?.show_performance_timings;
       this.lastTimingMs = Number(data?.timing_ms || 0) || null;
