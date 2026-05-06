@@ -360,7 +360,7 @@ module ::MediaGallery
           id: "storage_reconciliation",
           title: "Storage reconciliation",
           description: "Review whether database records and storage objects still match.",
-          help: "Run storage reconciliation to detect missing assets, orphan candidates, deleted media leftovers, and invalid storage references. This first iteration is read-only and never deletes files.",
+          help: "Run storage reconciliation to detect missing assets, orphan candidates, deleted media leftovers, and invalid storage references. Reconciliation is read-only by default. Reviewed, scoped cleanup is available only for explicitly eligible findings.",
           items: [
             issue(
               id: "storage_reconciliation_not_run",
@@ -408,7 +408,7 @@ module ::MediaGallery
         id: "storage_reconciliation",
         title: "Storage reconciliation",
         description: "Detect missing assets, orphan candidates, deleted media leftovers, and invalid storage references.",
-        help: "This section is read-only. It stores the latest bounded reconciliation result for review and export. Cleanup is intentionally not available in this iteration.",
+        help: "This section stores the latest bounded reconciliation result for review and export. Scoped cleanup is available only for eligible findings and never runs automatically.",
         items: items.presence || [
           issue(
             id: "storage_reconciliation_ok",
@@ -656,6 +656,9 @@ module ::MediaGallery
           "migration_cleanup_status",
           "migration_cleanup_mode",
           "migration_cleanup_pending",
+          "cleanup_available",
+          "cleanup_kind",
+          "cleanup_risk",
           "missing",
           "detail",
           "suggestion",
@@ -684,6 +687,9 @@ module ::MediaGallery
               finding["migration_cleanup_status"],
               finding["migration_cleanup_mode"],
               finding["migration_cleanup_pending"],
+              finding["cleanup_available"],
+              finding["cleanup_kind"],
+              finding["cleanup_risk"],
               finding["missing"],
               finding["detail"],
               finding["suggestion"],
@@ -719,7 +725,7 @@ module ::MediaGallery
       limits = cached["limits"] || {}
       limit_text = "Items checked: #{cached.dig("stats", "items_checked").to_i}; objects scanned: #{cached.dig("stats", "objects_scanned").to_i}; object limit: #{limits["object_limit"].presence || 'n/a'}."
       ignored_text = ignored_count.positive? ? " Ignored findings are excluded from the health status." : ""
-      [description, "Last run: #{checked_at}.", limit_text + ignored_text, "No cleanup is performed from this page."].compact.join(" ")
+      [description, "Last run: #{checked_at}.", limit_text + ignored_text, "Scoped cleanup is available only for eligible findings after explicit confirmation."].compact.join(" ")
     end
 
     def settings_section

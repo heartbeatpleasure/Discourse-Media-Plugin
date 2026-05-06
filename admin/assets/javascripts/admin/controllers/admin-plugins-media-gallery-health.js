@@ -241,6 +241,10 @@ function decorateExample(example) {
     hasSuggestion: Boolean(example?.suggestion),
     url: example?.url || null,
     canIgnore: Boolean(example?.can_ignore && (example?.key || example?.public_id)),
+    canCleanup: Boolean(example?.cleanup_available && example?.key),
+    cleanupLabel: example?.cleanup_label || "Clean scoped finding",
+    cleanupHint: example?.cleanup_hint || "Runs a scoped cleanup for this single reconciliation finding after confirmation.",
+    cleanupRisk: example?.cleanup_risk || "medium",
   };
 }
 
@@ -356,6 +360,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked ignoreExample = null;
   @tracked ignoreReason = "";
   @tracked ignoreExpiresInDays = "0";
+  @tracked cleanupKeyInProgress = "";
   @tracked showPerformanceTimings = false;
   @tracked lastTimingMs = null;
   @tracked lastTimingBreakdown = null;
@@ -378,6 +383,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.ignoreExample = null;
     this.ignoreReason = "";
     this.ignoreExpiresInDays = "0";
+    this.cleanupKeyInProgress = "";
     this.showPerformanceTimings = false;
     this.lastTimingMs = null;
     this.lastTimingBreakdown = null;
@@ -754,7 +760,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       });
       this.isFullStorage = false;
       this.applyResponse(data);
-      this.notice = "Reconciliation completed. Read-only scan only; no files were changed or deleted.";
+      this.notice = "Reconciliation completed. No files were changed; eligible findings can be cleaned one at a time after review.";
     } catch (error) {
       this.error = this.errorMessage(error);
     } finally {
@@ -854,6 +860,49 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   @action
+  async cleanupReconciliationFinding(issue, example, event) {
+    event?.preventDefault?.();
+    if (!example?.canCleanup || !example?.key || this.isLoading) {
+      return;
+    }
+
+    const title = example.title || example.public_id || example.key;
+    const hint = example.cleanupHint ? `\n\n${example.cleanupHint}` : "";
+    const risk = example.cleanupRisk ? `\nRisk: ${example.cleanupRisk}` : "";
+    const confirmed = window.confirm(
+      `Clean this single storage reconciliation finding?\n\n${title}${risk}${hint}\n\nThis action deletes only the scoped prefix/finding selected here and then reruns reconciliation. It cannot be undone.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    this.isLoading = true;
+    this.cleanupKeyInProgress = example.key;
+    this.error = "";
+    this.notice = "";
+
+    try {
+      const data = await ajax("/admin/plugins/media-gallery/health/reconciliation-cleanup.json", {
+        type: "POST",
+        data: {
+          key: example.key,
+          confirm: "cleanup_selected_reconciliation_finding",
+        },
+      });
+      this.applyResponse(data);
+      const status = data?.cleanup_result?.status || "complete";
+      this.notice = status === "complete"
+        ? "Scoped cleanup completed and reconciliation was refreshed."
+        : "Scoped cleanup completed with warnings. Reconciliation was refreshed; check Logs for details.";
+    } catch (error) {
+      this.error = this.errorMessage(error);
+    } finally {
+      this.cleanupKeyInProgress = "";
+      this.isLoading = false;
+    }
+  }
+
+  @action
   ignoreFinding(issue, example, event) {
     event?.preventDefault?.();
     if (!example?.canIgnore || this.isLoading) {
@@ -879,6 +928,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.ignoreExample = null;
     this.ignoreReason = "";
     this.ignoreExpiresInDays = "0";
+    this.cleanupKeyInProgress = "";
     this.showPerformanceTimings = false;
     this.lastTimingMs = null;
     this.lastTimingBreakdown = null;

@@ -71,6 +71,25 @@ module ::MediaGallery
       render_json_error("storage_reconciliation_export_failed", status: 422, message: "Could not export the reconciliation report. Please check Rails logs and try again.")
     end
 
+
+    def reconciliation_cleanup
+      result = ::MediaGallery::ReconciliationCleanup.cleanup_finding!(
+        finding_key: params[:key],
+        confirm: params[:confirm],
+        actor: current_user,
+        request: request
+      )
+      ::MediaGallery::HealthCheck.run_reconciliation!
+      payload = ::MediaGallery::HealthCheck.summary(full_storage: false)
+      payload[:cleanup_result] = result
+      render_json_dump(payload)
+    rescue ::MediaGallery::ReconciliationCleanup::UnsafeCleanup => e
+      render_json_error("storage_reconciliation_cleanup_unsafe", status: 422, message: e.message)
+    rescue => e
+      Rails.logger.error("[media_gallery] storage reconciliation cleanup failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      render_json_error("storage_reconciliation_cleanup_failed", status: 422, message: "Scoped cleanup failed. Please check Rails logs and retry after running reconciliation.")
+    end
+
     def timed_phase!(timing, key)
       phase_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       yield

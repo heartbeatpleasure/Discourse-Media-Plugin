@@ -640,9 +640,9 @@ export default RouteTemplate(
         <div class="mg-health__panel-header">
           <div class="mg-health__panel-copy">
             <h2>Storage reconciliation</h2>
-            <p class="mg-health__muted">Read-only reconciliation compares media records, manifests, and configured storage profiles. Cleanup is intentionally not available in this iteration.</p>
+            <p class="mg-health__muted">Reconciliation compares media records, manifests, and configured storage profiles. Scoped cleanup is available only for explicitly eligible findings after confirmation.</p>
           </div>
-          <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">Run reconciliation manually when you want to review missing assets, orphan candidates, deleted media leftovers, and invalid storage references. Export downloads the latest stored report as JSON.</span></span>
+          <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">Run reconciliation manually when you want to review missing assets, orphan candidates, deleted media leftovers, and invalid storage references. Export downloads the latest stored report as JSON. Eligible findings can be cleaned one at a time after review.</span></span>
         </div>
 
         {{#if @controller.hasReconciliation}}
@@ -837,6 +837,9 @@ export default RouteTemplate(
                             {{#if example.url}}
                               <a class="btn" href={{example.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
                             {{/if}}
+                            {{#if example.canCleanup}}
+                              <button class="btn btn-danger" type="button" disabled={{@controller.isLoading}} title={{example.cleanupHint}} {{on "click" (fn @controller.cleanupReconciliationFinding issue example)}}>{{example.cleanupLabel}}</button>
+                            {{/if}}
                             {{#if example.canIgnore}}
                               <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.ignoreFinding issue example)}}>Ignore finding</button>
                             {{/if}}
@@ -1005,6 +1008,9 @@ export default RouteTemplate(
                             <div class="mg-health__example-actions">
                               {{#if example.url}}
                                 <a class="btn" href={{example.url}} target="_blank" rel="noopener noreferrer">Open in management</a>
+                              {{/if}}
+                              {{#if example.canCleanup}}
+                                <button class="btn btn-danger" type="button" disabled={{@controller.isLoading}} title={{example.cleanupHint}} {{on "click" (fn @controller.cleanupReconciliationFinding issue example)}}>{{example.cleanupLabel}}</button>
                               {{/if}}
                               {{#if example.canIgnore}}
                                 <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" (fn @controller.ignoreFinding issue example)}}>Ignore finding</button>

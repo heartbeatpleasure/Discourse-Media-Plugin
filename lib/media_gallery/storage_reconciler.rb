@@ -294,8 +294,13 @@ module ::MediaGallery
         backend: backend,
         label: "Deleted media still has storage files",
         detail: "This item is marked as asset-deleted, but storage objects still appear to exist: #{leftovers.first(5).join(', ')}.",
-        suggestion: "Review the report deletion summary before any cleanup action. This reconciler does not delete files.",
-        storage_key: leftovers.first
+        suggestion: "Review the report deletion summary before any cleanup action. Use scoped cleanup only after confirming the asset-deleted state is intentional.",
+        storage_key: leftovers.first,
+        cleanup_available: true,
+        cleanup_kind: "cleanup_deleted_media_item",
+        cleanup_label: "Clean deleted media leftovers",
+        cleanup_hint: "Runs the shared media asset cleanup service for this asset-deleted record without deleting the audit record.",
+        cleanup_risk: "medium"
       )
     end
 
@@ -523,6 +528,7 @@ module ::MediaGallery
       detail = grouped_orphan_detail(group)
       suggestion = grouped_orphan_suggestion(group)
       sample_keys = Array(group[:sample_keys]).map(&:to_s).reject(&:blank?)
+      cleanup = cleanup_descriptor_for_group(group)
 
       add_finding(
         context,
@@ -546,11 +552,61 @@ module ::MediaGallery
         migration_cleanup_status: group[:migration_cleanup_status],
         migration_cleanup_mode: group[:migration_cleanup_mode],
         migration_cleanup_pending: group[:migration_cleanup_pending],
+        cleanup_available: cleanup[:available],
+        cleanup_kind: cleanup[:kind],
+        cleanup_label: cleanup[:label],
+        cleanup_hint: cleanup[:hint],
+        cleanup_risk: cleanup[:risk],
         label: group[:label],
         detail: detail,
         suggestion: suggestion,
         can_ignore: true
       )
+    end
+
+    def cleanup_descriptor_for_group(group)
+      classification = group[:classification].to_s
+      public_id = group[:public_id].to_s
+      prefix = group[:group_prefix].to_s
+
+      return { available: false } if public_id.blank? || prefix.blank?
+
+      case classification
+      when "hls_temporary_prefix"
+        {
+          available: true,
+          kind: "delete_prefix",
+          label: "Clean temp workspace",
+          hint: "Deletes only this stale hls__tmp_* workspace prefix after confirmation.",
+          risk: "low"
+        }
+      when "hls_old_package_prefix"
+        {
+          available: true,
+          kind: "delete_prefix",
+          label: "Clean old HLS backup",
+          hint: "Deletes only this hls__old_* backup prefix after confirmation.",
+          risk: "low"
+        }
+      when "migration_source_leftovers"
+        {
+          available: true,
+          kind: "delete_prefix",
+          label: "Clean migration source leftovers",
+          hint: "Deletes this media prefix only from the non-current source profile after the active target assets are verified.",
+          risk: "medium"
+        }
+      when "hls_media_prefix"
+        {
+          available: group[:status].to_s.blank?,
+          kind: "delete_prefix",
+          label: "Clean orphaned HLS prefix",
+          hint: "Deletes this HLS prefix only when the media record no longer exists.",
+          risk: "medium"
+        }
+      else
+        { available: false }
+      end
     end
 
     def grouped_orphan_detail(group)
@@ -747,7 +803,7 @@ module ::MediaGallery
       label
     end
 
-    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
+    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, cleanup_available: nil, cleanup_kind: nil, cleanup_label: nil, cleanup_hint: nil, cleanup_risk: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
       public_id ||= item&.public_id
       title ||= item&.title.to_s.presence || (public_id.present? ? "Untitled media" : label)
       status ||= item&.status
@@ -784,6 +840,11 @@ module ::MediaGallery
         migration_cleanup_status: migration_cleanup_status,
         migration_cleanup_mode: migration_cleanup_mode,
         migration_cleanup_pending: migration_cleanup_pending,
+        cleanup_available: cleanup_available,
+        cleanup_kind: cleanup_kind,
+        cleanup_label: cleanup_label,
+        cleanup_hint: cleanup_hint,
+        cleanup_risk: cleanup_risk,
         missing: missing,
         detail: detail,
         suggestion: suggestion,

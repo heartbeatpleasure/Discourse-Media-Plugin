@@ -60,6 +60,7 @@ after_initialize do
   require_relative "lib/media_gallery/s3_asset_store"
   require_relative "lib/media_gallery/asset_manifest"
   require_relative "lib/media_gallery/media_asset_cleanup"
+  require_relative "lib/media_gallery/reconciliation_cleanup"
   require_relative "lib/media_gallery/delivery_resolver"
   require_relative "lib/media_gallery/security"
   require_relative "lib/media_gallery/ffmpeg"
@@ -160,6 +161,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/security" => "media_gallery/admin_security#index", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/reconcile" => "media_gallery/admin_health#reconcile", defaults: { format: :json }
     get "/admin/plugins/media-gallery/health/reconciliation-export" => "media_gallery/admin_health#reconciliation_export", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/health/reconciliation-cleanup" => "media_gallery/admin_health#reconciliation_cleanup", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/ignore" => "media_gallery/admin_health#ignore", defaults: { format: :json }
     delete "/admin/plugins/media-gallery/health/ignore" => "media_gallery/admin_health#unignore", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/review" => "media_gallery/admin_reports#review", defaults: { format: :json }
