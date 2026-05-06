@@ -111,6 +111,25 @@ function formatRelativeTime(value) {
   return "";
 }
 
+function classificationLabel(value) {
+  switch (String(value || "")) {
+    case "migration_source_leftovers":
+      return "migration/source leftovers";
+    case "hls_media_prefix":
+      return "HLS media prefix";
+    case "hls_temporary_prefix":
+      return "HLS temporary workspace";
+    case "hls_old_package_prefix":
+      return "old HLS package folder";
+    case "unknown_storage_prefix":
+      return "unknown storage prefix";
+    case "unsampled_media_prefix":
+      return "existing media outside item sample";
+    default:
+      return "";
+  }
+}
+
 function formatDuration(value) {
   const ms = Number(value || 0);
   if (!Number.isFinite(ms) || ms <= 0) {
@@ -176,12 +195,26 @@ function decorateExample(example) {
   if (example?.missing) {
     subtitleParts.push(`missing: ${example.missing}`);
   }
+  const classification = classificationLabel(example?.classification);
+  if (classification) {
+    subtitleParts.push(classification);
+  }
+  if (example?.object_count) {
+    subtitleParts.push(`${formatNumber(example.object_count)} object${Number(example.object_count) === 1 ? "" : "s"}`);
+  }
+  if (example?.group_prefix) {
+    subtitleParts.push(`prefix: ${example.group_prefix}`);
+  }
   const profileLabel = example?.profile_display_label || example?.profile_label || example?.profile_key;
   if (profileLabel) {
     subtitleParts.push(`profile: ${profileLabel}`);
   }
   if (example?.backend) {
     subtitleParts.push(`backend: ${example.backend}`);
+  }
+  const currentProfile = example?.current_profile_label || example?.current_profile_key;
+  if (currentProfile) {
+    subtitleParts.push(`current profile: ${currentProfile}`);
   }
   if (example?.role) {
     subtitleParts.push(`role: ${example.role}`);
@@ -475,6 +508,10 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     const profileCount = Number(stats.profiles_checked || 0);
     const objectLimit = Number(limits.object_limit || 0);
     const itemLimit = Number(limits.item_limit || 0);
+    const orphanGroups = Number(stats.orphan_groups_found || this.reconciliation?.classifications?.orphan_groups_found || 0);
+    const orphanObjects = Number(stats.orphan_objects_found || this.reconciliation?.classifications?.orphan_objects_found || 0);
+    const knownPluginObjects = Number(stats.known_plugin_objects || this.reconciliation?.classifications?.known_plugin_objects || 0);
+    const unsampledMediaObjects = Number(stats.unsampled_media_objects || this.reconciliation?.classifications?.unsampled_media_objects || 0);
 
     return [
       { label: "Last run", value: formatDateTime(this.reconciliation?.generated_at) },
@@ -493,6 +530,26 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       },
       { label: "Active findings", value: this.reconciliationActiveFindingsCount },
       { label: "Ignored findings", value: this.reconciliationIgnoredFindingsCount },
+      {
+        label: "Orphan groups",
+        value: formatNumber(orphanGroups),
+        help: "Orphan candidates are grouped by storage prefix/public_id so one HLS package is shown as one finding instead of many segment files.",
+      },
+      {
+        label: "Orphan objects",
+        value: formatNumber(orphanObjects),
+        help: "Total storage objects covered by the grouped orphan findings in this bounded scan.",
+      },
+      {
+        label: "Known plugin files",
+        value: formatNumber(knownPluginObjects),
+        help: "Known Media Gallery plugin-owned files, such as forensics exports, are counted separately and are not reported as orphan warnings.",
+      },
+      {
+        label: "Existing media outside sample",
+        value: formatNumber(unsampledMediaObjects),
+        help: "Objects whose public_id still exists but was outside the media item sample are not reported as orphan warnings. Increase the item limit for a fuller scan.",
+      },
       {
         label: "New",
         value: formatNumber(this.reconciliation?.new_findings_count || 0),

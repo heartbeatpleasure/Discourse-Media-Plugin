@@ -28,6 +28,11 @@ module ::MediaGallery
     }.freeze
 
     STORAGE_BACKENDS = %w[local s3].freeze
+    KNOWN_PLUGIN_STORAGE_PREFIXES = {
+      "forensics_exports" => "Forensics exports",
+      "forensics_export_archive" => "Forensics export archive",
+    }.freeze
+    PUBLIC_ID_PATTERN = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
     def run(item_limit: 500, object_limit: 2000, orphan_sample_limit: 50)
       started_at = Time.zone.now
@@ -43,9 +48,16 @@ module ::MediaGallery
           items_checked: 0,
           profiles_checked: 0,
           objects_scanned: 0,
+          orphan_objects_found: 0,
+          orphan_groups_found: 0,
+          known_plugin_objects: 0,
+          known_plugin_prefixes: [],
+          unsampled_media_objects: 0,
+          unsampled_media_prefixes: [],
           truncated_profiles: [],
           truncated_profile_labels: [],
         },
+        scanned_public_ids: Set.new,
         profiles: {
           configured: [],
           checked: [],
@@ -54,6 +66,7 @@ module ::MediaGallery
 
       ::MediaGallery::MediaItem.includes(:user).order(updated_at: :desc).limit(item_limit).find_each do |item|
         context[:stats][:items_checked] += 1
+        context[:scanned_public_ids] << item.public_id.to_s if item.public_id.present?
         inspect_item!(item, context)
       rescue => e
         add_finding(
@@ -100,6 +113,7 @@ module ::MediaGallery
         stats: context[:stats],
         profiles: context[:profiles],
         categories: categories,
+        classifications: reconciliation_classification_summary(context),
       }
     rescue => e
       Rails.logger.error("[media_gallery] storage reconciliation failed: #{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}")
@@ -334,40 +348,27 @@ module ::MediaGallery
             context[:stats][:truncated_profile_labels] << label if label.present?
           end
 
-          orphan_count = 0
-          keys.each do |key|
-            next if expected_storage_key?(context, profile_key, key)
+          orphan_groups = grouped_unexpected_storage_findings(context, profile_key: profile_key, backend: backend, keys: keys)
+          register_orphan_group_stats!(context, orphan_groups)
+          orphan_groups.each_with_index do |group, index|
+            next if index >= orphan_sample_limit
 
-            orphan_count += 1
-            next if orphan_count > orphan_sample_limit
-
-            add_finding(
-              context,
-              "orphaned_files",
-              issue_type: "orphaned_storage_file",
-              severity: "warning",
-              profile_key: profile_key,
-              backend: backend,
-              storage_key: key,
-              label: "Orphaned storage file candidate",
-              detail: "No sampled media item or manifest references this storage object.",
-              suggestion: "Review this candidate before cleanup. Do not delete until confirmed.",
-              can_ignore: true
-            )
+            add_grouped_orphan_finding!(context, group)
           end
 
-          if orphan_count > orphan_sample_limit
-            omitted = orphan_count - orphan_sample_limit
+          if orphan_groups.length > orphan_sample_limit
+            omitted_groups = orphan_groups.length - orphan_sample_limit
+            omitted_objects = orphan_groups.drop(orphan_sample_limit).sum { |group| group[:object_count].to_i }
             add_finding(
               context,
               "orphaned_files",
-              issue_type: "orphaned_storage_file_truncated",
+              issue_type: "orphaned_storage_group_truncated",
               severity: "warning",
               profile_key: profile_key,
               backend: backend,
-              label: "More orphan candidates omitted",
-              detail: "#{omitted} additional orphan candidate#{'s' if omitted != 1} were omitted from the preview for this profile.",
-              suggestion: "Increase the sample limit only after reviewing performance impact.",
+              label: "More orphan groups omitted",
+              detail: "#{omitted_groups} additional orphan group#{'s' if omitted_groups != 1} covering #{omitted_objects} storage object#{'s' if omitted_objects != 1} were omitted from the preview for this profile.",
+              suggestion: "Increase the reconciliation orphan sample limit only after reviewing performance impact.",
               can_ignore: false
             )
           end
@@ -387,6 +388,233 @@ module ::MediaGallery
           )
         end
       end
+    end
+
+    def grouped_unexpected_storage_findings(context, profile_key:, backend:, keys:)
+      groups = {}
+
+      Array(keys).each do |raw_key|
+        key = normalize_key(raw_key)
+        next if key.blank?
+        next if expected_storage_key?(context, profile_key, key)
+
+        if known_plugin_storage_key?(key)
+          register_known_plugin_storage!(context, profile_key, key)
+          next
+        end
+
+        descriptor = orphan_group_descriptor(key)
+        group_key = [profile_key, backend, descriptor[:classification], descriptor[:group_prefix]].join("|")
+        group = groups[group_key] ||= descriptor.merge(
+          profile_key: profile_key,
+          profile_label: profile_label_for_key(profile_key),
+          profile_display_label: profile_display_label_for_key(profile_key),
+          backend: backend,
+          object_count: 0,
+          sample_keys: []
+        )
+        group[:object_count] += 1
+        group[:sample_keys] << key if group[:sample_keys].length < 5
+      end
+
+      attach_media_context_to_orphan_groups!(context, groups.values, profile_key: profile_key)
+      groups.values
+        .reject { |group| group[:classification].to_s == "unsampled_media_prefix" }
+        .sort_by { |group| [-group[:object_count].to_i, group[:group_prefix].to_s] }
+    end
+
+    def orphan_group_descriptor(key)
+      segments = normalize_key(key).split("/")
+      first = segments.first.to_s
+
+      if public_id_like?(first) && segments[1].to_s == "hls"
+        return {
+          classification: "hls_media_prefix",
+          issue_type: "orphaned_hls_prefix",
+          label: "HLS storage prefix is not referenced",
+          public_id: first,
+          title: "HLS leftovers for #{first}",
+          group_prefix: File.join(first, "hls"),
+          storage_key: File.join(first, "hls"),
+        }
+      end
+
+      if public_id_like?(first) && segments[1].to_s.start_with?("hls__tmp_")
+        prefix = File.join(first, segments[1].to_s)
+        return {
+          classification: "hls_temporary_prefix",
+          issue_type: "orphaned_hls_temporary_prefix",
+          label: "Stale HLS temporary workspace",
+          public_id: first,
+          title: "HLS temporary workspace for #{first}",
+          group_prefix: prefix,
+          storage_key: prefix,
+        }
+      end
+
+      if public_id_like?(first) && segments[1].to_s.start_with?("hls__old_")
+        prefix = File.join(first, segments[1].to_s)
+        return {
+          classification: "hls_old_package_prefix",
+          issue_type: "orphaned_hls_old_package_prefix",
+          label: "Old HLS package backup folder",
+          public_id: first,
+          title: "Old HLS package backup for #{first}",
+          group_prefix: prefix,
+          storage_key: prefix,
+        }
+      end
+
+      {
+        classification: "unknown_storage_prefix",
+        issue_type: "orphaned_storage_prefix",
+        label: "Unknown storage prefix",
+        public_id: public_id_like?(first) ? first : nil,
+        title: first.present? ? "Storage prefix #{first}" : "Unknown storage prefix",
+        group_prefix: first.presence || normalize_key(key),
+        storage_key: first.presence || normalize_key(key),
+      }
+    end
+
+    def attach_media_context_to_orphan_groups!(context, groups, profile_key:)
+      public_ids = groups.filter_map { |group| group[:public_id].to_s.presence }.uniq
+      return if public_ids.blank?
+
+      items = ::MediaGallery::MediaItem.where(public_id: public_ids).to_a.index_by { |item| item.public_id.to_s }
+      groups.each do |group|
+        public_id = group[:public_id].to_s
+        item = items[public_id]
+        next if item.blank?
+
+        current_profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
+        group[:title] = item.title.to_s.presence || "Untitled media"
+        group[:status] = item.status.to_s.presence
+        group[:current_profile_key] = current_profile_key.presence
+        group[:current_profile_label] = profile_label_for_key(current_profile_key) if current_profile_key.present?
+
+        if current_profile_key.present? && current_profile_key != profile_key.to_s
+          group[:classification] = "migration_source_leftovers"
+          group[:issue_type] = "migration_source_storage_leftovers"
+          group[:label] = "Possible migration/source storage leftovers"
+        elsif !context[:scanned_public_ids].include?(public_id)
+          group[:classification] = "unsampled_media_prefix"
+          register_unsampled_media_storage!(context, profile_key, group)
+        end
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] storage reconciliation media context lookup failed: #{e.class}: #{e.message}")
+    end
+
+    def register_orphan_group_stats!(context, groups)
+      context[:stats][:orphan_objects_found] += Array(groups).sum { |group| group[:object_count].to_i }
+      context[:stats][:orphan_groups_found] += Array(groups).length
+    end
+
+    def add_grouped_orphan_finding!(context, group)
+      object_count = group[:object_count].to_i
+      detail = grouped_orphan_detail(group)
+      suggestion = grouped_orphan_suggestion(group)
+      sample_keys = Array(group[:sample_keys]).map(&:to_s).reject(&:blank?)
+
+      add_finding(
+        context,
+        "orphaned_files",
+        issue_type: group[:issue_type],
+        severity: "warning",
+        public_id: group[:public_id],
+        title: group[:title],
+        status: group[:status],
+        profile_key: group[:profile_key],
+        profile_label: group[:profile_label],
+        profile_display_label: group[:profile_display_label],
+        backend: group[:backend],
+        storage_key: group[:storage_key],
+        group_prefix: group[:group_prefix],
+        object_count: object_count,
+        sample_keys: sample_keys,
+        classification: group[:classification],
+        current_profile_key: group[:current_profile_key],
+        current_profile_label: group[:current_profile_label],
+        label: group[:label],
+        detail: detail,
+        suggestion: suggestion,
+        can_ignore: true
+      )
+    end
+
+    def grouped_orphan_detail(group)
+      object_count = group[:object_count].to_i
+      prefix = group[:group_prefix].to_s
+      sample_keys = Array(group[:sample_keys]).map(&:to_s).reject(&:blank?)
+      sample_text = sample_keys.present? ? " Sample keys: #{sample_keys.join(', ')}." : ""
+
+      case group[:classification].to_s
+      when "migration_source_leftovers"
+        current = group[:current_profile_label].presence || group[:current_profile_key].presence || "another profile"
+        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} are on this profile, while the media item currently resolves to #{current}. This commonly means migration source cleanup is pending or incomplete.#{sample_text}"
+      when "hls_media_prefix"
+        "#{object_count} HLS storage object#{'s' if object_count != 1} under #{prefix} are not referenced by any sampled media item or manifest. This often comes from deleted media or an incomplete cleanup path.#{sample_text}"
+      when "hls_temporary_prefix"
+        "#{object_count} HLS temporary storage object#{'s' if object_count != 1} under #{prefix} look like leftover packaging workspace files.#{sample_text}"
+      when "hls_old_package_prefix"
+        "#{object_count} old HLS package object#{'s' if object_count != 1} under #{prefix} look like leftover swap/rollback artifacts.#{sample_text}"
+      else
+        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} are not referenced by sampled media items or manifests.#{sample_text}"
+      end
+    end
+
+    def grouped_orphan_suggestion(group)
+      case group[:classification].to_s
+      when "migration_source_leftovers"
+        "Open the item in Migration manager and verify whether source cleanup is pending, failed, or intentionally deferred. Do not delete until the active target profile and playback are verified."
+      when "hls_media_prefix"
+        "Check whether this public_id still exists in Media management or was deleted through frontend, Reports, or Management. Use a scoped cleanup only after confirming it is not the active package."
+      when "hls_temporary_prefix", "hls_old_package_prefix"
+        "Review age and recent HLS jobs. These should normally be cleared by HLS artifact cleanup after the safe retention window."
+      else
+        "Review this prefix before cleanup. It may be a legacy file, a deleted media leftover, or a file outside the Media Gallery manifest model."
+      end
+    end
+
+    def known_plugin_storage_key?(key)
+      KNOWN_PLUGIN_STORAGE_PREFIXES.key?(normalize_key(key).split("/").first.to_s)
+    end
+
+    def register_known_plugin_storage!(context, profile_key, key)
+      top = normalize_key(key).split("/").first.to_s
+      label = KNOWN_PLUGIN_STORAGE_PREFIXES[top] || top
+      context[:stats][:known_plugin_objects] += 1
+      entry = [profile_key.to_s, label].reject(&:blank?).join(": ")
+      append_limited_unique!(context[:stats][:known_plugin_prefixes], entry, limit: 50)
+    end
+
+    def register_unsampled_media_storage!(context, profile_key, group)
+      object_count = group[:object_count].to_i
+      context[:stats][:unsampled_media_objects] += object_count
+      prefix = [profile_key.to_s, group[:group_prefix].to_s].reject(&:blank?).join(": ")
+      append_limited_unique!(context[:stats][:unsampled_media_prefixes], prefix, limit: 50)
+    end
+
+    def append_limited_unique!(array, value, limit:)
+      return if value.blank? || array.include?(value) || array.length >= limit.to_i
+
+      array << value
+    end
+
+    def public_id_like?(value)
+      PUBLIC_ID_PATTERN.match?(value.to_s)
+    end
+
+    def reconciliation_classification_summary(context)
+      stats = context[:stats] || {}
+      {
+        orphan_objects_found: stats[:orphan_objects_found].to_i,
+        orphan_groups_found: stats[:orphan_groups_found].to_i,
+        known_plugin_objects: stats[:known_plugin_objects].to_i,
+        known_plugin_prefixes: Array(stats[:known_plugin_prefixes]).first(20),
+        unsampled_media_objects: stats[:unsampled_media_objects].to_i,
+        unsampled_media_prefixes: Array(stats[:unsampled_media_prefixes]).first(20),
+      }
     end
 
     def role_available?(item, role, role_name)
@@ -506,7 +734,7 @@ module ::MediaGallery
       label
     end
 
-    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, backend: nil, role: nil, storage_key: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
+    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
       public_id ||= item&.public_id
       title ||= item&.title.to_s.presence || (public_id.present? ? "Untitled media" : label)
       status ||= item&.status
@@ -529,9 +757,17 @@ module ::MediaGallery
         title: title,
         status: status,
         profile_key: profile_key,
+        profile_label: profile_label,
+        profile_display_label: profile_display_label,
         backend: backend,
         role: role,
         storage_key: safe_storage_key,
+        group_prefix: group_prefix,
+        object_count: object_count,
+        sample_keys: Array(sample_keys).presence,
+        classification: classification,
+        current_profile_key: current_profile_key,
+        current_profile_label: current_profile_label,
         missing: missing,
         detail: detail,
         suggestion: suggestion,
