@@ -175,6 +175,8 @@ en:
           layout_v6_local_sync: "v6_local_sync (local sync + new codebook, future layout)"
           layout_v7_high_separation: "v7_high_separation (stronger payload + stronger sync, future layout)"
           layout_v8_microgrid: "v8_microgrid (sparse micro-grid payload + grid matcher)"
+          layout_v9_spread_spectrum: "v9_spread_spectrum (CPU-only spread-spectrum grid matcher)"
+          layout_v8_v9_hybrid: "v8_v9_hybrid (v8 fallback + v9 primary, 2x storage)"
           auto_extend_label: "Auto-extend"
           auto_extend_help: "If the initial result is weak (short/ambiguous), retry automatically with a longer sample (URL mode only)."
           find_media_title: "Find media (public_id)"
@@ -262,7 +264,7 @@ en:
     media_gallery_delivery_mode_default_title: "Media gallery delivery mode default"
     media_gallery_delivery_mode_default: "Default delivery method for managed media."
     media_gallery_fingerprint_watermark_layout_title: "Media gallery fingerprint watermark layout"
-    media_gallery_fingerprint_watermark_layout: "Configured forensic layout used as the base selection for new HLS packaging and fallback detection."
+    media_gallery_fingerprint_watermark_layout: "Configured forensic layout used as the base selection for new HLS packaging and fallback detection. v9_spread_spectrum and v8_v9_hybrid are opt-in CPU-only forensic layouts."
     media_gallery_fingerprint_preserve_legacy_layouts_for_new_uploads_title: "Media gallery preserve legacy fingerprint layouts for new uploads"
     media_gallery_fingerprint_preserve_legacy_layouts_for_new_uploads: "When disabled, legacy configured layouts v1-v5 are auto-upgraded to v8_microgrid for newly packaged uploads. Existing packaged media are not changed."
 

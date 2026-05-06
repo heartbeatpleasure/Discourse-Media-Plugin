@@ -1116,6 +1116,8 @@ export default RouteTemplate(
                   <option value="v6_local_sync">{{i18n "admin.media_gallery.forensics_identify.layout_v6_local_sync"}}</option>
                   <option value="v7_high_separation">{{i18n "admin.media_gallery.forensics_identify.layout_v7_high_separation"}}</option>
                   <option value="v8_microgrid">{{i18n "admin.media_gallery.forensics_identify.layout_v8_microgrid"}}</option>
+                  <option value="v9_spread_spectrum">{{i18n "admin.media_gallery.forensics_identify.layout_v9_spread_spectrum"}}</option>
+                  <option value="v8_v9_hybrid">{{i18n "admin.media_gallery.forensics_identify.layout_v8_v9_hybrid"}}</option>
                 </select>
               </div>
 

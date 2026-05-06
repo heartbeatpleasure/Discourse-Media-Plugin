@@ -1431,7 +1431,7 @@ module ::MediaGallery
     end
 
     def v8_layout_result?(result)
-      result.dig("meta", "layout").to_s == "v8_microgrid"
+      %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
     rescue
       false
     end

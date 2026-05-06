@@ -792,9 +792,11 @@ plugins:
     client: false
 
   # Watermark layout used when generating A/B HLS variants.
-  # v8_microgrid is the hardened default for new packaging. Legacy layouts can
-  # still be selected, but v1-v5 are auto-promoted to v8 for new uploads unless
-  # legacy preservation is explicitly enabled below.
+  # v8_microgrid is the hardened default for new packaging. v9_spread_spectrum
+  # is an opt-in CPU-only spread-spectrum successor, and v8_v9_hybrid can be
+  # used for controlled rollouts. Legacy layouts can still be selected, but
+  # v1-v5 are auto-promoted to v8 for new uploads unless legacy preservation
+  # is explicitly enabled below.
   media_gallery_fingerprint_watermark_layout:
     default: "v8_microgrid"
     type: enum
@@ -807,6 +809,8 @@ plugins:
       - v6_local_sync
       - v7_high_separation
       - v8_microgrid
+      - v9_spread_spectrum
+      - v8_v9_hybrid
     client: false
 
   # If enabled, keep using configured legacy layouts (v1-v5) for new uploads.

@@ -28,6 +28,8 @@ module ::MediaGallery
     LAYOUT_V6 = "v6_local_sync"
     LAYOUT_V7 = "v7_high_separation"
     LAYOUT_V8 = "v8_microgrid"
+    LAYOUT_V9 = "v9_spread_spectrum"
+    LAYOUT_V8_V9 = "v8_v9_hybrid"
 
     # Conservative defaults; intentionally subtle.
     V1_BOX_COUNT = 6
@@ -95,6 +97,15 @@ module ::MediaGallery
     V8_SYNC_PATTERN = %w[a a b a b b a b a a b a].freeze
     V8_HLS_COMPAT_SYNC_OPACITY = 0.0155
 
+    # v9: CPU-only spread-spectrum style grid. This keeps the same 2x A/B HLS
+    # storage model, but replaces larger visible microgrid structures with many
+    # smaller, balanced +/- chips that are decoded by correlation/consensus.
+    V9_PAIR_COUNT = 32
+    V9_BOX_SIZE_FRAC = 0.052
+    V9_SYNC_PAIR_COUNT = 8
+    V9_SYNC_OPACITY = 0.014
+    V9_SYNC_PATTERN = %w[a b a a b b a b b a b a a b].freeze
+
     V2_OPACITY = 0.006 # 0.6% alpha
     V3_OPACITY = 0.010 # 1.0% alpha
     V4_OPACITY = 0.010 # 1.0% alpha
@@ -102,6 +113,7 @@ module ::MediaGallery
     V6_OPACITY = 0.0115 # 1.15% alpha
     V7_OPACITY = 0.0135 # 1.35% alpha, still subtle but materially easier to decode
     V8_OPACITY = 0.0185 # denser but still sparse templates; slightly lower alpha reduces visibility
+    V9_OPACITY = 0.0155 # lower per-chip alpha; SNR comes from many distributed chips
 
     # Keep away from the borders so mild crops don't remove everything.
     V1_MARGIN = 0.06
@@ -112,6 +124,7 @@ module ::MediaGallery
     V6_MARGIN = 0.06
     V7_MARGIN = 0.06
     V8_MARGIN = 0.055
+    V9_MARGIN = 0.055
 
     V8_TEMPLATE_GRID_W = 8
     V8_TEMPLATE_GRID_H = 5
@@ -142,10 +155,24 @@ module ::MediaGallery
       [[0, 0], [1, 0], [1, 1], [2, 1], [2, 2], [3, 2], [0, 3], [1, 3], [1, 4], [2, 4]]
     ].freeze
 
+    V9_TEMPLATE_GRID_W = 10
+    V9_TEMPLATE_GRID_H = 6
+    V9_ANALYSIS_GRID_W = 18
+    V9_ANALYSIS_GRID_H = 11
+    V9_ANALYSIS_PAD_FRAC = 0.20
+    V9_TEMPLATE_POSITIVE_CELLS = [
+      [[0, 0], [2, 0], [4, 0], [1, 1], [3, 1], [0, 2], [2, 3], [3, 5]],
+      [[1, 0], [3, 0], [0, 1], [2, 1], [4, 2], [1, 3], [3, 3], [4, 5]],
+      [[0, 0], [3, 0], [1, 1], [4, 1], [2, 2], [0, 3], [3, 3], [2, 5]],
+      [[2, 0], [4, 0], [0, 1], [3, 1], [1, 2], [4, 2], [0, 4], [3, 5]],
+      [[1, 0], [4, 0], [2, 1], [0, 2], [3, 2], [1, 3], [4, 3], [0, 5]],
+      [[0, 0], [2, 1], [4, 1], [1, 2], [3, 2], [0, 3], [2, 4], [3, 5]]
+    ].freeze
+
     LEGACY_PACKAGING_LAYOUTS = [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5].freeze
 
     def allowed_layouts
-      [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5, LAYOUT_V6, LAYOUT_V7, LAYOUT_V8]
+      [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5, LAYOUT_V6, LAYOUT_V7, LAYOUT_V8, LAYOUT_V9, LAYOUT_V8_V9]
     end
     private_class_method :allowed_layouts
 
@@ -236,7 +263,13 @@ module ::MediaGallery
 
     def hls_packaging_profile(layout: nil)
       mode = packaging_layout_mode(layout: layout)
-      mode == LAYOUT_V8 ? :hls_compat : nil
+      if mode == LAYOUT_V8
+        :hls_compat
+      elsif mode == LAYOUT_V9 || mode == LAYOUT_V8_V9
+        :spread_spectrum_v1
+      else
+        nil
+      end
     rescue
       nil
     end
@@ -247,7 +280,7 @@ module ::MediaGallery
 
       mode = layout.to_s.presence || layout_mode
       mode = layout_mode unless allowed_layouts.include?(mode)
-      if mode == LAYOUT_V2 || mode == LAYOUT_V3 || mode == LAYOUT_V4 || mode == LAYOUT_V5 || mode == LAYOUT_V6 || mode == LAYOUT_V7 || mode == LAYOUT_V8
+      if [LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5, LAYOUT_V6, LAYOUT_V7, LAYOUT_V8, LAYOUT_V9, LAYOUT_V8_V9].include?(mode)
         vf_pairs(media_item_id: media_item_id, variant: v, layout: mode, profile: profile)
       else
         vf_tiles(media_item_id: media_item_id, variant: v)
@@ -351,6 +384,13 @@ module ::MediaGallery
           analysis: v8_analysis_config(profile: profile),
           profile: normalized_v8_profile(profile)
         }
+      when LAYOUT_V9
+        v9_spec_for(media_item_id: media_item_id, layout: mode)
+      when LAYOUT_V8_V9
+        v9_spec_for(media_item_id: media_item_id, layout: mode).merge(
+          hybrid_components: [LAYOUT_V8, LAYOUT_V9],
+          primary_component: LAYOUT_V9
+        )
       else
         {
           layout: mode,
@@ -406,10 +446,14 @@ module ::MediaGallery
 
     def vf_pairs(media_item_id:, variant:, layout:, profile: nil)
       layout = layout.to_s
-      layout = LAYOUT_V2 unless [LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5, LAYOUT_V6, LAYOUT_V7, LAYOUT_V8].include?(layout)
+      layout = LAYOUT_V2 unless [LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5, LAYOUT_V6, LAYOUT_V7, LAYOUT_V8, LAYOUT_V9, LAYOUT_V8_V9].include?(layout)
 
       if layout == LAYOUT_V8
         return vf_microgrid_pairs(media_item_id: media_item_id, variant: variant, layout: layout, profile: profile)
+      elsif layout == LAYOUT_V9
+        return vf_v9_spread_pairs(media_item_id: media_item_id, variant: variant)
+      elsif layout == LAYOUT_V8_V9
+        return vf_v8_v9_hybrid(media_item_id: media_item_id, variant: variant)
       end
 
       alpha = if layout == LAYOUT_V7
@@ -603,6 +647,104 @@ module ::MediaGallery
       filters.join(",")
     end
     private_class_method :vf_microgrid_pairs
+
+    def v9_spec_for(media_item_id:, layout: LAYOUT_V9)
+      {
+        layout: layout,
+        kind: "pairs",
+        opacity: V9_OPACITY,
+        box_size_frac: V9_BOX_SIZE_FRAC,
+        margin: V9_MARGIN,
+        pairs: v9_pairs_for(media_item_id: media_item_id),
+        sync_pairs: v9_sync_pairs,
+        sync_pattern: v9_sync_pattern,
+        sync_period: v9_sync_pattern.length,
+        sync_opacity: V9_SYNC_OPACITY,
+        sync_box_size_frac: V9_BOX_SIZE_FRAC,
+        analysis: v9_analysis_config,
+        profile: "spread_spectrum_v1"
+      }
+    end
+    private_class_method :v9_spec_for
+
+    def v9_analysis_config
+      {
+        mode: "templated_pair_grid_v2",
+        pad_frac: V9_ANALYSIS_PAD_FRAC,
+        sample_grid_w: V9_ANALYSIS_GRID_W,
+        sample_grid_h: V9_ANALYSIS_GRID_H,
+        template_grid_w: V9_TEMPLATE_GRID_W,
+        template_grid_h: V9_TEMPLATE_GRID_H,
+        template_variants: V9_TEMPLATE_POSITIVE_CELLS,
+        legacy_template_variants: [],
+        score_mode: "bar_consensus_zscore",
+      }
+    end
+    private_class_method :v9_analysis_config
+
+    def v9_template_positive_cells(template_variant)
+      idx = template_variant.to_i % V9_TEMPLATE_POSITIVE_CELLS.length
+      V9_TEMPLATE_POSITIVE_CELLS[idx]
+    rescue
+      V9_TEMPLATE_POSITIVE_CELLS.first
+    end
+    private_class_method :v9_template_positive_cells
+
+    def v9_template_cells_for_pair(pair)
+      positives = v9_template_positive_cells(pair.is_a?(Hash) ? pair[:template_variant].to_i : 0)
+      negatives = positives.map { |x, y| [(V9_TEMPLATE_GRID_W - 1) - x.to_i, y.to_i] }
+      { positive: positives, negative: negatives }
+    end
+    private_class_method :v9_template_cells_for_pair
+
+    def v9_spread_pair_filters(pairs:, variant:, alpha:, enable_expr: nil)
+      return [] if pairs.blank?
+
+      filters = []
+      pairs.each do |p|
+        x = p[:x].to_f.round(6)
+        y = p[:y].to_f.round(6)
+        box = (p[:box_size_frac].presence || V9_BOX_SIZE_FRAC).to_f
+        box = V9_BOX_SIZE_FRAC if box <= 0.0
+        pair_w = (box * 2.0).round(6)
+        cell_w = (pair_w / V9_TEMPLATE_GRID_W.to_f).round(6)
+        cell_h = (box / V9_TEMPLATE_GRID_H.to_f).round(6)
+        template = v9_template_cells_for_pair(p)
+
+        { positive: "white", negative: "black" }.each do |polarity, default_color|
+          color = default_color
+          color = (color == "white" ? "black" : "white") if variant.to_s == "b"
+          template[polarity].each do |cx, cy|
+            fx = (x + (cell_w * cx.to_i)).round(6)
+            fy = (y + (cell_h * cy.to_i)).round(6)
+            expr = enable_expr.to_s.present? ? ":enable='#{enable_expr}'" : ""
+            filters << "drawbox=x=iw*#{fx}:y=ih*#{fy}:w=iw*#{cell_w}:h=ih*#{cell_h}:color=#{color}@#{alpha}:t=fill#{expr}"
+          end
+        end
+      end
+
+      filters
+    end
+    private_class_method :v9_spread_pair_filters
+
+    def vf_v9_spread_pairs(media_item_id:, variant:)
+      filters = v9_spread_pair_filters(
+        pairs: v9_pairs_for(media_item_id: media_item_id),
+        variant: variant,
+        alpha: V9_OPACITY
+      )
+      filters.concat(sync_filters_for_layout(layout: LAYOUT_V9, box: V9_BOX_SIZE_FRAC))
+      filters.join(",")
+    end
+    private_class_method :vf_v9_spread_pairs
+
+    def vf_v8_v9_hybrid(media_item_id:, variant:)
+      filters = []
+      filters << vf_microgrid_pairs(media_item_id: media_item_id, variant: variant, layout: LAYOUT_V8, profile: :hls_compat)
+      filters << vf_v9_spread_pairs(media_item_id: media_item_id, variant: variant)
+      filters.compact.reject(&:blank?).join(",")
+    end
+    private_class_method :vf_v8_v9_hybrid
 
     def v2_pairs_for(media_item_id:)
       # For v2 we keep the same PRNG seed, but we place PAIRS (two boxes wide).
@@ -1019,6 +1161,81 @@ module ::MediaGallery
     end
     private_class_method :v8_pairs_for
 
+    def v9_pairs_for(media_item_id:)
+      secret = fingerprint_secret
+      seed_bytes = prng_bytes(secret, "wm|#{SALT}|#{media_item_id}|v9", V9_PAIR_COUNT * 16)
+
+      box = V9_BOX_SIZE_FRAC
+      pair_w = (box * 2.0)
+      margin = V9_MARGIN
+
+      excluded = visible_watermark_exclusion_rects(box: box, pair_w: pair_w)
+      excluded += v9_sync_pairs.map { |p| { x: p[:x], y: p[:y], w: pair_w, h: box } }
+
+      bands = [
+        { x_min: margin, x_max: 0.28 - pair_w, y_min: margin, y_max: 0.17 - box },
+        { x_min: 0.34, x_max: 0.66 - pair_w, y_min: margin, y_max: 0.17 - box },
+        { x_min: 0.72, x_max: 1.0 - margin - pair_w, y_min: margin, y_max: 0.17 - box },
+        { x_min: margin, x_max: 0.18 - pair_w, y_min: 0.22, y_max: 0.40 - box },
+        { x_min: 0.82, x_max: 1.0 - margin - pair_w, y_min: 0.22, y_max: 0.40 - box },
+        { x_min: 0.20, x_max: 0.41 - pair_w, y_min: 0.28, y_max: 0.48 - box },
+        { x_min: 0.59, x_max: 0.80 - pair_w, y_min: 0.28, y_max: 0.48 - box },
+        { x_min: margin, x_max: 0.18 - pair_w, y_min: 0.58, y_max: 0.78 - box },
+        { x_min: 0.82, x_max: 1.0 - margin - pair_w, y_min: 0.58, y_max: 0.78 - box },
+        { x_min: 0.20, x_max: 0.41 - pair_w, y_min: 0.52, y_max: 0.72 - box },
+        { x_min: 0.59, x_max: 0.80 - pair_w, y_min: 0.52, y_max: 0.72 - box },
+        { x_min: margin, x_max: 0.28 - pair_w, y_min: 0.83 - box, y_max: 1.0 - margin - box },
+        { x_min: 0.34, x_max: 0.66 - pair_w, y_min: 0.83 - box, y_max: 1.0 - margin - box },
+        { x_min: 0.72, x_max: 1.0 - margin - pair_w, y_min: 0.83 - box, y_max: 1.0 - margin - box }
+      ].map do |band|
+        band.merge(
+          x_max: [band[:x_max], band[:x_min] + 0.001].max,
+          y_max: [band[:y_max], band[:y_min] + 0.001].max
+        )
+      end
+
+      occupied = []
+      out = []
+
+      V9_PAIR_COUNT.times do |i|
+        placed = false
+        30.times do |try|
+          off = (i * 16) + ((try % 4) * 4)
+          band = bands[(i + try) % bands.length]
+          x_r = u32_to_unit(seed_bytes, off)
+          y_r = u32_to_unit(seed_bytes, off + 4)
+          t_r = u32_to_unit(seed_bytes, off + 8)
+
+          span_x = [band[:x_max] - band[:x_min], 0.001].max
+          span_y = [band[:y_max] - band[:y_min], 0.001].max
+          x = (band[:x_min] + span_x * x_r).round(6)
+          y = (band[:y_min] + span_y * y_r).round(6)
+          rect = { x: x, y: y, w: pair_w, h: box }
+          next if rect_overlaps_any?(rect, excluded)
+
+          pad = (box * 0.15).round(6)
+          padded = { x: (x - pad), y: (y - pad), w: (pair_w + 2 * pad), h: (box + 2 * pad) }
+          next if rect_overlaps_any?(padded, occupied)
+
+          occupied << rect
+          variants_len = V9_TEMPLATE_POSITIVE_CELLS.length
+          out << { x: x, y: y, template_variant: (t_r * variants_len).floor % variants_len, box_size_frac: box }
+          placed = true
+          break
+        end
+
+        next if placed
+
+        band = bands[i % bands.length]
+        x = (band[:x_min] + ([band[:x_max] - band[:x_min], 0.001].max * 0.5)).round(6)
+        y = (band[:y_min] + ([band[:y_max] - band[:y_min], 0.001].max * 0.5)).round(6)
+        out << { x: x, y: y, template_variant: i % V9_TEMPLATE_POSITIVE_CELLS.length, box_size_frac: box }
+      end
+
+      out
+    end
+    private_class_method :v9_pairs_for
+
     def v4_sync_pairs
       [
         { x: 0.16, y: 0.17 },
@@ -1096,6 +1313,20 @@ module ::MediaGallery
     end
     private_class_method :v8_sync_pairs
 
+    def v9_sync_pairs
+      [
+        { x: 0.10, y: 0.11, template_variant: 0, box_size_frac: V9_BOX_SIZE_FRAC },
+        { x: 0.42, y: 0.11, template_variant: 1, box_size_frac: V9_BOX_SIZE_FRAC },
+        { x: 0.74, y: 0.11, template_variant: 2, box_size_frac: V9_BOX_SIZE_FRAC },
+        { x: 0.06, y: 0.43, template_variant: 3, box_size_frac: V9_BOX_SIZE_FRAC },
+        { x: 0.84, y: 0.43, template_variant: 4, box_size_frac: V9_BOX_SIZE_FRAC },
+        { x: 0.10, y: 0.79, template_variant: 5, box_size_frac: V9_BOX_SIZE_FRAC },
+        { x: 0.42, y: 0.79, template_variant: 0, box_size_frac: V9_BOX_SIZE_FRAC },
+        { x: 0.74, y: 0.79, template_variant: 1, box_size_frac: V9_BOX_SIZE_FRAC }
+      ]
+    end
+    private_class_method :v9_sync_pairs
+
 
     def v5_sync_pattern
       V5_SYNC_PATTERN
@@ -1112,10 +1343,18 @@ module ::MediaGallery
     def v8_sync_pattern
       V8_SYNC_PATTERN
     end
+
+    def v9_sync_pattern
+      V9_SYNC_PATTERN
+    end
     private_class_method :v5_sync_pattern
 
     def sync_pairs_for_layout(layout, profile: nil)
       case layout.to_s
+      when LAYOUT_V8_V9
+        v9_sync_pairs
+      when LAYOUT_V9
+        v9_sync_pairs
       when LAYOUT_V8
         v8_sync_pairs(profile: profile)
       when LAYOUT_V7
@@ -1132,6 +1371,10 @@ module ::MediaGallery
 
     def sync_pattern_for_layout(layout)
       case layout.to_s
+      when LAYOUT_V8_V9
+        v9_sync_pattern
+      when LAYOUT_V9
+        v9_sync_pattern
       when LAYOUT_V8
         v8_sync_pattern
       when LAYOUT_V7
@@ -1148,6 +1391,10 @@ module ::MediaGallery
 
     def sync_opacity_for_layout(layout, profile: nil)
       case layout.to_s
+      when LAYOUT_V8_V9
+        V9_SYNC_OPACITY
+      when LAYOUT_V9
+        V9_SYNC_OPACITY
       when LAYOUT_V8
         v8_sync_opacity(profile: profile)
       when LAYOUT_V7
@@ -1183,7 +1430,12 @@ module ::MediaGallery
       enable_b = sync_enable_expr_for_layout(layout: layout, sync_variant: "b")
       return [] if enable_a.blank? || enable_b.blank?
 
-      if layout.to_s == LAYOUT_V8
+      if layout.to_s == LAYOUT_V9 || layout.to_s == LAYOUT_V8_V9
+        filters = []
+        filters.concat(v9_spread_pair_filters(pairs: sync_pairs_for_layout(layout, profile: profile), variant: "a", alpha: alpha, enable_expr: enable_a))
+        filters.concat(v9_spread_pair_filters(pairs: sync_pairs_for_layout(layout, profile: profile), variant: "b", alpha: alpha, enable_expr: enable_b))
+        return filters
+      elsif layout.to_s == LAYOUT_V8
         filters = []
         filters.concat(microgrid_pair_filters(pairs: sync_pairs_for_layout(layout, profile: profile), variant: "a", alpha: alpha, enable_expr: enable_a, profile: profile))
         filters.concat(microgrid_pair_filters(pairs: sync_pairs_for_layout(layout, profile: profile), variant: "b", alpha: alpha, enable_expr: enable_b, profile: profile))

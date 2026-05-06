@@ -104,7 +104,7 @@ module ::MediaGallery
       return threaded if threaded.present?
 
       case layout.to_s
-      when "v6_local_sync", "v7_high_separation", "v8_microgrid"
+      when "v6_local_sync", "v7_high_separation", "v8_microgrid", "v9_spread_spectrum", "v8_v9_hybrid"
         CODEBOOK_LOCAL_WINDOW_V2
       else
         CODEBOOK_REPEAT_INTERLEAVE_V1

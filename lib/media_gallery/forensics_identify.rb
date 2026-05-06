@@ -1490,7 +1490,8 @@ module ::MediaGallery
       delta = [[seg * 0.18, 0.35].max, 0.90].min
       chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
       chunk_size = 15 if chunk_size <= 0
-      use_dense_points = spec.to_h[:layout].to_s == "v8_microgrid" || spec.dig(:analysis, :mode).to_s == "templated_pair_grid_v1"
+      grid_layouts = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid]
+      use_dense_points = grid_layouts.include?(spec.to_h[:layout].to_s) || %w[templated_pair_grid_v1 templated_pair_grid_v2].include?(spec.dig(:analysis, :mode).to_s)
       point_offsets = if use_dense_points
         [-delta, -(delta * 0.5), 0.0, (delta * 0.5), delta].map { |v| v.round(3) }.uniq
       else
@@ -3630,7 +3631,7 @@ end
       obs = Array(observed_variants)
       confs = Array(observed_confidences)
       seg_indices = Array(observed_segment_indices)
-      v8_layout = layout.to_s == "v8_microgrid"
+      v8_layout = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].include?(layout.to_s)
 
       entries = []
       obs.each_with_index do |ov, i|
