@@ -143,12 +143,27 @@ module ::MediaGallery
     FILEMODE_AUTO_MAX_OFFSET_MARGIN_SEGMENTS = 8
     FILEMODE_AUTO_MAX_OFFSET_HARD_CAP = 720
 
+    # Iteration 2: detector hardening for the CPU-only grid layouts.
+    # These layouts benefit from reading several in-segment observations and
+    # from reference calibration sampled at more than one point per HLS segment.
+    GRID_DETECTOR_LAYOUTS = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].freeze
+    REFERENCE_GRID_SAMPLE_RATIO = 0.22
+    REFERENCE_GRID_SAMPLE_MIN_SECONDS = 0.30
+    REFERENCE_GRID_SAMPLE_MAX_SECONDS = 0.75
+
     def normalize_filemode_time_budget_seconds(value)
       v = value.to_f
       v = FILEMODE_TIME_BUDGET_SECONDS.to_f if v <= 0.0
       v
     end
     private_class_method :normalize_filemode_time_budget_seconds
+
+    def grid_detector_layout?(layout)
+      GRID_DETECTOR_LAYOUTS.include?(layout.to_s)
+    rescue
+      false
+    end
+    private_class_method :grid_detector_layout?
 
     def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil, sample_times: nil, time_budget_seconds: nil)
       raise ArgumentError, "missing media_item" if media_item.blank?
@@ -800,6 +815,9 @@ module ::MediaGallery
         variants: sampled.map { |r| r[:variant] },
         confidences: sampled.map { |r| r[:confidence] },
         scores: sampled.map { |r| r[:score] },
+        sync_scores: sampled.map { |r| r[:sync_score].to_f },
+        sync_confidences: sampled.map { |r| r[:sync_confidence].to_f },
+        sync_variants: sampled.map { |r| r[:sync_variant] },
         dense_step_seconds: step,
         truncated: used_times.length < times.length,
         effective_max_samples: effective_max_samples,
@@ -814,6 +832,9 @@ module ::MediaGallery
       variants = []
       confidences = []
       scores = []
+      sync_scores = []
+      sync_confidences = []
+      sync_variants = []
       used_times = []
       segment_indices = []
       voting_points = 1
@@ -834,6 +855,9 @@ module ::MediaGallery
           variants << nil
           confidences << 0.0
           scores << 0.0
+          sync_scores << 0.0
+          sync_confidences << 0.0
+          sync_variants << nil
           next
         end
 
@@ -849,6 +873,15 @@ module ::MediaGallery
         variants << variant
         confidences << conf.round(4)
         scores << score
+
+        sync_score = sample[:sync_score].to_f
+        sync_conf = sample[:sync_confidence].to_f
+        sync_conf = 0.0 if sync_conf.nan? || sync_conf.infinite? || sync_conf.negative?
+        sync_variant = sync_score >= 0 ? "a" : "b"
+        sync_variant = nil if sync_conf < MIN_CONFIDENCE
+        sync_scores << sync_score
+        sync_confidences << sync_conf.round(4)
+        sync_variants << sync_variant
       end
 
       elapsed = nil
@@ -861,6 +894,9 @@ module ::MediaGallery
         variants: variants,
         confidences: confidences,
         scores: scores,
+        sync_scores: sync_scores,
+        sync_confidences: sync_confidences,
+        sync_variants: sync_variants,
         times: used_times,
         segment_indices: segment_indices,
         layout: dense[:layout].to_s,
@@ -876,25 +912,80 @@ module ::MediaGallery
     private_class_method :build_phase_observation_from_dense
 
     def aggregate_dense_phase_sample(dense:, target_time:, duration_seconds:, segment_seconds:)
-      offsets = dense_phase_vote_offsets(segment_seconds: segment_seconds, dense_step_seconds: dense[:dense_step_seconds])
+      offsets = dense_phase_vote_offsets(
+        segment_seconds: segment_seconds,
+        dense_step_seconds: dense[:dense_step_seconds],
+        layout: dense[:layout]
+      )
       samples = offsets.filter_map do |delta|
         tt = clamp_time(target_time.to_f + delta.to_f, duration_seconds: duration_seconds)
         interpolate_dense_sample(dense: dense, target_time: tt)
       end
       return nil if samples.empty?
 
+      payload = aggregate_temporal_sample_metrics(samples: samples, score_key: :score, confidence_key: :confidence)
+      sync = aggregate_temporal_sample_metrics(samples: samples, score_key: :sync_score, confidence_key: :sync_confidence)
+
       {
-        score: median(samples.map { |sample| sample[:score].to_f }).to_f,
-        confidence: median(samples.map { |sample| sample[:confidence].to_f }).to_f,
+        score: payload[:score].to_f,
+        confidence: payload[:confidence].to_f,
+        sync_score: sync[:score].to_f,
+        sync_confidence: sync[:confidence].to_f,
         points_used: samples.length,
         offset_seconds: offsets.map(&:abs).max.to_f,
+        temporal_consensus: payload[:consensus].to_f,
       }
     rescue
       interpolate_dense_sample(dense: dense, target_time: target_time)
     end
     private_class_method :aggregate_dense_phase_sample
 
-    def dense_phase_vote_offsets(segment_seconds:, dense_step_seconds:)
+    def aggregate_temporal_sample_metrics(samples:, score_key:, confidence_key:)
+      entries = Array(samples).filter_map do |sample|
+        score = sample.to_h[score_key].to_f
+        conf = sample.to_h[confidence_key].to_f
+        next if score.nan? || score.infinite?
+        conf = 0.0 if conf.nan? || conf.infinite? || conf.negative?
+        { score: score, confidence: conf }
+      end
+      return { score: 0.0, confidence: 0.0, consensus: 0.0 } if entries.blank?
+
+      weights = entries.map { |entry| [entry[:confidence].to_f, 0.005].max }
+      total_w = weights.sum.to_f
+      total_w = 1.0 if total_w <= 0.0
+
+      pos_w = 0.0
+      neg_w = 0.0
+      entries.each_with_index do |entry, idx|
+        if entry[:score].to_f >= 0.0
+          pos_w += weights[idx].to_f
+        else
+          neg_w += weights[idx].to_f
+        end
+      end
+
+      consensus = (pos_w - neg_w) / total_w
+      weighted_score = entries.each_with_index.sum { |entry, idx| entry[:score].to_f * weights[idx].to_f } / total_w
+      med_score = median(entries.map { |entry| entry[:score].to_f }).to_f
+      med_conf = median(entries.map { |entry| entry[:confidence].to_f }).to_f
+
+      # Prefer the confidence-weighted score when the temporal sign is coherent;
+      # otherwise fall back to the median so one noisy frame does not flip a segment.
+      score = consensus.abs >= 0.34 ? weighted_score : med_score
+      support_bonus = 0.86 + ([entries.length, 5].min.to_f * 0.028)
+      conf = med_conf * support_bonus * (0.72 + (consensus.abs * 0.28))
+
+      {
+        score: score.to_f,
+        confidence: [[conf.to_f, 0.0].max, 1.0].min,
+        consensus: consensus.to_f,
+      }
+    rescue
+      { score: 0.0, confidence: 0.0, consensus: 0.0 }
+    end
+    private_class_method :aggregate_temporal_sample_metrics
+
+    def dense_phase_vote_offsets(segment_seconds:, dense_step_seconds:, layout: nil)
       seg = segment_seconds.to_f
       seg = 6.0 if seg <= 0.0
       dense_step = dense_step_seconds.to_f
@@ -903,8 +994,14 @@ module ::MediaGallery
       offset = [seg * 0.18, dense_step].max
       offset = [offset, seg * 0.32].min
       offset = [offset, 0.25].max
+      offset = offset.round(3)
 
-      [-offset.round(3), 0.0, offset.round(3)].uniq
+      if grid_detector_layout?(layout)
+        inner = [(offset * 0.5).round(3), 0.15].max
+        [-offset, -inner, 0.0, inner, offset].uniq
+      else
+        [-offset, 0.0, offset].uniq
+      end
     rescue
       [0.0]
     end
@@ -920,7 +1017,9 @@ module ::MediaGallery
       elsif idx == 0 || times[idx].to_f == target_time.to_f
         score = Array(dense[:scores])[idx].to_f
         conf = Array(dense[:confidences])[idx].to_f
-        return { score: score, confidence: conf }
+        sync_score = Array(dense[:sync_scores])[idx].to_f
+        sync_conf = Array(dense[:sync_confidences])[idx].to_f
+        return { score: score, confidence: conf, sync_score: sync_score, sync_confidence: sync_conf }
       end
 
       left_idx = idx - 1
@@ -937,10 +1036,16 @@ module ::MediaGallery
       s1 = Array(dense[:scores])[right_idx].to_f
       c0 = Array(dense[:confidences])[left_idx].to_f
       c1 = Array(dense[:confidences])[right_idx].to_f
+      ss0 = Array(dense[:sync_scores])[left_idx].to_f
+      ss1 = Array(dense[:sync_scores])[right_idx].to_f
+      sc0 = Array(dense[:sync_confidences])[left_idx].to_f
+      sc1 = Array(dense[:sync_confidences])[right_idx].to_f
 
       {
         score: (s0 + ((s1 - s0) * ratio)),
         confidence: (c0 + ((c1 - c0) * ratio)),
+        sync_score: (ss0 + ((ss1 - ss0) * ratio)),
+        sync_confidence: (sc0 + ((sc1 - sc0) * ratio)),
       }
     rescue
       nil
@@ -1490,8 +1595,7 @@ module ::MediaGallery
       delta = [[seg * 0.18, 0.35].max, 0.90].min
       chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
       chunk_size = 15 if chunk_size <= 0
-      grid_layouts = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid]
-      use_dense_points = grid_layouts.include?(spec.to_h[:layout].to_s) || %w[templated_pair_grid_v1 templated_pair_grid_v2].include?(spec.dig(:analysis, :mode).to_s)
+      use_dense_points = grid_detector_layout?(spec.to_h[:layout].to_s) || %w[templated_pair_grid_v1 templated_pair_grid_v2].include?(spec.dig(:analysis, :mode).to_s)
       point_offsets = if use_dense_points
         [-delta, -(delta * 0.5), 0.0, (delta * 0.5), delta].map { |v| v.round(3) }.uniq
       else
@@ -3467,6 +3571,25 @@ module ::MediaGallery
     end
     private_class_method :packaged_segments_for
 
+    def reference_table_offsets_for(spec:, segment_duration:)
+      dur = segment_duration.to_f
+      return [0.0] if dur <= 0.0
+
+      layout = spec.is_a?(Hash) ? spec[:layout].to_s : nil
+      return [0.0] unless grid_detector_layout?(layout)
+
+      offset = dur * REFERENCE_GRID_SAMPLE_RATIO.to_f
+      offset = REFERENCE_GRID_SAMPLE_MIN_SECONDS.to_f if offset < REFERENCE_GRID_SAMPLE_MIN_SECONDS.to_f
+      offset = REFERENCE_GRID_SAMPLE_MAX_SECONDS.to_f if offset > REFERENCE_GRID_SAMPLE_MAX_SECONDS.to_f
+      offset = [(dur / 2.0) - 0.08, offset].min
+      offset = 0.0 if offset.negative?
+
+      offset.positive? ? [-offset.round(3), 0.0, offset.round(3)] : [0.0]
+    rescue
+      [0.0]
+    end
+    private_class_method :reference_table_offsets_for
+
     # Builds (and caches) per-segment reference thresholds derived from the packaged A/B variants.
     # This makes A/B classification much more robust for re-encodes/screen recordings, because we
     # compare the leak score against the content-matched A and B scores for the *same* segment.
@@ -3494,7 +3617,7 @@ module ::MediaGallery
       "na"
     end
 
-  cache_path = File.join(root, "forensics_reference_v2_#{spec[:layout].to_s.presence || 'layout'}.json")
+  cache_path = File.join(root, "forensics_reference_v3_#{spec[:layout].to_s.presence || 'layout'}.json")
   cache = (JSON.parse(File.read(cache_path)) rescue nil) if File.exist?(cache_path)
 
   if cache.is_a?(Hash) && cache["spec_hash"].to_s == spec_hash && cache["thr"].is_a?(Array) && cache["delta"].is_a?(Array)
@@ -3503,7 +3626,7 @@ module ::MediaGallery
     if thr.length >= needed && delta.length >= needed
       med = cache["delta_median"].to_f
       med = 1.0 if med <= 0
-      return { thr: thr, delta: delta, delta_median: med }
+      return { thr: thr, delta: delta, delta_median: med, samples_per_segment: cache["samples_per_segment"].to_f > 0.0 ? cache["samples_per_segment"].to_f : 1.0 }
     end
   end
 
@@ -3514,35 +3637,41 @@ module ::MediaGallery
   b_pl = File.join(root, "b", variant, "index.m3u8")
   return nil unless File.exist?(a_pl) && File.exist?(b_pl)
 
-  # Absolute midpoints for the first `needed` segments using template durations.
-  times = []
+  # Absolute in-segment samples for the first `needed` segments using template durations.
+  # Grid layouts are sampled at several points per segment so the reference threshold
+  # reflects the whole segment instead of a single lucky/unlucky midpoint frame.
+  sample_plan = []
   cursor = 0.0
   needed.times do |i|
     dur = segs[i][:duration].to_f
     dur = 0.0 if dur.nan? || dur.infinite? || dur <= 0.0
-    times << (cursor + (dur / 2.0))
+    mid = cursor + (dur / 2.0)
+    reference_table_offsets_for(spec: spec, segment_duration: dur).each do |offset|
+      sample_plan << { index: i, time: (mid + offset.to_f) }
+    end
     cursor += dur
+  end
+
+  per_segment_a = Hash.new { |h, k| h[k] = [] }
+  per_segment_b = Hash.new { |h, k| h[k] = [] }
+  chunk = 25
+
+  sample_plan.each_slice(chunk) do |slice|
+    slice_times = slice.map { |entry| entry[:time].to_f }
+    sa = Array(sample_scores_batch_single(file_path: a_pl, times: slice_times, spec: spec))
+    sb = Array(sample_scores_batch_single(file_path: b_pl, times: slice_times, spec: spec))
+    slice.each_with_index do |entry, k|
+      idx = entry[:index].to_i
+      per_segment_a[idx] << (sa[k] || 0).to_f
+      per_segment_b[idx] << (sb[k] || 0).to_f
+    end
   end
 
   thr = []
   delta = []
-
-  scores_a = []
-  scores_b = []
-  chunk = 25
-
-  times.each_slice(chunk) do |slice|
-    sa = Array(sample_scores_batch_single(file_path: a_pl, times: slice, spec: spec))
-    sb = Array(sample_scores_batch_single(file_path: b_pl, times: slice, spec: spec))
-    slice.length.times do |k|
-      scores_a << (sa[k] || 0).to_f
-      scores_b << (sb[k] || 0).to_f
-    end
-  end
-
   needed.times do |i|
-    sa = scores_a[i].to_f
-    sb = scores_b[i].to_f
+    sa = median(per_segment_a[i]).to_f
+    sb = median(per_segment_b[i]).to_f
     thr << ((sa + sb) / 2.0)
     delta << ((sa - sb) / 2.0)
   end
@@ -3560,6 +3689,7 @@ module ::MediaGallery
         "thr" => thr,
         "delta" => delta,
         "delta_median" => delta_median,
+        "samples_per_segment" => sample_plan.length > 0 ? (sample_plan.length.to_f / needed.to_f).round(2) : 1.0,
         "generated_at" => Time.now.utc.iso8601
       })
     )
@@ -3567,7 +3697,12 @@ module ::MediaGallery
     # ignore cache write errors
   end
 
-  { thr: thr, delta: delta, delta_median: delta_median }
+  {
+    thr: thr,
+    delta: delta,
+    delta_median: delta_median,
+    samples_per_segment: sample_plan.length > 0 ? (sample_plan.length.to_f / needed.to_f).round(2) : 1.0
+  }
 rescue
   nil
 end
@@ -3631,7 +3766,7 @@ end
       obs = Array(observed_variants)
       confs = Array(observed_confidences)
       seg_indices = Array(observed_segment_indices)
-      v8_layout = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].include?(layout.to_s)
+      v8_layout = grid_detector_layout?(layout.to_s)
 
       entries = []
       obs.each_with_index do |ov, i|
@@ -4808,6 +4943,7 @@ end
               ref_thr: ref[:thr],
               ref_delta: ref[:delta],
               delta_median: ref[:delta_median].to_f,
+              reference_samples_per_segment: ref[:samples_per_segment].to_f,
               max_offset_segments: max_offset_segments.to_i,
               started_at: started_at,
               time_budget_seconds: time_budget_seconds
@@ -5830,7 +5966,7 @@ end
     end
     private_class_method :build_sync_offset_prior
 
-    def match_fingerprints_with_reference(fps:, media_item:, scores:, confidences:, observed_segment_indices:, sync_variants: nil, sync_confidences: nil, spec: nil, ref_thr:, ref_delta:, delta_median:, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
+    def match_fingerprints_with_reference(fps:, media_item:, scores:, confidences:, observed_segment_indices:, sync_variants: nil, sync_confidences: nil, spec: nil, ref_thr:, ref_delta:, delta_median:, reference_samples_per_segment: nil, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
   ::MediaGallery::Fingerprinting.with_expected_variant_cache do
   max_off = max_offset_segments.to_i
   max_off = 0 if max_off.negative?
@@ -6270,6 +6406,7 @@ end
     reference_used: true,
     reference_delta_median: delta_med.round(4),
     reference_min_delta: min_delta.round(4),
+    reference_samples_per_segment: reference_samples_per_segment.to_f > 0.0 ? reference_samples_per_segment.to_f.round(2) : 1.0,
     reference_median_margin: (best_diag ? best_diag[:median_margin].to_f : 0.0).round(4),
     reference_median_ratio: (best_diag ? best_diag[:median_ratio].to_f : 0.0).round(4),
     effective_samples: u[:usable_count].to_f.round(2),

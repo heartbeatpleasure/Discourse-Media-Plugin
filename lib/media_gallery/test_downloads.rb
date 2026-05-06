@@ -406,6 +406,9 @@ module ::MediaGallery
       raise "artifact_output_missing" unless File.exist?(output_path)
       verification ||= {}
       verification["artifact_file_present"] = File.exist?(output_path)
+      artifact_realism = verify_artifact_realism(output_path: output_path, selection: selected, staged_entries: staged_entries)
+      verification.merge!(artifact_realism[:checks]) if artifact_realism[:checks].is_a?(Hash)
+      verification["warnings"] = Array(verification["warnings"]) + Array(artifact_realism[:warnings])
       checks = verification.reject { |k, _| k.to_s == "warnings" || k.to_s == "verified" }
       verification["verified"] = checks.values.all? { |v| v == true }
 
@@ -431,6 +434,7 @@ module ::MediaGallery
         "segment_variants" => Array(selected[:segment_entries]).map { |entry| entry[:ab].to_s },
         "segment_durations" => Array(selected[:segment_entries]).map { |entry| entry[:duration].to_f.round(6) },
         "segment_source_locators" => Array(staged_entries).map { |entry| entry[:source_locator].to_s },
+        "artifact_realism" => artifact_realism[:details],
         "provenance" => provenance,
         "verification" => verification,
         "created_at" => Time.now.utc.iso8601,
@@ -449,6 +453,56 @@ module ::MediaGallery
       end
       raise e
     end
+
+    def verify_artifact_realism(output_path:, selection:, staged_entries:)
+      expected_duration = Array(staged_entries).sum { |entry| entry[:duration].to_f }
+      expected_duration = Array(selection[:segment_entries]).sum { |entry| entry[:duration].to_f } if expected_duration <= 0.0
+
+      details = {
+        "expected_duration_seconds" => expected_duration.to_f.positive? ? expected_duration.to_f.round(3) : nil,
+        "segment_count" => Array(selection[:segment_entries]).length,
+      }.compact
+      checks = {}
+      warnings = []
+
+      probe = ::MediaGallery::Ffmpeg.probe(output_path)
+      streams = Array(probe["streams"])
+      video_stream = streams.find { |stream| stream["codec_type"].to_s == "video" }
+      duration = probe.dig("format", "duration").to_f
+      duration = 0.0 if duration.nan? || duration.infinite? || duration.negative?
+
+      details["artifact_duration_seconds"] = duration.round(3) if duration.positive?
+      details["video_codec"] = video_stream["codec_name"].to_s if video_stream.is_a?(Hash)
+      details["width"] = video_stream["width"].to_i if video_stream.is_a?(Hash) && video_stream["width"].to_i > 0
+      details["height"] = video_stream["height"].to_i if video_stream.is_a?(Hash) && video_stream["height"].to_i > 0
+
+      checks["artifact_video_stream_present"] = video_stream.present?
+      if expected_duration.positive? && duration.positive?
+        tolerance = [[expected_duration.to_f * 0.07, 0.75].max, 6.0].min
+        diff = (duration.to_f - expected_duration.to_f).abs
+        details["duration_diff_seconds"] = diff.round(3)
+        details["duration_tolerance_seconds"] = tolerance.round(3)
+        checks["artifact_duration_matches_selected_segments"] = diff <= tolerance
+        warnings << "artifact_duration_outside_tolerance" unless checks["artifact_duration_matches_selected_segments"]
+      else
+        checks["artifact_duration_matches_selected_segments"] = false
+        warnings << "artifact_duration_unavailable"
+      end
+
+      { checks: checks, details: details, warnings: warnings }
+    rescue => e
+      {
+        checks: {
+          "artifact_video_stream_present" => false,
+          "artifact_duration_matches_selected_segments" => false,
+        },
+        details: {
+          "probe_error" => "#{e.class}: #{e.message}"
+        },
+        warnings: ["artifact_probe_failed"]
+      }
+    end
+    private_class_method :verify_artifact_realism
 
     def read_meta!(public_id, artifact_id)
       path = artifact_meta_path(public_id, artifact_id)
