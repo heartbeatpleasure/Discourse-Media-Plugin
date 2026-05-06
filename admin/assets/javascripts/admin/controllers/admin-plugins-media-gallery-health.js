@@ -1027,9 +1027,12 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       });
       this.applyResponse(data);
       const status = data?.cleanup_result?.status || "complete";
-      this.notice = status === "complete"
-        ? "Scoped cleanup completed and reconciliation was refreshed."
-        : "Scoped cleanup completed with warnings. Reconciliation was refreshed; check Logs for details.";
+      const stillActive = Boolean(data?.cleanup_result?.finding_still_active_after_reconciliation);
+      this.notice = stillActive
+        ? "Scoped cleanup ran, but storage still reports this finding after automatic retry. Wait a moment, run reconciliation again, and check Logs if it remains."
+        : (status === "complete"
+          ? "Scoped cleanup completed and reconciliation was refreshed."
+          : "Scoped cleanup completed with warnings. Reconciliation was refreshed; check Logs for details.");
       this.cleanupModalOpen = false;
       this.cleanupIssue = null;
       this.cleanupExample = null;

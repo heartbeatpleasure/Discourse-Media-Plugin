@@ -80,6 +80,9 @@ module ::MediaGallery
         request: request
       )
       ::MediaGallery::HealthCheck.run_reconciliation!
+      if result.respond_to?(:[]=)
+        result["finding_still_active_after_reconciliation"] = ::MediaGallery::ReconciliationCleanup.finding_active?(params[:key])
+      end
       payload = ::MediaGallery::HealthCheck.summary(full_storage: false)
       payload[:cleanup_result] = result
       render_json_dump(payload)

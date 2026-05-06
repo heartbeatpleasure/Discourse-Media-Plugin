@@ -7,6 +7,8 @@ module ::MediaGallery
     class UnsafeCleanup < StandardError; end
 
     CONFIRM_TOKEN = "cleanup_selected_reconciliation_finding"
+    PREFIX_DELETE_MAX_ATTEMPTS = 3
+    PREFIX_DELETE_RETRY_DELAY_SECONDS = 0.35
     SAFE_DELETE_PREFIX_CLASSIFICATIONS = %w[
       hls_temporary_prefix
       hls_old_package_prefix
@@ -69,9 +71,12 @@ module ::MediaGallery
 
       sample_before = Array(store.list_prefix(prefix, limit: 25)).map(&:to_s)
       existed = sample_before.present?
-      deleted = !!store.delete_prefix(prefix)
-      remaining = Array(store.list_prefix(prefix, limit: 1)).map(&:to_s)
-      status = deleted && remaining.blank? ? "complete" : "partial"
+      delete_result = delete_prefix_until_clear(store, prefix)
+      remaining = Array(delete_result[:remaining]).map(&:to_s)
+      status = delete_result[:ok] ? "complete" : "partial"
+      warnings = []
+      warnings << "prefix_still_has_objects_after_cleanup" if remaining.present?
+      warnings << "delete_prefix_returned_false" unless delete_result[:delete_succeeded]
 
       {
         "schema_version" => 1,
@@ -84,16 +89,56 @@ module ::MediaGallery
         "backend" => backend,
         "group_prefix" => prefix,
         "existed" => existed,
-        "deleted" => deleted,
+        "deleted" => delete_result[:delete_succeeded],
         "remaining" => remaining.present?,
+        "delete_attempts" => delete_result[:attempts].length,
+        "delete_attempt_details" => delete_result[:attempts],
         "sample_keys_before" => sample_before.first(10),
-        "warnings" => remaining.present? || !deleted ? ["delete_prefix_failed_or_remaining_objects"] : [],
+        "remaining_sample_keys" => remaining.first(10),
+        "warnings" => warnings,
         "finished_at" => Time.now.utc.iso8601,
       }.compact
     rescue UnsafeCleanup
       raise
     rescue => e
       raise UnsafeCleanup, "Scoped cleanup failed: #{e.class}: #{e.message}"
+    end
+
+    def delete_prefix_until_clear(store, prefix)
+      attempts = []
+      remaining = []
+      delete_succeeded = false
+
+      PREFIX_DELETE_MAX_ATTEMPTS.times do |index|
+        attempt_number = index + 1
+        deleted = !!store.delete_prefix(prefix)
+        delete_succeeded ||= deleted
+
+        sleep(delete_retry_delay_for(store)) if delete_retry_delay_for(store).positive?
+
+        remaining = Array(store.list_prefix(prefix, limit: 10)).map(&:to_s)
+        attempts << {
+          "attempt" => attempt_number,
+          "deleted" => deleted,
+          "remaining_sample_count" => remaining.length,
+        }
+
+        break if remaining.blank?
+      end
+
+      { ok: delete_succeeded && remaining.blank?, delete_succeeded: delete_succeeded, remaining: remaining, attempts: attempts }
+    end
+
+    def delete_retry_delay_for(store)
+      store.respond_to?(:backend) && store.backend.to_s == "s3" ? PREFIX_DELETE_RETRY_DELAY_SECONDS : 0.0
+    rescue
+      0.0
+    end
+
+    def finding_active?(finding_key)
+      find_active_finding(finding_key).present?
+    rescue
+      false
     end
 
     def cleanup_deleted_media_item!(finding, actor:, request:)
