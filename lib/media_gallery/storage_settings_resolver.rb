@@ -420,11 +420,13 @@ module ::MediaGallery
     private_class_method :local_root_for_profile_key
 
     def s3_options
+      prefix_setting = site_setting_string(:media_gallery_s3_prefix)
       {
         endpoint: site_setting_string(:media_gallery_s3_endpoint),
         region: site_setting_string(:media_gallery_s3_region).presence || "auto",
         bucket: site_setting_string(:media_gallery_s3_bucket),
-        prefix: normalize_prefix(site_setting_string(:media_gallery_s3_prefix)),
+        prefix: normalize_prefix(prefix_setting),
+        list_scope_prefix: normalize_list_scope_prefix(prefix_setting),
         access_key_id: site_setting_string(:media_gallery_s3_access_key_id),
         secret_access_key: site_setting_string(:media_gallery_s3_secret_access_key),
         force_path_style: site_setting_bool(:media_gallery_s3_force_path_style, default: false),
@@ -433,11 +435,13 @@ module ::MediaGallery
     end
 
     def s3_profile_2_options
+      prefix_setting = site_setting_string(:media_gallery_target_s3_prefix)
       {
         endpoint: site_setting_string(:media_gallery_target_s3_endpoint),
         region: site_setting_string(:media_gallery_target_s3_region).presence || "auto",
         bucket: site_setting_string(:media_gallery_target_s3_bucket),
-        prefix: normalize_prefix(site_setting_string(:media_gallery_target_s3_prefix)),
+        prefix: normalize_prefix(prefix_setting),
+        list_scope_prefix: normalize_list_scope_prefix(prefix_setting),
         access_key_id: site_setting_string(:media_gallery_target_s3_access_key_id),
         secret_access_key: site_setting_string(:media_gallery_target_s3_secret_access_key),
         force_path_style: site_setting_bool(:media_gallery_target_s3_force_path_style, default: false),
@@ -447,11 +451,13 @@ module ::MediaGallery
     private_class_method :s3_profile_2_options
 
     def s3_profile_3_options
+      prefix_setting = site_setting_string(:media_gallery_target_s3_2_prefix)
       {
         endpoint: site_setting_string(:media_gallery_target_s3_2_endpoint),
         region: site_setting_string(:media_gallery_target_s3_2_region).presence || "auto",
         bucket: site_setting_string(:media_gallery_target_s3_2_bucket),
-        prefix: normalize_prefix(site_setting_string(:media_gallery_target_s3_2_prefix)),
+        prefix: normalize_prefix(prefix_setting),
+        list_scope_prefix: normalize_list_scope_prefix(prefix_setting),
         access_key_id: site_setting_string(:media_gallery_target_s3_2_access_key_id),
         secret_access_key: site_setting_string(:media_gallery_target_s3_2_secret_access_key),
         force_path_style: site_setting_bool(:media_gallery_target_s3_2_force_path_style, default: false),
@@ -466,6 +472,7 @@ module ::MediaGallery
         region: opts[:region],
         bucket: opts[:bucket],
         prefix: opts[:prefix],
+        list_scope_prefix: opts[:list_scope_prefix],
         force_path_style: !!opts[:force_path_style],
         presign_ttl_seconds: opts[:presign_ttl_seconds].to_i,
         access_key_id_last4: redact_tail(opts[:access_key_id]),
@@ -516,6 +523,18 @@ module ::MediaGallery
       value.to_s.strip.sub(%r{\A/+}, "").sub(%r{/+\z}, "")
     end
     private_class_method :normalize_prefix
+
+    def normalize_list_scope_prefix(value)
+      raw = value.to_s.strip.sub(%r{\A/+}, "")
+      return "" if raw.blank?
+
+      slash_scoped = raw.end_with?("/")
+      raw = raw.sub(%r{/+\z}, "")
+      return "" if raw.blank?
+
+      slash_scoped ? "#{raw}/" : raw
+    end
+    private_class_method :normalize_list_scope_prefix
 
     def legacy_private_root_path
       return nil unless SiteSetting.respond_to?(:media_gallery_private_root_path)

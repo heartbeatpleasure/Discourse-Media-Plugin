@@ -487,6 +487,38 @@ export default RouteTemplate(
         overflow-wrap: anywhere;
       }
 
+      .mg-health__example-meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 0.45rem;
+        margin-top: 0.55rem;
+      }
+
+      .mg-health__example-meta-row {
+        min-width: 0;
+        border: 1px solid var(--mg-health-border);
+        border-radius: 10px;
+        background: var(--secondary);
+        padding: 0.45rem 0.55rem;
+      }
+
+      .mg-health__example-meta-row.is-emphasis {
+        border-color: var(--primary-low-mid);
+        background: var(--primary-very-low);
+      }
+
+      .mg-health__example-meta-label {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+        font-weight: 700;
+      }
+
+      .mg-health__example-meta-value {
+        margin-top: 0.1rem;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
       .mg-health__example-actions {
         display: flex;
         flex-wrap: wrap;
@@ -669,6 +701,9 @@ export default RouteTemplate(
                       <span class="mg-health__status-dot {{profile.statusClass}}" title={{profile.statusLabel}}></span>
                       <span class="mg-health__profile-chip-name">{{profile.displayName}}</span>
                       <span class="mg-health__profile-chip-meta">{{profile.objectsScannedLabel}} objects</span>
+                      {{#if profile.scanPrefixLabel}}
+                        <span class="mg-health__profile-chip-meta">{{profile.scanPrefixLabel}}</span>
+                      {{/if}}
                       {{#if profile.truncated}}
                         <span class="mg-health__profile-chip-meta">limit reached</span>
                       {{/if}}
@@ -826,6 +861,16 @@ export default RouteTemplate(
                           {{/if}}
                           {{#if example.subtitle}}
                             <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
+                          {{/if}}
+                          {{#if example.hasMetaRows}}
+                            <div class="mg-health__example-meta">
+                              {{#each example.metaRows as |row|}}
+                                <div class="mg-health__example-meta-row {{if row.emphasis "is-emphasis"}}">
+                                  <div class="mg-health__example-meta-label">{{row.label}}</div>
+                                  <div class="mg-health__example-meta-value">{{row.value}}</div>
+                                </div>
+                              {{/each}}
+                            </div>
                           {{/if}}
                           {{#if example.hasDetail}}
                             <div class="mg-health__example-subtitle">{{example.detail}}</div>
@@ -998,6 +1043,16 @@ export default RouteTemplate(
                             {{/if}}
                             {{#if example.subtitle}}
                               <div class="mg-health__example-subtitle">{{example.subtitle}}</div>
+                            {{/if}}
+                            {{#if example.hasMetaRows}}
+                              <div class="mg-health__example-meta">
+                                {{#each example.metaRows as |row|}}
+                                  <div class="mg-health__example-meta-row {{if row.emphasis "is-emphasis"}}">
+                                    <div class="mg-health__example-meta-label">{{row.label}}</div>
+                                    <div class="mg-health__example-meta-value">{{row.value}}</div>
+                                  </div>
+                                {{/each}}
+                              </div>
                             {{/if}}
                             {{#if example.hasDetail}}
                               <div class="mg-health__example-subtitle">{{example.detail}}</div>

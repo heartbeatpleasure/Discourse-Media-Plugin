@@ -177,7 +177,7 @@ module ::MediaGallery
     end
 
     def list_prefix(prefix, limit: nil)
-      pref = normalized_key(prefix)
+      pref = normalized_list_prefix(prefix)
       keys = []
       continuation_token = nil
       max_keys = nil
@@ -203,6 +203,10 @@ module ::MediaGallery
       end
 
       keys
+    end
+
+    def list_scope_prefix
+      root_list_prefix
     end
 
     def presigned_get_url(key, expires_in:, response_content_type: nil, response_content_disposition: nil)
@@ -410,6 +414,20 @@ module ::MediaGallery
       return pref if rel.blank?
 
       "#{pref}/#{rel}"
+    end
+
+    def normalized_list_prefix(prefix)
+      rel = prefix.to_s.sub(%r{\A/+}, "")
+      return root_list_prefix if rel.blank?
+
+      normalized_key(rel)
+    end
+
+    def root_list_prefix
+      scoped = options[:list_scope_prefix].to_s.sub(%r{\A/+}, "")
+      return scoped if scoped.present?
+
+      normalized_prefix
     end
 
     def denormalized_key(key)

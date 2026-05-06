@@ -130,6 +130,60 @@ function classificationLabel(value) {
   }
 }
 
+
+function storageContextRows(example) {
+  const rows = [];
+  const foundProfile = example?.profile_display_label || example?.profile_label || example?.profile_key;
+  const foundBackend = example?.backend ? String(example.backend) : "";
+  const foundValue = [foundProfile, foundBackend ? `backend: ${foundBackend}` : ""].filter(Boolean).join(" · ");
+
+  if (foundValue) {
+    rows.push({
+      label: "Found on storage profile",
+      value: foundValue,
+      emphasis: true,
+    });
+  }
+
+  const activeProfile = example?.current_profile_label || example?.current_profile_key;
+  if (activeProfile) {
+    rows.push({
+      label: "Active playback profile",
+      value: activeProfile,
+      emphasis: true,
+    });
+  }
+
+  if (example?.classification === "migration_source_leftovers" && foundProfile && activeProfile) {
+    rows.push({
+      label: "Meaning",
+      value: "This finding is on the old/source profile; playback currently resolves to the active profile.",
+    });
+  }
+
+  if (example?.group_prefix) {
+    rows.push({ label: "Storage prefix", value: example.group_prefix });
+  }
+
+  if (example?.object_count) {
+    rows.push({
+      label: "Objects in group",
+      value: `${formatNumber(example.object_count)} object${Number(example.object_count) === 1 ? "" : "s"}`,
+    });
+  }
+
+  const classification = classificationLabel(example?.classification);
+  if (classification) {
+    rows.push({ label: "Classification", value: classification });
+  }
+
+  if (example?.migration_cleanup_status) {
+    rows.push({ label: "Migration cleanup", value: example.migration_cleanup_status });
+  }
+
+  return rows.filter((row) => row.value);
+}
+
 function formatDuration(value) {
   const ms = Number(value || 0);
   if (!Number.isFinite(ms) || ms <= 0) {
@@ -205,20 +259,6 @@ function decorateExample(example) {
   if (example?.group_prefix) {
     subtitleParts.push(`prefix: ${example.group_prefix}`);
   }
-  const profileLabel = example?.profile_display_label || example?.profile_label || example?.profile_key;
-  if (profileLabel) {
-    subtitleParts.push(`profile: ${profileLabel}`);
-  }
-  if (example?.backend) {
-    subtitleParts.push(`backend: ${example.backend}`);
-  }
-  const currentProfile = example?.current_profile_label || example?.current_profile_key;
-  if (currentProfile) {
-    subtitleParts.push(`current profile: ${currentProfile}`);
-  }
-  if (example?.migration_cleanup_status) {
-    subtitleParts.push(`cleanup: ${example.migration_cleanup_status}`);
-  }
   if (example?.role) {
     subtitleParts.push(`role: ${example.role}`);
   }
@@ -229,6 +269,8 @@ function decorateExample(example) {
     subtitleParts.push(example.error);
   }
 
+  const metaRows = storageContextRows(example);
+
   return {
     ...example,
     key: example?.key || `${example?.issue_type || "issue"}:${example?.public_id || title}`,
@@ -237,6 +279,8 @@ function decorateExample(example) {
     subtitle: subtitleParts.filter(Boolean).join(" • "),
     detail: example?.detail || "",
     suggestion: example?.suggestion || "",
+    metaRows,
+    hasMetaRows: metaRows.length > 0,
     hasDetail: Boolean(example?.detail),
     hasSuggestion: Boolean(example?.suggestion),
     url: example?.url || null,
@@ -629,6 +673,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         statusLabel: profileStatusLabel(profile),
         statusClass: profileStatusClass(profile),
         objectsScannedLabel: formatNumber(profile?.objects_scanned || 0),
+        scanPrefixLabel: profile?.scan_prefix ? `scan scope ${profile.scan_prefix}` : "",
         truncatedLabel: profile?.truncated ? "Limit reached" : "Complete",
       }))
       .filter((profile) => profile.displayName);

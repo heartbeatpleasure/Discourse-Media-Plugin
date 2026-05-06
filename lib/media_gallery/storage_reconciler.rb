@@ -339,6 +339,8 @@ module ::MediaGallery
         end
 
         begin
+          scan_scope = storage_scan_scope_for(store)
+          profile_payload[:scan_prefix] = scan_scope if scan_scope.present?
           store.ensure_available!
           listed = Array(store.list_prefix("", limit: object_limit + 1)).map(&:to_s)
           truncated = listed.length > object_limit
@@ -380,6 +382,8 @@ module ::MediaGallery
         rescue => e
           profile_payload[:status] = "failed"
           profile_payload[:error] = "#{e.class}: #{e.message}".truncate(300)
+          scope_text = profile_payload[:scan_prefix].to_s.presence
+          scope_detail = scope_text.present? ? " while listing configured scan scope #{scope_text}" : " while listing the profile root"
           add_finding(
             context,
             "invalid_storage_references",
@@ -388,8 +392,8 @@ module ::MediaGallery
             profile_key: profile_key,
             backend: backend,
             label: "Storage profile scan failed",
-            detail: "#{e.class}: #{e.message}".truncate(500),
-            suggestion: "Check profile availability and Rails logs."
+            detail: "#{e.class}: #{e.message}#{scope_detail}".truncate(500),
+            suggestion: "Check profile availability, Rails logs, and whether the storage/API key allows listing the configured scan scope."
           )
         end
       end
@@ -516,6 +520,14 @@ module ::MediaGallery
       end
     rescue => e
       Rails.logger.warn("[media_gallery] storage reconciliation media context lookup failed: #{e.class}: #{e.message}")
+    end
+
+    def storage_scan_scope_for(store)
+      return nil unless store.respond_to?(:list_scope_prefix)
+
+      store.list_scope_prefix.to_s.presence
+    rescue
+      nil
     end
 
     def register_orphan_group_stats!(context, groups)
