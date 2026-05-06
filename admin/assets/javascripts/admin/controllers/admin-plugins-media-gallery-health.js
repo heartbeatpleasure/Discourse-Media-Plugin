@@ -142,7 +142,6 @@ function storageContextRows(example) {
     rows.push({
       label: "Found on",
       value: foundProfile,
-      emphasis: true,
       className: "is-compact",
     });
   }
@@ -151,7 +150,6 @@ function storageContextRows(example) {
     rows.push({
       label: "Active playback",
       value: activeProfile,
-      emphasis: true,
       className: "is-compact",
     });
   }
@@ -180,19 +178,19 @@ function storageContextRows(example) {
     });
   }
 
-  if (example?.group_prefix) {
-    rows.push({
-      label: "Storage prefix",
-      value: example.group_prefix,
-      className: "is-wide",
-    });
-  }
-
   if (example?.classification === "migration_source_leftovers" && foundProfile && activeProfile) {
     rows.push({
       label: "Meaning",
       value: `Old/source files were found on ${foundProfile}. Playback currently uses ${activeProfile}.`,
       className: "is-wide is-note",
+    });
+  }
+
+  if (example?.group_prefix) {
+    rows.push({
+      label: "Cleanup scope",
+      value: example.group_prefix,
+      className: "is-wide is-technical",
     });
   }
 

@@ -507,22 +507,21 @@ export default RouteTemplate(
 
       .mg-health__example-meta {
         display: grid;
-        grid-template-columns: repeat(12, minmax(0, 1fr));
-        gap: 0.5rem;
-        margin-top: 0.6rem;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.55rem;
+        margin-top: 0.65rem;
       }
 
       .mg-health__example-meta-row {
         min-width: 0;
-        grid-column: span 3;
         border: 1px solid var(--mg-health-border);
         border-radius: 10px;
         background: var(--secondary);
-        padding: 0.45rem 0.6rem;
+        padding: 0.5rem 0.65rem;
       }
 
       .mg-health__example-meta-row.is-compact {
-        grid-column: span 3;
+        min-height: auto;
       }
 
       .mg-health__example-meta-row.is-wide {
@@ -530,13 +529,17 @@ export default RouteTemplate(
       }
 
       .mg-health__example-meta-row.is-note {
+        background: var(--secondary);
+        border-left: 4px solid var(--primary-low-mid);
+      }
+
+      .mg-health__example-meta-row.is-technical {
         background: transparent;
-        border-style: dashed;
       }
 
       .mg-health__example-meta-row.is-emphasis {
-        border-color: var(--primary-low-mid);
-        background: var(--primary-very-low);
+        border-color: var(--mg-health-border);
+        background: var(--secondary);
       }
 
       .mg-health__example-meta-label {
@@ -555,8 +558,27 @@ export default RouteTemplate(
       }
 
       .mg-health__example-meta-row.is-note .mg-health__example-meta-value {
-        font-weight: 500;
+        font-weight: 600;
         color: var(--primary-high);
+      }
+
+      .mg-health__example-meta-row.is-technical .mg-health__example-meta-value {
+        color: var(--primary-high);
+        font-family: var(--d-font-family--monospace, monospace);
+        font-size: var(--font-down-1);
+        font-weight: 500;
+      }
+
+      @media (max-width: 980px) {
+        .mg-health__example-meta {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 560px) {
+        .mg-health__example-meta {
+          grid-template-columns: 1fr;
+        }
       }
 
       .mg-health__example-actions {
@@ -915,7 +937,7 @@ export default RouteTemplate(
                           {{#if example.hasMetaRows}}
                             <div class="mg-health__example-meta">
                               {{#each example.metaRows as |row|}}
-                                <div class="mg-health__example-meta-row {{if row.emphasis "is-emphasis"}}">
+                                <div class="mg-health__example-meta-row {{row.className}} {{if row.emphasis "is-emphasis"}}">
                                   <div class="mg-health__example-meta-label">{{row.label}}</div>
                                   <div class="mg-health__example-meta-value">{{row.value}}</div>
                                 </div>

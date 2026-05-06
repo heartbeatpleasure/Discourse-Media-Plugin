@@ -629,10 +629,11 @@ module ::MediaGallery
 
       case group[:classification].to_s
       when "migration_source_leftovers"
+        found = group[:profile_display_label].presence || group[:profile_label].presence || group[:profile_key].presence || "this storage profile"
         current = group[:current_profile_label].presence || group[:current_profile_key].presence || "another profile"
         cleanup_status = group[:migration_cleanup_status].to_s.presence
         cleanup_text = cleanup_status.present? ? " Current cleanup status: #{cleanup_status}." : ""
-        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} are on this profile, while the media item currently resolves to #{current}. This commonly means migration source cleanup is pending or incomplete.#{cleanup_text}#{sample_text}"
+        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} were found on #{found}. The active playback profile for this media item is #{current}. This commonly means migration source cleanup is pending or incomplete.#{cleanup_text}#{sample_text}"
       when "hls_media_prefix"
         "#{object_count} HLS storage object#{'s' if object_count != 1} under #{prefix} are not referenced by any sampled media item or manifest. This often comes from deleted media or an incomplete cleanup path.#{sample_text}"
       when "hls_temporary_prefix"
