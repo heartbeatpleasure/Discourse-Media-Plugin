@@ -203,13 +203,25 @@ module MediaGallery
     # Remux a local HLS playlist into MP4 using FFmpeg's HLS demuxer.
     # This mirrors real playlist-based consumption more closely than raw concat
     # and tends to preserve segment timing/ordering better for forensic tests.
-    def self.remux_local_hls_to_mp4(playlist_path:, output_path:)
+    def self.remux_local_hls_to_mp4(playlist_path:, output_path:, allow_all_extensions: false)
+      input_options = [
+        "-protocol_whitelist",
+        "file,crypto,data,pipe",
+      ]
+
+      # FFmpeg's HLS demuxer refuses non-media extension key files by default.
+      # Test-download AES remuxes use a locally generated, trusted playlist in a
+      # private temp dir, so allowing all extensions is safe there and avoids
+      # naming key material with a misleading media extension.
+      if allow_all_extensions
+        input_options += ["-allowed_extensions", "ALL"]
+      end
+
       cmd = [
         ffmpeg_path,
         *ffmpeg_common_args,
         "-y",
-        "-protocol_whitelist",
-        "file,crypto,data,pipe",
+        *input_options,
         "-i",
         playlist_path,
         "-map",

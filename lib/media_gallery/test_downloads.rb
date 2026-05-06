@@ -402,6 +402,7 @@ module ::MediaGallery
         if aes128_context.present?
           verification["hls_aes128_context_present"] = true
           verification["hls_aes128_key_file_present"] = File.exist?(aes128_context[:key_path].to_s)
+          verification["hls_aes128_ffmpeg_allowed_extensions_all"] = true
         end
 
         playlist_path = File.join(stage_dir, "artifact.m3u8")
@@ -412,6 +413,7 @@ module ::MediaGallery
           ::MediaGallery::Ffmpeg.remux_local_hls_to_mp4(
             playlist_path: playlist_path,
             output_path: output_path,
+            allow_all_extensions: true,
           )
         else
           begin
