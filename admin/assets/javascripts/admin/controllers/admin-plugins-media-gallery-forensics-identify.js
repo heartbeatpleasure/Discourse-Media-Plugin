@@ -984,10 +984,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get showNoSearchMatches() {
-    const q = this.searchQuery || "";
+    const q = (this.searchQuery || "").trim();
     return (
       !this.isSearching &&
-      q.length >= 3 &&
+      q.length > 0 &&
       (this.searchResults?.length || 0) === 0 &&
       !this.searchError
     );
@@ -1061,7 +1061,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   @action
   onSearchInput(event) {
-    this.searchQuery = (event?.target?.value || "").trim();
+    // Keep the raw input value while typing. Trimming here makes trailing spaces
+    // disappear immediately, which prevents users from entering multi-word
+    // searches such as "Chris video". The actual request still trims the
+    // query inside search().
+    this.searchQuery = event?.target?.value || "";
     this._debouncedSearch();
   }
 
@@ -1087,10 +1091,6 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
     try {
       const q = (this.searchQuery || "").trim();
-      if (q && q.length < 3) {
-        this.searchResults = [];
-        return;
-      }
 
       const params = new URLSearchParams();
       params.set("q", q || "");
