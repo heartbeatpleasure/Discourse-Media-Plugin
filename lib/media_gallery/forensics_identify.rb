@@ -147,9 +147,14 @@ module ::MediaGallery
     # These layouts benefit from reading several in-segment observations and
     # from reference calibration sampled at more than one point per HLS segment.
     GRID_DETECTOR_LAYOUTS = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].freeze
+    REFERENCE_CACHE_VERSION = "v5"
     REFERENCE_GRID_SAMPLE_RATIO = 0.22
     REFERENCE_GRID_SAMPLE_MIN_SECONDS = 0.30
     REFERENCE_GRID_SAMPLE_MAX_SECONDS = 0.75
+    V9_REFERENCE_GRID_INNER_RATIO = 0.12
+    V9_REFERENCE_GRID_OUTER_RATIO = 0.28
+    V9_REFERENCE_GRID_INNER_MAX_SECONDS = 0.45
+    V9_REFERENCE_GRID_OUTER_MAX_SECONDS = 0.95
 
     def normalize_filemode_time_budget_seconds(value)
       v = value.to_f
@@ -164,6 +169,102 @@ module ::MediaGallery
       false
     end
     private_class_method :grid_detector_layout?
+
+    def v9_reference_layout?(layout)
+      %w[v9_spread_spectrum v8_v9_hybrid].include?(layout.to_s)
+    rescue
+      false
+    end
+    private_class_method :v9_reference_layout?
+
+    def reference_detection_profile_for_layout(layout:, delta_median:)
+      delta_med = delta_median.to_f
+      delta_med = 1.0 if delta_med <= 0.0 || delta_med.nan? || delta_med.infinite?
+      layout_name = layout.to_s
+
+      if layout_name == "v9_spread_spectrum"
+        return {
+          name: "v9_reference_normalized_v1",
+          min_delta: [delta_med * 0.18, 0.45].max,
+          min_margin: 0.035,
+          ratio_soft_start: 0.85,
+          max_ratio: 3.50,
+          ratio_penalty: 0.42,
+          strength_floor: 0.35,
+          strength_cap: 1.85,
+          max_margin_weight: 1.35,
+        }
+      end
+
+      if layout_name == "v8_v9_hybrid"
+        return {
+          name: "hybrid_reference_normalized_v1",
+          min_delta: [delta_med * 0.16, 0.55].max,
+          min_margin: 0.035,
+          ratio_soft_start: 0.90,
+          max_ratio: 3.75,
+          ratio_penalty: 0.36,
+          strength_floor: 0.38,
+          strength_cap: 1.90,
+          max_margin_weight: 1.35,
+        }
+      end
+
+      {
+        name: "v8_reference_conservative_v1",
+        min_delta: [delta_med * 0.10, 6.0].max,
+        min_margin: 0.05,
+        ratio_soft_start: nil,
+        max_ratio: nil,
+        ratio_penalty: 0.0,
+        strength_floor: 1.0,
+        strength_cap: 1.0,
+        max_margin_weight: nil,
+      }
+    rescue
+      {
+        name: "reference_conservative_fallback",
+        min_delta: 6.0,
+        min_margin: 0.05,
+        ratio_soft_start: nil,
+        max_ratio: nil,
+        ratio_penalty: 0.0,
+        strength_floor: 1.0,
+        strength_cap: 1.0,
+        max_margin_weight: nil,
+      }
+    end
+    private_class_method :reference_detection_profile_for_layout
+
+    def reference_weight_adjustment_for_match(ratio:, margin:, reference_delta_abs:, delta_median:, profile:)
+      r = ratio.to_f
+      m = margin.to_f
+      da = reference_delta_abs.to_f
+      dm = delta_median.to_f
+      dm = 1.0 if dm <= 0.0 || dm.nan? || dm.infinite?
+
+      max_ratio = profile[:max_ratio]
+      return nil if max_ratio.present? && r > max_ratio.to_f
+
+      soft = profile[:ratio_soft_start]
+      penalty = 1.0
+      if soft.present? && r > soft.to_f
+        penalty = 1.0 / (1.0 + ((r - soft.to_f) * profile[:ratio_penalty].to_f))
+      end
+
+      strength = da / dm
+      strength = profile[:strength_floor].to_f if strength < profile[:strength_floor].to_f
+      strength = profile[:strength_cap].to_f if strength > profile[:strength_cap].to_f
+
+      max_margin = profile[:max_margin_weight]
+      m = max_margin.to_f if max_margin.present? && m > max_margin.to_f
+
+      adjusted = m * penalty * strength
+      adjusted.finite? && adjusted.positive? ? adjusted : nil
+    rescue
+      nil
+    end
+    private_class_method :reference_weight_adjustment_for_match
 
     def identify_from_file(media_item:, file_path:, max_samples: DEFAULT_MAX_SAMPLES, max_offset_segments: DEFAULT_MAX_OFFSET_SEGMENTS, layout: nil, sample_times: nil, time_budget_seconds: nil)
       raise ArgumentError, "missing media_item" if media_item.blank?
@@ -3787,6 +3888,22 @@ module ::MediaGallery
       layout = spec.is_a?(Hash) ? spec[:layout].to_s : nil
       return [0.0] unless grid_detector_layout?(layout)
 
+      if v9_reference_layout?(layout)
+        inner = dur * V9_REFERENCE_GRID_INNER_RATIO.to_f
+        inner = REFERENCE_GRID_SAMPLE_MIN_SECONDS.to_f if inner < REFERENCE_GRID_SAMPLE_MIN_SECONDS.to_f
+        inner = V9_REFERENCE_GRID_INNER_MAX_SECONDS.to_f if inner > V9_REFERENCE_GRID_INNER_MAX_SECONDS.to_f
+
+        outer = dur * V9_REFERENCE_GRID_OUTER_RATIO.to_f
+        outer = REFERENCE_GRID_SAMPLE_MIN_SECONDS.to_f if outer < REFERENCE_GRID_SAMPLE_MIN_SECONDS.to_f
+        outer = V9_REFERENCE_GRID_OUTER_MAX_SECONDS.to_f if outer > V9_REFERENCE_GRID_OUTER_MAX_SECONDS.to_f
+
+        max_safe = [(dur / 2.0) - 0.08, 0.0].max
+        inner = [inner, max_safe].min
+        outer = [outer, max_safe].min
+        offsets = [-outer, -inner, 0.0, inner, outer].map { |v| v.to_f.round(3) }.uniq
+        return offsets.presence || [0.0]
+      end
+
       offset = dur * REFERENCE_GRID_SAMPLE_RATIO.to_f
       offset = REFERENCE_GRID_SAMPLE_MIN_SECONDS.to_f if offset < REFERENCE_GRID_SAMPLE_MIN_SECONDS.to_f
       offset = REFERENCE_GRID_SAMPLE_MAX_SECONDS.to_f if offset > REFERENCE_GRID_SAMPLE_MAX_SECONDS.to_f
@@ -4017,7 +4134,7 @@ module ::MediaGallery
       "na"
     end
 
-  cache_path = File.join(root, "forensics_reference_v4_#{spec[:layout].to_s.presence || 'layout'}.json")
+  cache_path = File.join(root, "forensics_reference_#{REFERENCE_CACHE_VERSION}_#{spec[:layout].to_s.presence || 'layout'}.json")
   cache = (JSON.parse(File.read(cache_path)) rescue nil) if File.exist?(cache_path)
 
   if cache.is_a?(Hash) && cache["spec_hash"].to_s == spec_hash && cache["thr"].is_a?(Array) && cache["delta"].is_a?(Array)
@@ -4026,7 +4143,7 @@ module ::MediaGallery
     if thr.length >= needed && delta.length >= needed
       med = cache["delta_median"].to_f
       med = 1.0 if med <= 0
-      return { thr: thr, delta: delta, delta_median: med, samples_per_segment: cache["samples_per_segment"].to_f > 0.0 ? cache["samples_per_segment"].to_f : 1.0, cache_version: cache["cache_version"].to_s.presence || "v4", source_encrypted: ActiveModel::Type::Boolean.new.cast(cache["source_encrypted"]), sampling_method: cache["sampling_method"].to_s.presence || "cached" }
+      return { thr: thr, delta: delta, delta_median: med, samples_per_segment: cache["samples_per_segment"].to_f > 0.0 ? cache["samples_per_segment"].to_f : 1.0, cache_version: cache["cache_version"].to_s.presence || REFERENCE_CACHE_VERSION, source_encrypted: ActiveModel::Type::Boolean.new.cast(cache["source_encrypted"]), sampling_method: cache["sampling_method"].to_s.presence || "cached" }
     end
   end
 
@@ -4102,7 +4219,7 @@ module ::MediaGallery
       JSON.pretty_generate({
         "layout" => spec[:layout].to_s,
         "spec_hash" => spec_hash,
-        "cache_version" => "v4",
+        "cache_version" => REFERENCE_CACHE_VERSION,
         "source_encrypted" => sampling_context.is_a?(Hash) && sampling_context[:encrypted] == true,
         "sampling_method" => sampling_context.is_a?(Hash) ? sampling_context[:method].to_s : nil,
         "thr" => thr,
@@ -4121,7 +4238,7 @@ module ::MediaGallery
     delta: delta,
     delta_median: delta_median,
     samples_per_segment: sample_plan.length > 0 ? (sample_plan.length.to_f / needed.to_f).round(2) : 1.0,
-    cache_version: "v4",
+    cache_version: REFERENCE_CACHE_VERSION,
     source_encrypted: sampling_context.is_a?(Hash) && sampling_context[:encrypted] == true,
     sampling_method: sampling_context.is_a?(Hash) ? sampling_context[:method].to_s : nil
   }
@@ -5787,7 +5904,7 @@ end
     end
     private_class_method :sample_variant_robust
 
-    def robust_pair_channel_metrics(diffs)
+    def robust_pair_channel_metrics(diffs, score_mode: nil)
       arr = Array(diffs).map { |v| v.to_f }
       return { score: 0.0, confidence: 0.0, consensus: 0.0, strength: 0.0, kept_count: 0 } if arr.empty?
 
@@ -5810,7 +5927,17 @@ end
       consensus = (pos_w - neg_w) / total_w
       vote_margin = ((kept.count { |d| d >= 0.0 } - kept.count { |d| d < 0.0 }).abs.to_f / [kept.length, 1].max.to_f)
       strength = median(kept.map { |d| d.abs }).to_f
-      conf = ((strength / 255.0) * (0.45 + (consensus.abs * 0.35) + (vote_margin * 0.20))).round(4)
+      confidence_scale = case score_mode.to_s
+      when "bar_consensus_zscore"
+        8.0
+      when "center_biased_zscore"
+        12.0
+      else
+        255.0
+      end
+      confidence_scale = 255.0 if confidence_scale <= 0.0
+      conf = ((strength / confidence_scale) * (0.45 + (consensus.abs * 0.35) + (vote_margin * 0.20))).round(4)
+      conf = 1.0 if conf > 1.0
       score = (consensus * strength * kept.length.to_f).round(4)
 
       {
@@ -6088,8 +6215,8 @@ end
         end
       end
 
-      main_metrics = robust_pair_channel_metrics(main_diffs)
-      sync_metrics = robust_pair_channel_metrics(sync_diffs)
+      main_metrics = robust_pair_channel_metrics(main_diffs, score_mode: config[:score_mode])
+      sync_metrics = robust_pair_channel_metrics(sync_diffs, score_mode: config[:score_mode])
 
       payload_score = main_metrics[:score].to_f
       payload_variant = payload_score >= 0.0 ? "a" : "b"
@@ -6403,8 +6530,14 @@ end
   delta_med = delta_median.to_f
   delta_med = 1.0 if delta_med <= 0.0
 
-  # Require a minimum A/B separation.
-  min_delta = [delta_med * 0.10, 6.0].max
+  layout_name = spec.is_a?(Hash) ? spec[:layout].to_s : ""
+  reference_profile = reference_detection_profile_for_layout(layout: layout_name, delta_median: delta_med)
+
+  # Require a minimum A/B separation. v9 uses z-score/correlation-like scores, so
+  # the absolute reference delta is intentionally much lower than the v8 luma/grid
+  # detector. The normalized reference gates below carry the false-positive guard.
+  min_delta = reference_profile[:min_delta].to_f
+  min_margin = reference_profile[:min_margin].to_f
 
   # Robustly scale leak confidence (do not square; confidences are small by design).
   conf_list = Array(confidences).map { |c| c.to_f }.select { |c| c > 0.0 && !c.nan? && !c.infinite? }
@@ -6471,9 +6604,18 @@ end
       ratio = d_cl / (sep + eps)
       margin = (d_ot - d_cl) / (sep + eps)
 
-      next if margin < 0.05
+      next if margin < min_margin
 
-      w = margin * leak_scale[i]
+      adjusted_margin = reference_weight_adjustment_for_match(
+        ratio: ratio,
+        margin: margin,
+        reference_delta_abs: da,
+        delta_median: delta_med,
+        profile: reference_profile
+      )
+      next if adjusted_margin.blank?
+
+      w = adjusted_margin.to_f * leak_scale[i]
       next if w <= 0.0 || w.nan? || w.infinite?
 
       usable << [i, base_seg_idx, v, w, margin, ratio]
@@ -6835,6 +6977,10 @@ end
     reference_used: true,
     reference_delta_median: delta_med.round(4),
     reference_min_delta: min_delta.round(4),
+    reference_detection_profile: reference_profile[:name].to_s,
+    reference_min_margin: min_margin.round(4),
+    reference_max_ratio: reference_profile[:max_ratio].present? ? reference_profile[:max_ratio].to_f.round(4) : nil,
+    reference_ratio_soft_start: reference_profile[:ratio_soft_start].present? ? reference_profile[:ratio_soft_start].to_f.round(4) : nil,
     reference_samples_per_segment: reference_samples_per_segment.to_f > 0.0 ? reference_samples_per_segment.to_f.round(2) : 1.0,
     reference_median_margin: (best_diag ? best_diag[:median_margin].to_f : 0.0).round(4),
     reference_median_ratio: (best_diag ? best_diag[:median_ratio].to_f : 0.0).round(4),
