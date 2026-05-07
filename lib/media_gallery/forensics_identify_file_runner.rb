@@ -475,6 +475,12 @@ module ::MediaGallery
         v8_max_mismatch_rate_unanimous: 0.35,
         v8_max_second_evidence_unanimous: -8.0,
         v8_min_top_evidence_unanimous_conclusive: -0.5,
+        v9_min_usable_likely_single_candidate: 12,
+        v9_min_weighted_likely_single_candidate: 0.86,
+        v9_min_high_quality_likely_single_candidate: 0.88,
+        v9_max_mismatch_rate_likely_single_candidate: 0.30,
+        v9_min_evidence_likely_single_candidate: 5.0,
+        v9_min_consistent_chunks_likely_single_candidate: 2,
         candidate_population_count: 0,
         population_guard_medium_min: 50,
         population_guard_large_min: 250,
@@ -601,6 +607,12 @@ module ::MediaGallery
 
     def v8_layout_result?(result)
       %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
+    rescue
+      false
+    end
+
+    def v9_layout_result?(result)
+      %w[v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
     rescue
       false
     end
@@ -1266,13 +1278,17 @@ module ::MediaGallery
 
       top_cand = cands[0].is_a?(Hash) ? cands[0] : {}
       second_cand = cands[1].is_a?(Hash) ? cands[1] : {}
-      top = top_cand["match_ratio"].to_f
-      second = second_cand["match_ratio"].to_f
+      top = top_cand["match_ratio_weighted"].to_f
+      top = top_cand["match_ratio"].to_f if top <= 0.0
+      second = second_cand["match_ratio_weighted"].to_f
+      second = second_cand["match_ratio"].to_f if second <= 0.0
       delta = top - second
 
       mismatches = top_cand["mismatches"].to_i
       compared = top_cand["compared"].to_i
       mismatch_rate = compared > 0 ? (mismatches.to_f / compared.to_f) : 1.0
+      population_count = candidate_population_count(result)
+      single_candidate_population = population_count <= 1
 
       v8_pairwise_info = v8_pairwise_conclusive_info(result, thresholds: thresholds, top_cand: top_cand, second_cand: second_cand, mismatch_rate: mismatch_rate)
       if v8_pairwise_info[:used]
@@ -1287,7 +1303,18 @@ module ::MediaGallery
            top >= thresholds[:min_match_strong] &&
            delta >= thresholds[:min_delta_strong] &&
            mismatch_rate <= thresholds[:max_mismatch_rate_strong]
-        return "conclusive_match"
+        return single_candidate_population ? "likely_match" : "conclusive_match"
+      end
+
+      if single_candidate_population &&
+           v9_layout_result?(result) &&
+           usable >= thresholds[:v9_min_usable_likely_single_candidate].to_i &&
+           top >= thresholds[:v9_min_weighted_likely_single_candidate].to_f &&
+           top_cand["high_quality_match_ratio_weighted"].to_f >= thresholds[:v9_min_high_quality_likely_single_candidate].to_f &&
+           mismatch_rate <= thresholds[:v9_max_mismatch_rate_likely_single_candidate].to_f &&
+           top_cand["evidence_score"].to_f >= thresholds[:v9_min_evidence_likely_single_candidate].to_f &&
+           top_cand["evidence_consistent_chunks"].to_i >= thresholds[:v9_min_consistent_chunks_likely_single_candidate].to_i
+        return "likely_match"
       end
 
       if usable >= thresholds[:min_usable_likely] &&

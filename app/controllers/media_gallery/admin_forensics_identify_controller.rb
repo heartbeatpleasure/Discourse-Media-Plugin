@@ -734,6 +734,12 @@ module ::MediaGallery
         v8_max_mismatch_rate_unanimous: 0.35,
         v8_max_second_evidence_unanimous: -8.0,
         v8_min_top_evidence_unanimous_conclusive: -0.5,
+        v9_min_usable_likely_single_candidate: 12,
+        v9_min_weighted_likely_single_candidate: 0.86,
+        v9_min_high_quality_likely_single_candidate: 0.88,
+        v9_max_mismatch_rate_likely_single_candidate: 0.30,
+        v9_min_evidence_likely_single_candidate: 5.0,
+        v9_min_consistent_chunks_likely_single_candidate: 2,
       }
       return thresholds unless mode == "file_mode"
 
@@ -1297,6 +1303,8 @@ module ::MediaGallery
       top_consistent_chunks = top_cand["evidence_consistent_chunks"].to_i
       top_consistent_chunks = result.dig("meta", "top_consistent_chunks").to_i if top_consistent_chunks <= 0
       shortlist_evidence_gap = result.dig("meta", "shortlist_evidence_gap").to_f
+      population_count = candidate_population_count(result)
+      single_candidate_population = mode == "file_mode" && population_count <= 1
 
       thresholds = decision_policy_thresholds_for(result, mode: mode)
       strong_usable = thresholds[:min_usable_strong]
@@ -1364,9 +1372,53 @@ module ::MediaGallery
       end
 
       if strong_ok
+        if single_candidate_population
+          return {
+            decision: "likely_match",
+            reasons: ["single_candidate_population_prevents_conclusive_filemode"],
+            mode: mode,
+            top_ratio: top,
+            second_ratio: second,
+            delta: delta,
+            mismatches: mismatches,
+            compared: compared,
+            mismatch_rate: mismatch_rate,
+            top_evidence_score: top_evidence_score,
+            top_consistent_chunks: top_consistent_chunks,
+            shortlist_evidence_gap: shortlist_evidence_gap,
+          }
+        end
+
         return {
           decision: "conclusive_match",
           reasons: ["all_strong_thresholds_passed"],
+          mode: mode,
+          top_ratio: top,
+          second_ratio: second,
+          delta: delta,
+          mismatches: mismatches,
+          compared: compared,
+          mismatch_rate: mismatch_rate,
+          top_evidence_score: top_evidence_score,
+          top_consistent_chunks: top_consistent_chunks,
+          shortlist_evidence_gap: shortlist_evidence_gap,
+        }
+      end
+
+      v9_single_candidate_likely =
+        single_candidate_population &&
+        v9_layout_result?(result) &&
+        usable >= thresholds[:v9_min_usable_likely_single_candidate].to_i &&
+        top >= thresholds[:v9_min_weighted_likely_single_candidate].to_f &&
+        top_cand["high_quality_match_ratio_weighted"].to_f >= thresholds[:v9_min_high_quality_likely_single_candidate].to_f &&
+        mismatch_rate <= thresholds[:v9_max_mismatch_rate_likely_single_candidate].to_f &&
+        top_evidence_score >= thresholds[:v9_min_evidence_likely_single_candidate].to_f &&
+        top_consistent_chunks >= thresholds[:v9_min_consistent_chunks_likely_single_candidate].to_i
+
+      if v9_single_candidate_likely
+        return {
+          decision: "likely_match",
+          reasons: ["v9_single_candidate_likely_guardrails_passed"],
           mode: mode,
           top_ratio: top,
           second_ratio: second,
@@ -1434,6 +1486,21 @@ module ::MediaGallery
       %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
     rescue
       false
+    end
+
+    def v9_layout_result?(result)
+      %w[v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
+    rescue
+      false
+    end
+
+    def candidate_population_count(result)
+      meta = result.is_a?(Hash) ? (result["meta"] || {}) : {}
+      v = meta["candidate_population_count"].to_i
+      return v if v > 0
+      Array(result["candidates"]).length
+    rescue
+      0
     end
 
     def v8_artifact_like_result?(result, thresholds:)

@@ -110,6 +110,16 @@ module ::MediaGallery
     TARGETED_FILL_MIN_REMAINING_SECONDS = 5.0
     TARGETED_FILL_MAX_SEGMENTS = 15
     TARGETED_FILL_MIN_IMPROVEMENT = 0.12
+    # Iteration 8: v9 is intentionally lower-amplitude than v8, so the first
+    # reference pass can leave many usable-but-not-yet-confirmed segments on the
+    # floor. Allow a bounded, candidate-preserving recovery pass that samples
+    # additional weak/missing v9 segments without changing rendering or storage.
+    V9_TARGETED_FILL_MAX_SEGMENTS = 28
+    V9_TARGETED_FILL_MIN_USABLE_TARGET = 18
+    V9_TARGETED_FILL_ACCEPT_MIN_USABLE_GAIN = 3
+    V9_TARGETED_FILL_ACCEPT_MIN_WEIGHTED = 0.80
+    V9_TARGETED_FILL_ACCEPT_MIN_HIGH_QUALITY = 0.78
+    V9_TARGETED_FILL_ACCEPT_MAX_SCORE_REGRESSION = 0.45
     TARGETED_FILL_FLIP_MIN_PAIRWISE_MARGIN = 10.0
     TARGETED_FILL_FLIP_MIN_PAIRWISE_WINS = 6
     TARGETED_FILL_FLIP_MIN_RANK_GAP = 18.0
@@ -1734,7 +1744,41 @@ module ::MediaGallery
     end
     private_class_method :targeted_fill_candidate_flip_corroborated?
 
-    def should_run_targeted_filemode_fill?(obs:, match:, started_at:, budget_seconds:)
+    def reference_variants_from_match(match)
+      meta = match.to_h[:meta] || match.to_h["meta"] || {}
+      variants = meta[:reference_observed_variants] || meta["reference_observed_variants"]
+      variants.is_a?(Array) ? variants : []
+    rescue
+      []
+    end
+    private_class_method :reference_variants_from_match
+
+    def reference_confidences_from_match(match)
+      meta = match.to_h[:meta] || match.to_h["meta"] || {}
+      confidences = meta[:reference_observed_confidences] || meta["reference_observed_confidences"]
+      confidences.is_a?(Array) ? confidences : []
+    rescue
+      []
+    end
+    private_class_method :reference_confidences_from_match
+
+    def reference_usable_count_from_match(match)
+      variants = reference_variants_from_match(match)
+      return 0 if variants.blank?
+      variants.count { |v| v.present? }
+    rescue
+      0
+    end
+    private_class_method :reference_usable_count_from_match
+
+    def v9_targeted_recovery_layout?(spec)
+      v9_reference_layout?(spec.to_h[:layout].to_s)
+    rescue
+      false
+    end
+    private_class_method :v9_targeted_recovery_layout?
+
+    def should_run_targeted_filemode_fill?(obs:, match:, spec: nil, started_at:, budget_seconds:)
       return { run: false, reason: "missing_observation_or_match" } if obs.blank? || match.blank?
 
       remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds)
@@ -1745,31 +1789,59 @@ module ::MediaGallery
 
       variants = Array(obs[:variants])
       confidences = Array(obs[:confidences])
-      nil_or_weak = variants.each_index.count do |i|
-        variants[i].blank? || confidences[i].to_f < TARGETED_FILL_LOW_CONFIDENCE
+      ref_variants = reference_variants_from_match(match)
+      ref_confidences = reference_confidences_from_match(match)
+      use_reference_signal = ref_variants.present? && ref_variants.length >= variants.length
+      decision_variants = use_reference_signal ? ref_variants : variants
+      decision_confidences = use_reference_signal ? ref_confidences : confidences
+
+      nil_or_weak = decision_variants.each_index.count do |i|
+        decision_variants[i].blank? || decision_confidences[i].to_f < TARGETED_FILL_LOW_CONFIDENCE
       end
       minimum_uncertain = (cands.length < 2 ? 2 : 4)
       return { run: false, reason: "too_few_uncertain_positions" } if nil_or_weak < minimum_uncertain
 
       meta = match[:meta] || {}
+      layout_name = spec.to_h[:layout].to_s.presence || meta[:layout].to_s
+      v9_recovery = v9_targeted_recovery_layout?(spec) || v9_reference_layout?(layout_name)
+      reference_usable = reference_usable_count_from_match(match)
+      reference_usable = decision_variants.count(&:present?) if reference_usable <= 0
+
       rank_gap = meta[:shortlist_rank_gap].to_f
       ev_gap = meta[:shortlist_evidence_gap].to_f
       hard_delta = if cands.length >= 2
-        cands[0][:match_ratio].to_f - cands[1][:match_ratio].to_f
+        cands[0][:match_ratio_weighted].to_f - cands[1][:match_ratio_weighted].to_f
       else
         0.0
+      end
+      hard_delta = cands[0][:match_ratio].to_f - cands[1].to_h[:match_ratio].to_f if hard_delta == 0.0 && cands.length >= 2
+
+      if v9_recovery && reference_usable < V9_TARGETED_FILL_MIN_USABLE_TARGET
+        top_ratio_w = cands[0][:match_ratio_weighted].to_f
+        top_ratio = cands[0][:match_ratio].to_f
+        high_q = cands[0][:high_quality_match_ratio_weighted].to_f
+        enough_signal_to_recover = top_ratio_w >= 0.70 || top_ratio >= 0.70 || high_q >= 0.70 || reference_usable < 8
+        return {
+          run: enough_signal_to_recover,
+          reason: (enough_signal_to_recover ? "v9_recovery_low_reference_usable" : "v9_recovery_signal_too_weak"),
+          remaining_seconds: remaining.round(3),
+          uncertain_positions: nil_or_weak,
+          reference_usable_samples: reference_usable,
+        }
       end
 
       if cands.length < 2
         top_compared = cands[0][:compared].to_i
-        top_ratio = cands[0][:match_ratio].to_f
-        usable = variants.count(&:present?)
+        top_ratio = cands[0][:match_ratio_weighted].to_f
+        top_ratio = cands[0][:match_ratio].to_f if top_ratio <= 0.0
+        usable = decision_variants.count(&:present?)
         run = usable < [top_compared, Array(obs[:segment_indices]).length].max || top_ratio >= 0.85
         return {
           run: run,
           reason: (run ? "single_candidate_missing_signal" : "single_candidate_already_filled"),
           remaining_seconds: remaining.round(3),
           uncertain_positions: nil_or_weak,
+          reference_usable_samples: reference_usable,
         }
       end
 
@@ -1779,6 +1851,7 @@ module ::MediaGallery
         reason: (run ? "weak_separation_with_missing_signal" : "current_result_already_separated"),
         remaining_seconds: remaining.round(3),
         uncertain_positions: nil_or_weak,
+        reference_usable_samples: reference_usable,
       }
     rescue
       { run: false, reason: "targeted_fill_decision_failed" }
@@ -1821,28 +1894,66 @@ module ::MediaGallery
       end
       return [] if total_segments <= 0
 
+      meta = match[:meta] || {}
+      layout_name = meta[:layout].to_s.presence || obs.to_h[:layout].to_s
+      v9_recovery = v9_reference_layout?(layout_name)
+      ref_variants = reference_variants_from_match(match)
+      ref_confidences = reference_confidences_from_match(match)
+      ref_indices = Array(meta[:observed_segment_indices_used] || meta["observed_segment_indices_used"])
+
       conf_by_seg = {}
+      variant_by_seg = {}
+      if ref_variants.present? && ref_indices.present?
+        ref_indices.each_with_index do |seg_idx, idx|
+          next if seg_idx.blank?
+          key = seg_idx.to_i
+          ref_conf = Array(ref_confidences)[idx].to_f
+          next if ref_conf <= 0.0 && Array(ref_variants)[idx].blank?
+          conf_by_seg[key] = [conf_by_seg[key].to_f, ref_conf].max
+          variant_by_seg[key] = Array(ref_variants)[idx] if Array(ref_variants)[idx].present?
+        end
+      end
+
       Array(obs[:segment_indices]).each_with_index do |seg_idx, idx|
         next if seg_idx.blank?
-        conf_by_seg[seg_idx.to_i] = [conf_by_seg[seg_idx.to_i].to_f, Array(obs[:confidences])[idx].to_f].max
+        key = seg_idx.to_i
+        conf_by_seg[key] = [conf_by_seg[key].to_f, Array(obs[:confidences])[idx].to_f].max
+        variant_by_seg[key] ||= Array(obs[:variants])[idx]
       end
 
       priorities = []
+      max_select = v9_recovery ? V9_TARGETED_FILL_MAX_SEGMENTS : TARGETED_FILL_MAX_SEGMENTS
       total_segments.times do |local_seg|
         conf = conf_by_seg[local_seg].to_f
-        next if conf >= 0.75
+        already_variant = variant_by_seg[local_seg].present?
+        next if conf >= 0.75 && already_variant
 
         score = 5.0 - (conf * 4.0)
-        score += 1.0 if conf <= 0.0
+        score += 1.2 if conf <= 0.0
+        score += 0.55 if !already_variant
 
         if second.present?
-          top_v = expected_variant_for_candidate_local_segment(candidate: top, media_item_id: media_item.id, local_segment_index: local_seg)
-          second_v = expected_variant_for_candidate_local_segment(candidate: second, media_item_id: media_item.id, local_segment_index: local_seg)
+          top_v = expected_variant_for_candidate_local_segment(candidate: top, media_item_id: media_item.id, local_segment_index: local_seg, layout: layout_name)
+          second_v = expected_variant_for_candidate_local_segment(candidate: second, media_item_id: media_item.id, local_segment_index: local_seg, layout: layout_name)
           next if top_v.blank? || second_v.blank? || top_v == second_v
+          score += 0.85
           score += 0.5 if (local_seg % [Array(match.dig(:meta, :phase_candidates_seconds)).length, 4].max).zero? rescue false
         else
+          expected = expected_variant_for_candidate_local_segment(candidate: top, media_item_id: media_item.id, local_segment_index: local_seg, layout: layout_name)
+          next if expected.blank?
           score += 0.8 if conf <= 0.0
           score += 0.35 if local_seg <= 2 || local_seg >= (total_segments - 3)
+          # Prefer a balanced A/B recovery set for a single candidate; it avoids
+          # accidentally reinforcing a one-sided observed sequence.
+          score += expected == "a" ? 0.04 : 0.08
+        end
+
+        # Spread recovery reads across the clip instead of sampling one contiguous
+        # area. This is important for v9 partial clips where local texture can make
+        # several nearby segments unusable.
+        if v9_recovery && total_segments > 12
+          bucket = (local_seg.to_f / total_segments.to_f)
+          score += (Math.sin(bucket * Math::PI * 4.0).abs * 0.18)
         end
 
         priorities << [score, local_seg]
@@ -1853,23 +1964,31 @@ module ::MediaGallery
 
       selected = []
       seen = {}
+      expected_counts = Hash.new(0)
       priorities.sort_by { |score, seg_idx| [-score, seg_idx] }.each do |_score, seg_idx|
         neighborhood = second.present? ? TARGETED_FILL_NEIGHBORHOOD : 0
         ((seg_idx - neighborhood)..(seg_idx + neighborhood)).each do |probe|
           next if probe < 0 || probe >= total_segments
           next if seen[probe]
+          if v9_recovery && second.blank?
+            exp = expected_variant_for_candidate_local_segment(candidate: top, media_item_id: media_item.id, local_segment_index: probe, layout: layout_name)
+            other = exp == "a" ? "b" : "a"
+            # Keep the added set roughly balanced when possible.
+            next if exp.present? && expected_counts[exp] > expected_counts[other] + 4
+            expected_counts[exp] += 1 if exp.present?
+          end
           seen[probe] = true
           selected << probe
-          break if selected.length >= TARGETED_FILL_MAX_SEGMENTS
+          break if selected.length >= max_select
         end
-        break if selected.length >= TARGETED_FILL_MAX_SEGMENTS
+        break if selected.length >= max_select
       end
 
       tail_start = [(total_segments * (1.0 - TARGETED_FILL_TAIL_FRACTION)).floor, 0].max
       tail_added = 0
       tail_candidates = (tail_start...total_segments).to_a.reverse
       tail_candidates.each do |seg_idx|
-        break if selected.length >= TARGETED_FILL_MAX_SEGMENTS
+        break if selected.length >= max_select
         break if tail_added >= TARGETED_FILL_TAIL_RESERVE
         next if seen[seg_idx]
         conf = conf_by_seg[seg_idx].to_f
@@ -1895,11 +2014,19 @@ module ::MediaGallery
 
       seg = segment_seconds.to_f
       seg = 6.0 if seg <= 0.0
-      delta = [[seg * 0.18, 0.35].max, 0.90].min
+      layout_name = spec.to_h[:layout].to_s
+      v9_recovery = v9_reference_layout?(layout_name)
+      delta = if v9_recovery
+        [[seg * 0.32, 0.55].max, 1.05].min
+      else
+        [[seg * 0.18, 0.35].max, 0.90].min
+      end
       chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
       chunk_size = 15 if chunk_size <= 0
-      use_dense_points = grid_detector_layout?(spec.to_h[:layout].to_s) || %w[templated_pair_grid_v1 templated_pair_grid_v2].include?(spec.dig(:analysis, :mode).to_s)
-      point_offsets = if use_dense_points
+      use_dense_points = grid_detector_layout?(layout_name) || %w[templated_pair_grid_v1 templated_pair_grid_v2].include?(spec.dig(:analysis, :mode).to_s)
+      point_offsets = if v9_recovery
+        [-delta, -(delta * 0.67), -(delta * 0.33), 0.0, (delta * 0.33), (delta * 0.67), delta].map { |v| v.round(3) }.uniq
+      elsif use_dense_points
         [-delta, -(delta * 0.5), 0.0, (delta * 0.5), delta].map { |v| v.round(3) }.uniq
       else
         [-delta, 0.0, delta].map { |v| v.round(3) }.uniq
@@ -2043,7 +2170,7 @@ module ::MediaGallery
     private_class_method :merge_filemode_observations
 
     def maybe_targeted_fill_filemode_observations(media_item:, file_path:, obs:, match:, segment_seconds:, spec:, sample_times:, started_at:, time_budget_seconds:, max_offset_segments:)
-      decision = should_run_targeted_filemode_fill?(obs: obs, match: match, started_at: started_at, budget_seconds: time_budget_seconds)
+      decision = should_run_targeted_filemode_fill?(obs: obs, match: match, spec: spec, started_at: started_at, budget_seconds: time_budget_seconds)
       return nil unless decision[:run]
 
       positions = build_targeted_fill_segment_indices(
@@ -2090,6 +2217,27 @@ module ::MediaGallery
       flip_corroborated = targeted_fill_candidate_flip_corroborated?(orig_match: match, merged_match: merged_match)
       use_merged = merged_score >= (orig_score + TARGETED_FILL_MIN_IMPROVEMENT) && flip_corroborated
 
+      v9_recovery_acceptance = false
+      if !use_merged && v9_targeted_recovery_layout?(spec) && targeted_fill_top_fingerprint_id(match) == targeted_fill_top_fingerprint_id(merged_match)
+        orig_ref_usable = reference_usable_count_from_match(match)
+        merged_ref_usable = reference_usable_count_from_match(merged_match)
+        orig_ref_usable = Array(obs[:variants]).count(&:present?) if orig_ref_usable <= 0
+        merged_ref_usable = Array(merged_obs[:variants]).count(&:present?) if merged_ref_usable <= 0
+        top = Array(merged_match[:candidates]).first.to_h
+        weighted = top[:match_ratio_weighted].to_f
+        high_q = top[:high_quality_match_ratio_weighted].to_f
+        compared = top[:compared].to_i
+        usable_gain = merged_ref_usable.to_i - orig_ref_usable.to_i
+        score_regression = orig_score.to_f - merged_score.to_f
+        v9_recovery_acceptance =
+          usable_gain >= V9_TARGETED_FILL_ACCEPT_MIN_USABLE_GAIN &&
+          compared >= merged_ref_usable.to_i &&
+          weighted >= V9_TARGETED_FILL_ACCEPT_MIN_WEIGHTED &&
+          high_q >= V9_TARGETED_FILL_ACCEPT_MIN_HIGH_QUALITY &&
+          score_regression <= V9_TARGETED_FILL_ACCEPT_MAX_SCORE_REGRESSION
+        use_merged = v9_recovery_acceptance
+      end
+
       if use_merged
         merged_obs[:quality_hints] = merge_observation_quality_hints(
           base_obs: obs,
@@ -2107,8 +2255,11 @@ module ::MediaGallery
       chosen_meta[:targeted_fill_positions] = positions
       chosen_meta[:targeted_fill_score_gain] = (merged_score - orig_score).round(4)
       chosen_meta[:targeted_fill_points_per_segment] = extra_obs[:targeted_fill_points_per_segment].to_i
+      chosen_meta[:targeted_fill_v9_recovery_acceptance] = v9_recovery_acceptance
       chosen_meta[:targeted_fill_rejected_reason] = if use_merged
         nil
+      elsif v9_targeted_recovery_layout?(spec) && targeted_fill_top_fingerprint_id(match) == targeted_fill_top_fingerprint_id(merged_match)
+        "v9_recovery_acceptance_thresholds_not_met"
       elsif merged_score < (orig_score + TARGETED_FILL_MIN_IMPROVEMENT)
         "original_result_better"
       else
