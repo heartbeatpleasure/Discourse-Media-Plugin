@@ -740,6 +740,21 @@ module ::MediaGallery
         v9_max_mismatch_rate_likely_single_candidate: 0.30,
         v9_min_evidence_likely_single_candidate: 5.0,
         v9_min_consistent_chunks_likely_single_candidate: 2,
+        # V9 emits a softer spread-spectrum signal than v8, so a good partial
+        # file-mode read may have a moderate raw bit delta while still showing
+        # strong separation in weighted/high-quality evidence and stable chunk offsets.
+        # Keep this as a likely-only path; conclusive still requires the stricter
+        # generic/file-mode or pairwise conclusive policies.
+        v9_min_usable_likely_multi_candidate: 16,
+        v9_min_weighted_likely_multi_candidate: 0.78,
+        v9_min_weighted_delta_likely_multi_candidate: 0.045,
+        v9_min_high_quality_likely_multi_candidate: 0.74,
+        v9_min_high_quality_delta_likely_multi_candidate: 0.18,
+        v9_max_mismatch_rate_likely_multi_candidate: 0.24,
+        v9_min_evidence_likely_multi_candidate: 7.0,
+        v9_min_evidence_gap_likely_multi_candidate: 1.0,
+        v9_min_rank_gap_likely_multi_candidate: 3.0,
+        v9_min_consistent_chunks_likely_multi_candidate: 2,
       }
       return thresholds unless mode == "file_mode"
 
@@ -1182,6 +1197,8 @@ module ::MediaGallery
       result["meta"]["top_mismatches"] = mismatches
       result["meta"]["top_compared"] = compared
       result["meta"]["top_mismatch_rate"] = mismatch_rate
+      annotate_v9_decision_diagnostics!(result)
+      annotate_partial_clip_offset_diagnostics!(result)
       result["meta"]["top_evidence_score"] = decision_info[:top_evidence_score].to_f.round(4)
       result["meta"]["top_consistent_chunks"] = decision_info[:top_consistent_chunks].to_i
       result["meta"]["shortlist_evidence_gap"] = decision_info[:shortlist_evidence_gap].to_f.round(4)
@@ -1222,6 +1239,28 @@ module ::MediaGallery
         "v8_min_top_evidence_anchorless_conclusive" => thresholds[:v8_min_top_evidence_anchorless_conclusive],
       }
 
+
+      if v9_layout_result?(result)
+        result["meta"]["policy"].merge!(
+          "v9_min_usable_likely_single_candidate" => thresholds[:v9_min_usable_likely_single_candidate],
+          "v9_min_weighted_likely_single_candidate" => thresholds[:v9_min_weighted_likely_single_candidate],
+          "v9_min_high_quality_likely_single_candidate" => thresholds[:v9_min_high_quality_likely_single_candidate],
+          "v9_max_mismatch_rate_likely_single_candidate" => thresholds[:v9_max_mismatch_rate_likely_single_candidate],
+          "v9_min_evidence_likely_single_candidate" => thresholds[:v9_min_evidence_likely_single_candidate],
+          "v9_min_consistent_chunks_likely_single_candidate" => thresholds[:v9_min_consistent_chunks_likely_single_candidate],
+          "v9_min_usable_likely_multi_candidate" => thresholds[:v9_min_usable_likely_multi_candidate],
+          "v9_min_weighted_likely_multi_candidate" => thresholds[:v9_min_weighted_likely_multi_candidate],
+          "v9_min_weighted_delta_likely_multi_candidate" => thresholds[:v9_min_weighted_delta_likely_multi_candidate],
+          "v9_min_high_quality_likely_multi_candidate" => thresholds[:v9_min_high_quality_likely_multi_candidate],
+          "v9_min_high_quality_delta_likely_multi_candidate" => thresholds[:v9_min_high_quality_delta_likely_multi_candidate],
+          "v9_max_mismatch_rate_likely_multi_candidate" => thresholds[:v9_max_mismatch_rate_likely_multi_candidate],
+          "v9_min_evidence_likely_multi_candidate" => thresholds[:v9_min_evidence_likely_multi_candidate],
+          "v9_min_evidence_gap_likely_multi_candidate" => thresholds[:v9_min_evidence_gap_likely_multi_candidate],
+          "v9_min_rank_gap_likely_multi_candidate" => thresholds[:v9_min_rank_gap_likely_multi_candidate],
+          "v9_min_consistent_chunks_likely_multi_candidate" => thresholds[:v9_min_consistent_chunks_likely_multi_candidate],
+        )
+      end
+
       result["meta"]["recommendation"] =
         case decision
         when "conclusive_match"
@@ -1237,6 +1276,53 @@ module ::MediaGallery
         else
           "try_longer_or_closer_to_original"
         end
+    end
+
+    def annotate_v9_decision_diagnostics!(result)
+      return unless result.is_a?(Hash)
+      meta = result["meta"] ||= {}
+      cands = Array(result["candidates"])
+      top = cands[0].is_a?(Hash) ? cands[0] : {}
+      second = cands[1].is_a?(Hash) ? cands[1] : {}
+      return if top.blank?
+
+      weighted_top = candidate_value(top, :match_ratio_weighted)
+      weighted_second = candidate_value(second, :match_ratio_weighted)
+      adaptive_top = candidate_value(top, :match_ratio_adaptive_weighted)
+      adaptive_second = candidate_value(second, :match_ratio_adaptive_weighted)
+      high_quality_top = candidate_value(top, :high_quality_match_ratio_weighted)
+      high_quality_second = candidate_value(second, :high_quality_match_ratio_weighted)
+
+      meta["top_match_ratio_weighted"] = weighted_top.round(4)
+      meta["second_match_ratio_weighted"] = weighted_second.round(4)
+      meta["weighted_match_delta"] = (weighted_top - weighted_second).round(4)
+      meta["top_match_ratio_adaptive_weighted"] = adaptive_top.round(4)
+      meta["second_match_ratio_adaptive_weighted"] = adaptive_second.round(4)
+      meta["adaptive_match_delta"] = (adaptive_top - adaptive_second).round(4)
+      meta["top_high_quality_match_ratio_weighted"] = high_quality_top.round(4)
+      meta["second_high_quality_match_ratio_weighted"] = high_quality_second.round(4)
+      meta["high_quality_match_delta_weighted"] = (high_quality_top - high_quality_second).round(4)
+      meta["v9_decision_metric_note"] = "v9 uses weighted/high-quality/chunk evidence for likely decisions; raw match_ratio is shown only as one diagnostic." if v9_layout_result?(result)
+    rescue
+      nil
+    end
+
+    def annotate_partial_clip_offset_diagnostics!(result)
+      return unless result.is_a?(Hash)
+      meta = result["meta"] ||= {}
+      return if meta["source_mode"].to_s == "hls_playlist"
+
+      chosen = meta["chosen_offset_segments"].to_i
+      effective = meta["effective_max_offset_segments"].to_i
+      seg = meta["segment_seconds"].to_f
+      seg = 0.0 if seg.nan? || seg.infinite? || seg.negative?
+      return if effective <= 0
+
+      meta["offset_estimated_clip_start_segment"] = chosen
+      meta["offset_estimated_clip_start_seconds"] = (chosen.to_f * seg).round(3) if seg.positive?
+      meta["offset_diagnostic_note"] = "For partial MP4/file-mode uploads, offset is the inferred original HLS segment start of the clip. A non-zero offset is normal when the test download starts later than segment 0."
+    rescue
+      nil
     end
 
     def classify_decision(result)
@@ -1419,6 +1505,43 @@ module ::MediaGallery
         return {
           decision: "likely_match",
           reasons: ["v9_single_candidate_likely_guardrails_passed"],
+          mode: mode,
+          top_ratio: top,
+          second_ratio: second,
+          delta: delta,
+          mismatches: mismatches,
+          compared: compared,
+          mismatch_rate: mismatch_rate,
+          top_evidence_score: top_evidence_score,
+          top_consistent_chunks: top_consistent_chunks,
+          shortlist_evidence_gap: shortlist_evidence_gap,
+        }
+      end
+
+      top_high_quality_weighted = candidate_value(top_cand, :high_quality_match_ratio_weighted)
+      second_high_quality_weighted = candidate_value(second_cand, :high_quality_match_ratio_weighted)
+      high_quality_delta = top_high_quality_weighted - second_high_quality_weighted
+      rank_gap = result.dig("meta", "shortlist_rank_gap").to_f
+      rank_gap = top_cand["rank_score"].to_f - second_cand["rank_score"].to_f if rank_gap <= 0.0 && second_cand.present?
+
+      v9_multi_candidate_likely =
+        !single_candidate_population &&
+        v9_layout_result?(result) &&
+        usable >= thresholds[:v9_min_usable_likely_multi_candidate].to_i &&
+        top >= thresholds[:v9_min_weighted_likely_multi_candidate].to_f &&
+        delta >= thresholds[:v9_min_weighted_delta_likely_multi_candidate].to_f &&
+        top_high_quality_weighted >= thresholds[:v9_min_high_quality_likely_multi_candidate].to_f &&
+        high_quality_delta >= thresholds[:v9_min_high_quality_delta_likely_multi_candidate].to_f &&
+        mismatch_rate <= thresholds[:v9_max_mismatch_rate_likely_multi_candidate].to_f &&
+        top_evidence_score >= thresholds[:v9_min_evidence_likely_multi_candidate].to_f &&
+        shortlist_evidence_gap >= thresholds[:v9_min_evidence_gap_likely_multi_candidate].to_f &&
+        rank_gap >= thresholds[:v9_min_rank_gap_likely_multi_candidate].to_f &&
+        top_consistent_chunks >= thresholds[:v9_min_consistent_chunks_likely_multi_candidate].to_i
+
+      if v9_multi_candidate_likely
+        return {
+          decision: "likely_match",
+          reasons: ["v9_multi_candidate_weighted_evidence_guardrails_passed"],
           mode: mode,
           top_ratio: top,
           second_ratio: second,
