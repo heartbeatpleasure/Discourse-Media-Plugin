@@ -3546,10 +3546,16 @@ module ::MediaGallery
 
       out = []
       last_extinf = nil
+      media_sequence = 0
 
       File.read(pl).to_s.each_line do |line|
         l = line.to_s.strip
         next if l.blank?
+
+        if l.start_with?("#EXT-X-MEDIA-SEQUENCE:")
+          media_sequence = [l.sub("#EXT-X-MEDIA-SEQUENCE:", "").to_i, 0].max
+          next
+        end
 
         if l.start_with?("#EXTINF:")
           dur_s = l.sub("#EXTINF:", "").split(",").first.to_s
@@ -3561,7 +3567,8 @@ module ::MediaGallery
         next if l.start_with?("#")
         next if last_extinf.blank?
 
-        out << { uri: l, duration: last_extinf.to_f }
+        out << { uri: l, duration: last_extinf.to_f, media_sequence: media_sequence }
+        media_sequence += 1
         last_extinf = nil
       end
 
@@ -3590,6 +3597,197 @@ module ::MediaGallery
     end
     private_class_method :reference_table_offsets_for
 
+    def reference_aes128_encryption_for(media_item:, variant:)
+      return nil unless defined?(::MediaGallery::Hls) && defined?(::MediaGallery::HlsAes128)
+
+      encryption = ::MediaGallery::Hls.aes128_encryption_meta_for(media_item)
+      if encryption.present?
+        encryption = encryption.deep_stringify_keys
+        return encryption if encryption["method"].to_s.casecmp("AES-128").zero? && encryption["key_id"].to_s.present?
+      end
+
+      # Managed-role metadata is the normal source, but keep a conservative
+      # playlist fallback for older/staged packages where the role was not yet
+      # enriched with encryption metadata.
+      pl = packaged_variant_playlist_path_for(media_item: media_item, variant: variant)
+      raw = File.exist?(pl.to_s) ? File.read(pl.to_s) : nil
+      raw.to_s.each_line do |line|
+        l = line.to_s.strip
+        next unless l.match?(/\A#EXT-X-KEY:/i) && l.match?(/METHOD=AES-128/i)
+
+        uri = l[/URI="([^"]+)"/, 1].to_s
+        key_id = ::MediaGallery::HlsAes128.key_id_from_placeholder_uri(uri)
+        next if key_id.blank?
+
+        iv_hex = l[/IV=0x([0-9a-fA-F]{32})/, 1]
+        return {
+          "method" => "AES-128",
+          "scheme" => ::MediaGallery::HlsAes128::SCHEME_SINGLE_KEY_V1,
+          "key_id" => key_id,
+          "iv_hex" => iv_hex.to_s.presence,
+          "source" => "template_playlist"
+        }.compact
+      end
+
+      nil
+    rescue
+      nil
+    end
+    private_class_method :reference_aes128_encryption_for
+
+    def reference_aes128_key_bytes(media_item:, encryption:, variant:)
+      return nil unless defined?(::MediaGallery::HlsAes128)
+      key_id = ::MediaGallery::HlsAes128.normalize_key_id(encryption.to_h["key_id"].to_s)
+      key_bytes = ::MediaGallery::HlsAes128.fetch_key_bytes(
+        item: media_item,
+        key_id: key_id,
+        variant: variant,
+      )
+      return nil unless ::MediaGallery::HlsAes128.valid_key_bytes?(key_bytes)
+
+      key_bytes.b
+    rescue
+      nil
+    end
+    private_class_method :reference_aes128_key_bytes
+
+    def reference_media_sequence_for_segment(entry:, fallback_index:)
+      if entry.is_a?(Hash) && entry.key?(:media_sequence)
+        return [entry[:media_sequence].to_i, 0].max
+      end
+
+      uri = entry.is_a?(Hash) ? entry[:uri].to_s : ""
+      seg_idx = ::MediaGallery::Fingerprinting.segment_index_from_filename(File.basename(uri)) rescue nil
+      seg_idx.present? ? seg_idx.to_i : [fallback_index.to_i, 0].max
+    rescue
+      [fallback_index.to_i, 0].max
+    end
+    private_class_method :reference_media_sequence_for_segment
+
+    def reference_aes128_iv_hex_for(entry:, fallback_index:)
+      format("%032x", reference_media_sequence_for_segment(entry: entry, fallback_index: fallback_index))
+    rescue
+      format("%032x", [fallback_index.to_i, 0].max)
+    end
+    private_class_method :reference_aes128_iv_hex_for
+
+    def build_reference_sampling_playlist!(source_playlist_path:, dest_playlist_path:, stage_dir:, prefix:, entries:, encryption:, key_uri:)
+      source_dir = File.dirname(source_playlist_path.to_s)
+      segment_dir = File.join(stage_dir.to_s, prefix.to_s)
+      FileUtils.mkdir_p(segment_dir)
+
+      fixed_iv = if defined?(::MediaGallery::HlsAes128)
+        ::MediaGallery::HlsAes128.normalize_iv_hex(encryption.to_h["iv_hex"])
+      end
+
+      target_duration = Array(entries).map { |entry| entry[:duration].to_f }.select { |v| v > 0.0 }.max.to_f.ceil
+      target_duration = 1 if target_duration <= 0
+
+      body = []
+      body << "#EXTM3U"
+      body << "#EXT-X-VERSION:3"
+      body << "#EXT-X-PLAYLIST-TYPE:VOD"
+      body << "#EXT-X-TARGETDURATION:#{target_duration}"
+      body << "#EXT-X-MEDIA-SEQUENCE:0"
+      if fixed_iv.present?
+        body << "#EXT-X-KEY:METHOD=AES-128,URI=\"#{File.basename(key_uri.to_s)}\",IV=0x#{fixed_iv}"
+      end
+
+      Array(entries).each_with_index do |entry, idx|
+        uri = entry[:uri].to_s
+        filename = File.basename(uri)
+        next if filename.blank? || filename.start_with?(".")
+
+        src = File.join(source_dir, filename)
+        next unless File.exist?(src)
+
+        dst = File.join(segment_dir, filename)
+        unless File.exist?(dst)
+          begin
+            FileUtils.ln_s(src, dst)
+          rescue
+            FileUtils.cp(src, dst)
+          end
+        end
+
+        if fixed_iv.blank?
+          iv = reference_aes128_iv_hex_for(entry: entry, fallback_index: idx)
+          body << "#EXT-X-KEY:METHOD=AES-128,URI=\"#{File.basename(key_uri.to_s)}\",IV=0x#{iv}"
+        end
+
+        dur = entry[:duration].to_f
+        dur = ::MediaGallery::Hls.segment_duration_seconds.to_f if dur <= 0.0 && defined?(::MediaGallery::Hls)
+        dur = 3.0 if dur <= 0.0
+        body << format("#EXTINF:%.6f,", dur)
+        body << File.join(prefix.to_s, filename)
+      end
+
+      body << "#EXT-X-ENDLIST"
+      File.write(dest_playlist_path, body.join("\n") + "\n")
+      dest_playlist_path
+    end
+    private_class_method :build_reference_sampling_playlist!
+
+    def prepare_reference_sampling_context(media_item:, root:, variant:, a_playlist_path:, b_playlist_path:, entries:)
+      encryption = reference_aes128_encryption_for(media_item: media_item, variant: variant)
+      return { a_playlist: a_playlist_path, b_playlist: b_playlist_path, input_options: [], encrypted: false, method: "clear_hls_reference" } unless encryption.present?
+
+      key_bytes = reference_aes128_key_bytes(media_item: media_item, encryption: encryption, variant: variant)
+      return { a_playlist: a_playlist_path, b_playlist: b_playlist_path, input_options: [], encrypted: true, method: "aes128_reference_unavailable" } if key_bytes.blank?
+
+      stage_dir = Dir.mktmpdir("media_gallery_forensics_reference")
+      key_uri = ::MediaGallery::HlsAes128.key_uri_placeholder(encryption["key_id"].to_s.presence || variant.to_s.presence || "v0")
+      key_path = File.join(stage_dir, key_uri)
+      File.binwrite(key_path, key_bytes)
+      File.chmod(0o600, key_path) rescue nil
+
+      a_local = File.join(stage_dir, "reference_a.m3u8")
+      b_local = File.join(stage_dir, "reference_b.m3u8")
+      build_reference_sampling_playlist!(
+        source_playlist_path: a_playlist_path,
+        dest_playlist_path: a_local,
+        stage_dir: stage_dir,
+        prefix: "a",
+        entries: entries,
+        encryption: encryption,
+        key_uri: key_uri,
+      )
+      build_reference_sampling_playlist!(
+        source_playlist_path: b_playlist_path,
+        dest_playlist_path: b_local,
+        stage_dir: stage_dir,
+        prefix: "b",
+        entries: entries,
+        encryption: encryption,
+        key_uri: key_uri,
+      )
+
+      {
+        a_playlist: a_local,
+        b_playlist: b_local,
+        input_options: ["-protocol_whitelist", "file,crypto,data,pipe", "-allowed_extensions", "ALL"],
+        encrypted: true,
+        method: "aes128_local_reference_playlists",
+        stage_dir: stage_dir,
+      }
+    rescue
+      begin
+        FileUtils.rm_rf(stage_dir) if defined?(stage_dir) && stage_dir.present?
+      rescue
+        nil
+      end
+      { a_playlist: a_playlist_path, b_playlist: b_playlist_path, input_options: [], encrypted: encryption.present?, method: "reference_sampling_context_failed" }
+    end
+    private_class_method :prepare_reference_sampling_context
+
+    def cleanup_reference_sampling_context!(context)
+      stage_dir = context.is_a?(Hash) ? context[:stage_dir].to_s : ""
+      FileUtils.rm_rf(stage_dir) if stage_dir.present? && Dir.exist?(stage_dir)
+    rescue
+      nil
+    end
+    private_class_method :cleanup_reference_sampling_context!
+
     # Builds (and caches) per-segment reference thresholds derived from the packaged A/B variants.
     # This makes A/B classification much more robust for re-encodes/screen recordings, because we
     # compare the leak score against the content-matched A and B scores for the *same* segment.
@@ -3617,7 +3815,7 @@ module ::MediaGallery
       "na"
     end
 
-  cache_path = File.join(root, "forensics_reference_v3_#{spec[:layout].to_s.presence || 'layout'}.json")
+  cache_path = File.join(root, "forensics_reference_v4_#{spec[:layout].to_s.presence || 'layout'}.json")
   cache = (JSON.parse(File.read(cache_path)) rescue nil) if File.exist?(cache_path)
 
   if cache.is_a?(Hash) && cache["spec_hash"].to_s == spec_hash && cache["thr"].is_a?(Array) && cache["delta"].is_a?(Array)
@@ -3626,7 +3824,7 @@ module ::MediaGallery
     if thr.length >= needed && delta.length >= needed
       med = cache["delta_median"].to_f
       med = 1.0 if med <= 0
-      return { thr: thr, delta: delta, delta_median: med, samples_per_segment: cache["samples_per_segment"].to_f > 0.0 ? cache["samples_per_segment"].to_f : 1.0 }
+      return { thr: thr, delta: delta, delta_median: med, samples_per_segment: cache["samples_per_segment"].to_f > 0.0 ? cache["samples_per_segment"].to_f : 1.0, cache_version: cache["cache_version"].to_s.presence || "v4", source_encrypted: ActiveModel::Type::Boolean.new.cast(cache["source_encrypted"]), sampling_method: cache["sampling_method"].to_s.presence || "cached" }
     end
   end
 
@@ -3655,16 +3853,32 @@ module ::MediaGallery
   per_segment_a = Hash.new { |h, k| h[k] = [] }
   per_segment_b = Hash.new { |h, k| h[k] = [] }
   chunk = 25
+  sampling_context = prepare_reference_sampling_context(
+    media_item: media_item,
+    root: root,
+    variant: variant,
+    a_playlist_path: a_pl,
+    b_playlist_path: b_pl,
+    entries: segs,
+  )
 
-  sample_plan.each_slice(chunk) do |slice|
-    slice_times = slice.map { |entry| entry[:time].to_f }
-    sa = Array(sample_scores_batch_single(file_path: a_pl, times: slice_times, spec: spec))
-    sb = Array(sample_scores_batch_single(file_path: b_pl, times: slice_times, spec: spec))
-    slice.each_with_index do |entry, k|
-      idx = entry[:index].to_i
-      per_segment_a[idx] << (sa[k] || 0).to_f
-      per_segment_b[idx] << (sb[k] || 0).to_f
+  begin
+    a_sample_pl = sampling_context[:a_playlist].to_s.presence || a_pl
+    b_sample_pl = sampling_context[:b_playlist].to_s.presence || b_pl
+    input_options = Array(sampling_context[:input_options])
+
+    sample_plan.each_slice(chunk) do |slice|
+      slice_times = slice.map { |entry| entry[:time].to_f }
+      sa = Array(sample_scores_batch_single(file_path: a_sample_pl, times: slice_times, spec: spec, input_options: input_options))
+      sb = Array(sample_scores_batch_single(file_path: b_sample_pl, times: slice_times, spec: spec, input_options: input_options))
+      slice.each_with_index do |entry, k|
+        idx = entry[:index].to_i
+        per_segment_a[idx] << (sa[k] || 0).to_f
+        per_segment_b[idx] << (sb[k] || 0).to_f
+      end
     end
+  ensure
+    cleanup_reference_sampling_context!(sampling_context)
   end
 
   thr = []
@@ -3686,6 +3900,9 @@ module ::MediaGallery
       JSON.pretty_generate({
         "layout" => spec[:layout].to_s,
         "spec_hash" => spec_hash,
+        "cache_version" => "v4",
+        "source_encrypted" => sampling_context.is_a?(Hash) && sampling_context[:encrypted] == true,
+        "sampling_method" => sampling_context.is_a?(Hash) ? sampling_context[:method].to_s : nil,
         "thr" => thr,
         "delta" => delta,
         "delta_median" => delta_median,
@@ -3701,7 +3918,10 @@ module ::MediaGallery
     thr: thr,
     delta: delta,
     delta_median: delta_median,
-    samples_per_segment: sample_plan.length > 0 ? (sample_plan.length.to_f / needed.to_f).round(2) : 1.0
+    samples_per_segment: sample_plan.length > 0 ? (sample_plan.length.to_f / needed.to_f).round(2) : 1.0,
+    cache_version: "v4",
+    source_encrypted: sampling_context.is_a?(Hash) && sampling_context[:encrypted] == true,
+    sampling_method: sampling_context.is_a?(Hash) ? sampling_context[:method].to_s : nil
   }
 rescue
   nil
@@ -4931,7 +5151,7 @@ end
           ref = reference_tables_for(media_item: media_item, spec: spec, needed_count: needed_ref)
 
           if ref && ref[:thr].is_a?(Array) && ref[:delta].is_a?(Array)
-            return match_fingerprints_with_reference(
+            reference_result = match_fingerprints_with_reference(
               fps: fps,
               media_item: media_item,
               scores: observed_scores,
@@ -4948,6 +5168,11 @@ end
               started_at: started_at,
               time_budget_seconds: time_budget_seconds
             )
+            reference_result[:meta] ||= {}
+            reference_result[:meta][:reference_cache_version] = ref[:cache_version].to_s.presence if ref[:cache_version].present?
+            reference_result[:meta][:reference_source_encrypted] = (ref[:source_encrypted] == true)
+            reference_result[:meta][:reference_sampling_method] = ref[:sampling_method].to_s.presence if ref[:sampling_method].present?
+            return reference_result
           end
         rescue
           # fall back to the legacy path
@@ -5697,7 +5922,7 @@ end
     # --------------------- batch sampling ---------------------------------
 
     # Returns an Array of numeric scores (one per time). Does not apply confidence gating.
-    def sample_scores_batch_single(file_path:, times:, spec:)
+    def sample_scores_batch_single(file_path:, times:, spec:, input_options: nil)
       times = Array(times).map { |t| t.to_f }.select { |t| t >= 0.0 }
       return [] if times.empty?
 
@@ -5717,7 +5942,8 @@ end
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec) }
+          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec) },
+          input_options: input_options
         )
 
         out = []
@@ -5737,7 +5963,8 @@ end
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_tile_filter(in_label: in_label, tiles: tiles, box: box) }
+          filter_builder: lambda { |in_label| build_tile_filter(in_label: in_label, tiles: tiles, box: box) },
+          input_options: input_options
         )
 
         out = []
@@ -6673,7 +6900,7 @@ def clamp_time(t, duration_seconds:)
     end
     private_class_method :ffmpeg_sample_raw
 
-    def ffmpeg_sample_raw_multi(file_path:, times:, expected_bytes_per_frame:, filter_builder:)
+    def ffmpeg_sample_raw_multi(file_path:, times:, expected_bytes_per_frame:, filter_builder:, input_options: nil)
       times = Array(times).map { |t| t.to_f }
       return nil if times.empty?
 
@@ -6686,8 +6913,11 @@ def clamp_time(t, duration_seconds:)
         "-nostats",
       ]
 
+      input_opts = Array(input_options).map(&:to_s).reject(&:blank?)
       times.each do |t|
-        cmd += ["-ss", t.to_s, "-i", file_path]
+        cmd += ["-ss", t.to_s]
+        cmd += input_opts if input_opts.present?
+        cmd += ["-i", file_path]
       end
 
       filters = []
