@@ -867,32 +867,31 @@ module ::MediaGallery
       # Keep the search query itself lightweight. Usernames are prefetched in one
       # separate pluck for the returned candidate batch so serialization cannot
       # accidentally perform N+1 user lookups.
+      item_table = ::MediaGallery::MediaItem.table_name
       scope = ::MediaGallery::MediaItem.order(created_at: :desc)
       q = ::MediaGallery::TextSanitizer.search_query(params[:q], max_length: 200)
 
       if q.present?
-        if q =~ /\A\d+\z/
-          scope = scope.where(id: q.to_i)
-        else
-          like = "%#{q}%"
-          scope = scope.where(
-            "public_id ILIKE :q OR title ILIKE :q OR media_type ILIKE :q",
-            q: like
-          )
-        end
+        like = "%#{ActiveRecord::Base.sanitize_sql_like(q)}%"
+        numeric_id = q =~ /\A\d+\z/ ? q.to_i : nil
+        scope = scope.left_outer_joins(:user).where(
+          "#{item_table}.public_id ILIKE :q OR "             "#{item_table}.title ILIKE :q OR "             "#{item_table}.media_type ILIKE :q OR "             "#{item_table}.tags::text ILIKE :q OR "             "users.username ILIKE :q OR "             "users.name ILIKE :q OR "             "(:numeric_id IS NOT NULL AND #{item_table}.id = :numeric_id)",
+          q: like,
+          numeric_id: numeric_id,
+        )
       end
 
       backend = params[:backend].to_s.strip
-      scope = scope.where(managed_storage_backend: backend) if %w[local s3].include?(backend)
+      scope = scope.where(item_table => { managed_storage_backend: backend }) if %w[local s3].include?(backend)
 
       gender = params[:gender].to_s.strip
-      scope = scope.where(gender: gender) if ::MediaGallery::MediaItem::GENDERS.include?(gender)
+      scope = scope.where(item_table => { gender: gender }) if ::MediaGallery::MediaItem::GENDERS.include?(gender)
 
       status = params[:status].to_s.strip
-      scope = scope.where(status: status) if status.present?
+      scope = scope.where(item_table => { status: status }) if status.present?
 
       media_type = params[:media_type].to_s.strip
-      scope = scope.where(media_type: media_type) if %w[audio image video].include?(media_type)
+      scope = scope.where(item_table => { media_type: media_type }) if %w[audio image video].include?(media_type)
 
       hidden_filter = params[:hidden].to_s.strip
       case hidden_filter
@@ -924,9 +923,9 @@ module ::MediaGallery
       when "oldest"
         scope.reorder(created_at: :asc)
       when "title_asc"
-        scope.reorder(Arel.sql("LOWER(title) ASC"), created_at: :desc)
+        scope.reorder(Arel.sql("LOWER(#{item_table}.title) ASC"), created_at: :desc)
       when "title_desc"
-        scope.reorder(Arel.sql("LOWER(title) DESC"), created_at: :desc)
+        scope.reorder(Arel.sql("LOWER(#{item_table}.title) DESC"), created_at: :desc)
       when "updated_desc"
         scope.reorder(updated_at: :desc)
       else

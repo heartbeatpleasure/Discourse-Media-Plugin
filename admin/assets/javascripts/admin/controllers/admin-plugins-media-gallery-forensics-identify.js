@@ -1004,32 +1004,38 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @action
   onSearchTypeFilterChange(event) {
     this.searchTypeFilter = event?.target?.value || "all";
+    this._debouncedSearch();
   }
 
   @action
   onSearchStatusFilterChange(event) {
     this.searchStatusFilter = event?.target?.value || "all";
+    this._debouncedSearch();
   }
 
   @action
   onSearchBackendFilterChange(event) {
     this.searchBackendFilter = event?.target?.value || "all";
+    this._debouncedSearch();
   }
 
   @action
   onSearchHlsFilterChange(event) {
     this.searchHlsFilter = event?.target?.value || "all";
+    this._debouncedSearch();
   }
 
   @action
   onSearchLimitChange(event) {
     const value = parseInt(event?.target?.value, 10);
     this.searchLimit = Number.isFinite(value) && value > 0 ? value : 20;
+    this._debouncedSearch();
   }
 
   @action
   onSearchSortChange(event) {
     this.searchSort = event?.target?.value || "newest";
+    this._debouncedSearch();
   }
 
   @action
@@ -1070,6 +1076,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     }, 300);
   }
 
+  @action
   async search() {
     this.searchError = "";
     this.lookupError = "";
