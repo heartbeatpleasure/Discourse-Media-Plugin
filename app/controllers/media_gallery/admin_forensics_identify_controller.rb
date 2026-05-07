@@ -63,7 +63,7 @@ module ::MediaGallery
             </p>
 
             <p>
-              <label>Max samples (frames): <input type="number" name="max_samples" value="60" min="5" max="200"></label>
+              <label>Max samples (frames): <input type="number" name="max_samples" value="60" min="5" max="600"></label>
             </p>
 
             <p>
@@ -112,7 +112,7 @@ module ::MediaGallery
 
       max_samples = params[:max_samples].to_i
       max_samples = 60 if max_samples <= 0
-      max_samples = [max_samples, 200].min
+      max_samples = [max_samples, 600].min
 
       max_offset = params[:max_offset_segments].to_i
       max_offset = 30 if max_offset.negative?
@@ -243,7 +243,7 @@ module ::MediaGallery
 
       max_samples = params[:max_samples].to_i
       max_samples = 60 if max_samples <= 0
-      max_samples = [max_samples, 200].min
+      max_samples = [max_samples, 600].min
 
       max_offset = params[:max_offset_segments].to_i
       max_offset = 30 if max_offset.negative?

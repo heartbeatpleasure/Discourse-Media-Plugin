@@ -706,6 +706,8 @@ module ::MediaGallery
       seg_counter = 0
       public_id = item.public_id.to_s
       codebook_scheme = packaged_codebook_scheme_for(item)
+      delivery_sequence = []
+      delivery_segment_indices = []
 
       raw.to_s.each_line do |line|
         l = line.rstrip
@@ -731,13 +733,14 @@ module ::MediaGallery
         seg = File.basename(l)
         if seg =~ /\A[\w\-.]+\.(ts|m4s)\z/i
           ab = nil
+          seg_idx = nil
           if MediaGallery::Fingerprinting.enabled? && fingerprint_id.present? && media_item_id.present?
-            idx = MediaGallery::Fingerprinting.segment_index_from_filename(seg)
-            idx ||= seg_counter
+            seg_idx = MediaGallery::Fingerprinting.segment_index_from_filename(seg)
+            seg_idx ||= seg_counter
             ab = MediaGallery::Fingerprinting.expected_variant_for_segment(
               fingerprint_id: fingerprint_id,
               media_item_id: media_item_id,
-              segment_index: idx,
+              segment_index: seg_idx,
               codebook: codebook_scheme
             )
           end
@@ -745,6 +748,8 @@ module ::MediaGallery
           seg_counter += 1
 
           if ab.present?
+            delivery_sequence << ab.to_s
+            delivery_segment_indices << (seg_idx || (seg_counter - 1)).to_i
             out << "/media/hls/#{public_id}/seg/#{variant}/#{ab}/#{seg}?token=#{token}"
           else
             out << "/media/hls/#{public_id}/seg/#{variant}/#{seg}?token=#{token}"
@@ -753,7 +758,53 @@ module ::MediaGallery
           out << l
         end
       end
-      out.join("\n") + "\n"
+
+      rewritten = out.join("\n") + "\n"
+      record_hls_delivery_receipt_once!(
+        item: item,
+        variant: variant,
+        token: token,
+        fingerprint_id: fingerprint_id,
+        sequence: delivery_sequence,
+        segment_indices: delivery_segment_indices,
+        manifest_body: rewritten,
+        codebook_scheme: codebook_scheme,
+        role: role
+      )
+      rewritten
+    end
+
+    def record_hls_delivery_receipt_once!(item:, variant:, token:, fingerprint_id:, sequence:, segment_indices:, manifest_body:, codebook_scheme:, role: nil)
+      return if fingerprint_id.blank? || sequence.blank?
+      return unless MediaGallery::Fingerprinting.enabled?
+
+      token_sha = Digest::SHA256.hexdigest(token.to_s)
+      seq_sha = Digest::SHA256.hexdigest(Array(sequence).join)
+      cache_key = "media_gallery:hls_delivery_receipt:v1:#{token_sha}:#{variant}:#{seq_sha}"
+      return if Rails.cache.read(cache_key) == true
+
+      meta = ::MediaGallery::Hls.fingerprint_meta_for(item, role: role, store: (role.present? ? hls_store_for(item, role) : nil)) rescue nil
+      layout = meta.is_a?(Hash) ? meta["layout"].to_s.presence : nil
+
+      ok = MediaGallery::Fingerprinting.record_hls_delivery_receipt!(
+        user_id: current_user&.id,
+        media_item_id: item.id,
+        fingerprint_id: fingerprint_id,
+        token: token,
+        variant: variant,
+        sequence: sequence,
+        segment_indices: segment_indices,
+        manifest_body: manifest_body,
+        codebook: codebook_scheme,
+        layout: layout,
+        ip: request.remote_ip,
+        user_agent: request.user_agent
+      )
+
+      Rails.cache.write(cache_key, true, expires_in: 5.minutes) if ok
+    rescue => e
+      Rails.logger.warn("[media_gallery] HLS delivery receipt failed public_id=#{item&.public_id} error=#{e.class}: #{e.message}") rescue nil
+      nil
     end
 
     def rewrite_aes128_key_tag(line, item:, variant:, token:, role: nil)

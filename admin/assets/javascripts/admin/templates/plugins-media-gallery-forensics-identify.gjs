@@ -1086,7 +1086,7 @@ export default RouteTemplate(
                   class="admin-input"
                   type="number"
                   min="5"
-                  max="200"
+                  max="600"
                   value={{@controller.maxSamples}}
                   {{on "input" @controller.onMaxSamplesInput}}
                 />

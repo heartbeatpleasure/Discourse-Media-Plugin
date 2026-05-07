@@ -35,7 +35,10 @@ module ::MediaGallery
 
       max_samples = max_samples.to_i
       max_samples = 60 if max_samples <= 0
-      max_samples = [max_samples, 200].min
+      # Background jobs can now use the one-pass streaming sampler, so allow
+      # enough segment observations for long full/partial HLS-derived MP4s.
+      max_samples = [max_samples, 320].max if async_mode && max_samples <= 60
+      max_samples = [max_samples, 600].min
 
       max_offset = max_offset_segments.to_i
       max_offset = 30 if max_offset.negative?
@@ -49,12 +52,24 @@ module ::MediaGallery
       engine_budget = budgets[:engine]
 
       capped_max_samples = max_samples
-      if file_mb >= FILEMODE_AUTOCAP_MB_3
-        capped_max_samples = [capped_max_samples, (async_mode ? 55 : 25)].min
-      elsif file_mb >= FILEMODE_AUTOCAP_MB_2
-        capped_max_samples = [capped_max_samples, (async_mode ? 60 : 35)].min
-      elsif file_mb >= FILEMODE_AUTOCAP_MB_1
-        capped_max_samples = [capped_max_samples, (async_mode ? 55 : 45)].min
+      if async_mode
+        # Keep async caps high; ForensicsIdentify will still apply duration/file-size
+        # caps, but those are now relaxed when the engine budget is large enough.
+        if file_mb >= FILEMODE_AUTOCAP_MB_3
+          capped_max_samples = [capped_max_samples, 360].min
+        elsif file_mb >= FILEMODE_AUTOCAP_MB_2
+          capped_max_samples = [capped_max_samples, 320].min
+        elsif file_mb >= FILEMODE_AUTOCAP_MB_1
+          capped_max_samples = [capped_max_samples, 280].min
+        end
+      else
+        if file_mb >= FILEMODE_AUTOCAP_MB_3
+          capped_max_samples = [capped_max_samples, 25].min
+        elsif file_mb >= FILEMODE_AUTOCAP_MB_2
+          capped_max_samples = [capped_max_samples, 35].min
+        elsif file_mb >= FILEMODE_AUTOCAP_MB_1
+          capped_max_samples = [capped_max_samples, 45].min
+        end
       end
 
       base_meta = {

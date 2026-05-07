@@ -591,6 +591,13 @@ module ::MediaGallery
             match[:meta][:file_keyframe_plan_used] = use_inferred_sample_plan
             match[:meta][:file_keyframe_plan_rejected_reason] = keyframe_plan_rejected_reason if keyframe_plan_rejected_reason.present?
           end
+          if obs.is_a?(Hash) && obs[:streaming_sampler_used]
+            match[:meta][:filemode_streaming_sampler_used] = true
+            match[:meta][:filemode_streaming_sample_interval_seconds] = obs[:streaming_sample_interval_seconds].to_f.round(4)
+            match[:meta][:filemode_streaming_samples_requested] = obs[:streaming_samples_requested].to_i
+            match[:meta][:filemode_streaming_samples_returned] = obs[:streaming_samples_returned].to_i
+            match[:meta][:filemode_streaming_start_time_seconds] = obs[:streaming_start_time_seconds].to_f.round(4)
+          end
 
           refined = maybe_refine_filemode_observations(
             media_item: media_item,
@@ -1556,6 +1563,10 @@ module ::MediaGallery
 
       if usable >= 24 && top_ratio >= 0.74 && delta >= 0.10 && (evidence >= 3.0 || rank >= 8.0)
         return { use: true, reason: "direct_preflight_stable_enough", usable_samples: usable, top_ratio: top_ratio.round(4), delta: delta.round(4), evidence_score: evidence.round(4), rank_score: rank.round(4) }
+      end
+
+      if obs[:streaming_sampler_used] && usable >= 48 && delta >= 0.04
+        return { use: true, reason: "streaming_all_segment_preflight_preferred", usable_samples: usable, top_ratio: top_ratio.round(4), delta: delta.round(4), evidence_score: evidence.round(4), rank_score: rank.round(4) }
       end
 
       # When the direct preflight consumed a large share of the budget, avoid
@@ -3258,27 +3269,54 @@ module ::MediaGallery
       relaxed_budget = budget >= 150.0
 
       if duration_seconds.to_f > 0
-        if duration_seconds.to_f > 900
-          cap = [cap, (relaxed_budget ? 32 : 24)].min
-        elsif duration_seconds.to_f > 480
-          cap = [cap, (relaxed_budget ? 45 : 32)].min
-        elsif duration_seconds.to_f > 240
-          cap = [cap, (relaxed_budget ? 55 : 45)].min
-        elsif duration_seconds.to_f > 120
-          cap = [cap, (relaxed_budget ? 60 : 50)].min
+        if relaxed_budget
+          # Background/file-mode jobs can use the streaming sampler below, which
+          # reads many segment-midpoint frames in one ffmpeg pass. Keep generous
+          # caps so full clean/remuxed files can contribute enough A/B evidence.
+          if duration_seconds.to_f > 900
+            cap = [cap, 360].min
+          elsif duration_seconds.to_f > 480
+            cap = [cap, 320].min
+          elsif duration_seconds.to_f > 240
+            cap = [cap, 260].min
+          elsif duration_seconds.to_f > 120
+            cap = [cap, 200].min
+          end
+        else
+          if duration_seconds.to_f > 900
+            cap = [cap, 24].min
+          elsif duration_seconds.to_f > 480
+            cap = [cap, 32].min
+          elsif duration_seconds.to_f > 240
+            cap = [cap, 45].min
+          elsif duration_seconds.to_f > 120
+            cap = [cap, 50].min
+          end
         end
       end
 
       fs = file_size_bytes.to_i
       if fs > 0
-        if fs > 250 * 1024 * 1024
-          cap = [cap, (relaxed_budget ? 36 : 24)].min
-        elsif fs > 150 * 1024 * 1024
-          cap = [cap, (relaxed_budget ? 45 : 32)].min
-        elsif fs > 100 * 1024 * 1024
-          cap = [cap, (relaxed_budget ? 50 : 40)].min
-        elsif fs > 70 * 1024 * 1024
-          cap = [cap, (relaxed_budget ? 55 : 45)].min
+        if relaxed_budget
+          if fs > 250 * 1024 * 1024
+            cap = [cap, 360].min
+          elsif fs > 150 * 1024 * 1024
+            cap = [cap, 320].min
+          elsif fs > 100 * 1024 * 1024
+            cap = [cap, 280].min
+          elsif fs > 70 * 1024 * 1024
+            cap = [cap, 240].min
+          end
+        else
+          if fs > 250 * 1024 * 1024
+            cap = [cap, 24].min
+          elsif fs > 150 * 1024 * 1024
+            cap = [cap, 32].min
+          elsif fs > 100 * 1024 * 1024
+            cap = [cap, 40].min
+          elsif fs > 70 * 1024 * 1024
+            cap = [cap, 45].min
+          end
         end
       end
 
@@ -3942,6 +3980,18 @@ module ::MediaGallery
         time_budget_seconds: time_budget_seconds
       )
 
+      streaming_obs = extract_observed_variants_streaming(
+        file_path: file_path,
+        segment_seconds: seg,
+        spec: spec,
+        sample_points: sample_points,
+        duration_seconds: duration,
+        effective_max_samples: cap,
+        started_at: started_at,
+        time_budget_seconds: time_budget_seconds
+      )
+      return streaming_obs if streaming_obs.present?
+
       pass1 = []
       used_times = []
       used_segment_indices = []
@@ -4090,6 +4140,81 @@ module ::MediaGallery
         quality_hints: {},
       }
     end
+
+    def extract_observed_variants_streaming(file_path:, segment_seconds:, spec:, sample_points:, duration_seconds:, effective_max_samples:, started_at:, time_budget_seconds:)
+      points = Array(sample_points)
+      return nil unless points.length >= 24
+      return nil unless grid_detector_layout?(spec.is_a?(Hash) ? spec[:layout] : nil)
+
+      times = points.map { |p| sample_point_time_value(p) }.select { |t| t >= 0.0 }
+      return nil unless times.length == points.length
+
+      intervals = times.each_cons(2).map { |a, b| (b.to_f - a.to_f).round(6) }.select { |v| v > 0.05 }
+      return nil if intervals.blank?
+
+      median_interval = median(intervals).to_f
+      seg = segment_seconds.to_f
+      seg = 6.0 if seg <= 0.0
+      tolerance = [[seg * 0.20, 0.18].max, 0.72].min
+      consistent = intervals.count { |iv| (iv - median_interval).abs <= tolerance }.to_f / intervals.length.to_f
+      return nil unless median_interval >= (seg * 0.55) && median_interval <= (seg * 1.55) && consistent >= 0.82
+
+      remaining = time_remaining_seconds(started_at: started_at, budget_seconds: time_budget_seconds)
+      return nil if remaining < 10.0
+
+      start_time = times.first.to_f
+      sampled = sample_variants_stream_single(
+        file_path: file_path,
+        start_time: start_time,
+        interval_seconds: median_interval,
+        frame_count: points.length,
+        spec: spec
+      )
+      return nil if sampled.blank?
+      return nil if sampled.length < [(points.length * 0.82).floor, 1].max
+
+      variants = sampled.map { |r| r[:variant] }
+      confidences = sampled.map { |r| r[:confidence] }
+      scores = sampled.map { |r| r[:score] }
+      payload_vectors = sampled.map { |r| Array(r[:payload_vector]).map { |v| v.to_f.round(4) } }
+      sync_scores = sampled.map { |r| r[:sync_score].to_f }
+      sync_confidences = sampled.map { |r| r[:sync_confidence].to_f }
+      sync_variants = sampled.map { |r| r[:sync_variant] }
+
+      usable = variants.count { |v| v.present? }
+      return nil if usable < [points.length * 0.08, 8].max
+
+      elapsed = started_at.present? ? (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at.to_f).round(3) : nil
+
+      {
+        duration_seconds: duration_seconds,
+        variants: variants,
+        confidences: confidences,
+        scores: scores,
+        payload_vectors: payload_vectors,
+        sync_scores: sync_scores,
+        sync_confidences: sync_confidences,
+        sync_variants: sync_variants,
+        times: times.first(sampled.length),
+        segment_indices: points.first(sampled.length).map { |pt| pt[:segment_index].to_i },
+        layout: spec[:layout].to_s,
+        truncated: sampled.length < points.length,
+        elapsed_seconds: elapsed,
+        effective_max_samples: effective_max_samples,
+        budget_exhausted: false,
+        sample_points: points.first(sampled.length),
+        quality_hints: {},
+        streaming_sampler_used: true,
+        streaming_sample_interval_seconds: median_interval,
+        streaming_start_time_seconds: start_time,
+        streaming_samples_requested: points.length,
+        streaming_samples_returned: sampled.length,
+      }
+    rescue => e
+      Rails.logger.debug("[media_gallery] streaming filemode sampler unavailable: #{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
     # Attempts to derive accurate segment midpoints from the packaged (template) HLS playlist on disk.
     # This avoids assuming fixed `segment_seconds` and reduces drift-related sampling errors.
     def packaged_total_duration_for(media_item:)
@@ -6722,6 +6847,83 @@ end
     end
     private_class_method :sample_scores_batch_single
 
+
+    def sample_variants_stream_single(file_path:, start_time:, interval_seconds:, frame_count:, spec:)
+      frames = frame_count.to_i
+      return [] if frames <= 0
+
+      interval = interval_seconds.to_f
+      interval = 3.0 if interval <= 0.0 || interval.nan? || interval.infinite?
+
+      kind = spec[:kind].to_s
+      kind = "pairs" if kind.blank? && spec[:pairs].present?
+      kind = "tiles" if kind.blank? && spec[:tiles].present?
+
+      if kind == "pairs"
+        main_pairs = Array(spec[:pairs])
+        pairs = analysis_pairs_for_spec(spec)
+        box = spec[:box_size_frac].to_f
+        box = 0.12 if box <= 0
+        pair_filter = build_pair_filter(in_label: nil, pairs: pairs, box: box, spec: spec)
+        expected = pair_filter[:expected_bytes]
+
+        raw = ffmpeg_sample_raw_stream(
+          file_path: file_path,
+          start_time: start_time,
+          interval_seconds: interval,
+          frame_count: frames,
+          expected_bytes_per_frame: expected,
+          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec) }
+        )
+
+        parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: Array.new(frames, 0.0)) do |bytes|
+          decoded = decode_pair_frame_bytes(bytes: bytes, main_pair_count: main_pairs.length, pairs: pairs, spec: spec, box: box)
+          variant = decoded[:variant]
+          variant = nil if decoded[:payload_confidence].to_f < MIN_CONFIDENCE
+          {
+            variant: variant,
+            confidence: decoded[:payload_confidence].to_f,
+            score: decoded[:payload_score].to_f,
+            sync_score: decoded[:sync_score].to_f,
+            sync_confidence: decoded[:sync_confidence].to_f,
+            sync_variant: decoded[:sync_variant],
+            payload_vector: Array(decoded[:payload_vector]).map { |v| v.to_f.round(4) }
+          }
+        end
+      else
+        tiles = spec[:tiles] || []
+        box = spec[:box_size_frac].to_f
+        box = 0.12 if box <= 0
+        expected = tiles.length * 2
+
+        raw = ffmpeg_sample_raw_stream(
+          file_path: file_path,
+          start_time: start_time,
+          interval_seconds: interval,
+          frame_count: frames,
+          expected_bytes_per_frame: expected,
+          filter_builder: lambda { |in_label| build_tile_filter(in_label: in_label, tiles: tiles, box: box) }
+        )
+
+        parse_batch_bytes(raw: raw, expected_bytes_per_frame: expected, times: Array.new(frames, 0.0)) do |bytes|
+          score = 0
+          tiles.length.times do |i|
+            inner = bytes[i * 2]
+            outer_m = bytes[i * 2 + 1]
+            score += (inner - outer_m)
+          end
+          conf = (score.abs.to_f / (tiles.length * 255.0)).round(4)
+          variant = score >= 0 ? "a" : "b"
+          variant = nil if conf < MIN_CONFIDENCE
+          { variant: variant, confidence: conf, score: score, sync_score: 0.0, sync_confidence: 0.0, sync_variant: nil, payload_vector: [] }
+        end
+      end
+    rescue => e
+      Rails.logger.debug("[media_gallery] streaming sample decode failed: #{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      []
+    end
+    private_class_method :sample_variants_stream_single
+
     def sample_variants_batch_single(file_path:, times:, spec:, input_options: nil)
       times = Array(times).map { |t| t.to_f }.select { |t| t >= 0.0 }
       return [] if times.empty?
@@ -7690,6 +7892,56 @@ def clamp_time(t, duration_seconds:)
       stdout
     end
     private_class_method :ffmpeg_sample_raw
+
+
+    def ffmpeg_sample_raw_stream(file_path:, start_time:, interval_seconds:, frame_count:, expected_bytes_per_frame:, filter_builder:)
+      frames = frame_count.to_i
+      return nil if frames <= 0
+
+      interval = interval_seconds.to_f
+      interval = 3.0 if interval <= 0.0 || interval.nan? || interval.infinite?
+      fps_value = (1.0 / interval).round(8)
+      start = start_time.to_f
+      start = 0.0 if start.nan? || start.infinite? || start.negative?
+
+      built = filter_builder.call("[sampled]")
+      filter = "[0:v]setpts=PTS-STARTPTS,fps=fps=#{fps_value}[sampled];#{built[:filter]}"
+
+      cmd = [
+        ::MediaGallery::Ffmpeg.ffmpeg_path,
+        *::MediaGallery::Ffmpeg.ffmpeg_common_args,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
+        "-ss",
+        start.to_s,
+        "-i",
+        file_path,
+        "-filter_complex",
+        filter,
+        "-map",
+        "[out]",
+        "-frames:v",
+        frames.to_s,
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "gray",
+        "-",
+      ]
+
+      stdout, _stderr, status = Open3.capture3(*cmd)
+      return nil unless status.success?
+
+      need = expected_bytes_per_frame.to_i * frames
+      return nil if need > 0 && stdout.to_s.bytesize < [expected_bytes_per_frame.to_i, 1].max
+
+      stdout
+    rescue
+      nil
+    end
+    private_class_method :ffmpeg_sample_raw_stream
 
     def ffmpeg_sample_raw_multi(file_path:, times:, expected_bytes_per_frame:, filter_builder:, input_options: nil)
       times = Array(times).map { |t| t.to_f }

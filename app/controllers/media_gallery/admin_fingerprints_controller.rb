@@ -78,6 +78,13 @@ module ::MediaGallery
             ip: s.ip,
             user_agent: s.user_agent,
             played_at: s.played_at,
+            hls_variant: (s.respond_to?(:hls_variant) ? s.hls_variant : nil),
+            hls_variant_sequence_length: (s.respond_to?(:hls_variant_sequence_length) ? s.hls_variant_sequence_length : nil),
+            hls_variant_sequence_sha256: (s.respond_to?(:hls_variant_sequence_sha256) ? s.hls_variant_sequence_sha256 : nil),
+            hls_manifest_sha256: (s.respond_to?(:hls_manifest_sha256) ? s.hls_manifest_sha256 : nil),
+            hls_delivery_signature: (s.respond_to?(:hls_delivery_signature) ? s.hls_delivery_signature : nil),
+            hls_delivery_meta: (s.respond_to?(:hls_delivery_meta) ? s.hls_delivery_meta : nil),
+            hls_variant_sequence_preview: (s.respond_to?(:hls_variant_sequence) && s.hls_variant_sequence.present? ? s.hls_variant_sequence.to_s[0, 160] : nil),
             created_at: s.created_at
           }
         }

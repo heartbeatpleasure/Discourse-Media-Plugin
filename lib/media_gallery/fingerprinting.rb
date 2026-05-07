@@ -310,6 +310,125 @@ module ::MediaGallery
       fp
     end
 
+
+
+    # Builds a compact, signed delivery receipt for an HLS A/B variant playlist.
+    # This is not a replacement for pixel detection; it is an audit trail showing
+    # which A/B sequence the server actually issued for a playback token.
+    def hls_delivery_receipt(media_item_id:, user_id:, fingerprint_id:, token:, variant:, sequence:, segment_indices: nil, manifest_body: nil, codebook: nil, layout: nil)
+      seq = Array(sequence).map { |v| v.to_s.downcase }.select { |v| %w[a b].include?(v) }.join
+      indices = Array(segment_indices).map { |v| v.to_i }
+      now = Time.now.utc
+      token_sha256 = Digest::SHA256.hexdigest(token.to_s)
+      sequence_sha256 = Digest::SHA256.hexdigest(seq)
+      manifest_sha256 = Digest::SHA256.hexdigest(manifest_body.to_s)
+
+      signed_payload = [
+        "hls_delivery_receipt_v1",
+        media_item_id.to_i,
+        user_id.to_i,
+        fingerprint_id.to_s,
+        token_sha256,
+        variant.to_s,
+        sequence_sha256,
+        seq.length,
+        indices.first,
+        indices.last,
+        codebook.to_s,
+        layout.to_s
+      ].join("|")
+
+      signature = OpenSSL::HMAC.hexdigest("SHA256", secret, signed_payload)
+
+      {
+        token_sha256: token_sha256,
+        hls_variant: variant.to_s.presence,
+        hls_variant_sequence: seq,
+        hls_variant_sequence_sha256: sequence_sha256,
+        hls_variant_sequence_length: seq.length,
+        hls_manifest_sha256: manifest_sha256,
+        hls_delivery_signature: signature,
+        hls_delivery_meta: {
+          version: 1,
+          recorded_at: now.iso8601,
+          codebook_scheme: codebook.to_s.presence,
+          layout: layout.to_s.presence,
+          segment_index_first: indices.first,
+          segment_index_last: indices.last,
+          segment_indices_count: indices.length,
+          a_count: seq.count("a"),
+          b_count: seq.count("b"),
+        }.compact,
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] HLS delivery receipt build failed media_item_id=#{media_item_id} user_id=#{user_id} error=#{e.class}: #{e.message}") rescue nil
+      nil
+    end
+
+    # Best-effort update of the playback session created when the token was issued.
+    # We update, rather than creating one row per playlist refresh, so repeated HLS
+    # polling does not explode the table size.
+    def record_hls_delivery_receipt!(user_id:, media_item_id:, fingerprint_id:, token:, variant:, sequence:, segment_indices: nil, manifest_body: nil, codebook: nil, layout: nil, ip: nil, user_agent: nil)
+      return false if user_id.blank? || media_item_id.blank? || fingerprint_id.blank? || token.blank?
+      return false if Array(sequence).blank?
+      return false unless defined?(MediaGallery::MediaPlaybackSession)
+
+      receipt = hls_delivery_receipt(
+        media_item_id: media_item_id,
+        user_id: user_id,
+        fingerprint_id: fingerprint_id,
+        token: token,
+        variant: variant,
+        sequence: sequence,
+        segment_indices: segment_indices,
+        manifest_body: manifest_body,
+        codebook: codebook,
+        layout: layout
+      )
+      return false unless receipt.is_a?(Hash)
+
+      token_sha = receipt[:token_sha256].to_s
+      rec = MediaGallery::MediaPlaybackSession.where(token_sha256: token_sha).order(id: :desc).first
+      unless rec
+        rec = MediaGallery::MediaPlaybackSession.create!(
+          user_id: user_id.to_i,
+          media_item_id: media_item_id.to_i,
+          fingerprint_id: fingerprint_id.to_s,
+          token_sha256: token_sha,
+          ip: ip.to_s.presence,
+          user_agent: user_agent.to_s.presence,
+          played_at: Time.now,
+        )
+      end
+
+      updates = {
+        hls_variant: receipt[:hls_variant],
+        hls_variant_sequence: receipt[:hls_variant_sequence],
+        hls_variant_sequence_sha256: receipt[:hls_variant_sequence_sha256],
+        hls_variant_sequence_length: receipt[:hls_variant_sequence_length],
+        hls_manifest_sha256: receipt[:hls_manifest_sha256],
+        hls_delivery_signature: receipt[:hls_delivery_signature],
+        hls_delivery_meta: receipt[:hls_delivery_meta],
+        played_at: rec.played_at || Time.now,
+        updated_at: Time.now,
+      }
+
+      if ip.to_s.present? && rec.respond_to?(:ip)
+        updates[:ip] = ip.to_s
+      end
+      if user_agent.to_s.present? && rec.respond_to?(:user_agent)
+        updates[:user_agent] = user_agent.to_s
+      end
+
+      rec.update_columns(updates.select { |k, _| rec.respond_to?(k) })
+      true
+    rescue ActiveRecord::StatementInvalid, ActiveModel::MissingAttributeError => e
+      Rails.logger.warn("[media_gallery] HLS delivery receipt skipped; run migrations? media_item_id=#{media_item_id} error=#{e.class}: #{e.message}") rescue nil
+      false
+    rescue => e
+      Rails.logger.warn("[media_gallery] HLS delivery receipt log failed media_item_id=#{media_item_id} user_id=#{user_id} error=#{e.class}: #{e.message}") rescue nil
+      false
+    end
     # Best-effort per-play session record. This is useful for investigations:
     # "who actually played this media and received which fingerprint_id".
     #

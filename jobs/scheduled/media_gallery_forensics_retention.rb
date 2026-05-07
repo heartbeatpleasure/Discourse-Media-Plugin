@@ -186,6 +186,12 @@ module ::Jobs
         "token_sha256",
         "ip",
         "user_agent",
+        "hls_variant",
+        "hls_variant_sequence_length",
+        "hls_variant_sequence_sha256",
+        "hls_manifest_sha256",
+        "hls_delivery_signature",
+        "hls_delivery_meta",
         "created_at"
       ]
 
@@ -208,6 +214,12 @@ module ::Jobs
                 csv_safe_cell(s.token_sha256),
                 csv_safe_cell(s.ip),
                 csv_safe_cell(s.user_agent),
+                csv_safe_cell(s.respond_to?(:hls_variant) ? s.hls_variant : nil),
+                csv_safe_cell(s.respond_to?(:hls_variant_sequence_length) ? s.hls_variant_sequence_length : nil),
+                csv_safe_cell(s.respond_to?(:hls_variant_sequence_sha256) ? s.hls_variant_sequence_sha256 : nil),
+                csv_safe_cell(s.respond_to?(:hls_manifest_sha256) ? s.hls_manifest_sha256 : nil),
+                csv_safe_cell(s.respond_to?(:hls_delivery_signature) ? s.hls_delivery_signature : nil),
+                csv_safe_cell(s.respond_to?(:hls_delivery_meta) ? s.hls_delivery_meta.to_json : nil),
                 csv_safe_cell(s.created_at&.iso8601)
               ]
             end
