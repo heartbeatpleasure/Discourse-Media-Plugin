@@ -151,6 +151,10 @@ module ::MediaGallery
     end
 
     def list_prefix(prefix, limit: nil)
+      list_prefix_entries(prefix, limit: limit).map { |entry| entry[:key] }
+    end
+
+    def list_prefix_entries(prefix, limit: nil)
       dir = absolute_path_for(prefix, allow_blank: true)
       return [] unless Dir.exist?(dir)
 
@@ -158,7 +162,14 @@ module ::MediaGallery
       Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).sort.each do |path|
         next if File.directory?(path)
 
-        entries << relative_key_for(path)
+        key = relative_key_for(path)
+        entries << {
+          key: key,
+          bytes: File.size(path),
+          content_type: nil,
+          backend: backend,
+          exists: true
+        }
         break if limit.present? && limit.to_i > 0 && entries.length >= limit.to_i
       end
       entries

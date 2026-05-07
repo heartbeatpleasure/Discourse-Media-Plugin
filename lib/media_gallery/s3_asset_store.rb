@@ -177,8 +177,12 @@ module ::MediaGallery
     end
 
     def list_prefix(prefix, limit: nil)
+      list_prefix_entries(prefix, limit: limit).map { |entry| entry[:key] }
+    end
+
+    def list_prefix_entries(prefix, limit: nil)
       pref = normalized_list_prefix(prefix)
-      keys = []
+      entries = []
       continuation_token = nil
       max_keys = nil
       if limit.present? && limit.to_i > 0
@@ -194,15 +198,22 @@ module ::MediaGallery
         )
 
         Array(result.contents).each do |obj|
-          keys << denormalized_key(obj.key)
-          return keys if limit.present? && limit.to_i > 0 && keys.length >= limit.to_i
+          entries << {
+            key: denormalized_key(obj.key),
+            bytes: obj.size.to_i,
+            content_type: nil,
+            backend: backend,
+            exists: true,
+            etag: obj.etag.to_s.delete('"')
+          }
+          return entries if limit.present? && limit.to_i > 0 && entries.length >= limit.to_i
         end
 
         break unless result.is_truncated
         continuation_token = result.next_continuation_token
       end
 
-      keys
+      entries
     end
 
     def list_scope_prefix

@@ -130,6 +130,10 @@ module ::MediaGallery
     private_class_method :target_summary_for
 
     def preview_role(item:, role_name:, role:, source_store:, target_store:)
+      if role_name.to_s == "hls"
+        return preview_hls_role(item: item, role_name: role_name, role: role, source_store: source_store, target_store: target_store)
+      end
+
       objects = enumerate_role_objects(item: item, role_name: role_name, role: role, source_store: source_store)
       warnings = []
       warnings << "source_store_unavailable" if source_store.blank? && role["backend"].to_s != "upload"
@@ -148,8 +152,6 @@ module ::MediaGallery
         }
       end
 
-      warnings << "hls_role_has_no_objects_on_source" if role_name.to_s == "hls" && object_rows.empty?
-
       {
         name: role_name,
         backend: role["backend"].to_s,
@@ -166,6 +168,49 @@ module ::MediaGallery
       }
     end
     private_class_method :preview_role
+
+    def preview_hls_role(item:, role_name:, role:, source_store:, target_store:)
+      source_store = local_store_for_hls(role, source_store)
+      prefix = hls_prefix_for(item, role)
+      warnings = []
+      warnings << "source_store_unavailable" if source_store.blank? && role["backend"].to_s != "upload"
+
+      source_entries = list_prefix_entries(source_store, prefix)
+      target_entries = list_prefix_entries(target_store, prefix)
+      source_entries = source_entries.uniq { |entry| entry[:key].to_s }.sort_by { |entry| entry[:key].to_s }
+      target_entry_map = target_entries.index_by { |entry| entry[:key].to_s }
+
+      object_rows = source_entries.map do |entry|
+        key = entry[:key].to_s
+        target_entry = target_entry_map[key]
+        {
+          key: key,
+          content_type: entry[:content_type].presence || content_type_for_hls_key(key),
+          source: info_from_prefix_entry(source_store, entry, exists: true),
+          target: target_entry.present? ? info_from_prefix_entry(target_store, target_entry, exists: true) : missing_info_for(target_store, key)
+        }
+      end
+
+      warnings << "hls_role_has_no_objects_on_source" if object_rows.empty?
+      warnings << "target_store_missing" if target_store.blank?
+
+      {
+        name: role_name,
+        backend: role["backend"].to_s,
+        role: role,
+        summary: {
+          object_count: object_rows.length,
+          source_bytes: object_rows.sum { |r| r.dig(:source, :bytes).to_i },
+          target_existing_bytes: object_rows.sum { |r| r.dig(:target, :bytes).to_i },
+          target_existing_count: object_rows.count { |r| r.dig(:target, :exists) },
+          unsupported_upload_role: role["backend"].to_s == "upload",
+          listing_based: true
+        },
+        warnings: warnings.compact.uniq,
+        objects: object_rows
+      }
+    end
+    private_class_method :preview_hls_role
 
     def enumerate_role_objects(item:, role_name:, role:, source_store:)
       case role_name.to_s
@@ -188,17 +233,61 @@ module ::MediaGallery
     private_class_method :enumerate_single_object
 
     def enumerate_hls_objects(item:, role:, source_store:)
-      if role["backend"].to_s == "local" && source_store.blank?
-        source_store = ::MediaGallery::LocalAssetStore.new(root_path: ::MediaGallery::StorageSettingsResolver.local_asset_root_path)
-      end
-
-      prefix = role["key_prefix"].to_s.presence || File.join(item.public_id.to_s, "hls")
-      keys = Array(source_store&.list_prefix(prefix)).uniq.sort
-      keys.map do |key|
-        { key: key, content_type: content_type_for_hls_key(key) }
+      source_store = local_store_for_hls(role, source_store)
+      prefix = hls_prefix_for(item, role)
+      list_prefix_entries(source_store, prefix).map do |entry|
+        key = entry[:key].to_s
+        { key: key, content_type: entry[:content_type].presence || content_type_for_hls_key(key) }
       end
     end
     private_class_method :enumerate_hls_objects
+
+    def local_store_for_hls(role, source_store)
+      if role["backend"].to_s == "local" && source_store.blank?
+        ::MediaGallery::LocalAssetStore.new(root_path: ::MediaGallery::StorageSettingsResolver.local_asset_root_path)
+      else
+        source_store
+      end
+    end
+    private_class_method :local_store_for_hls
+
+    def hls_prefix_for(item, role)
+      role["key_prefix"].to_s.presence || File.join(item.public_id.to_s, "hls")
+    end
+    private_class_method :hls_prefix_for
+
+    def list_prefix_entries(store, prefix)
+      return [] if store.blank?
+
+      entries = if store.respond_to?(:list_prefix_entries)
+        store.list_prefix_entries(prefix)
+      else
+        Array(store.list_prefix(prefix)).map { |key| { key: key } }
+      end
+
+      Array(entries).map do |entry|
+        entry.is_a?(Hash) ? entry.deep_symbolize_keys : { key: entry.to_s }
+      end.reject { |entry| entry[:key].to_s.blank? }
+    end
+    private_class_method :list_prefix_entries
+
+    def info_from_prefix_entry(store, entry, exists:)
+      key = entry[:key].to_s
+      {
+        exists: !!exists,
+        backend: store&.backend,
+        key: key,
+        bytes: entry[:bytes].to_i,
+        content_type: entry[:content_type].to_s.presence,
+        etag: entry[:etag].to_s.presence
+      }.compact
+    end
+    private_class_method :info_from_prefix_entry
+
+    def missing_info_for(store, key)
+      { exists: false, backend: store&.backend, key: key.to_s }
+    end
+    private_class_method :missing_info_for
 
     def source_object_info(source_store:, object:)
       if source_store.blank?

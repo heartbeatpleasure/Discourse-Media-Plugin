@@ -63,6 +63,12 @@ module ::MediaGallery
       raise NotImplementedError
     end
 
+    # Optional efficient listing API used by migration previews. Implementations should
+    # return hashes with at least :key and may include :bytes / :content_type.
+    def list_prefix_entries(prefix, limit: nil)
+      list_prefix(prefix, limit: limit).map { |key| { key: key } }
+    end
+
     def presigned_get_url(key, expires_in:, response_content_type: nil, response_content_disposition: nil)
       raise NotImplementedError
     end
