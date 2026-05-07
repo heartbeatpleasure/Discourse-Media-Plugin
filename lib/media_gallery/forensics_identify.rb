@@ -240,21 +240,19 @@ module ::MediaGallery
           )
           effective_max_offset_segments = offset_window_profile[:effective].to_i
 
-          obs, match = identify_with_phase_search(
-            media_item: media_item,
-            file_path: file_path,
-            segment_seconds: seg,
+          direct_obs = nil
+          direct_match = nil
+          direct_diag = filemode_direct_preflight_diagnostics(
             spec: spec,
-            max_samples: max_samples,
             sample_times: sample_times,
             file_size_bytes: file_size_bytes,
+            duration_seconds: probed_duration_seconds,
             started_at: started_at,
-            time_budget_seconds: filemode_budget_seconds,
-            max_offset_segments: effective_max_offset_segments
+            budget_seconds: filemode_budget_seconds
           )
 
-          if obs.blank? || match.blank?
-            obs = extract_observed_variants(
+          if direct_diag[:run]
+            direct_obs = extract_observed_variants(
               file_path: file_path,
               segment_seconds: seg,
               spec: spec,
@@ -265,7 +263,73 @@ module ::MediaGallery
               time_budget_seconds: filemode_budget_seconds
             )
 
-            match = match_fingerprints(
+            direct_match = match_fingerprints(
+              media_item: media_item,
+              observed_variants: direct_obs[:variants],
+              observed_confidences: direct_obs[:confidences],
+              observed_scores: direct_obs[:scores],
+              observed_sync_variants: direct_obs[:sync_variants],
+              observed_sync_confidences: direct_obs[:sync_confidences],
+              observed_segment_indices: direct_obs[:segment_indices],
+              observed_quality_hints: direct_obs[:quality_hints],
+              spec: spec,
+              max_offset_segments: effective_max_offset_segments,
+              started_at: started_at,
+              time_budget_seconds: filemode_budget_seconds
+            )
+
+            annotate_direct_preflight!(match: direct_match, obs: direct_obs, decision: direct_diag)
+          end
+
+          use_direct_without_phase = filemode_direct_preflight_sufficient?(
+            obs: direct_obs,
+            match: direct_match,
+            started_at: started_at,
+            budget_seconds: filemode_budget_seconds
+          )
+
+          if use_direct_without_phase[:use]
+            obs = direct_obs
+            match = direct_match
+            match[:meta] ||= {}
+            match[:meta][:phase_search_skipped] = true
+            match[:meta][:phase_search_skip_reason] = use_direct_without_phase[:reason]
+          else
+            obs, match = identify_with_phase_search(
+              media_item: media_item,
+              file_path: file_path,
+              segment_seconds: seg,
+              spec: spec,
+              max_samples: max_samples,
+              sample_times: sample_times,
+              file_size_bytes: file_size_bytes,
+              started_at: started_at,
+              time_budget_seconds: filemode_budget_seconds,
+              max_offset_segments: effective_max_offset_segments
+            )
+
+            if (obs.blank? || match.blank?) && direct_obs.present? && direct_match.present?
+              obs = direct_obs
+              match = direct_match
+              match[:meta] ||= {}
+              match[:meta][:phase_search_fallback_to_direct] = true
+              match[:meta][:phase_search_fallback_reason] = "phase_search_no_result"
+            end
+          end
+
+          if obs.blank? || match.blank?
+            obs = direct_obs || extract_observed_variants(
+              file_path: file_path,
+              segment_seconds: seg,
+              spec: spec,
+              max_samples: max_samples,
+              sample_times: sample_times,
+              file_size_bytes: file_size_bytes,
+              started_at: started_at,
+              time_budget_seconds: filemode_budget_seconds
+            )
+
+            match = direct_match || match_fingerprints(
               media_item: media_item,
               observed_variants: obs[:variants],
               observed_confidences: obs[:confidences],
@@ -773,19 +837,13 @@ module ::MediaGallery
       budget = time_budget_seconds.to_f
       budget = FILEMODE_TIME_BUDGET_SECONDS.to_f if budget <= 0.0
 
-      max_target_time = Array(base_points).map { |p| p[:time].to_f }.max.to_f
-      phase_window = phase_search_window_seconds(segment_seconds)
-      dense_end = [max_target_time + phase_window + step, duration_seconds.to_f].min
-      dense_end = duration_seconds.to_f if dense_end <= 0.0
-
-      times = []
-      t = 0.0
-      while t <= dense_end + 0.001
-        times << t.round(3)
-        t += step
-      end
-      times << dense_end.round(3) if times.empty? || times.last.to_f < dense_end.to_f - 0.05
-      times.uniq!
+      times = build_dense_phase_sample_times(
+        base_points: base_points,
+        duration_seconds: duration_seconds,
+        segment_seconds: segment_seconds,
+        step_seconds: step,
+        layout: spec[:layout]
+      )
 
       chunk_size = FILEMODE_SAMPLE_CHUNK.to_i
       chunk_size = 15 if chunk_size <= 0
@@ -827,6 +885,62 @@ module ::MediaGallery
       }
     end
     private_class_method :extract_dense_observed_variants
+
+    def build_dense_phase_sample_times(base_points:, duration_seconds:, segment_seconds:, step_seconds:, layout: nil)
+      duration = duration_seconds.to_f
+      duration = 0.0 if duration.nan? || duration.infinite? || duration.negative?
+
+      step = step_seconds.to_f
+      step = DENSE_SAMPLE_STEP_DEFAULT.to_f if step <= 0.0
+
+      points = Array(base_points).map { |p| p.is_a?(Hash) ? p[:time].to_f : p.to_f }
+      points.select! { |t| t >= 0.0 }
+      return [] if points.empty?
+
+      phase_window = phase_search_window_seconds(segment_seconds)
+      vote_offsets = dense_phase_vote_offsets(segment_seconds: segment_seconds, dense_step_seconds: step, layout: layout)
+      vote_window = Array(vote_offsets).map { |v| v.to_f.abs }.max.to_f
+      padding = phase_window.to_f + vote_window.to_f + step.to_f
+      padding = step.to_f if padding <= 0.0
+
+      # Older dense phase search sampled every 0.5s/1.0s from t=0 to the last
+      # observed segment. On long or high-bitrate file-mode uploads that can mean
+      # hundreds or thousands of expensive FFmpeg inputs even though we only need
+      # local evidence around the selected forensic samples. Build a sparse union
+      # of small windows around each planned segment midpoint instead. This keeps
+      # phase-search behavior intact while avoiding full-timeline scans.
+      out = []
+      seen = {}
+      add_time = lambda do |t|
+        tt = t.to_f
+        tt = 0.0 if tt < 0.0
+        tt = duration if duration > 0.0 && tt > duration
+        key = tt.round(3)
+        return if seen[key]
+        seen[key] = true
+        out << key
+      end
+
+      points.each do |center|
+        start_t = center.to_f - padding
+        end_t = center.to_f + padding
+        start_t = 0.0 if start_t < 0.0
+        end_t = duration if duration > 0.0 && end_t > duration
+
+        t = start_t
+        while t <= end_t + 0.001
+          add_time.call(t)
+          t += step
+        end
+        add_time.call(center)
+        add_time.call(end_t)
+      end
+
+      out.sort
+    rescue
+      []
+    end
+    private_class_method :build_dense_phase_sample_times
 
     def build_phase_observation_from_dense(dense:, base_points:, duration_seconds:, phase_seconds:, segment_seconds:, effective_max_samples:)
       variants = []
@@ -1125,6 +1239,94 @@ module ::MediaGallery
       -Float::INFINITY
     end
     private_class_method :phase_result_score
+
+
+    def filemode_direct_preflight_diagnostics(spec:, sample_times:, file_size_bytes:, duration_seconds:, started_at:, budget_seconds:)
+      layout = spec.is_a?(Hash) ? spec[:layout].to_s : ""
+      return { run: false, reason: "non_grid_layout" } unless grid_detector_layout?(layout)
+      return { run: false, reason: "missing_packaged_sample_times" } if Array(sample_times).blank?
+
+      remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds)
+      return { run: false, reason: "insufficient_time_budget", remaining_seconds: remaining.round(3) } if remaining < 12.0
+
+      fs = file_size_bytes.to_i
+      dur = duration_seconds.to_f
+      large_or_long = fs >= (80 * 1024 * 1024) || dur >= 180.0
+
+      {
+        run: large_or_long,
+        reason: large_or_long ? "large_grid_file_direct_preflight" : "small_file_phase_search_preferred",
+        remaining_seconds: remaining.round(3),
+        file_size_mb: fs > 0 ? (fs / (1024.0 * 1024.0)).round(1) : 0.0,
+        duration_seconds: dur.positive? ? dur.round(3) : 0.0,
+      }
+    rescue
+      { run: false, reason: "direct_preflight_decision_failed" }
+    end
+    private_class_method :filemode_direct_preflight_diagnostics
+
+    def annotate_direct_preflight!(match:, obs:, decision:)
+      return if match.blank?
+      meta = match[:meta] ||= {}
+      cands = Array(match[:candidates])
+      top = cands[0]
+      second = cands[1]
+      top_ratio = top ? top[:match_ratio_weighted].to_f : 0.0
+      top_ratio = top[:match_ratio].to_f if top_ratio <= 0.0 && top
+      second_ratio = second ? second[:match_ratio_weighted].to_f : 0.0
+      second_ratio = second[:match_ratio].to_f if second_ratio <= 0.0 && second
+      usable = Array(obs.to_h[:variants]).count { |v| v.present? }
+
+      meta[:direct_preflight_used] = true
+      meta[:direct_preflight_reason] = decision.to_h[:reason].to_s
+      meta[:direct_preflight_samples] = Array(obs.to_h[:variants]).length
+      meta[:direct_preflight_usable_samples] = usable
+      meta[:direct_preflight_top_ratio] = top_ratio.round(4)
+      meta[:direct_preflight_second_ratio] = second_ratio.round(4)
+      meta[:direct_preflight_delta] = (top_ratio - second_ratio).round(4)
+      meta[:direct_preflight_score] = phase_result_score(match: match).round(4)
+    rescue
+      nil
+    end
+    private_class_method :annotate_direct_preflight!
+
+    def filemode_direct_preflight_sufficient?(obs:, match:, started_at:, budget_seconds:)
+      return { use: false, reason: "missing_direct_preflight" } if obs.blank? || match.blank?
+
+      remaining = time_remaining_seconds(started_at: started_at, budget_seconds: budget_seconds)
+      cands = Array(match[:candidates])
+      top = cands[0]
+      second = cands[1]
+      usable = Array(obs[:variants]).count { |v| v.present? }
+      return { use: true, reason: "no_time_after_direct_preflight", remaining_seconds: remaining.round(3), usable_samples: usable } if remaining < 45.0 && usable >= 8
+
+      top_ratio = top ? top[:match_ratio_weighted].to_f : 0.0
+      top_ratio = top[:match_ratio].to_f if top_ratio <= 0.0 && top
+      second_ratio = second ? second[:match_ratio_weighted].to_f : 0.0
+      second_ratio = second[:match_ratio].to_f if second_ratio <= 0.0 && second
+      delta = top_ratio - second_ratio
+      evidence = top ? top[:evidence_score].to_f : 0.0
+      rank = top ? top[:rank_score].to_f : 0.0
+
+      if usable >= 16 && top_ratio >= 0.82 && delta >= 0.14
+        return { use: true, reason: "direct_preflight_already_strong", usable_samples: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+      end
+
+      if usable >= 24 && top_ratio >= 0.74 && delta >= 0.10 && (evidence >= 3.0 || rank >= 8.0)
+        return { use: true, reason: "direct_preflight_stable_enough", usable_samples: usable, top_ratio: top_ratio.round(4), delta: delta.round(4), evidence_score: evidence.round(4), rank_score: rank.round(4) }
+      end
+
+      # When the direct preflight consumed a large share of the budget, avoid
+      # launching dense phase search that may be killed by the outer soft timeout.
+      if remaining < 120.0 && usable >= 12
+        return { use: true, reason: "preserve_partial_result_near_budget", remaining_seconds: remaining.round(3), usable_samples: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+      end
+
+      { use: false, reason: "phase_search_still_useful", remaining_seconds: remaining.round(3), usable_samples: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+    rescue
+      { use: false, reason: "direct_preflight_sufficiency_failed" }
+    end
+    private_class_method :filemode_direct_preflight_sufficient?
 
 
     def should_run_filemode_multisample_refine?(obs:, match:, started_at:, budget_seconds:)
