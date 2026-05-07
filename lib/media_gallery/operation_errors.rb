@@ -117,6 +117,24 @@ module ::MediaGallery
         present("Copy finished, but the target is still missing objects#{detail.present? ? ": #{detail}" : "."}", recommended_action: "Run verify and review the missing objects before switching.")
       when "source_object_missing"
         present("A source object is missing#{detail.present? ? ": #{detail}" : "."}", recommended_action: "Check source storage and try copy again.")
+      when "source_download_failed"
+        present(
+          "Copy could not reliably read one source object#{detail.present? ? ": #{detail}" : "."}",
+          retryable: true,
+          recommended_action: "Retry copy. Already copied target objects will be skipped; if the same key fails repeatedly, check the source storage object and provider logs."
+        )
+      when "source_download_incomplete"
+        present(
+          "Copy received an incomplete source object#{detail.present? ? ": #{detail}" : "."}",
+          retryable: true,
+          recommended_action: "Retry copy. This is usually a storage/network read issue rather than a video/AES issue."
+        )
+      when "target_upload_failed"
+        present(
+          "Copy could not write one target object#{detail.present? ? ": #{detail}" : "."}",
+          retryable: true,
+          recommended_action: "Retry copy after checking the target storage health/probe. Already copied objects will be skipped."
+        )
       when "verify_store_missing"
         present("Verify could not open the source or target store.", recommended_action: "Check storage health/probe.")
       when "finalize_not_available"

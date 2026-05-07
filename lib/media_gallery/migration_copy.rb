@@ -3,6 +3,7 @@
 require "securerandom"
 require "tmpdir"
 require "time"
+require "fileutils"
 
 module ::MediaGallery
   module MigrationCopy
@@ -121,18 +122,28 @@ module ::MediaGallery
           end
 
           tmp_path = File.join(tmpdir, "obj_#{index}_#{SecureRandom.hex(6)}")
-          begin
-            source_store.download_to_file!(object[:key], tmp_path)
-            target_store.put_file!(tmp_path, key: object[:key], content_type: object[:content_type].presence || "application/octet-stream")
-            bytes_copied += File.size(tmp_path).to_i
-            copied += 1
-          ensure
-            FileUtils.rm_f(tmp_path)
-          end
+          bytes_written = copy_object_with_retries!(
+            item: item,
+            state: state,
+            source_store: source_store,
+            target_store: target_store,
+            object: object,
+            tmp_path: tmp_path,
+            expected_bytes: source_info[:bytes].to_i,
+            copied: copied,
+            skipped: skipped,
+            failed: failed,
+            bytes_copied: bytes_copied,
+            index: index + 1,
+            total: objects.length,
+          )
+          bytes_copied += bytes_written.to_i
+          copied += 1
 
           update_progress!(item, state, copied: copied, skipped: skipped, failed: failed, bytes_copied: bytes_copied, current_key: object[:key], index: index + 1, total: objects.length)
         rescue => e
           failed += 1
+          update_progress!(item, state, copied: copied, skipped: skipped, failed: failed, bytes_copied: bytes_copied, current_key: object[:key], index: index + 1, total: objects.length)
           raise e
         end
       end
@@ -227,7 +238,15 @@ module ::MediaGallery
       state["finished_at"] = Time.now.utc.iso8601
       ::MediaGallery::OperationErrors.apply_failure!(state, e, operation: "copy")
       save_copy_state!(item, state) if item&.persisted?
-      ::MediaGallery::OperationLogger.error("migration_copy_failed", item: item, operation: "copy", data: { error: state["last_error"], error_code: state["last_error_code"], source_profile_key: state["source_profile_key"], target_profile_key: state["target_profile_key"] })
+      ::MediaGallery::OperationLogger.error("migration_copy_failed", item: item, operation: "copy", data: {
+        error: state["last_error"],
+        error_code: state["last_error_code"],
+        current_key: state["current_key"],
+        progress_index: state["progress_index"],
+        progress_total: state["progress_total"],
+        source_profile_key: state["source_profile_key"],
+        target_profile_key: state["target_profile_key"],
+      })
       raise e
     end
 
@@ -308,6 +327,126 @@ module ::MediaGallery
 
 
 
+
+    def copy_object_with_retries!(item:, state:, source_store:, target_store:, object:, tmp_path:, expected_bytes:, copied:, skipped:, failed:, bytes_copied:, index:, total:)
+      key = object[:key].to_s
+      content_type = object[:content_type].presence || "application/octet-stream"
+      attempts = 0
+      max_attempts = copy_object_retry_limit
+      last_error = nil
+      stage = "source_download_failed"
+
+      while attempts < max_attempts
+        attempts += 1
+        update_retry_progress!(
+          item,
+          state,
+          copied: copied,
+          skipped: skipped,
+          failed: failed,
+          bytes_copied: bytes_copied,
+          current_key: key,
+          index: index,
+          total: total,
+          attempt: attempts,
+          max_attempts: max_attempts,
+          retry_error: last_error,
+        ) if attempts > 1
+
+        begin
+          FileUtils.rm_f(tmp_path)
+          stage = "source_download_failed"
+          source_store.download_to_file!(key, tmp_path, expected_bytes: expected_bytes.to_i.positive? ? expected_bytes.to_i : nil)
+          verify_downloaded_file!(tmp_path, expected_bytes: expected_bytes, key: key)
+          stage = "target_upload_failed"
+          target_store.put_file!(tmp_path, key: key, content_type: content_type)
+          return File.size(tmp_path).to_i
+        rescue => e
+          last_error = e
+          FileUtils.rm_f(tmp_path)
+          if retryable_copy_error?(e) && attempts < max_attempts
+            sleep(copy_object_retry_delay(attempts))
+            next
+          end
+
+          raise contextual_copy_error(e, key: key, attempts: attempts, stage: stage)
+        ensure
+          FileUtils.rm_f(tmp_path)
+        end
+      end
+
+      raise contextual_copy_error(last_error || "copy_retry_exhausted", key: key, attempts: attempts, stage: stage)
+    end
+    private_class_method :copy_object_with_retries!
+
+    def verify_downloaded_file!(tmp_path, expected_bytes:, key:)
+      raise "source_download_failed:#{key} temporary file missing after download" unless File.exist?(tmp_path)
+
+      expected = expected_bytes.to_i
+      return true unless expected.positive?
+
+      actual = File.size(tmp_path).to_i
+      return true if actual == expected
+
+      raise "source_download_incomplete:#{key} expected=#{expected} received=#{actual}"
+    end
+    private_class_method :verify_downloaded_file!
+
+    def contextual_copy_error(error, key:, attempts:, stage: "source_download_failed")
+      message = error.is_a?(Exception) ? "#{error.class}: #{error.message}" : error.to_s
+      prefix = if message =~ /(source_object_missing)/i
+        "source_object_missing"
+      else
+        stage.to_s.presence || "source_download_failed"
+      end
+
+      "#{prefix}:#{key} after #{attempts.to_i} attempt(s) - #{message}"
+    end
+    private_class_method :contextual_copy_error
+
+    def retryable_copy_error?(error)
+      message = "#{error.class}: #{error.message}"
+      return true if message =~ /(http response body truncated|source_download_incomplete|s3_download_incomplete|Net::ReadTimeout|EOFError|Connection reset|execution expired|Broken pipe|Timeout::Error|NetworkingError|ChecksumError|SlowDown|RequestTimeout|InternalError|ServiceUnavailable|temporarily unavailable|503|502|500)/i
+
+      false
+    end
+    private_class_method :retryable_copy_error?
+
+    def copy_object_retry_limit
+      3
+    end
+    private_class_method :copy_object_retry_limit
+
+    def copy_object_retry_delay(attempt)
+      [0.5 * attempt.to_i, 2.0].min
+    end
+    private_class_method :copy_object_retry_delay
+
+    def update_retry_progress!(item, state, copied:, skipped:, failed:, bytes_copied:, current_key:, index:, total:, attempt:, max_attempts:, retry_error:)
+      latest = copy_state_for(item)
+      latest.merge!(state)
+      latest["status"] = "copying"
+      latest["objects_copied"] = copied
+      latest["objects_skipped"] = skipped
+      latest["objects_failed"] = failed
+      latest["bytes_copied"] = bytes_copied
+      latest["current_key"] = current_key
+      latest["progress_index"] = index
+      latest["progress_total"] = total
+      latest["current_retry_attempt"] = attempt
+      latest["current_retry_max"] = max_attempts
+      latest["current_retry_error"] = retry_error ? truncate_error_for_state(retry_error) : nil
+      latest["updated_at"] = Time.now.utc.iso8601
+      save_copy_state!(item, latest)
+    end
+    private_class_method :update_retry_progress!
+
+    def truncate_error_for_state(error, max = 240)
+      value = error.is_a?(Exception) ? "#{error.class}: #{error.message}" : error.to_s
+      value.length > max ? "#{value[0...max]}…" : value
+    end
+    private_class_method :truncate_error_for_state
+
     def ensure_no_blocking_cycle!(item, force:)
       return true if force
 
@@ -364,6 +503,9 @@ module ::MediaGallery
       latest["current_key"] = current_key
       latest["progress_index"] = index
       latest["progress_total"] = total
+      latest.delete("current_retry_attempt")
+      latest.delete("current_retry_max")
+      latest.delete("current_retry_error")
       latest["updated_at"] = Time.now.utc.iso8601
       save_copy_state!(item, latest)
     end

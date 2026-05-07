@@ -36,6 +36,21 @@ function titleCase(value) {
   return text.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function formatTime(value) {
+  if (!value) {
+    return "—";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    timeStyle: "medium",
+  }).format(date);
+}
+
 function formatDateTime(value) {
   if (!value) {
     return "—";
@@ -199,6 +214,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked isLoadingSelection = false;
   @tracked isLoadingPlan = false;
   @tracked selectedPlanLoaded = false;
+  @tracked lastSelectionRefreshedAt = null;
 
   @tracked lastActionMessage = "";
   @tracked actionError = "";
@@ -284,6 +300,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.isLoadingSelection = false;
     this.isLoadingPlan = false;
     this.selectedPlanLoaded = false;
+    this.lastSelectionRefreshedAt = null;
     this.lastActionMessage = "";
     this.actionError = "";
     this.bulkActionMessage = "";
@@ -562,6 +579,10 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     return !((sourceProfileKey && targetProfileKey && sourceProfileKey === targetProfileKey) || (sourceFingerprint && targetFingerprint && sourceFingerprint === targetFingerprint));
   }
 
+  get selectedRefreshStatusLabel() {
+    return this.lastSelectionRefreshedAt ? `Last refreshed ${formatTime(this.lastSelectionRefreshedAt)}` : "";
+  }
+
   get selectedPlanHint() {
     if (!this.hasSelectedItem) {
       return "Select an item to inspect its migration preview.";
@@ -672,13 +693,18 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
           ? "Old source files are intentionally kept until cleanup is run"
           : `${cleanup.object_count || switchState.cleanup_object_count || 0} objects to purge`;
 
+    const copyBaseMeta = copy.progress_total ? `${copy.progress_index || 0} / ${copy.progress_total} objects` : ((copy.status || "idle") === "idle" ? "No copy queued" : `${copy.object_count || 0} objects`);
+    const copyRetryMeta = copy.current_retry_attempt
+      ? `${copyBaseMeta} • retry ${copy.current_retry_attempt}/${copy.current_retry_max || 3}${copy.current_retry_error ? ` after ${truncate(copy.current_retry_error, 80)}` : ""}`
+      : copyBaseMeta;
+
     return [
       this.selectedProcessingCard,
       buildStateCard({
         title: "Copy",
         status: copy.status || "idle",
         detail: copy.current_key ? `Current object: ${truncate(copy.current_key, 80)}` : ((copy.status || "idle") === "idle" ? "Copy not started" : `${copy.objects_copied || 0} copied • ${copy.objects_skipped || 0} skipped`),
-        meta: copy.progress_total ? `${copy.progress_index || 0} / ${copy.progress_total} objects` : ((copy.status || "idle") === "idle" ? "No copy queued" : `${copy.object_count || 0} objects`),
+        meta: copyRetryMeta,
         error: copy.last_error_human || copy.last_error,
       }),
       buildStateCard({
@@ -1262,6 +1288,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.selectedVerification = null;
     this.selectedPlan = null;
     this.selectedPlanLoaded = false;
+    this.lastSelectionRefreshedAt = null;
     this.lastActionMessage = "";
     this.actionError = "";
     await this.refreshSelected();
@@ -1342,6 +1369,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       });
       this.selectedDiagnostics = diagnostics;
       this.selectedVerification = diagnostics?.migration_verify || null;
+      this.lastSelectionRefreshedAt = new Date();
 
       if (includeSearchRefresh) {
         await this.search();
@@ -1370,6 +1398,15 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       }
       this.isLoadingSelection = false;
       this._syncAutoRefresh();
+    }
+  }
+
+  @action
+  async manualRefreshSelected(event) {
+    event?.preventDefault?.();
+    await this.refreshSelected({ preserveMessages: true, includeSearchRefresh: false });
+    if (!this.selectedError) {
+      this.lastActionMessage = `Status refreshed at ${formatTime(this.lastSelectionRefreshedAt || new Date())}.`;
     }
   }
 

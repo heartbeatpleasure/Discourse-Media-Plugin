@@ -89,12 +89,41 @@ module ::MediaGallery
     end
 
 
-    def download_to_file!(key, destination_path)
-      FileUtils.mkdir_p(File.dirname(destination_path.to_s))
-      File.open(destination_path, "wb") do |file|
-        client.get_object(bucket: bucket, key: normalized_key(key), response_target: file)
+    def download_to_file!(key, destination_path, expected_bytes: nil)
+      normalized = normalized_key(key)
+      destination = destination_path.to_s
+      attempts = 0
+
+      begin
+        attempts += 1
+        FileUtils.mkdir_p(File.dirname(destination))
+        FileUtils.rm_f(destination)
+
+        bytes_written = 0
+        response = nil
+        File.open(destination, "wb") do |file|
+          response = client.get_object(bucket: bucket, key: normalized) do |chunk|
+            file.write(chunk)
+            bytes_written += chunk.bytesize
+          end
+        end
+
+        expected = expected_bytes.to_i
+        expected = response&.content_length.to_i if expected <= 0
+        if expected.positive? && bytes_written != expected
+          raise "s3_download_incomplete:#{denormalized_key(normalized)} expected=#{expected} received=#{bytes_written}"
+        end
+
+        destination_path
+      rescue => e
+        FileUtils.rm_f(destination)
+        if retryable_download_error?(e) && attempts < download_retry_limit
+          sleep(download_retry_delay(attempts))
+          retry
+        end
+
+        raise
       end
-      destination_path
     end
 
 
@@ -229,6 +258,35 @@ module ::MediaGallery
     end
 
     private
+
+
+    def download_retry_limit
+      3
+    end
+
+    def download_retry_delay(attempt)
+      [0.25 * attempt.to_i, 1.0].min
+    end
+
+    def retryable_download_error?(error)
+      message = "#{error.class}: #{error.message}"
+      return true if message =~ /(http response body truncated|s3_download_incomplete|Net::ReadTimeout|EOFError|Connection reset|execution expired|Broken pipe|Timeout::Error|NetworkingError|ChecksumError)/i
+
+      if defined?(::Aws::S3::Errors::RequestTimeout) && error.is_a?(::Aws::S3::Errors::RequestTimeout)
+        return true
+      end
+      if defined?(::Aws::S3::Errors::SlowDown) && error.is_a?(::Aws::S3::Errors::SlowDown)
+        return true
+      end
+      if defined?(::Aws::S3::Errors::InternalError) && error.is_a?(::Aws::S3::Errors::InternalError)
+        return true
+      end
+      if defined?(::Aws::S3::Errors::ServiceUnavailable) && error.is_a?(::Aws::S3::Errors::ServiceUnavailable)
+        return true
+      end
+
+      false
+    end
 
     def purge_entries!(keys:, prefix:)
       ensure_available!

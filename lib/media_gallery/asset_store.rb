@@ -26,7 +26,7 @@ module ::MediaGallery
       raise NotImplementedError
     end
 
-    def download_to_file!(key, destination_path)
+    def download_to_file!(key, destination_path, expected_bytes: nil)
       raise NotImplementedError
     end
 

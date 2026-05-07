@@ -72,7 +72,7 @@ module ::MediaGallery
     end
 
 
-    def download_to_file!(key, destination_path)
+    def download_to_file!(key, destination_path, expected_bytes: nil)
       abs = absolute_path_for(key)
       raise Errno::ENOENT, abs unless File.exist?(abs)
 

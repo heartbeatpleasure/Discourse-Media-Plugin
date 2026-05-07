@@ -929,7 +929,7 @@ export default RouteTemplate(
               </div>
 
               <div class="mg-migrations__actions">
-                <button class="btn" type="button" {{on "click" @controller.refreshSelected}} disabled={{@controller.isLoadingSelection}}>
+                <button class="btn" type="button" {{on "click" @controller.manualRefreshSelected}} disabled={{@controller.isLoadingSelection}}>
                   {{if @controller.isLoadingSelection "Refreshing…" (i18n "admin.media_gallery.migrations.refresh_selected")}}
                 </button>
                 <button class="btn" type="button" {{on "click" @controller.copyToTarget}} disabled={{@controller.copyDisabled}}>
@@ -970,6 +970,9 @@ export default RouteTemplate(
               <div class="mg-migrations__panel-copy">
                 <h3>Current state</h3>
                 <span class="mg-migrations__muted">Processing, copy, switch, and cleanup are shown separately so you can see exactly where the item is in the migration flow.</span>
+                {{#if @controller.selectedRefreshStatusLabel}}
+                  <span class="mg-migrations__muted">{{@controller.selectedRefreshStatusLabel}}</span>
+                {{/if}}
               </div>
             </div>
             <div class="mg-migrations__state-grid">
