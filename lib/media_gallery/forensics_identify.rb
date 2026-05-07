@@ -187,6 +187,18 @@ module ::MediaGallery
     end
     private_class_method :v9_reference_layout?
 
+    def expected_variant_for_forensics(fingerprint_id:, media_item_id:, segment_index:, layout: nil)
+      ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+        fingerprint_id: fingerprint_id,
+        media_item_id: media_item_id,
+        segment_index: segment_index,
+        layout: layout
+      )
+    rescue
+      "a"
+    end
+    private_class_method :expected_variant_for_forensics
+
     def reference_detection_profile_for_layout(layout:, delta_median:)
       delta_med = delta_median.to_f
       delta_med = 1.0 if delta_med <= 0.0 || delta_med.nan? || delta_med.infinite?
@@ -1862,7 +1874,7 @@ module ::MediaGallery
       fp = candidate[:fingerprint_id].to_s
       return nil if fp.blank?
       offset = candidate[:best_offset_segments].to_i
-      variant = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+      variant = expected_variant_for_forensics(
         fingerprint_id: fp,
         media_item_id: media_item_id,
         segment_index: local_segment_index.to_i + offset,
@@ -3567,7 +3579,7 @@ module ::MediaGallery
     end
     private_class_method :chunked_resync_score
 
-    def build_chunked_reference_result(fps:, media_item:, scores_length:, max_off:, polarity_flip:, build_usable:, observed_segment_indices: nil)
+    def build_chunked_reference_result(fps:, media_item:, scores_length:, max_off:, polarity_flip:, build_usable:, observed_segment_indices: nil, layout: nil)
       usable_by_offset = {}
       (0..max_off).each do |offset|
         u = build_usable.call(offset, polarity_flip)
@@ -3602,10 +3614,11 @@ module ::MediaGallery
           fps.each do |rec|
             mism_w = 0.0
             summary[:usable].each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count)|
-              exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+              exp = expected_variant_for_forensics(
                 fingerprint_id: rec.fingerprint_id,
                 media_item_id: media_item.id,
-                segment_index: base_seg_idx.to_i + offset
+                segment_index: base_seg_idx.to_i + offset,
+                layout: layout
               )
               mism_w += w if exp != ov
             end
@@ -3671,10 +3684,11 @@ module ::MediaGallery
         chosen_chunks.each do |chunk|
           off = chunk[:offset].to_i
           chunk[:usable].each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count)|
-            exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+            exp = expected_variant_for_forensics(
               fingerprint_id: rec.fingerprint_id,
               media_item_id: media_item.id,
-              segment_index: base_seg_idx.to_i + off
+              segment_index: base_seg_idx.to_i + off,
+              layout: layout
             )
             comp += 1
             comp_w += w.to_f
@@ -4418,7 +4432,7 @@ end
           next if ov.blank?
 
           indices[i] = seg_idx
-          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          exp = expected_variant_for_forensics(
             fingerprint_id: cand[:fingerprint_id],
             media_item_id: media_item_id,
             segment_index: seg_idx,
@@ -4495,16 +4509,17 @@ end
     end
     private_class_method :v8_layout_name
 
-    def score_candidate_chunk_at_offset(candidate:, chunk:, media_item_id:, offset:, observed_polarity_flip: false)
+    def score_candidate_chunk_at_offset(candidate:, chunk:, media_item_id:, offset:, observed_polarity_flip: false, layout: nil)
       comp_w = 0.0
       match_w = 0.0
 
       chunk.each do |(_obs_idx, base_seg_idx, ov, weight)|
         seg_idx = base_seg_idx.to_i + offset.to_i
-        exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+        exp = expected_variant_for_forensics(
           fingerprint_id: candidate[:fingerprint_id],
           media_item_id: media_item_id,
-          segment_index: seg_idx
+          segment_index: seg_idx,
+          layout: layout
         )
         candidate_flip = candidate[:polarity_flip_used] ? true : false
         observed_variant = (candidate_flip == observed_polarity_flip ? ov : invert_variant(ov))
@@ -4527,7 +4542,7 @@ end
     end
     private_class_method :score_candidate_chunk_at_offset
 
-    def best_candidate_chunk_alignment(candidate:, chunk:, media_item_id:, base_offset:, local_offset_radius:, offset_floor:, offset_ceil:, observed_polarity_flip: false)
+    def best_candidate_chunk_alignment(candidate:, chunk:, media_item_id:, base_offset:, local_offset_radius:, offset_floor:, offset_ceil:, observed_polarity_flip: false, layout: nil)
       floor = offset_floor.to_i
       ceil = offset_ceil.to_i
       floor = 0 if floor.negative?
@@ -4551,7 +4566,8 @@ end
           chunk: chunk,
           media_item_id: media_item_id,
           offset: offset,
-          observed_polarity_flip: observed_polarity_flip
+          observed_polarity_flip: observed_polarity_flip,
+          layout: layout
         )
         next if scored.blank?
 
@@ -4577,12 +4593,13 @@ end
         chunk: chunk,
         media_item_id: media_item_id,
         offset: base_offset,
-        observed_polarity_flip: observed_polarity_flip
+        observed_polarity_flip: observed_polarity_flip,
+        layout: layout
       )
     end
     private_class_method :best_candidate_chunk_alignment
 
-    def reference_candidate_match_stats(candidate:, usable_result:, media_item_id:, offset:)
+    def reference_candidate_match_stats(candidate:, usable_result:, media_item_id:, offset:, layout: nil)
       usable = Array(usable_result[:usable])
       comp_w = usable_result[:comp_w].to_f
       return nil if usable.empty? || comp_w <= 0.0
@@ -4592,10 +4609,11 @@ end
       comp = 0
 
       usable.each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count)|
-        exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+        exp = expected_variant_for_forensics(
           fingerprint_id: candidate[:fingerprint_id],
           media_item_id: media_item_id,
-          segment_index: base_seg_idx.to_i + offset.to_i
+          segment_index: base_seg_idx.to_i + offset.to_i,
+          layout: layout
         )
         comp += 1
         if exp != ov
@@ -4748,7 +4766,8 @@ end
           local_offset_radius: local_offset_radius,
           offset_floor: offset_floor,
           offset_ceil: max_offset,
-          observed_polarity_flip: observed_polarity_flip
+          observed_polarity_flip: observed_polarity_flip,
+          layout: layout
         )
         next if alignment.blank? || alignment[:comp_w].to_f <= 0.0
 
@@ -4840,7 +4859,7 @@ end
     end
     private_class_method :build_candidate_evidence!
 
-    def verify_shortlist_candidates_with_local_offsets!(candidates:, media_item:, build_usable:, polarity_flip:, max_off:, shortlist_limit: SHORTLIST_VERIFY_LIMIT, anchor_trust: 0.0, polarity_score_delta: nil, polarity_gate_passed: true)
+    def verify_shortlist_candidates_with_local_offsets!(candidates:, media_item:, build_usable:, polarity_flip:, max_off:, shortlist_limit: SHORTLIST_VERIFY_LIMIT, anchor_trust: 0.0, polarity_score_delta: nil, polarity_gate_passed: true, layout: nil)
       arr = Array(candidates)
       return arr if arr.empty?
 
@@ -4874,7 +4893,8 @@ end
               candidate: candidate,
               usable_result: usable_result,
               media_item_id: media_item.id,
-              offset: offset
+              offset: offset,
+              layout: layout
             )
             next if stats.blank?
 
@@ -5034,7 +5054,8 @@ end
             local_offset_radius: local_radius,
             offset_floor: bounds[:floor].to_i,
             offset_ceil: bounds[:ceil].to_i,
-            observed_polarity_flip: observed_polarity_flip
+            observed_polarity_flip: observed_polarity_flip,
+            layout: layout
           )
         end
 
@@ -5218,15 +5239,17 @@ end
         chunk_comp_w = 0.0
 
         chunk.each do |(_obs_idx, base_seg_idx, ov, weight)|
-          exp_a = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          exp_a = expected_variant_for_forensics(
             fingerprint_id: candidate_a[:fingerprint_id],
             media_item_id: media_item_id,
-            segment_index: base_seg_idx.to_i + off_a
+            segment_index: base_seg_idx.to_i + off_a,
+            layout: layout
           )
-          exp_b = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          exp_b = expected_variant_for_forensics(
             fingerprint_id: candidate_b[:fingerprint_id],
             media_item_id: media_item_id,
-            segment_index: base_seg_idx.to_i + off_b
+            segment_index: base_seg_idx.to_i + off_b,
+            layout: layout
           )
           next if exp_a == exp_b
 
@@ -5652,6 +5675,7 @@ end
 
       max_off = max_offset_segments.to_i
       max_off = 0 if max_off.negative?
+      layout_name = v8_layout_name(spec&.dig(:layout) || spec&.[](:layout))
 
       obs = observed_variants.is_a?(Array) ? observed_variants : []
       confs = observed_confidences.is_a?(Array) ? observed_confidences : []
@@ -5750,10 +5774,11 @@ end
             comp_w = 0.0
 
             grouped_samples.each do |(_obs_idx, base_seg_idx, ov, w, _c, _raw_count, _margin)|
-              exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+              exp = expected_variant_for_forensics(
                 fingerprint_id: rec.fingerprint_id,
                 media_item_id: media_item.id,
-                segment_index: base_seg_idx.to_i + offset
+                segment_index: base_seg_idx.to_i + offset,
+                layout: layout_name
               )
 
               comp_w += w
@@ -5836,10 +5861,11 @@ end
         high_q_compared = 0
 
         chosen_samples.each do |(_obs_idx, base_seg_idx, ov, w, _c, _raw_count, _margin, adaptive_w, adaptive_factor)|
-          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          exp = expected_variant_for_forensics(
             fingerprint_id: rec.fingerprint_id,
             media_item_id: media_item.id,
-            segment_index: base_seg_idx.to_i + chosen_offset
+            segment_index: base_seg_idx.to_i + chosen_offset,
+            layout: layout_name
           )
 
           comp += 1
@@ -5907,7 +5933,7 @@ end
           rec = rec_by_user[cand[:user_id]]
           next unless rec
 
-          local = best_local_offset(rec: rec, samples: chosen_samples, max_off: max_off, media_item_id: media_item.id)
+          local = best_local_offset(rec: rec, samples: chosen_samples, max_off: max_off, media_item_id: media_item.id, layout: layout_name)
           cand[:local_best_offset_segments] = local[:offset]
           cand[:local_match_ratio] = local[:match_ratio].round(4)
         end
@@ -5978,7 +6004,7 @@ end
       { candidates: candidates, meta: meta }
     end
 
-    def best_local_offset(rec:, samples:, max_off:, media_item_id:)
+    def best_local_offset(rec:, samples:, max_off:, media_item_id:, layout: nil)
       best = { offset: 0, mism_w: nil, comp_w: 0.0, match_ratio: 0.0 }
 
       (0..max_off).each do |offset|
@@ -5986,10 +6012,11 @@ end
         comp_w = 0.0
 
         samples.each do |(_obs_idx, base_seg_idx, ov, w, _c)|
-          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          exp = expected_variant_for_forensics(
             fingerprint_id: rec.fingerprint_id,
             media_item_id: media_item_id,
-            segment_index: base_seg_idx.to_i + offset
+            segment_index: base_seg_idx.to_i + offset,
+            layout: layout
           )
 
           comp_w += w
@@ -6807,10 +6834,11 @@ end
       fps.each do |rec|
         mism_w = 0.0
         u[:usable].each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count)|
-          exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+          exp = expected_variant_for_forensics(
             fingerprint_id: rec.fingerprint_id,
             media_item_id: media_item.id,
-            segment_index: base_seg_idx.to_i + offset
+            segment_index: base_seg_idx.to_i + offset,
+            layout: layout_name
           )
           mism_w += w if exp != ov
         end
@@ -6899,7 +6927,8 @@ end
       max_off: max_off,
       polarity_flip: best_polarity_flip,
       build_usable: build_usable,
-      observed_segment_indices: seg_indices
+      observed_segment_indices: seg_indices,
+      layout: layout_name
     )
   end
 
@@ -6952,10 +6981,11 @@ end
       high_q_compared_w = 0.0
 
       scored_reference_usable.each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count, adaptive_w, adaptive_factor)|
-        exp = ::MediaGallery::Fingerprinting.expected_variant_for_segment(
+        exp = expected_variant_for_forensics(
           fingerprint_id: rec.fingerprint_id,
           media_item_id: media_item.id,
-          segment_index: base_seg_idx.to_i + best_offset
+          segment_index: base_seg_idx.to_i + best_offset,
+          layout: layout_name
         )
         comp += 1
         comp_aw += adaptive_w.to_f
@@ -7050,7 +7080,8 @@ end
       shortlist_limit: SHORTLIST_VERIFY_LIMIT,
       anchor_trust: anchor_trust,
       polarity_score_delta: polarity_choice[:score_gain],
-      polarity_gate_passed: polarity_choice[:gate_passed]
+      polarity_gate_passed: polarity_choice[:gate_passed],
+      layout: layout_name
     )
     shortlist_verification_used = true
     new_top_user_id = candidates.first&.dig(:user_id)
