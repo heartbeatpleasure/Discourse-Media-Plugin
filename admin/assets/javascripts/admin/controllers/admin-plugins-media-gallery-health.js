@@ -20,6 +20,8 @@ function severityLabel(severity) {
       return "Critical";
     case "warning":
       return "Warning";
+    case "info":
+      return "Info";
     default:
       return "OK";
   }
@@ -31,6 +33,8 @@ function badgeClass(severity) {
       return "is-danger";
     case "warning":
       return "is-warning";
+    case "info":
+      return "is-info";
     default:
       return "is-success";
   }
@@ -42,6 +46,8 @@ function iconFor(severity) {
       return "×";
     case "warning":
       return "!";
+    case "info":
+      return "i";
     default:
       return "✓";
   }
@@ -713,7 +719,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       .flatMap((section) => {
         const sectionTitle = section?.title || "Health issue";
         return (Array.isArray(section?.items) ? section.items : [])
-          .filter((item) => item?.severity && item.severity !== "ok")
+          .filter((item) => item?.severity && !["ok", "info"].includes(String(item.severity)))
           .map((item) => decorateIssue({ ...item, section_title: sectionTitle }));
       })
       .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));

@@ -167,6 +167,24 @@ export default RouteTemplate(
         margin-top: 1rem;
       }
 
+      .mg-fi__pagination {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-top: 1rem;
+        padding-top: 0.85rem;
+        border-top: 1px solid var(--mg-fi-border);
+      }
+
+      .mg-fi__pagination-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+
       .mg-fi__search-status {
         margin-top: 0.75rem;
       }
@@ -920,7 +938,7 @@ export default RouteTemplate(
             </button>
           </div>
           <div class="mg-fi__muted">
-            <span>{{@controller.searchResultsCount}} result(s)</span>
+            <span>{{@controller.searchPaginationLabel}}</span>
             {{#if @controller.performanceTimingLabel}}
               <br /><span class="mg-fi__performance">{{@controller.performanceTimingLabel}}</span>
             {{/if}}
@@ -1033,6 +1051,15 @@ export default RouteTemplate(
                 </article>
               {{/each}}
             </div>
+            {{#if @controller.hasSearchPagination}}
+              <div class="mg-fi__pagination">
+                <span class="mg-fi__muted">{{@controller.searchPaginationLabel}}</span>
+                <div class="mg-fi__pagination-actions">
+                  <button class="btn" type="button" {{on "click" @controller.previousSearchPage}} disabled={{@controller.previousSearchPageDisabled}}>Previous</button>
+                  <button class="btn" type="button" {{on "click" @controller.nextSearchPage}} disabled={{@controller.nextSearchPageDisabled}}>Next</button>
+                </div>
+              </div>
+            {{/if}}
           {{else}}
             <div class="mg-fi__empty">No media matches yet. Search by title, public_id, uploader, database row id, or overlay/session code, or use “Recent items”.</div>
           {{/if}}

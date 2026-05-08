@@ -17,10 +17,14 @@ module ::MediaGallery
     def search
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       timing = {}
-      candidate_limit = search_candidate_limit
       final_limit = search_limit
+      page = search_page
+      offset = search_offset(page, final_limit)
+      candidate_limit = search_candidate_limit
+      search_scope = filtered_search_scope
+      total_count = timed_phase!(timing, :count) { safe_search_count(search_scope) }
 
-      candidates = timed_phase!(timing, :query) { filtered_search_scope.limit(candidate_limit).to_a }
+      candidates = timed_phase!(timing, :query) { search_scope.offset(offset).limit(candidate_limit).to_a }
       hls_roles_by_item = timed_phase!(timing, :hls_manifest) { hls_roles_by_item_from_manifest(candidates) }
       active_key_ids_by_item = timed_phase!(timing, :aes_key_prefetch) { hls_aes128_active_key_ids_by_item(candidates) }
       storage_profile_info_by_item = timed_phase!(timing, :storage_profiles) { storage_profile_info_by_item_for_items(candidates) }
@@ -58,7 +62,17 @@ module ::MediaGallery
       profiles = timed_phase!(timing, :profiles) { search_profiles_summary }
       elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
       timing[:total] = elapsed_ms
-      maybe_log_slow_management_search!(timing, candidates_count: candidates.length, returned_count: items.length, candidate_limit: candidate_limit, final_limit: final_limit)
+      total_pages_count = total_pages(total_count, final_limit)
+      maybe_log_slow_management_search!(
+        timing,
+        candidates_count: candidates.length,
+        returned_count: items.length,
+        candidate_limit: candidate_limit,
+        final_limit: final_limit,
+        page: page,
+        offset: offset,
+        total_count: total_count
+      )
       render_json_dump(
         items: items,
         search_profiles: profiles,
@@ -68,6 +82,12 @@ module ::MediaGallery
         candidates_count: candidates.length,
         returned_count: items.length,
         candidate_limit: candidate_limit,
+        page: page,
+        per_page: final_limit,
+        total_count: total_count,
+        total_pages: total_pages_count,
+        has_next_page: page < total_pages_count,
+        has_previous_page: page > 1,
       )
     end
 
@@ -695,7 +715,7 @@ module ::MediaGallery
       end
     end
 
-    def maybe_log_slow_management_search!(timing, candidates_count:, returned_count:, candidate_limit:, final_limit:)
+    def maybe_log_slow_management_search!(timing, candidates_count:, returned_count:, candidate_limit:, final_limit:, page: nil, offset: nil, total_count: nil)
       threshold = management_search_slow_log_ms
       return if threshold <= 0
       return if timing[:total].to_i < threshold
@@ -706,6 +726,9 @@ module ::MediaGallery
         returned_count: returned_count,
         candidate_limit: candidate_limit,
         final_limit: final_limit,
+        page: page,
+        offset: offset,
+        total_count: total_count,
         q_present: params[:q].to_s.present?,
         status: params[:status].to_s.presence,
         media_type: params[:media_type].to_s.presence,
@@ -918,6 +941,14 @@ module ::MediaGallery
 
       scope = apply_hls_aes128_sql_prefilter(scope)
 
+      has_hls = params[:has_hls].to_s.strip
+      case has_hls
+      when "true"
+        scope = scope.where("storage_manifest -> 'roles' -> 'hls' IS NOT NULL")
+      when "false"
+        scope = scope.where("storage_manifest -> 'roles' -> 'hls' IS NULL")
+      end
+
       sort = params[:sort].to_s.strip
       scope = case sort
       when "oldest"
@@ -960,6 +991,29 @@ module ::MediaGallery
       limit = 20 if limit <= 0
       limit = 100 if limit > 100
       limit
+    end
+
+    def search_page
+      page = params[:page].to_i
+      page = 1 if page <= 0
+      [page, 10_000].min
+    end
+
+    def search_offset(page, limit)
+      [(page.to_i - 1), 0].max * limit.to_i
+    end
+
+    def safe_search_count(scope)
+      scope.except(:limit, :offset, :order).count
+    rescue => e
+      Rails.logger.warn("[media_gallery] admin media search count failed: #{e.class}: #{e.message}")
+      nil
+    end
+
+    def total_pages(total_count, limit)
+      count = total_count.to_i
+      return 1 if count <= 0 || limit.to_i <= 0
+      (count.to_f / limit.to_i).ceil
     end
 
     def search_candidate_limit

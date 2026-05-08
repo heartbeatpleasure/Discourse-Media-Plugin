@@ -153,6 +153,24 @@ export default RouteTemplate(
         margin-top: 1rem;
       }
 
+      .mg-test-downloads__pagination {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-top: 1rem;
+        padding-top: 0.85rem;
+        border-top: 1px solid var(--mg-td-border);
+      }
+
+      .mg-test-downloads__pagination-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+
       .mg-test-downloads__results-wrap,
       .mg-test-downloads__results {
         margin-top: 0.5rem;
@@ -628,10 +646,9 @@ export default RouteTemplate(
           <div class="mg-test-downloads__field">
             <label>Limit</label>
             <select class="combobox" value={{@controller.limit}} {{on "change" @controller.onLimitChange}}>
-              <option value="12">12</option>
-              <option value="24">24</option>
-              <option value="48">48</option>
-              <option value="96">96</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
             </select>
           </div>
         </div>
@@ -695,6 +712,15 @@ export default RouteTemplate(
                   </article>
                 {{/each}}
               </div>
+              {{#if @controller.hasPagination}}
+                <div class="mg-test-downloads__pagination">
+                  <span class="mg-test-downloads__muted">{{@controller.paginationLabel}}</span>
+                  <div class="mg-test-downloads__pagination-actions">
+                    <button class="btn" type="button" {{on "click" @controller.previousPage}} disabled={{@controller.previousPageDisabled}}>Previous</button>
+                    <button class="btn" type="button" {{on "click" @controller.nextPage}} disabled={{@controller.nextPageDisabled}}>Next</button>
+                  </div>
+                </div>
+              {{/if}}
             {{else if @controller.hasSearched}}
               <div class="mg-test-downloads__empty">
                 No videos found. Try a broader search or reset the filters.

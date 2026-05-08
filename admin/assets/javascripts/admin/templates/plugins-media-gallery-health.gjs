@@ -385,6 +385,11 @@ export default RouteTemplate(
         box-shadow: 0 0 0 1px #ffc66d;
       }
 
+      .mg-health__status-dot.is-info {
+        background: #2f80ed;
+        box-shadow: 0 0 0 1px #a8d1ff;
+      }
+
       .mg-health__status-dot.is-danger {
         background: var(--danger);
         box-shadow: 0 0 0 1px var(--danger-low-mid);
@@ -434,6 +439,13 @@ export default RouteTemplate(
         background: #fff3d6;
         color: #9a5b00;
         border-color: #ffc66d;
+      }
+
+      .mg-health__badge.is-info,
+      .mg-health__icon.is-info {
+        background: #eef6ff;
+        color: #0b63ce;
+        border-color: #a8d1ff;
       }
 
       .mg-health__badge.is-danger,

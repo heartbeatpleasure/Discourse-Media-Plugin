@@ -17,7 +17,7 @@ module ::MediaGallery
     LAST_RECONCILIATION_KEY = "last_storage_reconciliation"
     RECONCILIATION_HISTORY_KEY = "storage_reconciliation_history"
     IGNORED_FINDINGS_KEY = "ignored_findings"
-    SEVERITY_ORDER = { "ok" => 0, "warning" => 1, "critical" => 2 }.freeze
+    SEVERITY_ORDER = { "ok" => 0, "info" => 0, "warning" => 1, "critical" => 2 }.freeze
     VALID_NOTIFY_SEVERITIES = %w[warning critical].freeze
     RECONCILIATION_EXPANDED_OBJECT_LIMIT = 20_000
     RECONCILIATION_EXPANDED_ORPHAN_SAMPLE_LIMIT = 500
@@ -398,7 +398,7 @@ module ::MediaGallery
         items << issue(
           id: "reconciliation_scan_truncated",
           label: cached["scan_mode"].to_s == "expanded" ? "Expanded storage scan limit" : "Bounded storage scan",
-          severity: "warning",
+          severity: cached["scan_mode"].to_s == "expanded" ? "warning" : "info",
           count: Array(cached.dig("stats", "truncated_profiles")).length,
           message: "One or more storage profiles reached the scan limit.",
           detail: reconciliation_truncated_scan_detail(cached),
@@ -1081,7 +1081,7 @@ module ::MediaGallery
     def attention_issues(sections)
       Array(sections).flat_map do |section|
         Array(section[:items]).filter_map do |item|
-          next if item[:severity].to_s == "ok"
+          next if %w[ok info].include?(item[:severity].to_s)
 
           item.merge(
             section_id: section[:id].to_s,

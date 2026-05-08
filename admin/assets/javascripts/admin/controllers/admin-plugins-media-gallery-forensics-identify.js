@@ -226,6 +226,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked searchBackendFilter = "all";
   @tracked searchHlsFilter = "all";
   @tracked searchLimit = 20;
+  @tracked searchPage = 1;
+  @tracked searchPagination = null;
   @tracked searchSort = "newest";
   _searchTimer = null;
 
@@ -330,6 +332,45 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get searchResultsCount() {
     return this.decoratedSearchResults.length;
+  }
+
+  _applySearchPagination(json) {
+    const perPage = Number(json?.per_page || this.searchLimit || 20) || 20;
+    const page = Number(json?.page || this.searchPage || 1) || 1;
+    const totalCount = Number(json?.total_count);
+    const totalPages = Number(json?.total_pages);
+
+    this.searchPagination = {
+      page,
+      perPage,
+      totalCount: Number.isFinite(totalCount) ? totalCount : null,
+      totalPages: Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1,
+      hasNextPage: !!json?.has_next_page,
+      hasPreviousPage: !!json?.has_previous_page,
+    };
+    this.searchPage = page;
+  }
+
+  get hasSearchPagination() {
+    return !!(this.searchPagination?.hasPreviousPage || this.searchPagination?.hasNextPage || (this.searchPagination?.totalPages || 1) > 1);
+  }
+
+  get searchPaginationLabel() {
+    const page = this.searchPagination?.page || this.searchPage || 1;
+    const totalPages = this.searchPagination?.totalPages || 1;
+    const totalCount = this.searchPagination?.totalCount;
+    if (totalCount != null) {
+      return `Page ${page} of ${totalPages} · ${totalCount} result(s)`;
+    }
+    return `Page ${page}`;
+  }
+
+  get previousSearchPageDisabled() {
+    return this.isSearching || !this.searchPagination?.hasPreviousPage;
+  }
+
+  get nextSearchPageDisabled() {
+    return this.isSearching || !this.searchPagination?.hasNextPage;
   }
 
   get decoratedOverlayMatches() {
@@ -1004,24 +1045,28 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @action
   onSearchTypeFilterChange(event) {
     this.searchTypeFilter = event?.target?.value || "all";
+    this.searchPage = 1;
     this._debouncedSearch();
   }
 
   @action
   onSearchStatusFilterChange(event) {
     this.searchStatusFilter = event?.target?.value || "all";
+    this.searchPage = 1;
     this._debouncedSearch();
   }
 
   @action
   onSearchBackendFilterChange(event) {
     this.searchBackendFilter = event?.target?.value || "all";
+    this.searchPage = 1;
     this._debouncedSearch();
   }
 
   @action
   onSearchHlsFilterChange(event) {
     this.searchHlsFilter = event?.target?.value || "all";
+    this.searchPage = 1;
     this._debouncedSearch();
   }
 
@@ -1029,12 +1074,14 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   onSearchLimitChange(event) {
     const value = parseInt(event?.target?.value, 10);
     this.searchLimit = Number.isFinite(value) && value > 0 ? value : 20;
+    this.searchPage = 1;
     this._debouncedSearch();
   }
 
   @action
   onSearchSortChange(event) {
     this.searchSort = event?.target?.value || "newest";
+    this.searchPage = 1;
     this._debouncedSearch();
   }
 
@@ -1046,6 +1093,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     this.searchBackendFilter = "all";
     this.searchHlsFilter = "all";
     this.searchLimit = 20;
+    this.searchPage = 1;
+    this.searchPagination = null;
     this.searchSort = "newest";
     this.searchError = "";
     this.lookupCode = "";
@@ -1066,6 +1115,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     // searches such as "Chris video". The actual request still trims the
     // query inside search().
     this.searchQuery = event?.target?.value || "";
+    this.searchPage = 1;
     this._debouncedSearch();
   }
 
@@ -1078,6 +1128,24 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       this._searchTimer = null;
       this.search();
     }, 300);
+  }
+
+  @action
+  async previousSearchPage() {
+    if (this.previousSearchPageDisabled) {
+      return;
+    }
+    this.searchPage = Math.max(1, (this.searchPage || 1) - 1);
+    await this.search();
+  }
+
+  @action
+  async nextSearchPage() {
+    if (this.nextSearchPageDisabled) {
+      return;
+    }
+    this.searchPage = (this.searchPage || 1) + 1;
+    await this.search();
   }
 
   @action
@@ -1095,6 +1163,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       const params = new URLSearchParams();
       params.set("q", q || "");
       params.set("limit", String(this.searchLimit || 20));
+      params.set("page", String(this.searchPage || 1));
       params.set("sort", this.searchSort || "newest");
 
       if (this.searchTypeFilter !== "all") {
@@ -1150,6 +1219,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
         this.showPerformanceTimings = !!json?.show_performance_timings;
         this.lastSearchTimingMs = Number(json?.timing_ms || 0) || null;
         this.lastSearchTimingBreakdown = json?.timing_breakdown_ms || null;
+        this._applySearchPagination(json);
         this.searchResults = Array.isArray(json?.items) ? json.items : [];
       }
 

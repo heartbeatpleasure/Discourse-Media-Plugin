@@ -5,7 +5,7 @@ import { tracked } from "@glimmer/tracking";
 const DEFAULT_BACKEND_FILTER = "";
 const DEFAULT_STATUS_FILTER = "ready";
 const DEFAULT_SORT = "newest";
-const DEFAULT_LIMIT = "24";
+const DEFAULT_LIMIT = "20";
 const DEFAULT_HAS_HLS_FILTER = "true";
 
 export default class AdminPluginsMediaGalleryTestDownloadsController extends Controller {
@@ -14,6 +14,8 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @tracked statusFilter = DEFAULT_STATUS_FILTER;
   @tracked sort = DEFAULT_SORT;
   @tracked limit = DEFAULT_LIMIT;
+  @tracked page = 1;
+  @tracked pagination = null;
   @tracked hasHlsFilter = DEFAULT_HAS_HLS_FILTER;
   @tracked searchResults = [];
   @tracked isSearching = false;
@@ -44,6 +46,8 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.statusFilter = DEFAULT_STATUS_FILTER;
     this.sort = DEFAULT_SORT;
     this.limit = DEFAULT_LIMIT;
+    this.page = 1;
+    this.pagination = null;
     this.hasHlsFilter = DEFAULT_HAS_HLS_FILTER;
     this.searchResults = [];
     this.isSearching = false;
@@ -115,6 +119,28 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
   get generateDisabled() {
     return !this.canGenerate;
+  }
+
+  get hasPagination() {
+    return !!(this.pagination?.hasPreviousPage || this.pagination?.hasNextPage || (this.pagination?.totalPages || 1) > 1);
+  }
+
+  get paginationLabel() {
+    const page = this.pagination?.page || this.page || 1;
+    const totalPages = this.pagination?.totalPages || 1;
+    const totalCount = this.pagination?.totalCount;
+    if (totalCount != null) {
+      return `Page ${page} of ${totalPages} · ${totalCount} video(s)`;
+    }
+    return `Page ${page}`;
+  }
+
+  get previousPageDisabled() {
+    return this.isSearching || !this.pagination?.hasPreviousPage;
+  }
+
+  get nextPageDisabled() {
+    return this.isSearching || !this.pagination?.hasNextPage;
   }
 
   get selectionMessageClass() {
@@ -260,6 +286,23 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     };
   }
 
+  _applyPagination(json) {
+    const perPage = Number(json?.per_page || this.limit || DEFAULT_LIMIT) || Number(DEFAULT_LIMIT);
+    const page = Number(json?.page || this.page || 1) || 1;
+    const totalCount = Number(json?.total_count);
+    const totalPages = Number(json?.total_pages);
+
+    this.pagination = {
+      page,
+      perPage,
+      totalCount: Number.isFinite(totalCount) ? totalCount : null,
+      totalPages: Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1,
+      hasNextPage: !!json?.has_next_page,
+      hasPreviousPage: !!json?.has_previous_page,
+    };
+    this.page = page;
+  }
+
   _markSelectedResults() {
     const selectedPublicId = (this.publicId || "").trim();
     this.searchResults = (this.searchResults || []).map((item) => ({
@@ -281,6 +324,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   onSearchInput(event) {
     this.searchQuery = event?.target?.value || "";
     this.searchError = "";
+    this.page = 1;
   }
 
   @action
@@ -294,26 +338,31 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
   @action
   onBackendChange(event) {
     this.backendFilter = event?.target?.value || "";
+    this.page = 1;
   }
 
   @action
   onStatusChange(event) {
     this.statusFilter = event?.target?.value || "";
+    this.page = 1;
   }
 
   @action
   onSortChange(event) {
     this.sort = event?.target?.value || DEFAULT_SORT;
+    this.page = 1;
   }
 
   @action
   onLimitChange(event) {
     this.limit = event?.target?.value || DEFAULT_LIMIT;
+    this.page = 1;
   }
 
   @action
   onHasHlsChange(event) {
     this.hasHlsFilter = event?.target?.value || DEFAULT_HAS_HLS_FILTER;
+    this.page = 1;
   }
 
   @action
@@ -323,6 +372,8 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.statusFilter = DEFAULT_STATUS_FILTER;
     this.sort = DEFAULT_SORT;
     this.limit = DEFAULT_LIMIT;
+    this.page = 1;
+    this.pagination = null;
     this.hasHlsFilter = DEFAULT_HAS_HLS_FILTER;
     await this.search();
   }
@@ -365,6 +416,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
     params.set("media_type", "video");
     params.set("limit", this.limit || DEFAULT_LIMIT);
+    params.set("page", String(this.page || 1));
 
     if (this.backendFilter) {
       params.set("backend", this.backendFilter);
@@ -383,6 +435,24 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     }
 
     return params;
+  }
+
+  @action
+  async previousPage() {
+    if (this.previousPageDisabled) {
+      return;
+    }
+    this.page = Math.max(1, (this.page || 1) - 1);
+    await this.search();
+  }
+
+  @action
+  async nextPage() {
+    if (this.nextPageDisabled) {
+      return;
+    }
+    this.page = (this.page || 1) + 1;
+    await this.search();
   }
 
   @action
@@ -408,12 +478,15 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       }
 
       const json = await response.json();
+      this._applyPagination(json);
       const items = Array.isArray(json?.items) ? json.items : [];
       this.searchResults = items.map((item) => this._normalizeItem(item));
       this._markSelectedResults();
 
       const noun = this.searchResults.length === 1 ? "video" : "videos";
-      this.searchInfo = `${this.searchResults.length} ${noun} shown`;
+      this.searchInfo = this.pagination?.totalCount != null
+        ? `${this.pagination.totalCount} ${this.pagination.totalCount === 1 ? "video" : "videos"} · page ${this.pagination.page} of ${this.pagination.totalPages}`
+        : `${this.searchResults.length} ${noun} shown`;
       if ((this.searchQuery || "").trim()) {
         this.searchInfo += ` for “${(this.searchQuery || "").trim()}”`;
       }

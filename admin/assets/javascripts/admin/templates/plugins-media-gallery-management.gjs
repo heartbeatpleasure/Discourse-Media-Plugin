@@ -204,6 +204,24 @@ export default RouteTemplate(
         margin-top: 1rem;
       }
 
+      .mg-management__pagination {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-top: 1rem;
+        padding-top: 0.85rem;
+        border-top: 1px solid var(--mg-border);
+      }
+
+      .mg-management__pagination-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+
       .mg-management__action-groups {
         display: flex;
         flex-direction: column;
@@ -951,6 +969,15 @@ export default RouteTemplate(
                   </article>
                 {{/each}}
               </div>
+              {{#if @controller.hasPagination}}
+                <div class="mg-management__pagination">
+                  <span class="mg-management__muted">{{@controller.paginationLabel}}</span>
+                  <div class="mg-management__pagination-actions">
+                    <button class="btn" type="button" {{on "click" @controller.previousPage}} disabled={{@controller.previousPageDisabled}}>Previous</button>
+                    <button class="btn" type="button" {{on "click" @controller.nextPage}} disabled={{@controller.nextPageDisabled}}>Next</button>
+                  </div>
+                </div>
+              {{/if}}
             {{else if @controller.hasSearched}}
               <div class="mg-management__empty-state">
                 <strong>No items found</strong>

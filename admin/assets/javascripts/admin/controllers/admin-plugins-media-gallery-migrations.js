@@ -193,7 +193,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked statusFilter = "all";
   @tracked mediaTypeFilter = "all";
   @tracked hlsFilter = "all";
-  @tracked limit = 50;
+  @tracked limit = 20;
+  @tracked page = 1;
+  @tracked pagination = null;
   @tracked sortBy = "created_at_desc";
 
   @tracked isSearching = false;
@@ -281,7 +283,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.statusFilter = "all";
     this.mediaTypeFilter = "all";
     this.hlsFilter = "all";
-    this.limit = 50;
+    this.limit = 20;
+    this.page = 1;
+    this.pagination = null;
     this.sortBy = "created_at_desc";
     this.isSearching = false;
     this.searchError = "";
@@ -346,6 +350,45 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.selectionAbortController?.abort?.();
     this.storageAbortController?.abort?.();
     super.willDestroy(...arguments);
+  }
+
+  _applyPagination(json) {
+    const perPage = Number(json?.per_page || this.limit || 20) || 20;
+    const page = Number(json?.page || this.page || 1) || 1;
+    const totalCount = Number(json?.total_count);
+    const totalPages = Number(json?.total_pages);
+
+    this.pagination = {
+      page,
+      perPage,
+      totalCount: Number.isFinite(totalCount) ? totalCount : null,
+      totalPages: Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1,
+      hasNextPage: !!json?.has_next_page,
+      hasPreviousPage: !!json?.has_previous_page,
+    };
+    this.page = page;
+  }
+
+  get hasPagination() {
+    return !!(this.pagination?.hasPreviousPage || this.pagination?.hasNextPage || (this.pagination?.totalPages || 1) > 1);
+  }
+
+  get paginationLabel() {
+    const page = this.pagination?.page || this.page || 1;
+    const totalPages = this.pagination?.totalPages || 1;
+    const totalCount = this.pagination?.totalCount;
+    if (totalCount != null) {
+      return `Page ${page} of ${totalPages} · ${totalCount} item(s)`;
+    }
+    return `Page ${page}`;
+  }
+
+  get previousPageDisabled() {
+    return this.isSearching || !this.pagination?.hasPreviousPage;
+  }
+
+  get nextPageDisabled() {
+    return this.isSearching || !this.pagination?.hasNextPage;
   }
 
   get performanceTimingLabel() {
@@ -1161,7 +1204,20 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     if (this.statusFilter && this.statusFilter !== "all") params.set("status", this.statusFilter);
     if (this.mediaTypeFilter && this.mediaTypeFilter !== "all") params.set("media_type", this.mediaTypeFilter);
     if (this.hlsFilter && this.hlsFilter !== "all") params.set("has_hls", this.hlsFilter === "yes" ? "true" : "false");
-    params.set("limit", String(this.limit || 50));
+    params.set("limit", String(this.limit || 20));
+    params.set("page", String(this.page || 1));
+    switch (this.sortBy) {
+      case "created_at_asc":
+        params.set("sort", "oldest");
+        break;
+      case "title_asc":
+      case "title_desc":
+        params.set("sort", this.sortBy);
+        break;
+      default:
+        params.set("sort", "newest");
+        break;
+    }
     return params;
   }
 
@@ -1184,16 +1240,28 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     return message;
   }
 
-  @action onSearchInput(event) { this.searchQuery = event?.target?.value || ""; }
-  @action onBackendFilterChange(event) { this.backendFilter = event?.target?.value || "all"; }
-  @action onProfileFilterChange(event) { this.profileFilter = event?.target?.value || "all"; }
-  @action onStatusFilterChange(event) { this.statusFilter = event?.target?.value || "all"; }
-  @action onMediaTypeFilterChange(event) { this.mediaTypeFilter = event?.target?.value || "all"; }
-  @action onHlsFilterChange(event) { this.hlsFilter = event?.target?.value || "all"; }
-  @action onSortByChange(event) { this.sortBy = event?.target?.value || "created_at_desc"; }
+  _resetToFirstPage() { this.page = 1; }
+  @action onSearchInput(event) { this.searchQuery = event?.target?.value || ""; this._resetToFirstPage(); }
+  @action onBackendFilterChange(event) { this.backendFilter = event?.target?.value || "all"; this._resetToFirstPage(); }
+  @action onProfileFilterChange(event) { this.profileFilter = event?.target?.value || "all"; this._resetToFirstPage(); }
+  @action onStatusFilterChange(event) { this.statusFilter = event?.target?.value || "all"; this._resetToFirstPage(); }
+  @action onMediaTypeFilterChange(event) { this.mediaTypeFilter = event?.target?.value || "all"; this._resetToFirstPage(); }
+  @action onHlsFilterChange(event) { this.hlsFilter = event?.target?.value || "all"; this._resetToFirstPage(); }
+  @action onSortByChange(event) { this.sortBy = event?.target?.value || "created_at_desc"; this._resetToFirstPage(); }
   @action onLimitChange(event) {
     const value = parseInt(event?.target?.value, 10);
-    this.limit = Number.isFinite(value) && value > 0 ? Math.min(value, 100) : 50;
+    this.limit = Number.isFinite(value) && value > 0 ? Math.min(value, 100) : 20;
+    this._resetToFirstPage();
+  }
+  @action async previousPage() {
+    if (this.previousPageDisabled) { return; }
+    this.page = Math.max(1, (this.page || 1) - 1);
+    await this.search();
+  }
+  @action async nextPage() {
+    if (this.nextPageDisabled) { return; }
+    this.page = (this.page || 1) + 1;
+    await this.search();
   }
   @action onSearchKeydown(event) {
     if (event?.key === "Enter") {
@@ -1214,7 +1282,9 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.statusFilter = "all";
     this.mediaTypeFilter = "all";
     this.hlsFilter = "all";
-    this.limit = 50;
+    this.limit = 20;
+    this.page = 1;
+    this.pagination = null;
     this.sortBy = "created_at_desc";
     this.bulkConfirm = false;
     this.bulkFullMigration = true;
@@ -1248,13 +1318,19 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.showPerformanceTimings = !!json?.show_performance_timings;
       this.lastSearchTimingMs = Number(json?.timing_ms || 0) || null;
       this.lastSearchTimingBreakdown = json?.timing_breakdown_ms || null;
+      this._applyPagination(json);
       this.searchResults = Array.isArray(json?.items) ? json.items : [];
       const visibleIds = new Set(this.searchResults.map((row) => row.public_id));
       this.selectedBulkPublicIds = this.selectedBulkPublicIds.filter((publicId) => visibleIds.has(publicId));
       if (!this.selectedBulkPublicIds.length) {
         this.bulkConfirm = false;
       }
-      this.searchInfo = `${this.searchResults.length} result(s).`;
+      const totalCount = this.pagination?.totalCount;
+      const page = this.pagination?.page || this.page || 1;
+      const totalPages = this.pagination?.totalPages || 1;
+      this.searchInfo = totalCount != null
+        ? `${totalCount} result(s) · page ${page} of ${totalPages}.`
+        : `${this.searchResults.length} result(s).`;
       const refreshedSelection = this.searchResults.find((row) => row.public_id === this.selectedPublicId);
       if (refreshedSelection) {
         this.selectedItem = refreshedSelection;

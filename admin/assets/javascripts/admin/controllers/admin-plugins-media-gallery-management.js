@@ -484,7 +484,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked duplicateFilter = "all";
   @tracked genderFilter = "all";
   @tracked hlsAes128Filter = "all";
-  @tracked limit = "50";
+  @tracked limit = "20";
+  @tracked page = 1;
+  @tracked pagination = null;
   @tracked sortBy = "newest";
   @tracked searchResults = [];
   @tracked isSearching = false;
@@ -540,7 +542,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.duplicateFilter = "all";
     this.genderFilter = "all";
     this.hlsAes128Filter = "all";
-    this.limit = "50";
+    this.limit = "20";
+    this.page = 1;
+    this.pagination = null;
     this.sortBy = "newest";
     this.searchResults = [];
     this.isSearching = false;
@@ -1441,6 +1445,45 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.adminNote = "";
   }
 
+  _applyPagination(json) {
+    const perPage = Number(json?.per_page || this.limit || 20) || 20;
+    const page = Number(json?.page || this.page || 1) || 1;
+    const totalCount = Number(json?.total_count);
+    const totalPages = Number(json?.total_pages);
+
+    this.pagination = {
+      page,
+      perPage,
+      totalCount: Number.isFinite(totalCount) ? totalCount : null,
+      totalPages: Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1,
+      hasNextPage: !!json?.has_next_page,
+      hasPreviousPage: !!json?.has_previous_page,
+    };
+    this.page = page;
+  }
+
+  get hasPagination() {
+    return !!(this.pagination?.hasPreviousPage || this.pagination?.hasNextPage || (this.pagination?.totalPages || 1) > 1);
+  }
+
+  get paginationLabel() {
+    const page = this.pagination?.page || this.page || 1;
+    const totalPages = this.pagination?.totalPages || 1;
+    const totalCount = this.pagination?.totalCount;
+    if (totalCount != null) {
+      return `Page ${page} of ${totalPages} · ${totalCount} item(s)`;
+    }
+    return `Page ${page}`;
+  }
+
+  get previousPageDisabled() {
+    return this.isSearching || !this.pagination?.hasPreviousPage;
+  }
+
+  get nextPageDisabled() {
+    return this.isSearching || !this.pagination?.hasNextPage;
+  }
+
   _updateSearchInfo() {
     let suffix = "";
 
@@ -1457,7 +1500,13 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       suffix = timing > 0 ? ` • server ${timing}ms${parts ? ` (${parts})` : ""}` : "";
     }
 
-    this.searchInfo = `${this.searchResults.length} item(s) found${suffix}.`;
+    const totalCount = this.pagination?.totalCount;
+    const page = this.pagination?.page || this.page || 1;
+    const totalPages = this.pagination?.totalPages || 1;
+    const countLabel = totalCount != null
+      ? `${totalCount} item(s) found · page ${page} of ${totalPages}`
+      : `${this.searchResults.length} item(s) shown`;
+    this.searchInfo = `${countLabel}${suffix}.`;
   }
 
   _sortSearchResults(items) {
@@ -1668,48 +1717,81 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
 
+  _resetToFirstPage() {
+    this.page = 1;
+  }
+
   @action onSearchInput(event) {
     this.searchQuery = event?.target?.value || "";
+    this._resetToFirstPage();
   }
 
   @action onBackendFilterChange(event) {
     this.backendFilter = event?.target?.value || "all";
+    this._resetToFirstPage();
   }
 
   @action onProfileFilterChange(event) {
     this.profileFilter = event?.target?.value || "all";
+    this._resetToFirstPage();
   }
 
   @action onStatusFilterChange(event) {
     this.statusFilter = event?.target?.value || "all";
+    this._resetToFirstPage();
   }
 
   @action onMediaTypeFilterChange(event) {
     this.mediaTypeFilter = event?.target?.value || "all";
+    this._resetToFirstPage();
   }
 
   @action onHiddenFilterChange(event) {
     this.hiddenFilter = event?.target?.value || "all";
+    this._resetToFirstPage();
   }
 
   @action onDuplicateFilterChange(event) {
     this.duplicateFilter = event?.target?.value || "all";
+    this._resetToFirstPage();
   }
 
   @action onGenderFilterChange(event) {
     this.genderFilter = event?.target?.value || "all";
+    this._resetToFirstPage();
   }
 
   @action onHlsAes128FilterChange(event) {
     this.hlsAes128Filter = event?.target?.value || "all";
+    this._resetToFirstPage();
   }
 
   @action onLimitChange(event) {
-    this.limit = event?.target?.value || "50";
+    this.limit = event?.target?.value || "20";
+    this._resetToFirstPage();
   }
 
   @action onSortChange(event) {
     this.sortBy = event?.target?.value || "newest";
+    this._resetToFirstPage();
+  }
+
+  @action
+  async previousPage() {
+    if (this.previousPageDisabled) {
+      return;
+    }
+    this.page = Math.max(1, (this.page || 1) - 1);
+    await this.search();
+  }
+
+  @action
+  async nextPage() {
+    if (this.nextPageDisabled) {
+      return;
+    }
+    this.page = (this.page || 1) + 1;
+    await this.search();
   }
 
   @action onEditTitle(event) {
@@ -1759,7 +1841,9 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.duplicateFilter = "all";
     this.genderFilter = "all";
     this.hlsAes128Filter = "all";
-    this.limit = "50";
+    this.limit = "20";
+    this.page = 1;
+    this.pagination = null;
     this.sortBy = "newest";
     await this.search();
   }
@@ -1800,7 +1884,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     } else if (this.hlsAes128Filter !== "all") {
       params.set("hls_aes128", this.hlsAes128Filter);
     }
-    params.set("limit", String(this.limit || "50"));
+    params.set("limit", String(this.limit || "20"));
+    params.set("page", String(this.page || 1));
     params.set("sort", String(this.sortBy || "newest"));
     return params;
   }
@@ -1827,6 +1912,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       this.showPerformanceTimings = !!json?.show_performance_timings;
       this.lastSearchTimingMs = Number(json?.timing_ms || 0) || null;
       this.lastSearchTimingBreakdown = json?.timing_breakdown_ms || null;
+      this._applyPagination(json);
       this.searchResults = this._sortSearchResults(Array.isArray(json?.items) ? json.items : []);
       this._updateSearchInfo();
     } catch (e) {
