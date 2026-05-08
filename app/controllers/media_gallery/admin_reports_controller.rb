@@ -10,6 +10,8 @@ module ::MediaGallery
     VISIBILITY_KEY = "admin_visibility"
     MANAGEMENT_LOG_KEY = "admin_management_log"
     ASSET_DELETION_KEY = "reported_asset_deletion"
+    FALSE_REPORT_ACK_STORE_NAMESPACE = "media_gallery_admin_reports"
+    FALSE_REPORT_ACK_STORE_KEY = "false_reporter_acknowledgements"
     MAX_MANAGEMENT_LOG_ENTRIES = 50
 
     def index
@@ -20,6 +22,7 @@ module ::MediaGallery
       reports = timed_phase!(timing, :filters) do
         filtered = apply_status_filter(all_reports)
         filtered = apply_user_filter(filtered)
+        filtered = apply_report_time_window_filter(filtered)
         apply_report_search_filter(filtered)
       end
       timed_phase!(timing, :sort) do
@@ -30,7 +33,7 @@ module ::MediaGallery
       limit = bounded_limit
       visible_reports = timed_phase!(timing, :serialize) { reports.first(limit) }
       trends = timed_phase!(timing, :trends) { moderation_trends_payload(all_reports) }
-      false_reporters = timed_phase!(timing, :false_reporters) { false_reporters_payload(all_reports) }
+      false_reporters = timed_phase!(timing, :false_reporters) { false_reporters_payload(all_reports, include_acknowledged: show_acknowledged_false_reporters?) }
       timing[:total] = elapsed_ms_since(started_at)
 
       render_json_dump(
@@ -170,6 +173,42 @@ module ::MediaGallery
       render_json_error("report_review_failed", status: 422, message: "Report review failed. Please try again.")
     end
 
+
+
+    def acknowledge_false_reporter
+      user_id = params[:user_id].to_i
+      return render_json_error("invalid_user_id", status: 422, message: "Invalid user ID.") unless user_id.positive?
+
+      reports = report_scope.flat_map { |item| report_payloads_for_item(item) }
+      reporter = false_reporters_payload(reports, include_acknowledged: true).find { |entry| entry[:user_id].to_i == user_id }
+      return render_json_error("false_reporter_signal_not_found", status: 404, message: "No repeated rejected-report signal was found for this user.") if reporter.blank?
+
+      now = Time.now.utc.iso8601
+      acknowledgements = false_reporter_acknowledgements
+      acknowledgements[user_id.to_s] = {
+        "acknowledged_at" => now,
+        "acknowledged_by_user_id" => current_user.id,
+        "acknowledged_by_username" => current_user.username,
+        "latest_activity_at" => reporter[:latest_activity_at].to_s.presence,
+      }.compact
+      ::PluginStore.set(FALSE_REPORT_ACK_STORE_NAMESPACE, FALSE_REPORT_ACK_STORE_KEY, acknowledgements)
+
+      ::MediaGallery::OperationLogger.info(
+        "false_reporter_signal_acknowledged",
+        operation: "reports",
+        data: {
+          reporter_user_id: user_id,
+          reporter_username: reporter[:username],
+          latest_activity_at: reporter[:latest_activity_at],
+          acknowledged_by: current_user.username,
+        }.compact
+      )
+
+      render_json_dump(ok: true, message: "Rejected-report signal acknowledged until this user has new report activity.")
+    rescue => e
+      Rails.logger.warn("[media_gallery] false reporter acknowledgement failed user_id=#{params[:user_id]} request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      render_json_error("false_reporter_acknowledge_failed", status: 422, message: "Acknowledgement failed. Please try again.")
+    end
 
 def block_owner
   update_owner_access_block_from_report(block_type: :view, block: true)
@@ -327,7 +366,7 @@ end
       [7, 30, 90].map { |days| empty_report_counts.merge(days: days, since: days.days.ago.iso8601) }
     end
 
-    def false_reporters_payload(reports)
+    def false_reporters_payload(reports, include_acknowledged: false)
       grouped = Hash.new { |hash, key| hash[key] = { total: 0, rejected: 0, accepted: 0, resolved: 0, open: 0, username: nil, user_id: key } }
       Array(reports).each do |report|
         user_id = (report[:reporter_user_id] || report["reporter_user_id"]).to_i
@@ -340,6 +379,7 @@ end
         entry[status.to_sym] += 1
       end
 
+      acknowledgements = false_reporter_acknowledgements
       grouped.values.map do |entry|
         rejected_rate = entry[:total].positive? ? entry[:rejected].to_f / entry[:total] : 0.0
         severity = if entry[:total] >= 5 && rejected_rate >= 0.6
@@ -349,12 +389,54 @@ end
         else
           "info"
         end
-        entry.merge(rejected_rate: rejected_rate.round(3), severity: severity)
-      end.select { |entry| %w[warning danger].include?(entry[:severity]) }
-        .sort_by { |entry| [-entry[:rejected].to_i, -entry[:rejected_rate].to_f, entry[:username].to_s] }
-        .first(5)
+        next unless %w[warning danger].include?(severity)
+
+        latest_activity_at = latest_report_activity_at_for_user(Array(reports), entry[:user_id])
+        acknowledgement = acknowledgements[entry[:user_id].to_s].is_a?(Hash) ? acknowledgements[entry[:user_id].to_s] : {}
+        acknowledged_at = parse_report_time(acknowledgement["acknowledged_at"])
+        acknowledged = acknowledged_at.present? && latest_activity_at.present? && acknowledged_at >= latest_activity_at
+        next if acknowledged && !include_acknowledged
+
+        entry.merge(
+          rejected_rate: rejected_rate.round(3),
+          severity: severity,
+          latest_activity_at: latest_activity_at&.iso8601,
+          acknowledged: acknowledged,
+          acknowledged_at: acknowledged ? acknowledged_at&.iso8601 : nil,
+          acknowledged_by_username: acknowledged ? acknowledgement["acknowledged_by_username"].to_s.presence : nil,
+        ).compact
+      end.compact
+        .sort_by { |entry| [entry[:acknowledged] ? 1 : 0, -entry[:rejected].to_i, -entry[:rejected_rate].to_f, entry[:username].to_s] }
+        .first(include_acknowledged ? 20 : 5)
     rescue
       []
+    end
+
+    def latest_report_activity_at_for_user(reports, user_id)
+      uid = user_id.to_i
+      times = Array(reports).filter_map do |report|
+        reporter_id = (report[:reporter_user_id] || report["reporter_user_id"]).to_i
+        owner_id = report.dig(:media, :uploader_user_id).to_i
+        next unless reporter_id == uid || owner_id == uid
+
+        parse_report_time(report[:created_at] || report["created_at"])
+      end
+      times.compact.max
+    rescue
+      nil
+    end
+
+    def false_reporter_acknowledgements
+      value = ::PluginStore.get(FALSE_REPORT_ACK_STORE_NAMESPACE, FALSE_REPORT_ACK_STORE_KEY)
+      value.is_a?(Hash) ? value : {}
+    rescue
+      {}
+    end
+
+    def show_acknowledged_false_reporters?
+      ActiveModel::Type::Boolean.new.cast(params[:show_acknowledged_reporter_signals])
+    rescue
+      false
     end
 
     def empty_report_counts
@@ -406,7 +488,25 @@ end
         q: params[:q].to_s.strip.presence,
         reporter_user_id: params[:reporter_user_id].to_i.positive? ? params[:reporter_user_id].to_i : nil,
         media_owner_user_id: params[:media_owner_user_id].to_i.positive? ? params[:media_owner_user_id].to_i : nil,
+        since_days: bounded_since_days,
+        show_acknowledged_reporter_signals: show_acknowledged_false_reporters? ? true : nil,
       }.compact
+    end
+
+    def apply_report_time_window_filter(reports)
+      days = bounded_since_days
+      return reports if days.blank?
+
+      since = days.days.ago
+      reports.select do |report|
+        created_at = parse_report_time(report[:created_at] || report["created_at"])
+        created_at.present? && created_at >= since
+      end
+    end
+
+    def bounded_since_days
+      value = params[:since_days].to_i
+      [7, 30, 90].include?(value) ? value : nil
     end
 
     def apply_status_filter(reports)

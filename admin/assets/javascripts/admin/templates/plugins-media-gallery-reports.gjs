@@ -292,6 +292,27 @@ export default RouteTemplate(
         gap: 0.38rem;
       }
 
+      button.mg-reports__summary-card {
+        text-align: left;
+        color: var(--primary);
+        cursor: pointer;
+        appearance: none;
+        font: inherit;
+      }
+
+      button.mg-reports__summary-card:hover,
+      button.mg-reports__summary-card.is-active {
+        border-color: var(--tertiary);
+        box-shadow: inset 0 0 0 1px var(--tertiary-low);
+      }
+
+      .mg-reports__summary-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.65rem;
+      }
+
       .mg-reports__summary-label {
         color: var(--mg-muted);
         font-size: var(--font-down-1);
@@ -347,6 +368,12 @@ export default RouteTemplate(
       .mg-reports__summary-card.is-danger {
         border-color: var(--danger-low-mid);
         background: var(--danger-low);
+      }
+
+      .mg-reports__trend-card.is-acknowledged {
+        border-style: dashed;
+        opacity: 0.82;
+        background: var(--primary-very-low);
       }
 
       .mg-reports__trend-details {
@@ -612,12 +639,15 @@ export default RouteTemplate(
         <div class="mg-reports__panel-header">
           <div>
             <h2>Moderation overview</h2>
-            <p class="mg-reports__muted">Global report trends and repeated rejected-report signals. This is read-only and meant to guide review, not automate restrictions.</p>
+            <p class="mg-reports__muted">Global report trends and repeated rejected-report signals. Click a time window to filter the report list; acknowledging a user hides the signal until they submit or receive a new report.</p>
           </div>
+          <button class="btn" type="button" {{on "click" @controller.toggleAcknowledgedFalseReporters}}>
+            {{@controller.falseReporterToggleLabel}}
+          </button>
         </div>
         <div class="mg-reports__summary-grid">
           {{#each @controller.moderationTrendCards as |trend|}}
-            <div class="mg-reports__summary-card">
+            <button class="mg-reports__summary-card {{if trend.isActive "is-active"}}" type="button" {{on "click" (fn @controller.applyTrendWindow trend.days)}}>
               <div class="mg-reports__summary-label">{{trend.label}}</div>
               <div class="mg-reports__summary-value">{{trend.total}} reports</div>
               <div class="mg-reports__trend-details">
@@ -627,21 +657,33 @@ export default RouteTemplate(
                 <span>Resolved {{trend.resolved}}</span>
                 <span>Auto-hidden {{trend.autoHidden}}</span>
               </div>
-            </div>
+            </button>
           {{/each}}
         </div>
         {{#if @controller.falseReporterCards.length}}
           <div class="mg-reports__summary-grid" style="margin-top: 0.85rem;">
             {{#each @controller.falseReporterCards as |reporter|}}
-              <a class="mg-reports__summary-card mg-reports__trend-card {{reporter.className}}" href={{reporter.diagnosticsUrl}} target="_blank" rel="noopener noreferrer">
+              <article class="mg-reports__summary-card mg-reports__trend-card {{reporter.className}}">
                 <div class="mg-reports__summary-label">Repeated rejected reports</div>
                 <div class="mg-reports__summary-value">{{reporter.label}}</div>
                 <div class="mg-reports__trend-details">
                   <span>{{reporter.rejected}} rejected</span>
                   <span>{{reporter.total}} total</span>
                   <span>{{reporter.rejectedRateLabel}}</span>
+                  {{#if reporter.acknowledged}}
+                    <span>{{reporter.acknowledgedLabel}}</span>
+                  {{/if}}
                 </div>
-              </a>
+                <div class="mg-reports__summary-actions">
+                  <button class="btn btn-primary" type="button" {{on "click" (fn @controller.applyReporterFilter reporter)}}>View reports</button>
+                  {{#if reporter.diagnosticsUrl}}
+                    <a class="btn" href={{reporter.diagnosticsUrl}} target="_blank" rel="noopener noreferrer">Diagnostics</a>
+                  {{/if}}
+                  {{#unless reporter.acknowledged}}
+                    <button class="btn" type="button" disabled={{@controller.isAcknowledgingReporter}} {{on "click" (fn @controller.acknowledgeFalseReporter reporter)}}>Acknowledge</button>
+                  {{/unless}}
+                </div>
+              </article>
             {{/each}}
           </div>
         {{else}}

@@ -6,7 +6,8 @@ module ::MediaGallery
 
     SEARCH_LIMIT = 20
     RECENT_LIMIT = 8
-    UPLOADED_MEDIA_LIMIT = 50
+    UPLOADED_MEDIA_DEFAULT_PER_PAGE = 10
+    UPLOADED_MEDIA_MAX_PER_PAGE = 20
 
     def search
       query = sanitized_query(params[:q])
@@ -372,26 +373,56 @@ module ::MediaGallery
     end
 
     def uploaded_media_payload(user)
+      page = uploaded_media_page
+      per_page = uploaded_media_per_page
       scope = ::MediaGallery::MediaItem
         .where(user_id: user.id)
         .order(created_at: :desc)
 
       total = safe_count(scope)
-      items = scope.limit(UPLOADED_MEDIA_LIMIT).map { |item| media_item_payload(item) }
+      total_pages = [(total.to_f / per_page).ceil, 1].max
+      page = [[page, 1].max, total_pages].min
+      offset = (page - 1) * per_page
+      items = scope.offset(offset).limit(per_page).map { |item| media_item_payload(item) }
 
       {
         items: items,
         total: total,
-        limit: UPLOADED_MEDIA_LIMIT,
-        truncated: total > UPLOADED_MEDIA_LIMIT,
+        page: page,
+        per_page: per_page,
+        total_pages: total_pages,
+        has_previous: page > 1,
+        has_next: page < total_pages,
+        from: total.positive? ? offset + 1 : 0,
+        to: total.positive? ? offset + items.length : 0,
+        limit: per_page,
+        truncated: page < total_pages,
       }
     rescue
       {
         items: [],
         total: 0,
-        limit: UPLOADED_MEDIA_LIMIT,
+        page: 1,
+        per_page: UPLOADED_MEDIA_DEFAULT_PER_PAGE,
+        total_pages: 1,
+        has_previous: false,
+        has_next: false,
+        from: 0,
+        to: 0,
+        limit: UPLOADED_MEDIA_DEFAULT_PER_PAGE,
         truncated: false,
       }
+    end
+
+    def uploaded_media_page
+      value = params[:uploaded_media_page].to_i
+      value.positive? ? value : 1
+    end
+
+    def uploaded_media_per_page
+      value = params[:uploaded_media_per_page].to_i
+      value = UPLOADED_MEDIA_DEFAULT_PER_PAGE unless [10, 20].include?(value)
+      [[value, 1].max, UPLOADED_MEDIA_MAX_PER_PAGE].min
     end
 
     def recent_payload(user)

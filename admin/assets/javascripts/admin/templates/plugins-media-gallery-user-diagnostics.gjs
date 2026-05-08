@@ -402,6 +402,26 @@ export default RouteTemplate(
         gap: 0.35rem;
       }
 
+      .mg-userdiag__pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-bottom: 0.85rem;
+      }
+
+      .mg-userdiag__pagination-controls {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .mg-userdiag__pagination select {
+        min-height: 38px;
+      }
+
       .mg-userdiag__tag-chip {
         display: inline-flex;
         align-items: center;
@@ -947,6 +967,18 @@ export default RouteTemplate(
           </div>
 
           {{#if @controller.hasUploadedMediaItems}}
+            <div class="mg-userdiag__pagination">
+              <span class="mg-userdiag__muted">{{@controller.uploadedMediaPageLabel}}</span>
+              <div class="mg-userdiag__pagination-controls">
+                <label class="mg-userdiag__muted" for="media-gallery-uploaded-media-per-page">Per page</label>
+                <select id="media-gallery-uploaded-media-per-page" value={{@controller.uploadedMediaPerPage}} {{on "change" @controller.onUploadedMediaPerPageChange}}>
+                  <option value="10">10</option>
+                  <option value="20">20</option>
+                </select>
+                <button class="btn" type="button" disabled={{@controller.uploadedMediaPreviousDisabled}} {{on "click" @controller.previousUploadedMediaPage}}>Previous</button>
+                <button class="btn" type="button" disabled={{@controller.uploadedMediaNextDisabled}} {{on "click" @controller.nextUploadedMediaPage}}>Next</button>
+              </div>
+            </div>
             <div class="mg-userdiag__list">
               {{#each @controller.uploadedMediaItems as |item|}}
                 <article class="mg-userdiag__upload-card">
@@ -962,7 +994,7 @@ export default RouteTemplate(
                   </div>
                   <a class="btn mg-userdiag__upload-action" href={{item.management_url}} target="_blank" rel="noopener noreferrer">Manage</a>
                   <div class="mg-userdiag__upload-badges">
-                    <span class="mg-userdiag__badge">{{item.statusLabel}}</span>
+                    <span class="mg-userdiag__badge {{item.statusClass}}">{{item.statusLabel}}</span>
                     <span class="mg-userdiag__badge">{{item.typeLabel}}</span>
                     <span class="mg-userdiag__badge">{{item.containsLabel}}</span>
                     <span class="mg-userdiag__badge {{item.visibilityClass}}">{{item.visibilityLabel}}</span>

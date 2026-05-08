@@ -123,6 +123,9 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   @tracked reports = [];
   @tracked moderationTrends = [];
   @tracked falseReporters = [];
+  @tracked showAcknowledgedFalseReporters = false;
+  @tracked timeWindowDays = "";
+  @tracked isAcknowledgingReporter = false;
   @tracked showPerformanceTimings = false;
   @tracked lastTimingMs = null;
   @tracked lastTimingBreakdown = null;
@@ -150,6 +153,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     const initialStatus = String(initialParams.get("status") || "").trim();
     const reporterUserId = String(initialParams.get("reporter_user_id") || "").replace(/\D/g, "").slice(0, 20);
     const mediaOwnerUserId = String(initialParams.get("media_owner_user_id") || "").replace(/\D/g, "").slice(0, 20);
+    const sinceDays = String(initialParams.get("since_days") || "").replace(/\D/g, "").slice(0, 3);
 
     this.statusFilter = ["open", "closed", "accepted", "rejected", "resolved", "all"].includes(initialStatus)
       ? initialStatus
@@ -161,6 +165,9 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.reports = [];
     this.moderationTrends = [];
     this.falseReporters = [];
+    this.showAcknowledgedFalseReporters = false;
+    this.timeWindowDays = ["7", "30", "90"].includes(sinceDays) ? sinceDays : "";
+    this.isAcknowledgingReporter = false;
     this.showPerformanceTimings = false;
     this.lastTimingMs = null;
     this.lastTimingBreakdown = null;
@@ -401,6 +408,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       rejected: window.rejected ?? 0,
       resolved: window.resolved ?? 0,
       autoHidden: window.auto_hidden ?? 0,
+      isActive: String(this.timeWindowDays || "") === String(window.days ?? ""),
     }));
   }
 
@@ -409,9 +417,21 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       ...reporter,
       label: reporter.username ? `${reporter.username} (#${reporter.user_id})` : `User #${reporter.user_id}`,
       rejectedRateLabel: formatPercent(reporter.rejected_rate),
-      className: reporter.severity === "danger" ? "is-danger" : "is-warning",
+      className: reporter.acknowledged ? "is-acknowledged" : reporter.severity === "danger" ? "is-danger" : "is-warning",
       diagnosticsUrl: reporter.user_id ? `/admin/plugins/media-gallery-user-diagnostics?user_id=${encodeParam(reporter.user_id)}` : "",
+      reportsUrl: reporter.user_id ? `/admin/plugins/media-gallery-reports?status=all&reporter_user_id=${encodeParam(reporter.user_id)}` : "",
+      acknowledgedLabel: reporter.acknowledged
+        ? `Acknowledged${reporter.acknowledged_by_username ? ` by ${reporter.acknowledged_by_username}` : ""}${reporter.acknowledged_at ? ` · ${formatDateTime(reporter.acknowledged_at)}` : ""}`
+        : "",
     }));
+  }
+
+  get hasAcknowledgedFalseReportersVisible() {
+    return this.falseReporterCards.some((reporter) => reporter.acknowledged);
+  }
+
+  get falseReporterToggleLabel() {
+    return this.showAcknowledgedFalseReporters ? "Hide acknowledged" : "Show acknowledged";
   }
 
   get performanceTimingLabel() {
@@ -447,9 +467,13 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     const filtered = Number(this.totalReportCount || 0);
     const total = Number(this.activeFilters?.total_count || 0);
     const status = String(this.activeFilters?.status || this.statusFilter || "open");
+    const sinceDays = Number(this.activeFilters?.since_days || this.timeWindowDays || 0);
     const base = `${filtered} report${filtered === 1 ? "" : "s"} found`;
     const statusLabel = status === "all" ? "all statuses" : status;
     const parts = [base, statusLabel];
+    if ([7, 30, 90].includes(sinceDays)) {
+      parts.push(`last ${sinceDays} days`);
+    }
     if (shown !== filtered) {
       parts.push(`showing ${shown}`);
     }
@@ -534,6 +558,12 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     if (String(this.mediaOwnerUserIdFilter || "").trim()) {
       params.set("media_owner_user_id", String(this.mediaOwnerUserIdFilter || "").trim());
     }
+    if (["7", "30", "90"].includes(String(this.timeWindowDays || ""))) {
+      params.set("since_days", String(this.timeWindowDays));
+    }
+    if (this.showAcknowledgedFalseReporters) {
+      params.set("show_acknowledged_reporter_signals", "1");
+    }
 
     try {
       const data = await this._fetchJson(`/admin/plugins/media-gallery/reports?${params.toString()}`, {
@@ -592,7 +622,63 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.requestedReportId = "";
     this.reporterUserIdFilter = "";
     this.mediaOwnerUserIdFilter = "";
+    this.timeWindowDays = "";
     this.loadReports();
+  }
+
+  @action
+  applyTrendWindow(days) {
+    const value = String(days || "");
+    this.timeWindowDays = this.timeWindowDays === value ? "" : value;
+    this.statusFilter = "all";
+    this.requestedReportId = "";
+    this.loadReports();
+  }
+
+  @action
+  applyReporterFilter(reporter) {
+    if (!reporter?.user_id) {
+      return;
+    }
+
+    this.statusFilter = "all";
+    this.searchQuery = "";
+    this.requestedReportId = "";
+    this.reporterUserIdFilter = String(reporter.user_id);
+    this.mediaOwnerUserIdFilter = "";
+    this.timeWindowDays = "";
+    this.loadReports();
+  }
+
+  @action
+  toggleAcknowledgedFalseReporters() {
+    this.showAcknowledgedFalseReporters = !this.showAcknowledgedFalseReporters;
+    this.loadReports();
+  }
+
+  @action
+  async acknowledgeFalseReporter(reporter) {
+    if (!reporter?.user_id || this.isAcknowledgingReporter) {
+      return;
+    }
+
+    this.isAcknowledgingReporter = true;
+    this.noticeMessage = "";
+    this.noticeTone = "success";
+
+    try {
+      const data = await this._fetchJson(`/admin/plugins/media-gallery/reports/false-reporters/${encodeURIComponent(reporter.user_id)}/acknowledge`, {
+        method: "POST",
+      });
+      this.noticeMessage = data?.message || "Reporter signal acknowledged.";
+      this.noticeTone = "success";
+      await this.loadReports();
+    } catch (error) {
+      this.noticeMessage = error?.message || "Reporter acknowledgement failed.";
+      this.noticeTone = "danger";
+    } finally {
+      this.isAcknowledgingReporter = false;
+    }
   }
 
   @action

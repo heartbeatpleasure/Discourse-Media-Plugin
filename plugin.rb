@@ -164,6 +164,7 @@ after_initialize do
     post "/admin/plugins/media-gallery/health/reconciliation-cleanup" => "media_gallery/admin_health#reconciliation_cleanup", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/ignore" => "media_gallery/admin_health#ignore", defaults: { format: :json }
     delete "/admin/plugins/media-gallery/health/ignore" => "media_gallery/admin_health#unignore", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/reports/false-reporters/:user_id/acknowledge" => "media_gallery/admin_reports#acknowledge_false_reporter", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/review" => "media_gallery/admin_reports#review", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/block-owner" => "media_gallery/admin_reports#block_owner", defaults: { format: :json }
     post "/admin/plugins/media-gallery/reports/:report_id/unblock-owner" => "media_gallery/admin_reports#unblock_owner", defaults: { format: :json }

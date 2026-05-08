@@ -58,11 +58,27 @@ function formatPercent(value) {
   return `${Math.round(number * 100)}%`;
 }
 
+function mediaStatusClass(value) {
+  switch (String(value || "").toLowerCase()) {
+    case "ready":
+      return "is-success";
+    case "queued":
+    case "processing":
+      return "is-warning";
+    case "failed":
+    case "error":
+      return "is-danger";
+    default:
+      return "";
+  }
+}
+
 function decorateUploadItem(item) {
   return {
     ...item,
     createdAtLabel: formatDateTime(item?.created_at),
     statusLabel: titleize(item?.status),
+    statusClass: mediaStatusClass(item?.status),
     typeLabel: titleize(item?.media_type),
     containsLabel: titleize(item?.gender),
     tagsLabel: Array.isArray(item?.tags) && item.tags.length ? item.tags.join(", ") : "No tags",
@@ -78,7 +94,9 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   @tracked access = null;
   @tracked settingsRows = [];
   @tracked stats = null;
-  @tracked uploadedMedia = { items: [], total: 0, limit: 50, truncated: false };
+  @tracked uploadedMedia = { items: [], total: 0, page: 1, per_page: 10, total_pages: 1, limit: 10, truncated: false };
+  @tracked uploadedMediaPage = 1;
+  @tracked uploadedMediaPerPage = "10";
   @tracked recent = { uploads: [], logs: [], reports: [] };
   @tracked recentActivityFilter = "all";
   @tracked isSearching = false;
@@ -97,7 +115,9 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     this.access = null;
     this.settingsRows = [];
     this.stats = null;
-    this.uploadedMedia = { items: [], total: 0, limit: 50, truncated: false };
+    this.uploadedMedia = { items: [], total: 0, page: 1, per_page: 10, total_pages: 1, limit: 10, truncated: false };
+    this.uploadedMediaPage = 1;
+    this.uploadedMediaPerPage = "10";
     this.recent = { uploads: [], logs: [], reports: [] };
     this.recentActivityFilter = "all";
     this.isSearching = false;
@@ -316,11 +336,34 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
 
   get uploadedMediaCountLabel() {
     const total = Number(this.uploadedMedia?.total || 0);
-    const shown = this.uploadedMediaItems.length;
-    if (this.uploadedMedia?.truncated) {
-      return `Showing latest ${shown} of ${total} uploaded media items. Open Management for the full filtered list.`;
+    const from = Number(this.uploadedMedia?.from || 0);
+    const to = Number(this.uploadedMedia?.to || 0);
+    if (!total) {
+      return "0 uploaded media items.";
     }
-    return `${total} uploaded media item${total === 1 ? "" : "s"}.`;
+    return `Showing ${from}-${to} of ${total} uploaded media item${total === 1 ? "" : "s"}.`;
+  }
+
+  get uploadedMediaPageLabel() {
+    const page = Number(this.uploadedMedia?.page || this.uploadedMediaPage || 1);
+    const totalPages = Number(this.uploadedMedia?.total_pages || 1);
+    return `Page ${page} of ${totalPages}`;
+  }
+
+  get uploadedMediaHasPrevious() {
+    return !!this.uploadedMedia?.has_previous;
+  }
+
+  get uploadedMediaHasNext() {
+    return !!this.uploadedMedia?.has_next;
+  }
+
+  get uploadedMediaPreviousDisabled() {
+    return !this.uploadedMediaHasPrevious || this.isLoadingUser;
+  }
+
+  get uploadedMediaNextDisabled() {
+    return !this.uploadedMediaHasNext || this.isLoadingUser;
   }
 
   get uploadedMediaManagementUrl() {
@@ -446,21 +489,30 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   @action
   async selectUser(user) {
     if (!user?.id) return;
-    await this.loadUser(user.id);
+    await this.loadUser(user.id, { resetUploadedMediaPage: true });
   }
 
-  async loadUser(userId) {
+  async loadUser(userId, options = {}) {
+    if (options.resetUploadedMediaPage) {
+      this.uploadedMediaPage = 1;
+    }
+
     this.isLoadingUser = true;
     this.loadError = "";
     this.noticeMessage = "";
 
     try {
-      const data = await this._fetchJson(`/admin/plugins/media-gallery/user-diagnostics/${encodeURIComponent(userId)}`);
+      const params = new URLSearchParams();
+      params.set("uploaded_media_page", String(this.uploadedMediaPage || 1));
+      params.set("uploaded_media_per_page", String(this.uploadedMediaPerPage || "10"));
+      const data = await this._fetchJson(`/admin/plugins/media-gallery/user-diagnostics/${encodeURIComponent(userId)}?${params.toString()}`);
       this.selectedUser = data?.user || null;
       this.access = data?.access || null;
       this.settingsRows = Array.isArray(data?.settings) ? data.settings : [];
       this.stats = data?.stats || null;
-      this.uploadedMedia = data?.uploaded_media || { items: data?.recent?.uploads || [], total: data?.recent?.uploads?.length || 0, limit: 50, truncated: false };
+      this.uploadedMedia = data?.uploaded_media || { items: data?.recent?.uploads || [], total: data?.recent?.uploads?.length || 0, page: 1, per_page: 10, total_pages: 1, limit: 10, truncated: false };
+      this.uploadedMediaPage = Number(this.uploadedMedia?.page || this.uploadedMediaPage || 1);
+      this.uploadedMediaPerPage = String(this.uploadedMedia?.per_page || this.uploadedMediaPerPage || "10");
       this.recent = data?.recent || { uploads: [], logs: [], reports: [] };
       this.showPerformanceTimings = !!data?.show_performance_timings;
       this.lastTimingMs = Number(data?.timing_ms || 0) || null;
@@ -474,6 +526,35 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       this.loadError = error?.message || "Loading user diagnostics failed.";
     } finally {
       this.isLoadingUser = false;
+    }
+  }
+
+  @action
+  async previousUploadedMediaPage() {
+    if (!this.selectedUser?.id || !this.uploadedMediaHasPrevious) {
+      return;
+    }
+
+    this.uploadedMediaPage = Math.max(1, Number(this.uploadedMediaPage || 1) - 1);
+    await this.loadUser(this.selectedUser.id);
+  }
+
+  @action
+  async nextUploadedMediaPage() {
+    if (!this.selectedUser?.id || !this.uploadedMediaHasNext) {
+      return;
+    }
+
+    this.uploadedMediaPage = Number(this.uploadedMediaPage || 1) + 1;
+    await this.loadUser(this.selectedUser.id);
+  }
+
+  @action
+  async onUploadedMediaPerPageChange(event) {
+    this.uploadedMediaPerPage = ["10", "20"].includes(String(event?.target?.value || "")) ? String(event.target.value) : "10";
+    this.uploadedMediaPage = 1;
+    if (this.selectedUser?.id) {
+      await this.loadUser(this.selectedUser.id);
     }
   }
 
