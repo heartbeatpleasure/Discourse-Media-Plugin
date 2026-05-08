@@ -94,7 +94,9 @@ export default RouteTemplate(
       }
 
       .mg-exports__badge-row,
-      .mg-exports__actions {
+      .mg-exports__actions,
+      .mg-exports__pagination,
+      .mg-exports__page-size {
         display: flex;
         align-items: center;
         gap: 0.65rem;
@@ -178,6 +180,22 @@ export default RouteTemplate(
         align-self: center;
         white-space: nowrap;
         flex-shrink: 0;
+      }
+
+      .mg-exports__pagination {
+        justify-content: space-between;
+        flex-wrap: wrap;
+        border-top: 1px solid var(--mg-border);
+        padding-top: 0.9rem;
+        margin-top: 1rem;
+      }
+
+      .mg-exports__page-size {
+        flex-wrap: wrap;
+      }
+
+      .mg-exports__page-size select {
+        min-height: 40px;
       }
 
       .mg-exports__actions .btn {
@@ -324,12 +342,9 @@ export default RouteTemplate(
         <div class="mg-exports__hero-actions">
           <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
           <span class="mg-exports__badge is-info">
-            {{i18n "admin.media_gallery.forensics_exports.count" count=@controller.exports.length}}
+            {{@controller.countLabel}}
           </span>
         </div>
-      </section>
-
-      <section class="mg-exports__panel">
       </section>
 
       {{#if @controller.error}}
@@ -340,12 +355,23 @@ export default RouteTemplate(
         <div class="mg-exports__flash is-success">{{@controller.notice}}</div>
       {{/if}}
 
-      {{#if @controller.exports.length}}
+      {{#if @controller.hasExports}}
         <section class="mg-exports__panel">
           <div class="mg-exports__panel-header">
             <div class="mg-exports__panel-copy">
               <h2>{{i18n "admin.media_gallery.forensics_exports.available"}}</h2>
               <p class="mg-exports__muted">{{i18n "admin.media_gallery.forensics_exports.available_description"}}</p>
+            </div>
+            <div class="mg-exports__page-size">
+              <span class="mg-exports__muted">{{@controller.pageRangeLabel}}</span>
+              <select value={{@controller.perPage}} {{on "change" @controller.updatePerPage}} disabled={{@controller.isLoading}}>
+                <option value="10">10 per page</option>
+                <option value="20">20 per page</option>
+                <option value="50">50 per page</option>
+              </select>
+              <button class="btn" type="button" {{on "click" @controller.loadCurrentPage}} disabled={{@controller.isLoading}}>
+                {{#if @controller.isLoading}}Refreshing…{{else}}Refresh{{/if}}
+              </button>
             </div>
           </div>
 
@@ -443,6 +469,15 @@ export default RouteTemplate(
                 </div>
               </article>
             {{/each}}
+          </div>
+
+          <div class="mg-exports__pagination">
+            <span class="mg-exports__muted">{{@controller.pageRangeLabel}}</span>
+            <div class="mg-exports__actions">
+              <button class="btn" type="button" {{on "click" @controller.previousPage}} disabled={{@controller.previousDisabled}}>Previous</button>
+              <span class="mg-exports__muted">Page {{@controller.page}} of {{@controller.totalPages}}</span>
+              <button class="btn" type="button" {{on "click" @controller.nextPage}} disabled={{@controller.nextDisabled}}>Next</button>
+            </div>
           </div>
         </section>
       {{else}}

@@ -80,7 +80,11 @@ module ::MediaGallery
 
       severity = filters[:severity].to_s.strip
       if severity.present? && severity != "all"
-        scope = scope.where(log_events_table_name => { severity: normalize_severity(severity) })
+        if severity == "warning_or_danger"
+          scope = scope.where(log_events_table_name => { severity: %w[warning danger error] })
+        else
+          scope = scope.where(log_events_table_name => { severity: normalize_severity(severity) })
+        end
       end
 
       category = filters[:category].to_s.strip

@@ -89,7 +89,7 @@ function decorateExport(exp) {
 
 export default class AdminPluginsMediaGalleryForensicsExportsRoute extends DiscourseRoute {
   model() {
-    return ajax("/admin/plugins/media-gallery/forensics-exports.json").catch((e) => {
+    return ajax("/admin/plugins/media-gallery/forensics-exports.json?page=1&per_page=20").catch((e) => {
       let message = "";
       try {
         message =
@@ -116,6 +116,10 @@ export default class AdminPluginsMediaGalleryForensicsExportsRoute extends Disco
       exports: (model?.exports || []).map(decorateExport),
       error: model?.error,
       downloadBase: "/admin/plugins/media-gallery/forensics-exports",
+      page: Number(model?.page || 1) || 1,
+      perPage: Number(model?.per_page || 20) || 20,
+      totalCount: Number(model?.total_count || (model?.exports || []).length) || 0,
+      totalPages: Math.max(Number(model?.total_pages || 1) || 1, 1),
     });
   }
 }

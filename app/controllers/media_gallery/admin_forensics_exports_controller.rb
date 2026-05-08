@@ -10,17 +10,32 @@ module ::MediaGallery
     before_action :ensure_admin
 
     def index
-      limit = params[:limit].to_i
-      limit = 50 if limit <= 0
-      limit = 200 if limit > 200
+      per_page = params[:per_page].to_i
+      per_page = params[:limit].to_i if per_page <= 0
+      per_page = 20 if per_page <= 0
+      per_page = 100 if per_page > 100
+
+      page = params[:page].to_i
+      page = 1 if page <= 0
+
+      scope = MediaGallery::MediaForensicsExport.order(created_at: :desc)
+      total_count = scope.count
+      total_pages = [(total_count.to_f / per_page).ceil, 1].max
+      page = total_pages if page > total_pages
 
       exports =
-        MediaGallery::MediaForensicsExport
-          .order(created_at: :desc)
-          .limit(limit)
+        scope
+          .offset((page - 1) * per_page)
+          .limit(per_page)
           .map { |export| serialize_export(export) }
 
-      render_json_dump(exports: exports)
+      render_json_dump(
+        exports: exports,
+        page: page,
+        per_page: per_page,
+        total_count: total_count,
+        total_pages: total_pages,
+      )
     end
 
     def download

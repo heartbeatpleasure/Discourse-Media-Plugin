@@ -13,10 +13,114 @@ function paragraphs(value) {
     .filter(Boolean);
 }
 
+function pad(value) {
+  return String(value).padStart(2, "0");
+}
+
+function formatAdminDateTime(value) {
+  if (!value) {
+    return "—";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return `${pad(date.getUTCDate())}-${pad(date.getUTCMonth() + 1)}-${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`;
+}
+
+function trimCsvExtension(filename) {
+  return String(filename || "").replace(/\.csv(?:\.gz)?$/i, "") || "—";
+}
+
+function displayExportName(filename) {
+  const base = trimCsvExtension(filename);
+  if (base === "—") {
+    return base;
+  }
+
+  return base.replace(/^media_gallery_playback_sessions_/i, "");
+}
+
+function titleizeStorageLocation(value) {
+  switch (String(value || "").toLowerCase()) {
+    case "local":
+      return "Local";
+    case "local+archive":
+      return "Local + archive";
+    case "archive":
+      return "Archive";
+    case "database+archive":
+      return "Database + archive";
+    case "database":
+    case "db":
+      return "Database";
+    default:
+      return value ? String(value) : "—";
+  }
+}
+
+function formatNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return "—";
+  }
+
+  const number = Number(value);
+  if (Number.isNaN(number)) {
+    return String(value);
+  }
+
+  return new Intl.NumberFormat().format(number);
+}
+
+function decorateExport(exp) {
+  const rowsCount = Number(exp?.rows_count || 0);
+  const isReady = Boolean(exp?.download_ready);
+
+  return {
+    ...exp,
+    displayName: displayExportName(exp?.filename),
+    rowsLabel: formatNumber(rowsCount),
+    availabilityLabel: isReady ? "Ready" : "Missing file",
+    availabilityClass: isReady ? "is-success" : "is-warning",
+    showAvailability: !isReady,
+    createdLabel: formatAdminDateTime(exp?.created_at),
+    cutoffLabel: formatAdminDateTime(exp?.cutoff_at),
+    storageLocationLabel: titleizeStorageLocation(exp?.storage_location),
+    csvSizeLabel: formatNumber(exp?.csv_bytes),
+    gzipSizeLabel: formatNumber(exp?.gzip_bytes),
+    csvShaLabel: exp?.csv_sha256 || "—",
+    gzipShaLabel: exp?.gzip_sha256 || "—",
+    archiveLabel: exp?.archive_exists ? "Archived" : "Not archived",
+    archiveClass: exp?.archive_exists ? "is-success" : "is-info",
+    archivedLabel: formatAdminDateTime(exp?.archived_at),
+    archiveSizeLabel: formatNumber(exp?.archive_bytes),
+  };
+}
+
+function clampPage(value, totalPages) {
+  const page = Number(value || 1);
+  const total = Math.max(Number(totalPages || 1), 1);
+  if (!Number.isFinite(page) || page <= 1) {
+    return 1;
+  }
+  return Math.min(Math.floor(page), total);
+}
+
+
 export default class AdminPluginsMediaGalleryForensicsExportsController extends Controller {
   @tracked error = "";
   @tracked notice = "";
   @tracked confirmModal = null;
+  @tracked exports = [];
+  @tracked page = 1;
+  @tracked perPage = 20;
+  @tracked totalCount = 0;
+  @tracked totalPages = 1;
+  @tracked isLoading = false;
+
+  downloadBase = "/admin/plugins/media-gallery/forensics-exports";
 
   confirmResolver = null;
 
@@ -66,6 +170,104 @@ export default class AdminPluginsMediaGalleryForensicsExportsController extends 
     event?.preventDefault?.();
     this._resolveConfirm(true);
   }
+
+  get hasExports() {
+    return this.exports.length > 0;
+  }
+
+  get countLabel() {
+    return `${formatNumber(this.totalCount)} ${this.totalCount === 1 ? "export" : "exports"}`;
+  }
+
+  get pageRangeLabel() {
+    if (!this.totalCount) {
+      return "No exports";
+    }
+
+    const start = (this.page - 1) * this.perPage + 1;
+    const end = Math.min(this.page * this.perPage, this.totalCount);
+    return `${formatNumber(start)}-${formatNumber(end)} of ${formatNumber(this.totalCount)}`;
+  }
+
+  get canGoPrevious() {
+    return this.page > 1 && !this.isLoading;
+  }
+
+  get canGoNext() {
+    return this.page < this.totalPages && !this.isLoading;
+  }
+
+  get previousDisabled() {
+    return !this.canGoPrevious;
+  }
+
+  get nextDisabled() {
+    return !this.canGoNext;
+  }
+
+  async loadExports(page = this.page) {
+    const nextPage = clampPage(page, this.totalPages);
+    const params = new URLSearchParams();
+    params.set("page", String(nextPage));
+    params.set("per_page", String(this.perPage));
+
+    this.isLoading = true;
+    this.error = "";
+
+    try {
+      const response = await fetch(`${this.downloadBase}.json?${params.toString()}`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        const err = await this._extractError(response);
+        throw new Error(`Load failed (${response.status}): ${err}`);
+      }
+
+      const data = await response.json();
+      this.exports = Array.isArray(data?.exports) ? data.exports.map(decorateExport) : [];
+      this.page = Number(data?.page || nextPage) || 1;
+      this.perPage = Number(data?.per_page || this.perPage) || this.perPage;
+      this.totalCount = Number(data?.total_count || this.exports.length) || 0;
+      this.totalPages = Math.max(Number(data?.total_pages || 1) || 1, 1);
+    } catch (e) {
+      this.error = e?.message || String(e);
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  @action
+  loadCurrentPage() {
+    return this.loadExports(this.page);
+  }
+
+  @action
+  previousPage() {
+    if (this.canGoPrevious) {
+      return this.loadExports(this.page - 1);
+    }
+  }
+
+  @action
+  nextPage() {
+    if (this.canGoNext) {
+      return this.loadExports(this.page + 1);
+    }
+  }
+
+  @action
+  updatePerPage(event) {
+    const value = Number(event?.target?.value || 20);
+    this.perPage = [10, 20, 50].includes(value) ? value : 20;
+    return this.loadExports(1);
+  }
+
   _csrfToken() {
     return document.querySelector('meta[name="csrf-token"]')?.content || "";
   }
@@ -152,8 +354,9 @@ export default class AdminPluginsMediaGalleryForensicsExportsController extends 
         throw new Error(`Delete failed (${response.status}): ${err}`);
       }
 
-      this.set("exports", (this.exports || []).filter((item) => String(item.id) !== String(id)));
       this.notice = "Forensic export deleted.";
+      const nextPage = this.exports.length <= 1 && this.page > 1 ? this.page - 1 : this.page;
+      await this.loadExports(nextPage);
     } catch (e) {
       this.error = e?.message || String(e);
     }

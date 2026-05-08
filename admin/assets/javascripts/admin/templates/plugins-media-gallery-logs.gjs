@@ -413,6 +413,7 @@ export default RouteTemplate(
                 <option value="info">Info</option>
                 <option value="success">Success</option>
                 <option value="warning">Warning</option>
+                <option value="warning_or_danger">Warning / danger</option>
                 <option value="danger">Error / danger</option>
               </select>
             </div>

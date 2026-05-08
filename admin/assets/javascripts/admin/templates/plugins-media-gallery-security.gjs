@@ -69,12 +69,26 @@ export default RouteTemplate(
       }
 
       .mg-security__actions,
-      .mg-security__link-row {
+      .mg-security__link-row,
+      .mg-security__summary-actions {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        justify-content: flex-end;
         gap: 0.65rem;
+      }
+
+      .mg-security__actions,
+      .mg-security__link-row {
+        justify-content: flex-end;
+      }
+
+      .mg-security__summary-actions {
+        justify-content: flex-start;
+        margin-top: auto;
+      }
+
+      .mg-security__summary-actions .btn {
+        font-size: var(--font-down-1);
       }
 
       .mg-security__muted,
@@ -289,6 +303,17 @@ export default RouteTemplate(
         padding: 0.8rem 0.95rem;
       }
 
+      a.mg-security__top-item {
+        color: var(--primary);
+        text-decoration: none;
+      }
+
+      a.mg-security__top-item:hover,
+      a.mg-security__top-item:focus {
+        border-color: var(--tertiary-low);
+        background: var(--tertiary-very-low);
+      }
+
       .mg-security__top-empty {
         border: 1px dashed var(--mg-security-border);
         border-radius: 14px;
@@ -331,7 +356,7 @@ export default RouteTemplate(
         <div class="mg-security__copy">
           <h1>Security status</h1>
           <p class="mg-security__muted">
-            Read-only overview of active Media Gallery security, privacy and download-prevention controls. This page avoids listing internal open issues.
+            Overview of active Media Gallery security, privacy and download-prevention controls.
           </p>
           <p class="mg-security__muted">Last checked: {{@controller.generatedAtLabel}}</p>
           {{#if @controller.performanceTimingLabel}}
@@ -360,6 +385,14 @@ export default RouteTemplate(
             <div class="mg-security__summary-value">{{card.value}}</div>
             <div class="mg-security__summary-secondary">{{card.secondary}}</div>
             <p class="mg-security__muted">{{card.detail}}</p>
+            {{#if card.href}}
+              <div class="mg-security__summary-actions">
+                <a class="btn btn-small" href={{card.href}}>{{card.hrefLabel}}</a>
+                {{#if card.secondaryHref}}
+                  <a class="btn btn-small" href={{card.secondaryHref}}>{{card.secondaryHrefLabel}}</a>
+                {{/if}}
+              </div>
+            {{/if}}
           </article>
         {{/each}}
       </section>
@@ -368,7 +401,7 @@ export default RouteTemplate(
         <div class="mg-security__panel-header">
           <div class="mg-security__panel-copy">
             <h2>HTTPS and canonical URL</h2>
-            <p class="mg-security__muted">Read-only warning signal for HTTPS, canonical host and reverse-proxy scheme handling.</p>
+            <p class="mg-security__muted">Warning signal for HTTPS, canonical host and reverse-proxy scheme handling.</p>
           </div>
         </div>
         <div class="mg-security__facts mg-security__section-body">
@@ -500,7 +533,7 @@ export default RouteTemplate(
         <div class="mg-security__panel-header">
           <div class="mg-security__panel-copy">
             <h2>Relevant settings</h2>
-            <p class="mg-security__muted">Read-only status of settings that affect media security, privacy, retention and download deterrence.</p>
+            <p class="mg-security__muted">Status of settings that affect media security, privacy, retention and download deterrence.</p>
           </div>
           <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery">Open settings</a>
         </div>
@@ -739,20 +772,34 @@ export default RouteTemplate(
         </div>
         <div class="mg-security__top-list mg-security__section-body">
           {{#each @controller.topEventTypes as |event|}}
-            <div class="mg-security__top-item">
-              <span>{{event.label}}</span>
-              <strong>{{event.count}}</strong>
-            </div>
+            {{#if event.href}}
+              <a class="mg-security__top-item" href={{event.href}} title={{event.title}}>
+                <span>{{event.label}}</span>
+                <strong>{{event.count}}</strong>
+              </a>
+            {{else}}
+              <div class="mg-security__top-item">
+                <span>{{event.label}}</span>
+                <strong>{{event.count}}</strong>
+              </div>
+            {{/if}}
           {{else}}
             <div class="mg-security__top-empty">No recent media security events found.</div>
           {{/each}}
         </div>
         <div class="mg-security__top-list mg-security__section-body">
           {{#each @controller.eventCounterFacts as |event|}}
-            <div class="mg-security__top-item">
-              <span>{{event.label}}</span>
-              <strong>{{event.count}}</strong>
-            </div>
+            {{#if event.href}}
+              <a class="mg-security__top-item" href={{event.href}} title={{event.title}}>
+                <span>{{event.label}}</span>
+                <strong>{{event.count}}</strong>
+              </a>
+            {{else}}
+              <div class="mg-security__top-item">
+                <span>{{event.label}}</span>
+                <strong>{{event.count}}</strong>
+              </div>
+            {{/if}}
           {{/each}}
         </div>
       </section>
@@ -761,7 +808,7 @@ export default RouteTemplate(
         <div class="mg-security__panel-header">
           <div class="mg-security__panel-copy">
             <h2>Quick links</h2>
-            <p class="mg-security__muted">Related read-only or admin tools.</p>
+            <p class="mg-security__muted">Related admin tools.</p>
           </div>
         </div>
         <div class="mg-security__link-row mg-security__section-body">

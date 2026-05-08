@@ -28,7 +28,7 @@ module ::MediaGallery
       end
       filter_options = timed_phase!(timing, :filter_options) do
         {
-          severities: %w[all info success warning danger],
+          severities: %w[all info success warning warning_or_danger danger],
           categories: ::MediaGallery::LogEvents.category_options,
           event_types: ::MediaGallery::LogEvents.event_type_options,
         }
@@ -68,7 +68,7 @@ module ::MediaGallery
           sort: normalized_sort,
         },
         filter_options: {
-          severities: %w[all info success warning danger],
+          severities: %w[all info success warning warning_or_danger danger],
           categories: [],
           event_types: [],
         },

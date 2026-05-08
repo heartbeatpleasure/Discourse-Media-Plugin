@@ -103,6 +103,22 @@ function yesNo(value) {
   return value ? "Yes" : "No";
 }
 
+function logsUrl(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    const text = String(value ?? "").trim();
+    if (text && text !== "all") {
+      query.set(key, text);
+    }
+  });
+  const suffix = query.toString();
+  return `/admin/plugins/media-gallery-logs${suffix ? `?${suffix}` : ""}`;
+}
+
+function eventLogsUrl(eventType) {
+  return logsUrl({ hours: 168, event_type: eventType });
+}
+
 function evaluateSetting(setting) {
   const key = setting?.key;
   const present = Boolean(setting?.present);
@@ -304,10 +320,13 @@ function decorateProfile(profile) {
 }
 
 function decorateEvent(entry) {
+  const eventType = String(entry?.event_type || "event");
   return {
-    key: `${entry?.event_type || "event"}-${entry?.count || 0}`,
-    label: titleize(entry?.event_type || "event"),
+    key: `${eventType}-${entry?.count || 0}`,
+    label: titleize(eventType),
     count: formatNumber(entry?.count),
+    href: eventLogsUrl(eventType),
+    title: `Open ${titleize(eventType)} logs`,
   };
 }
 
@@ -352,10 +371,13 @@ function decorateFailureReason(row) {
 }
 
 function decorateCounter(row) {
+  const eventType = String(row?.event_type || "event");
   return {
-    key: row?.event_type || "event",
-    label: titleize(row?.event_type || "event"),
+    key: eventType,
+    label: titleize(eventType),
     count: formatNumber(row?.count),
+    href: eventLogsUrl(eventType),
+    title: `Open ${titleize(eventType)} logs`,
   };
 }
 
@@ -538,7 +560,7 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         key: "posture",
         label: "Overall posture",
         value: normalizeText(this.summary?.posture),
-        secondary: "Read-only security status",
+        secondary: "Security control posture",
         detail: "High-level summary of current security control posture.",
         statusDotClass: statusDotClass(postureStatus),
         statusTitle: posture || "Unknown",
@@ -566,7 +588,11 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         label: "Events last 7 days",
         value: formatNumber(this.recentEvents?.total_7d),
         secondary: `${formatNumber(this.recentEvents?.warning_or_danger_7d)} warning/danger`,
-        detail: "Recent logged media security events. Use Logs for event details.",
+        detail: "Recent logged media security events.",
+        href: logsUrl({ hours: 168 }),
+        hrefLabel: "View all 7-day logs",
+        secondaryHref: logsUrl({ hours: 168, severity: "warning_or_danger" }),
+        secondaryHrefLabel: "View warning/danger logs",
         statusDotClass: statusDotClass(warningEvents > 0 ? "warning" : "ok"),
         statusTitle: warningEvents > 0 ? "Warnings present" : "No warnings",
       },
