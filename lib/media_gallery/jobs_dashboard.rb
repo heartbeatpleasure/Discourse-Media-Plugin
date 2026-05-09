@@ -16,6 +16,8 @@ module ::MediaGallery
     MAX_LIMIT = 100
     RECENT_WINDOW_DAYS = 90
     STALE_FORENSICS_TASK_AFTER = 6.hours
+    TEST_DOWNLOAD_TASK_RECENT_WINDOW = 7.days
+    MAX_PLUGIN_STORE_TASK_ROWS = 1000
 
     ACTIVE_STATUSES = %w[
       queued working running processing copying verifying cleaning pending pending_cleanup switching rolling_back finalizing
@@ -83,6 +85,7 @@ module ::MediaGallery
     def all_operation_rows
       rows = media_item_operation_rows
       rows.concat(forensics_task_rows)
+      rows.concat(test_download_task_rows)
       rows.concat(recent_activity_rows)
       rows
     end
@@ -272,6 +275,134 @@ module ::MediaGallery
       nil
     end
 
+    def test_download_task_rows
+      return [] unless defined?(::MediaGallery::TestDownloads)
+      return [] unless defined?(::PluginStoreRow) && ::PluginStoreRow.respond_to?(:where)
+      return [] if ::PluginStoreRow.respond_to?(:table_exists?) && !::PluginStoreRow.table_exists?
+
+      namespace = ::MediaGallery::TestDownloads::TASK_NAMESPACE
+      rows = plugin_store_rows_for(namespace)
+      rows
+        .filter_map { |store_row| test_download_task_payload(namespace, store_row) }
+        .filter_map { |payload| test_download_task_row(payload) }
+        .sort_by { |row| -(parse_time(row[:updated_at])&.to_f || 0) }
+        .first(50)
+    rescue => e
+      Rails.logger.warn("[media_gallery] jobs dashboard test download task rows failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def plugin_store_rows_for(namespace)
+      scope = ::PluginStoreRow.where(plugin_name: namespace)
+      recent_rows = scope
+      recent_rows = recent_rows.order(updated_at: :desc) if plugin_store_row_column?("updated_at")
+
+      rows = recent_rows.limit(MAX_PLUGIN_STORE_TASK_ROWS).to_a
+      rows.concat(active_plugin_store_rows(scope))
+      rows.uniq { |row| plugin_store_row_identity(row) }
+    end
+
+    def active_plugin_store_rows(scope)
+      return [] unless plugin_store_row_column?("value")
+
+      active_statuses = %w[queued working running processing]
+      patterns = active_statuses.flat_map { |status| ["%\"status\":\"#{status}\"%", "%\"status\": \"#{status}\"%"] }
+      where_clause = Array.new(patterns.length, "value LIKE ?").join(" OR ")
+      scope.where(where_clause, *patterns).limit(MAX_PLUGIN_STORE_TASK_ROWS).to_a
+    rescue => e
+      Rails.logger.warn("[media_gallery] jobs dashboard active test download task lookup failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def plugin_store_row_identity(row)
+      return row.id if row.respond_to?(:id) && row.id.present?
+      return row.key if row.respond_to?(:key) && row.key.present?
+
+      row.object_id
+    end
+
+    def plugin_store_row_column?(column)
+      ::PluginStoreRow.respond_to?(:column_names) && ::PluginStoreRow.column_names.include?(column.to_s)
+    rescue
+      false
+    end
+
+    def test_download_task_payload(namespace, store_row)
+      key = store_row.respond_to?(:key) ? store_row.key.to_s : nil
+      return nil if key.blank?
+
+      payload = ::PluginStore.get(namespace, key)
+      payload.is_a?(Hash) ? payload.merge("_plugin_store_key" => key) : nil
+    rescue => e
+      Rails.logger.warn("[media_gallery] jobs dashboard test download task read failed key=#{key} #{e.class}: #{e.message}")
+      nil
+    end
+
+    def test_download_task_row(payload)
+      task_id = payload["task_id"].to_s.presence
+      public_id = payload["public_id"].to_s.presence
+      raw_status = payload["status"].to_s.presence || "unknown"
+      updated_at = first_present(payload["updated_at"], payload["finished_at"], payload["completed_at"], payload["created_at"])
+      return nil unless test_download_task_relevant?(raw_status, updated_at)
+
+      status = stale_test_download_status(raw_status, updated_at)
+      item = public_id.present? ? ::MediaGallery::MediaItem.find_by(public_id: public_id) : nil
+      user = payload["user_id"].present? ? ::User.find_by(id: payload["user_id"].to_i) : nil
+      artifact = payload["artifact"].is_a?(Hash) ? payload["artifact"] : {}
+      mode = payload["mode"].to_s.presence
+      segment_count = payload["segment_count"].presence
+      start_segment = payload["start_segment"].presence
+      detail_parts = []
+      detail_parts << "Mode: #{mode}" if mode.present?
+      detail_parts << "Start segment: #{start_segment}" if start_segment.present?
+      detail_parts << "Segment count: #{segment_count}" if segment_count.present?
+      detail_parts << "Artifact: #{artifact["artifact_id"]}" if artifact["artifact_id"].present?
+
+      detail = if status.to_s.start_with?("stale_")
+        "Task marker still says #{raw_status}, but it has not changed for more than #{distance_label(test_download_stale_after)}. Review Test downloads or logs before retrying."
+      else
+        detail_parts.join(" • ").presence
+      end
+
+      {
+        id: "test-download-task-#{task_id || payload["_plugin_store_key"] || public_id}",
+        state_key: "test_download_task",
+        group: "test_download",
+        group_label: TYPE_GROUPS["test_download"],
+        label: "Test download generation",
+        operation: "generate_test_download",
+        status: status,
+        status_group: status_group(status),
+        status_label: status_label(status),
+        original_status: raw_status,
+        title: item&.title.to_s.presence || public_id || "Test download task #{task_id}",
+        public_id: public_id,
+        media_type: item&.media_type.to_s.presence,
+        item_status: item&.status.to_s.presence,
+        username: user&.username || item&.user&.username,
+        queued_at: payload["created_at"],
+        started_at: payload["started_at"],
+        finished_at: first_present(payload["finished_at"], payload["completed_at"]),
+        updated_at: updated_at,
+        updated_at_label: time_label(updated_at),
+        detail: detail,
+        error: payload["error"].to_s.presence,
+        management_url: public_id.present? ? media_management_url(public_id) : nil,
+        test_downloads_url: public_id.present? ? media_test_downloads_url(public_id) : "/admin/plugins/media-gallery-test-downloads",
+        logs_url: public_id.present? ? "/admin/plugins/media-gallery-logs?q=#{CGI.escape(public_id.to_s)}&event_type=test_download&hours=720" : "/admin/plugins/media-gallery-logs?event_type=test_download&hours=720",
+      }.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] jobs dashboard test download task row failed #{e.class}: #{e.message}")
+      nil
+    end
+
+    def test_download_task_relevant?(status, updated_at)
+      return true if ACTIVE_STATUSES.include?(status.to_s.downcase)
+
+      time = parse_time(updated_at)
+      time.present? && time >= TEST_DOWNLOAD_TASK_RECENT_WINDOW.ago
+    end
+
     def recent_activity_rows
       return [] unless defined?(::MediaGallery::MediaLogEvent) && ::MediaGallery::LogEvents.table_present?
 
@@ -351,6 +482,36 @@ module ::MediaGallery
       return normalized if time.blank? || time > STALE_FORENSICS_TASK_AFTER.ago
 
       "stale_#{normalized}"
+    end
+
+    def stale_test_download_status(status, updated_at)
+      normalized = status.to_s.downcase
+      return normalized unless %w[queued working running processing].include?(normalized)
+
+      time = parse_time(updated_at)
+      return normalized if time.blank? || time > test_download_stale_after.ago
+
+      "stale_#{normalized}"
+    end
+
+    def test_download_stale_after
+      minutes = if SiteSetting.respond_to?(:media_gallery_admin_long_job_polling_timeout_minutes)
+        SiteSetting.media_gallery_admin_long_job_polling_timeout_minutes.to_i
+      else
+        45
+      end
+      minutes = 45 if minutes <= 0
+      [minutes.minutes + 30.minutes, 2.hours].max
+    rescue
+      2.hours
+    end
+
+    def distance_label(duration)
+      seconds = duration.to_i
+      return "#{(seconds / 1.hour.to_i).round} hours" if seconds >= 1.hour.to_i
+      return "#{(seconds / 1.minute.to_i).round} minutes" if seconds >= 1.minute.to_i
+
+      "#{seconds} seconds"
     end
 
     def progress_for(state)
