@@ -374,6 +374,23 @@ export default RouteTemplate(
           </span>
         </a>
 
+        <a class="mg-landing__card" href="/admin/plugins/media-gallery-jobs">
+          <div class="mg-landing__card-header">
+            <div class="mg-landing__card-title">
+              <span class="mg-landing__card-badge">
+                {{i18n "admin.media_gallery.category_operations"}}
+              </span>
+              <h3>Background jobs</h3>
+            </div>
+          </div>
+          <p class="mg-landing__card-description">
+            Review active, failed, and recent Media Gallery processing, migration, AES/HLS, identify, and test-download jobs from one read-only page.
+          </p>
+          <span class="mg-landing__card-action">
+            {{i18n "admin.media_gallery.open_tool"}}
+          </span>
+        </a>
+
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-migrations">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
