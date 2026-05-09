@@ -1,5 +1,4 @@
 import RouteTemplate from "ember-route-template";
-import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 
 export default RouteTemplate(
@@ -103,8 +102,13 @@ export default RouteTemplate(
       }
 
       button.mg-jobs__card:hover,
-      button.mg-jobs__card:focus {
+      button.mg-jobs__card:focus,
+      button.mg-jobs__card.is-active {
         border-color: var(--tertiary-medium);
+      }
+
+      button.mg-jobs__card.is-active {
+        box-shadow: inset 0 0 0 1px var(--tertiary-medium);
       }
 
       .mg-jobs__toolbar {
@@ -295,10 +299,15 @@ export default RouteTemplate(
           </div>
         </div>
         <div class="mg-jobs__type-grid">
-          {{#each @controller.typeCards as |type|}}
-            <button class="mg-jobs__card" type="button" {{on "click" (fn @controller.filterByType type.type)}}>
-              <div class="mg-jobs__field-label">{{type.label}}</div>
-              <div class="mg-jobs__card-value">{{type.countLabel}}</div>
+          {{#each @controller.typeCards as |typeCard|}}
+            <button
+              class="mg-jobs__card {{if typeCard.isActive "is-active"}}"
+              type="button"
+              data-job-type={{typeCard.value}}
+              {{on "click" @controller.filterByTypeFromEvent}}
+            >
+              <div class="mg-jobs__field-label">{{typeCard.label}}</div>
+              <div class="mg-jobs__card-value">{{typeCard.countLabel}}</div>
             </button>
           {{/each}}
         </div>

@@ -97,10 +97,15 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
   }
 
   get typeCards() {
-    return (this.summary?.by_type || []).map((entry) => ({
-      ...entry,
-      countLabel: formatNumber(entry.count || 0),
-    }));
+    return (this.summary?.by_type || []).map((entry) => {
+      const value = entry?.type || entry?.value || "all";
+      return {
+        ...entry,
+        value,
+        isActive: value === this.type,
+        countLabel: formatNumber(entry?.count || 0),
+      };
+    });
   }
 
   get statusOptions() {
@@ -190,5 +195,11 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
   filterByType(type) {
     this.type = type || "all";
     this.loadJobs();
+  }
+
+  @action
+  filterByTypeFromEvent(event) {
+    const type = event?.currentTarget?.dataset?.jobType || "all";
+    this.filterByType(type);
   }
 }
