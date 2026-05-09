@@ -191,6 +191,23 @@ function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+const LONG_JOB_ACTIVE_STATUSES = ["queued", "processing"];
+const DEFAULT_LONG_JOB_POLLING_TIMEOUT_MINUTES = 45;
+const MIN_LONG_JOB_POLLING_TIMEOUT_MINUTES = 1;
+const MAX_LONG_JOB_POLLING_TIMEOUT_MINUTES = 1440;
+const LONG_JOB_POLLING_INITIAL_INTERVAL_MS = 1000;
+const LONG_JOB_POLLING_MAX_INTERVAL_MS = 15000;
+const LONG_JOB_POLLING_MAX_REFRESH_FAILURES = 5;
+
+function boundedNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(Math.round(number), min), max);
+}
+
 function hlsStatusBadgeClass(status) {
   switch (String(status || "").toLowerCase()) {
     case "ok":
@@ -530,6 +547,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   searchAbortController = null;
   selectionAbortController = null;
   backfillPollRunId = 0;
+  longJobPollPublicId = "";
 
   resetState() {
     this.searchQuery = "";
@@ -583,6 +601,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.availableSearchProfiles = [];
     this.confirmModal = null;
     this.confirmResolver = null;
+    this._stopSelectedLongJobStatusPolling();
   }
 
   async loadInitial(initialQueryParams = {}) {
@@ -618,7 +637,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   willDestroy() {
-    this.backfillPollRunId += 1;
+    this._stopSelectedLongJobStatusPolling();
     this.searchAbortController?.abort?.();
     this.selectionAbortController?.abort?.();
     super.willDestroy(...arguments);
@@ -1946,7 +1965,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   @action
-  async refreshSelected({ preserveNotice = false } = {}) {
+  async refreshSelected({ preserveNotice = false, ensurePolling = true, throwOnError = false } = {}) {
     if (!this.selectedPublicId) {
       return;
     }
@@ -1975,11 +1994,17 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
         this.noticeTone = previousNoticeTone || "success";
       }
       this._syncSearchResult(json);
+      if (ensurePolling) {
+        this._ensureSelectedLongJobStatusPolling();
+      }
     } catch (e) {
       if (e?.name === "AbortError") {
         return;
       }
       this.selectionError = e?.message || String(e);
+      if (throwOnError) {
+        throw e;
+      }
     } finally {
       if (this.selectionAbortController === controller) {
         this.selectionAbortController = null;
@@ -2246,97 +2271,114 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
 
+  _stopSelectedLongJobStatusPolling() {
+    this.backfillPollRunId += 1;
+    this.longJobPollPublicId = "";
+  }
+
+  _longJobPollingTimeoutMinutes() {
+    return boundedNumber(
+      this.selectedItem?.admin_polling?.long_job_timeout_minutes,
+      DEFAULT_LONG_JOB_POLLING_TIMEOUT_MINUTES,
+      MIN_LONG_JOB_POLLING_TIMEOUT_MINUTES,
+      MAX_LONG_JOB_POLLING_TIMEOUT_MINUTES
+    );
+  }
+
+  _selectedAesBackfillInProgress() {
+    return LONG_JOB_ACTIVE_STATUSES.includes(this.selectedAesBackfillStatus);
+  }
+
+  _selectedClearRollbackInProgress() {
+    return LONG_JOB_ACTIVE_STATUSES.includes(this.selectedClearRollbackStatus);
+  }
+
+  _hasSelectedLongJobInProgress() {
+    return this._selectedAesBackfillInProgress() || this._selectedClearRollbackInProgress();
+  }
+
+  _ensureSelectedLongJobStatusPolling() {
+    if (this._hasSelectedLongJobInProgress()) {
+      this._startSelectedLongJobStatusPolling();
+    }
+  }
+
   _startBackfillStatusPolling() {
-    const publicId = this.selectedPublicId;
-    if (!publicId) {
-      return;
-    }
-
-    const pollRunId = ++this.backfillPollRunId;
-    this._pollBackfillStatus(publicId, pollRunId);
+    this._startSelectedLongJobStatusPolling();
   }
-
-  async _pollBackfillStatus(publicId, pollRunId) {
-    const maxDurationMs = 45 * 60 * 1000;
-    const maxIntervalMs = 15000;
-    const startedAt = Date.now();
-    let interval = 800;
-
-    while (Date.now() - startedAt < maxDurationMs) {
-      if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
-        return;
-      }
-
-      const status = this.selectedAesBackfillStatus;
-      const operation = String(this.selectedAesBackfillState?.operation || "");
-      const aesReady = !!this.selectedItem?.hls_aes128?.ready;
-      if (!["queued", "processing"].includes(status)) {
-        return;
-      }
-
-      // A key rotation starts from an already AES-ready item. Do not stop polling
-      // only because aesReady is true; wait until the queued/processing rotation
-      // state changes to ready/failed/cancelled so the UI reflects the outcome.
-      if (aesReady && operation !== "key_rotation") {
-        return;
-      }
-
-      await delay(interval);
-
-      if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
-        return;
-      }
-
-      try {
-        await this.refreshSelected({ preserveNotice: true });
-      } catch {
-        return;
-      }
-
-      interval = Math.min(Math.round(interval * 1.35), maxIntervalMs);
-    }
-  }
-
 
   _startClearRollbackStatusPolling() {
+    this._startSelectedLongJobStatusPolling();
+  }
+
+  _startSelectedLongJobStatusPolling() {
     const publicId = this.selectedPublicId;
-    if (!publicId) {
+    if (!publicId || !this._hasSelectedLongJobInProgress()) {
+      return;
+    }
+
+    if (this.longJobPollPublicId === publicId) {
       return;
     }
 
     const pollRunId = ++this.backfillPollRunId;
-    this._pollClearRollbackStatus(publicId, pollRunId);
+    this.longJobPollPublicId = publicId;
+    this._pollSelectedLongJobStatus(publicId, pollRunId);
   }
 
-  async _pollClearRollbackStatus(publicId, pollRunId) {
-    const maxDurationMs = 45 * 60 * 1000;
-    const maxIntervalMs = 15000;
+  async _pollSelectedLongJobStatus(publicId, pollRunId) {
+    const timeoutMinutes = this._longJobPollingTimeoutMinutes();
+    const maxDurationMs = timeoutMinutes * 60 * 1000;
     const startedAt = Date.now();
-    let interval = 800;
+    let interval = LONG_JOB_POLLING_INITIAL_INTERVAL_MS;
+    let consecutiveRefreshFailures = 0;
 
-    while (Date.now() - startedAt < maxDurationMs) {
-      if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
-        return;
+    try {
+      while (Date.now() - startedAt < maxDurationMs) {
+        if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
+          return;
+        }
+
+        if (!this._hasSelectedLongJobInProgress()) {
+          return;
+        }
+
+        await delay(interval);
+
+        if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
+          return;
+        }
+
+        try {
+          await this.refreshSelected({
+            preserveNotice: true,
+            ensurePolling: false,
+            throwOnError: true,
+          });
+          consecutiveRefreshFailures = 0;
+        } catch (e) {
+          if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
+            return;
+          }
+
+          consecutiveRefreshFailures += 1;
+          if (consecutiveRefreshFailures >= LONG_JOB_POLLING_MAX_REFRESH_FAILURES) {
+            const lastError = e?.message || String(e || "unknown error");
+            this.selectionError = `Automatic status refresh stopped after ${consecutiveRefreshFailures} failed attempts. The background job may still be running; use Refresh or check Background jobs. Last error: ${lastError}`;
+            return;
+          }
+        }
+
+        interval = Math.min(Math.round(interval * 1.35), LONG_JOB_POLLING_MAX_INTERVAL_MS);
       }
 
-      const status = this.selectedClearRollbackStatus;
-      if (!["queued", "processing"].includes(status)) {
-        return;
+      if (pollRunId === this.backfillPollRunId && this.selectedPublicId === publicId && this._hasSelectedLongJobInProgress()) {
+        this.selectionError = `Automatic status refresh stopped after ${timeoutMinutes} minute(s). The background job may still be running; use Refresh or check Background jobs.`;
       }
-
-      await delay(interval);
-
-      if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
-        return;
+    } finally {
+      if (pollRunId === this.backfillPollRunId && this.longJobPollPublicId === publicId) {
+        this.longJobPollPublicId = "";
       }
-
-      try {
-        await this.refreshSelected({ preserveNotice: true });
-      } catch {
-        return;
-      }
-
-      interval = Math.min(Math.round(interval * 1.35), maxIntervalMs);
     }
   }
 
@@ -2452,7 +2494,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       this._applyBackfillResponse(json, "cancelled");
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "AES HLS backfill state cleared.";
-      this.backfillPollRunId += 1;
+      this._stopSelectedLongJobStatusPolling();
       await this.refreshSelected({ preserveNotice: true });
     } catch (e) {
       this.selectionError = e?.message || String(e);
@@ -2657,7 +2699,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       this._applyClearRollbackResponse(json, "cancelled");
       this.noticeTone = "success";
       this.noticeMessage = json?.message || "Clear HLS rollback state cleared.";
-      this.backfillPollRunId += 1;
+      this._stopSelectedLongJobStatusPolling();
       await this.refreshSelected({ preserveNotice: true });
     } catch (e) {
       this.selectionError = e?.message || String(e);

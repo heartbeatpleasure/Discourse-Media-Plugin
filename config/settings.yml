@@ -657,6 +657,15 @@ plugins:
     max: 100
     client: false
 
+  # Maximum time the Management admin UI keeps polling selected long-running
+  # HLS/AES jobs before asking the admin to refresh/check Background jobs.
+  media_gallery_admin_long_job_polling_timeout_minutes:
+    default: 45
+    type: integer
+    min: 1
+    max: 1440
+    client: false
+
   # Show detailed server-side performance timings on Media Gallery admin pages.
   # Keep disabled in normal production use; slow-search logging below still works separately.
   media_gallery_admin_pages_show_performance_timings:

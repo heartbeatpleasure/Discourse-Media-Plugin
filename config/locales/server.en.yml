@@ -537,6 +537,8 @@ en:
     media_gallery_hls_aes128_key_rotation_segments_title: "HLS AES-128 key rotation segments"
     media_gallery_hls_aes128_backfill_bulk_limit: "Maximum number of eligible videos a single admin bulk AES backfill request may enqueue. Keep conservative because repackaging uses FFmpeg and storage I/O."
     media_gallery_hls_aes128_backfill_bulk_limit_title: "HLS AES backfill bulk limit"
+    media_gallery_admin_long_job_polling_timeout_minutes: "Maximum number of minutes the Media Gallery Management admin page keeps polling the selected item for long-running HLS/AES jobs before asking the admin to refresh or check Background jobs."
+    media_gallery_admin_long_job_polling_timeout_minutes_title: "Management long-job polling timeout minutes"
     media_gallery_log_hls_aes128_key_denials: "Logs denied AES-128 key requests separately from generic HLS denial troubleshooting. Useful during QA, but can add log volume."
     media_gallery_log_hls_aes128_key_denials_title: "Log denied HLS AES key requests"
     media_gallery_hls_x_accel_enabled: "When enabled, local HLS files can be served through the reverse proxy using X-Accel-Redirect. Requires matching NGINX/internal-location configuration."

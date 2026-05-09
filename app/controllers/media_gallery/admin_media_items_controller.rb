@@ -762,6 +762,17 @@ module ::MediaGallery
       false
     end
 
+    def admin_long_job_polling_timeout_minutes
+      value = if SiteSetting.respond_to?(:media_gallery_admin_long_job_polling_timeout_minutes)
+        SiteSetting.media_gallery_admin_long_job_polling_timeout_minutes.to_i
+      else
+        45
+      end
+      [[value, 1].max, 1440].min
+    rescue
+      45
+    end
+
     def audit_hls_integrity_verify!(item, result)
       payload = {
         checked_segments: result[:checked_segments],
@@ -1150,6 +1161,9 @@ module ::MediaGallery
         owner_media_access: owner_media_access_payload(item.user),
         allowed_tags: ::MediaGallery::Permissions.allowed_tags,
         management_log: item.admin_management_log,
+        admin_polling: {
+          long_job_timeout_minutes: admin_long_job_polling_timeout_minutes,
+        },
       }
     end
 
