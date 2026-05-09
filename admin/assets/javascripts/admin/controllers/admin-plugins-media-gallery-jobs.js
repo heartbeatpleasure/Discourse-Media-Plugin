@@ -1,7 +1,5 @@
 import Controller from "@ember/controller";
-import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
-import { ajax } from "discourse/lib/ajax";
 
 function formatNumber(value) {
   const number = Number(value || 0);
@@ -22,17 +20,6 @@ function statusClass(group) {
     default:
       return "is-muted";
   }
-}
-
-function compactRow(row) {
-  return {
-    ...row,
-    statusClass: statusClass(row?.status_group),
-    progressLabel: progressLabel(row?.progress),
-    titleLabel: row?.title || row?.public_id || row?.operation || "Untitled job",
-    itemMeta: [row?.public_id, row?.media_type, row?.username].filter(Boolean).join(" • "),
-    routeUrl: row?.group === "migration" ? row?.migrations_url : row?.management_url,
-  };
 }
 
 function progressLabel(progress) {
@@ -60,17 +47,54 @@ function progressLabel(progress) {
   return parts.join(" • ") || null;
 }
 
+function compactRow(row) {
+  return {
+    ...row,
+    statusClass: statusClass(row?.status_group),
+    progressLabel: progressLabel(row?.progress),
+    titleLabel: row?.title || row?.public_id || row?.operation || "Untitled job",
+    itemMeta: [row?.public_id, row?.media_type, row?.username].filter(Boolean).join(" • "),
+    routeUrl: row?.group === "migration" ? row?.migrations_url : row?.management_url,
+  };
+}
+
+function urlFor({ status = "all", type = "all", limit = "50" } = {}) {
+  const params = new URLSearchParams();
+  if (status && status !== "all") {
+    params.set("status", status);
+  }
+  if (type && type !== "all") {
+    params.set("type", type);
+  }
+  if (limit && limit !== "50") {
+    params.set("limit", limit);
+  }
+
+  const query = params.toString();
+  return `/admin/plugins/media-gallery-jobs${query ? `?${query}` : ""}`;
+}
+
 export default class AdminPluginsMediaGalleryJobsController extends Controller {
+  queryParams = ["status", "type", "limit"];
+
   @tracked rows = [];
   @tracked summary = {};
-  @tracked filterOptions = { statuses: [], types: [] };
   @tracked status = "all";
   @tracked type = "all";
   @tracked limit = "50";
-  @tracked loading = false;
   @tracked error = null;
-  @tracked message = null;
   @tracked generatedAtLabel = null;
+
+  loadModel(data = {}) {
+    const filters = data.filters || {};
+    this.status = filters.status || this.status || "all";
+    this.type = filters.type || this.type || "all";
+    this.limit = String(data.limit || this.limit || "50");
+    this.summary = data.summary || {};
+    this.rows = (data.rows || []).map(compactRow);
+    this.generatedAtLabel = data.generated_at_label || null;
+    this.error = data.error || null;
+  }
 
   get hasRows() {
     return this.rows.length > 0;
@@ -96,28 +120,38 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
     return formatNumber(this.summary?.total_count || 0);
   }
 
+  get refreshUrl() {
+    return urlFor({ status: this.status, type: this.type, limit: this.limit });
+  }
+
   get typeCards() {
     return (this.summary?.by_type || []).map((entry) => {
       const value = entry?.type || entry?.value || "all";
       return {
         ...entry,
         value,
+        label: entry?.label || value,
         isActive: value === this.type,
         countLabel: formatNumber(entry?.count || 0),
+        href: urlFor({ status: this.status, type: value, limit: this.limit }),
       };
     });
   }
 
-  get statusOptions() {
+  get statusLinks() {
     return [
       { value: "all", label: "All statuses" },
       { value: "active", label: "Active" },
       { value: "failed", label: "Failed" },
       { value: "completed", label: "Completed" },
-    ].map((option) => ({ ...option, selected: option.value === this.status }));
+    ].map((option) => ({
+      ...option,
+      isActive: option.value === this.status,
+      href: urlFor({ status: option.value, type: this.type, limit: this.limit }),
+    }));
   }
 
-  get typeOptions() {
+  get typeLinks() {
     return [
       { value: "all", label: "All job types" },
       { value: "processing", label: "Processing" },
@@ -125,81 +159,19 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
       { value: "aes", label: "AES / HLS" },
       { value: "forensics", label: "Forensics" },
       { value: "test_download", label: "Test downloads" },
-    ].map((option) => ({ ...option, selected: option.value === this.type }));
-  }
-
-  get limitOptions() {
-    return ["25", "50", "100"].map((value) => ({
-      value,
-      label: value,
-      selected: value === this.limit,
+    ].map((option) => ({
+      ...option,
+      isActive: option.value === this.type,
+      href: urlFor({ status: this.status, type: option.value, limit: this.limit }),
     }));
   }
 
-  loadInitial() {
-    this.loadJobs();
-  }
-
-  async loadJobs() {
-    this.loading = true;
-    this.error = null;
-    this.message = null;
-
-    try {
-      const data = await ajax("/admin/plugins/media-gallery/jobs.json", {
-        data: {
-          status: this.status,
-          type: this.type,
-          limit: this.limit,
-        },
-      });
-
-      this.summary = data.summary || {};
-      this.filterOptions = data.filter_options || { statuses: [], types: [] };
-      this.rows = (data.rows || []).map(compactRow);
-      this.generatedAtLabel = data.generated_at_label || null;
-      this.error = data.error || null;
-      this.message = data.error ? null : "Background jobs refreshed.";
-    } catch (e) {
-      this.error = e?.jqXHR?.responseJSON?.errors?.join(" ") || e?.message || "Unable to load background jobs.";
-      this.rows = [];
-    } finally {
-      this.loading = false;
-    }
-  }
-
-  @action
-  refresh() {
-    this.loadJobs();
-  }
-
-  @action
-  setStatus(event) {
-    this.status = event.target.value || "all";
-    this.loadJobs();
-  }
-
-  @action
-  setType(event) {
-    this.type = event.target.value || "all";
-    this.loadJobs();
-  }
-
-  @action
-  setLimit(event) {
-    this.limit = event.target.value || "50";
-    this.loadJobs();
-  }
-
-  @action
-  filterByType(type) {
-    this.type = type || "all";
-    this.loadJobs();
-  }
-
-  @action
-  filterByTypeFromEvent(event) {
-    const type = event?.currentTarget?.dataset?.jobType || "all";
-    this.filterByType(type);
+  get limitLinks() {
+    return ["25", "50", "100"].map((value) => ({
+      value,
+      label: value,
+      isActive: value === String(this.limit),
+      href: urlFor({ status: this.status, type: this.type, limit: value }),
+    }));
   }
 }

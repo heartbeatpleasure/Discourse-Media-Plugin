@@ -1,5 +1,4 @@
 import RouteTemplate from "ember-route-template";
-import { on } from "@ember/modifier";
 
 export default RouteTemplate(
   <template>
@@ -95,43 +94,60 @@ export default RouteTemplate(
         margin-top: 0.25rem;
       }
 
-      button.mg-jobs__card {
-        text-align: left;
+      a.mg-jobs__card {
         color: var(--primary);
-        cursor: pointer;
+        display: block;
+        text-decoration: none;
       }
 
-      button.mg-jobs__card:hover,
-      button.mg-jobs__card:focus,
-      button.mg-jobs__card.is-active {
+      a.mg-jobs__card:hover,
+      a.mg-jobs__card:focus,
+      a.mg-jobs__card.is-active {
         border-color: var(--tertiary-medium);
       }
 
-      button.mg-jobs__card.is-active {
+      a.mg-jobs__card.is-active {
         box-shadow: inset 0 0 0 1px var(--tertiary-medium);
       }
 
-      .mg-jobs__toolbar {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: end;
-        gap: 0.75rem;
+      .mg-jobs__filter-groups {
+        display: grid;
+        gap: 0.85rem;
         margin-top: 1rem;
       }
 
-      .mg-jobs__field {
+      .mg-jobs__filter-group {
         display: flex;
-        flex-direction: column;
-        gap: 0.3rem;
-        min-width: 170px;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.45rem;
       }
 
-      .mg-jobs__field select {
-        min-height: 2.65rem;
+      .mg-jobs__filter-label {
+        color: var(--mg-jobs-muted);
+        font-size: var(--font-down-1);
+        font-weight: 700;
+        margin-right: 0.25rem;
+      }
+
+      .mg-jobs__filter-pill {
         border: 1px solid var(--primary-low);
-        border-radius: 10px;
-        background: var(--secondary);
-        padding: 0.45rem 0.7rem;
+        border-radius: 999px;
+        background: var(--primary-very-low);
+        color: var(--primary-medium);
+        display: inline-flex;
+        align-items: center;
+        font-size: var(--font-down-1);
+        font-weight: 700;
+        line-height: 1;
+        padding: 0.42rem 0.65rem;
+        text-decoration: none;
+      }
+
+      .mg-jobs__filter-pill.is-active {
+        border-color: var(--tertiary-medium);
+        background: var(--tertiary-low);
+        color: var(--tertiary);
       }
 
       .mg-jobs__actions {
@@ -211,16 +227,10 @@ export default RouteTemplate(
         margin-top: 0.85rem;
       }
 
-      .mg-jobs__notice,
       .mg-jobs__empty,
       .mg-jobs__error {
         border-radius: 14px;
         padding: 0.75rem 0.9rem;
-      }
-
-      .mg-jobs__notice {
-        background: var(--success-low);
-        color: var(--success);
       }
 
       .mg-jobs__error {
@@ -255,17 +265,13 @@ export default RouteTemplate(
           {{/if}}
         </div>
         <div class="mg-jobs__actions">
-          <button class="btn" type="button" disabled={{@controller.loading}} {{on "click" @controller.refresh}}>
-            {{#if @controller.loading}}Refreshing…{{else}}Refresh{{/if}}
-          </button>
+          <a class="btn" href={{@controller.refreshUrl}}>Refresh</a>
           <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
         </div>
       </section>
 
       {{#if @controller.error}}
         <div class="mg-jobs__error">{{@controller.error}}</div>
-      {{else if @controller.message}}
-        <div class="mg-jobs__notice">{{@controller.message}}</div>
       {{/if}}
 
       <section class="mg-jobs__summary-grid" aria-label="Job summary">
@@ -295,20 +301,15 @@ export default RouteTemplate(
         <div class="mg-jobs__panel-header">
           <div class="mg-jobs__panel-copy">
             <h2>Job types</h2>
-            <p class="mg-jobs__muted">Click a type to filter the list below.</p>
+            <p class="mg-jobs__muted">Open a type to filter the list below.</p>
           </div>
         </div>
         <div class="mg-jobs__type-grid">
           {{#each @controller.typeCards as |typeCard|}}
-            <button
-              class="mg-jobs__card {{if typeCard.isActive "is-active"}}"
-              type="button"
-              data-job-type={{typeCard.value}}
-              {{on "click" @controller.filterByTypeFromEvent}}
-            >
+            <a class="mg-jobs__card {{if typeCard.isActive "is-active"}}" href={{typeCard.href}}>
               <div class="mg-jobs__field-label">{{typeCard.label}}</div>
               <div class="mg-jobs__card-value">{{typeCard.countLabel}}</div>
-            </button>
+            </a>
           {{/each}}
         </div>
       </section>
@@ -323,33 +324,25 @@ export default RouteTemplate(
           </div>
         </div>
 
-        <div class="mg-jobs__toolbar">
-          <label class="mg-jobs__field">
-            <span class="mg-jobs__field-label">Status</span>
-            <select {{on "change" @controller.setStatus}}>
-              {{#each @controller.statusOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
-              {{/each}}
-            </select>
-          </label>
-
-          <label class="mg-jobs__field">
-            <span class="mg-jobs__field-label">Type</span>
-            <select {{on "change" @controller.setType}}>
-              {{#each @controller.typeOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
-              {{/each}}
-            </select>
-          </label>
-
-          <label class="mg-jobs__field">
-            <span class="mg-jobs__field-label">Limit</span>
-            <select {{on "change" @controller.setLimit}}>
-              {{#each @controller.limitOptions as |option|}}
-                <option value={{option.value}} selected={{option.selected}}>{{option.label}}</option>
-              {{/each}}
-            </select>
-          </label>
+        <div class="mg-jobs__filter-groups">
+          <div class="mg-jobs__filter-group">
+            <span class="mg-jobs__filter-label">Status</span>
+            {{#each @controller.statusLinks as |option|}}
+              <a class="mg-jobs__filter-pill {{if option.isActive "is-active"}}" href={{option.href}}>{{option.label}}</a>
+            {{/each}}
+          </div>
+          <div class="mg-jobs__filter-group">
+            <span class="mg-jobs__filter-label">Type</span>
+            {{#each @controller.typeLinks as |option|}}
+              <a class="mg-jobs__filter-pill {{if option.isActive "is-active"}}" href={{option.href}}>{{option.label}}</a>
+            {{/each}}
+          </div>
+          <div class="mg-jobs__filter-group">
+            <span class="mg-jobs__filter-label">Limit</span>
+            {{#each @controller.limitLinks as |option|}}
+              <a class="mg-jobs__filter-pill {{if option.isActive "is-active"}}" href={{option.href}}>{{option.label}}</a>
+            {{/each}}
+          </div>
         </div>
 
         {{#if @controller.hasRows}}
