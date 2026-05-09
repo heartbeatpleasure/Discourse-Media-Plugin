@@ -38,12 +38,19 @@ export default RouteTemplate(
 
       .mg-jobs__hero,
       .mg-jobs__panel-header,
-      .mg-jobs__row-header,
-      .mg-jobs__actions {
+      .mg-jobs__row-header {
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
         gap: 1rem;
+      }
+
+      .mg-jobs__hero-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 0.65rem;
       }
 
       .mg-jobs__copy,
@@ -59,6 +66,7 @@ export default RouteTemplate(
       .mg-jobs__meta,
       .mg-jobs__field-label {
         color: var(--mg-jobs-muted);
+        font-size: var(--font-down-1);
       }
 
       .mg-jobs__meta,
@@ -80,6 +88,7 @@ export default RouteTemplate(
 
       .mg-jobs__type-grid {
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        margin-top: 0.95rem;
       }
 
       .mg-jobs__card {
@@ -94,7 +103,13 @@ export default RouteTemplate(
         margin-top: 0.25rem;
       }
 
-      a.mg-jobs__card {
+      .mg-jobs__card .mg-jobs__meta {
+        display: block;
+        margin-top: 0.5rem;
+      }
+
+      a.mg-jobs__card,
+      span.mg-jobs__card {
         color: var(--primary);
         display: block;
         text-decoration: none;
@@ -106,8 +121,15 @@ export default RouteTemplate(
         border-color: var(--tertiary-medium);
       }
 
-      a.mg-jobs__card.is-active {
+      a.mg-jobs__card.is-active,
+      span.mg-jobs__card.is-active {
         box-shadow: inset 0 0 0 1px var(--tertiary-medium);
+      }
+
+      .mg-jobs__card.is-disabled,
+      .mg-jobs__filter-pill.is-disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
       }
 
       .mg-jobs__filter-groups {
@@ -264,8 +286,8 @@ export default RouteTemplate(
             <p class="mg-jobs__meta">Last refreshed: {{@controller.generatedAtDisplay}}</p>
           {{/if}}
         </div>
-        <div class="mg-jobs__actions">
-          <a class="btn" href={{@controller.refreshUrl}}>Refresh</a>
+        <div class="mg-jobs__hero-actions">
+          <a class="btn btn-primary" href={{@controller.refreshUrl}}>Refresh</a>
           <a class="btn" href="/admin/plugins/media-gallery">Back to overview</a>
         </div>
       </section>
@@ -274,26 +296,29 @@ export default RouteTemplate(
         <div class="mg-jobs__error">{{@controller.error}}</div>
       {{/if}}
 
-      <section class="mg-jobs__summary-grid" aria-label="Job summary">
-        <div class="mg-jobs__card">
-          <div class="mg-jobs__field-label">Active</div>
-          <div class="mg-jobs__card-value">{{@controller.activeCountLabel}}</div>
-          <p class="mg-jobs__meta">Queued or running operations.</p>
+      <section class="mg-jobs__panel">
+        <div class="mg-jobs__panel-header">
+          <div class="mg-jobs__panel-copy">
+            <h2>Status</h2>
+            <p class="mg-jobs__muted">Open a status to filter the list below. Counts follow the selected job type.</p>
+          </div>
         </div>
-        <div class="mg-jobs__card">
-          <div class="mg-jobs__field-label">Failed</div>
-          <div class="mg-jobs__card-value">{{@controller.failedCountLabel}}</div>
-          <p class="mg-jobs__meta">Operations that need review.</p>
-        </div>
-        <div class="mg-jobs__card">
-          <div class="mg-jobs__field-label">Completed</div>
-          <div class="mg-jobs__card-value">{{@controller.completedCountLabel}}</div>
-          <p class="mg-jobs__meta">Recently completed/logged.</p>
-        </div>
-        <div class="mg-jobs__card">
-          <div class="mg-jobs__field-label">Showing</div>
-          <div class="mg-jobs__card-value">{{@controller.visibleCountLabel}}</div>
-          <p class="mg-jobs__meta">Filtered from {{@controller.totalCountLabel}} known states.</p>
+        <div class="mg-jobs__summary-grid" aria-label="Job status summary">
+          {{#each @controller.statusCards as |statusCard|}}
+            {{#if statusCard.isDisabled}}
+              <span class="mg-jobs__card is-disabled">
+                <div class="mg-jobs__field-label">{{statusCard.label}}</div>
+                <div class="mg-jobs__card-value">{{statusCard.countLabel}}</div>
+                <p class="mg-jobs__meta">{{statusCard.description}}</p>
+              </span>
+            {{else}}
+              <a class="mg-jobs__card {{if statusCard.isActive "is-active"}}" href={{statusCard.href}}>
+                <div class="mg-jobs__field-label">{{statusCard.label}}</div>
+                <div class="mg-jobs__card-value">{{statusCard.countLabel}}</div>
+                <p class="mg-jobs__meta">{{statusCard.description}}</p>
+              </a>
+            {{/if}}
+          {{/each}}
         </div>
       </section>
 
@@ -306,10 +331,17 @@ export default RouteTemplate(
         </div>
         <div class="mg-jobs__type-grid">
           {{#each @controller.typeCards as |typeCard|}}
-            <a class="mg-jobs__card {{if typeCard.isActive "is-active"}}" href={{typeCard.href}}>
-              <div class="mg-jobs__field-label">{{typeCard.label}}</div>
-              <div class="mg-jobs__card-value">{{typeCard.countLabel}}</div>
-            </a>
+            {{#if typeCard.isDisabled}}
+              <span class="mg-jobs__card is-disabled">
+                <div class="mg-jobs__field-label">{{typeCard.label}}</div>
+                <div class="mg-jobs__card-value">{{typeCard.countLabel}}</div>
+              </span>
+            {{else}}
+              <a class="mg-jobs__card {{if typeCard.isActive "is-active"}}" href={{typeCard.href}}>
+                <div class="mg-jobs__field-label">{{typeCard.label}}</div>
+                <div class="mg-jobs__card-value">{{typeCard.countLabel}}</div>
+              </a>
+            {{/if}}
           {{/each}}
         </div>
       </section>
@@ -321,22 +353,11 @@ export default RouteTemplate(
             <p class="mg-jobs__muted">
               This page is read-only. Use Management, Migration manager, Identify, or Test downloads for the actual action controls.
             </p>
+            <p class="mg-jobs__meta">{{@controller.showingSummaryLabel}}</p>
           </div>
         </div>
 
         <div class="mg-jobs__filter-groups">
-          <div class="mg-jobs__filter-group">
-            <span class="mg-jobs__filter-label">Status</span>
-            {{#each @controller.statusLinks as |option|}}
-              <a class="mg-jobs__filter-pill {{if option.isActive "is-active"}}" href={{option.href}}>{{option.label}}</a>
-            {{/each}}
-          </div>
-          <div class="mg-jobs__filter-group">
-            <span class="mg-jobs__filter-label">Type</span>
-            {{#each @controller.typeLinks as |option|}}
-              <a class="mg-jobs__filter-pill {{if option.isActive "is-active"}}" href={{option.href}}>{{option.label}}</a>
-            {{/each}}
-          </div>
           <div class="mg-jobs__filter-group">
             <span class="mg-jobs__filter-label">Limit</span>
             {{#each @controller.limitLinks as |option|}}

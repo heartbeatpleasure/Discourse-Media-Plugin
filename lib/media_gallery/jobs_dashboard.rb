@@ -44,7 +44,7 @@ module ::MediaGallery
       rows = sort_rows(rows)
 
       {
-        summary: summary_for(rows: rows, all_rows: all_rows, type_count_rows: status_rows),
+        summary: summary_for(rows: rows, all_rows: all_rows, status_filter: status_filter, type_filter: type_filter),
         rows: rows.first(limit),
         total_count: rows.length,
         limit: limit,
@@ -387,10 +387,13 @@ module ::MediaGallery
       rows.sort_by { |row| -(parse_time(row[:updated_at])&.to_f || 0) }
     end
 
-    def summary_for(rows:, all_rows:, type_count_rows: all_rows)
-      active = all_rows.count { |row| row[:status_group].to_s == "active" }
-      failed = all_rows.count { |row| row[:status_group].to_s == "failed" }
-      completed = all_rows.count { |row| row[:status_group].to_s == "completed" }
+    def summary_for(rows:, all_rows:, status_filter:, type_filter:)
+      status_scope_rows = type_filter == "all" ? all_rows : all_rows.select { |row| row[:group].to_s == type_filter }
+      type_scope_rows = status_filter == "all" ? all_rows : all_rows.select { |row| row[:status_group].to_s == status_filter }
+
+      active = status_scope_rows.count { |row| row[:status_group].to_s == "active" }
+      failed = status_scope_rows.count { |row| row[:status_group].to_s == "failed" }
+      completed = status_scope_rows.count { |row| row[:status_group].to_s == "completed" }
 
       {
         active_count: active,
@@ -398,8 +401,16 @@ module ::MediaGallery
         completed_count: completed,
         visible_count: rows.length,
         total_count: all_rows.length,
+        status_scope_count: status_scope_rows.length,
+        type_scope_count: type_scope_rows.length,
+        by_status: [
+          { status: "all", label: "All statuses", count: status_scope_rows.length },
+          { status: "active", label: "Active", count: active },
+          { status: "failed", label: "Failed", count: failed },
+          { status: "completed", label: "Completed", count: completed },
+        ],
         by_type: TYPE_GROUPS.keys.map do |type|
-          { type: type, label: TYPE_GROUPS[type], count: type_count_rows.count { |row| row[:group].to_s == type } }
+          { type: type, label: TYPE_GROUPS[type], count: type_scope_rows.count { |row| row[:group].to_s == type } }
         end,
       }
     end
@@ -411,6 +422,14 @@ module ::MediaGallery
         completed_count: 0,
         visible_count: 0,
         total_count: 0,
+        status_scope_count: 0,
+        type_scope_count: 0,
+        by_status: [
+          { status: "all", label: "All statuses", count: 0 },
+          { status: "active", label: "Active", count: 0 },
+          { status: "failed", label: "Failed", count: 0 },
+          { status: "completed", label: "Completed", count: 0 },
+        ],
         by_type: TYPE_GROUPS.keys.map { |type| { type: type, label: TYPE_GROUPS[type], count: 0 } },
       }
     end

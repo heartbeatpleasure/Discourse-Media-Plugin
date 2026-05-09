@@ -334,9 +334,26 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.lastSearchTimingBreakdown = null;
   }
 
+  applyInitialQueryState() {
+    const params = new URLSearchParams(window.location?.search || "");
+    const publicId = String(params.get("public_id") || "").trim();
+    const query = String(params.get("q") || publicId || "").trim();
+
+    if (query) {
+      this.searchQuery = query;
+    }
+    if (publicId) {
+      this.selectedPublicId = publicId;
+    }
+  }
+
   async loadInitial() {
+    this.applyInitialQueryState();
     await this.loadTargetProfiles();
     await this.search();
+    if (this.selectedPublicId) {
+      await this.refreshSelected();
+    }
     await this.loadStorageHealth("active");
     if (this.selectedTargetProfileKey) {
       await this.loadStorageHealth(this.selectedTargetProfileKey);

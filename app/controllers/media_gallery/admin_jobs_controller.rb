@@ -21,6 +21,7 @@ module ::MediaGallery
           completed_count: 0,
           visible_count: 0,
           total_count: 0,
+          by_status: [],
           by_type: [],
         },
         rows: [],
