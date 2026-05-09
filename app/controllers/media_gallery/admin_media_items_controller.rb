@@ -262,6 +262,9 @@ module ::MediaGallery
         hls_fingerprint: hls_fingerprint_diagnostics(item),
         hls_aes128: hls_aes128_diagnostics(item),
         recent_test_downloads: ::MediaGallery::TestDownloads.recent_artifacts_for(item.public_id, limit: 10),
+        admin_polling: {
+          long_job_timeout_minutes: admin_long_job_polling_timeout_minutes,
+        },
         processing_stale: processing_stale?(item),
         processing_stale_after_minutes: processing_stale_after_minutes,
       )

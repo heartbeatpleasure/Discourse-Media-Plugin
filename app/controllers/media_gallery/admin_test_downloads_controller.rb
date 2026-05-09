@@ -52,7 +52,10 @@ module ::MediaGallery
         ok: true,
         queued: true,
         task_id: task_id,
-        status_url: "/admin/plugins/media-gallery/test-downloads/status/#{task_id}.json"
+        status_url: "/admin/plugins/media-gallery/test-downloads/status/#{task_id}.json",
+        admin_polling: {
+          long_job_timeout_minutes: admin_long_job_polling_timeout_minutes,
+        }
       )
     rescue => e
       render_json_error_payload(e)
@@ -86,6 +89,9 @@ module ::MediaGallery
         status: task["status"].presence || "queued",
         artifact: artifact,
         error: task["error"],
+        admin_polling: {
+          long_job_timeout_minutes: admin_long_job_polling_timeout_minutes,
+        },
       )
     rescue => e
       render_json_error_payload(e, status: 404)
@@ -140,6 +146,17 @@ module ::MediaGallery
     end
 
     private
+
+    def admin_long_job_polling_timeout_minutes
+      value = if SiteSetting.respond_to?(:media_gallery_admin_long_job_polling_timeout_minutes)
+        SiteSetting.media_gallery_admin_long_job_polling_timeout_minutes.to_i
+      else
+        45
+      end
+      [[value, 1].max, 1440].min
+    rescue
+      45
+    end
 
     def ensure_test_downloads_enabled
       raise Discourse::InvalidAccess unless ::MediaGallery::TestDownloads.enabled?

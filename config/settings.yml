@@ -657,8 +657,8 @@ plugins:
     max: 100
     client: false
 
-  # Maximum time the Management admin UI keeps polling selected long-running
-  # HLS/AES jobs before asking the admin to refresh/check Background jobs.
+  # Maximum time admin UI pages keep polling selected long-running
+  # background jobs before asking the admin to refresh/check Background jobs.
   media_gallery_admin_long_job_polling_timeout_minutes:
     default: 45
     type: integer

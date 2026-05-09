@@ -7,6 +7,25 @@ const DEFAULT_STATUS_FILTER = "ready";
 const DEFAULT_SORT = "newest";
 const DEFAULT_LIMIT = "20";
 const DEFAULT_HAS_HLS_FILTER = "true";
+const DEFAULT_LONG_JOB_POLLING_TIMEOUT_MINUTES = 45;
+const MIN_LONG_JOB_POLLING_TIMEOUT_MINUTES = 1;
+const MAX_LONG_JOB_POLLING_TIMEOUT_MINUTES = 1440;
+const LONG_JOB_POLLING_INITIAL_INTERVAL_MS = 1000;
+const LONG_JOB_POLLING_MAX_INTERVAL_MS = 15000;
+const LONG_JOB_POLLING_MAX_REFRESH_FAILURES = 5;
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function boundedNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(Math.round(number), min), max);
+}
 
 export default class AdminPluginsMediaGalleryTestDownloadsController extends Controller {
   @tracked searchQuery = "";
@@ -644,15 +663,43 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     this.artifacts = [normalized, ...(this.artifacts || [])];
   }
 
-  async _pollTask(taskId, statusUrl) {
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+  _longJobPollingTimeoutMinutes(adminPolling = null) {
+    return boundedNumber(
+      adminPolling?.long_job_timeout_minutes,
+      DEFAULT_LONG_JOB_POLLING_TIMEOUT_MINUTES,
+      MIN_LONG_JOB_POLLING_TIMEOUT_MINUTES,
+      MAX_LONG_JOB_POLLING_TIMEOUT_MINUTES
+    );
+  }
 
-      const response = await fetch(statusUrl, {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        credentials: "same-origin",
-      });
+  async _pollTask(taskId, statusUrl, adminPolling = null) {
+    const timeoutMinutes = this._longJobPollingTimeoutMinutes(adminPolling);
+    const maxDurationMs = timeoutMinutes * 60 * 1000;
+    const startedAt = Date.now();
+    let interval = LONG_JOB_POLLING_INITIAL_INTERVAL_MS;
+    let consecutiveRefreshFailures = 0;
+
+    while (Date.now() - startedAt < maxDurationMs) {
+      await delay(interval);
+
+      let response;
+      try {
+        response = await fetch(statusUrl, {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
+        });
+      } catch (e) {
+        consecutiveRefreshFailures += 1;
+        if (consecutiveRefreshFailures >= LONG_JOB_POLLING_MAX_REFRESH_FAILURES) {
+          const lastError = e?.message || String(e || "unknown error");
+          this.generateError = `Automatic artifact status refresh stopped after ${consecutiveRefreshFailures} failed attempts. The background job may still be running; use Generate again later or check Background jobs. Last error: ${lastError}`;
+          this._setSelectionMessage(this.generateError, "danger");
+          return;
+        }
+        interval = Math.min(Math.round(interval * 1.35), LONG_JOB_POLLING_MAX_INTERVAL_MS);
+        continue;
+      }
 
       const json = await response.json().catch(() => null);
       if (!response.ok) {
@@ -662,9 +709,11 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
         return;
       }
 
+      consecutiveRefreshFailures = 0;
       const status = json?.status || "queued";
       if (status === "queued" || status === "working") {
         this._setSelectionMessage(`Generating artifact for ${this.publicId}… (${status})`, "info");
+        interval = Math.min(Math.round(interval * 1.35), LONG_JOB_POLLING_MAX_INTERVAL_MS);
         continue;
       }
 
@@ -685,7 +734,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
       return;
     }
 
-    this.generateError = "Timed out while waiting for artifact generation.";
+    this.generateError = `Automatic artifact status refresh stopped after ${timeoutMinutes} minute(s). The background job may still be running; use Generate again later or check Background jobs.`;
     this._setSelectionMessage(this.generateError, "danger");
   }
 
@@ -727,7 +776,7 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
 
       if (json?.ok && json?.queued && json?.task_id && json?.status_url) {
         this._setSelectionMessage(`Queued generation for ${this.publicId}.`, "info");
-        await this._pollTask(json.task_id, json.status_url);
+        await this._pollTask(json.task_id, json.status_url, json.admin_polling || null);
         return;
       }
 

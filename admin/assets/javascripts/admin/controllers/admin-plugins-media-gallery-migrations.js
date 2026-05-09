@@ -186,6 +186,25 @@ function buildThumbnailUrl(publicId, { item = null, diagnostics = null } = {}) {
   return `${base}${separator}v=${encodeURIComponent(stateKey)}`;
 }
 
+
+const LONG_JOB_ACTIVE_MEDIA_STATUSES = ["queued", "processing"];
+const MIGRATION_LONG_JOB_ACTIVE_STATUSES = ["queued", "copying", "cleaning", "pending_cleanup", "verifying"];
+const DEFAULT_LONG_JOB_POLLING_TIMEOUT_MINUTES = 45;
+const MIN_LONG_JOB_POLLING_TIMEOUT_MINUTES = 1;
+const MAX_LONG_JOB_POLLING_TIMEOUT_MINUTES = 1440;
+const LONG_JOB_POLLING_INITIAL_INTERVAL_MS = 1000;
+const LONG_JOB_POLLING_MAX_INTERVAL_MS = 15000;
+const LONG_JOB_POLLING_MAX_REFRESH_FAILURES = 5;
+
+function boundedNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(Math.round(number), min), max);
+}
+
 export default class AdminPluginsMediaGalleryMigrationsController extends Controller {
   @tracked searchQuery = "";
   @tracked backendFilter = "all";
@@ -248,8 +267,11 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
   @tracked lastSearchTimingBreakdown = null;
 
   autoRefreshTimer = null;
-  autoRefreshIntervalMs = 5000;
-  autoRefreshSearchCounter = 0;
+  autoRefreshRunId = 0;
+  autoRefreshPublicId = "";
+  autoRefreshStartedAt = 0;
+  autoRefreshIntervalMs = LONG_JOB_POLLING_INITIAL_INTERVAL_MS;
+  autoRefreshFailureCount = 0;
   searchAbortController = null;
   selectionAbortController = null;
   storageAbortController = null;
@@ -982,6 +1004,15 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     });
   }
 
+  _longJobPollingTimeoutMinutes() {
+    return boundedNumber(
+      this.selectedDiagnostics?.admin_polling?.long_job_timeout_minutes,
+      DEFAULT_LONG_JOB_POLLING_TIMEOUT_MINUTES,
+      MIN_LONG_JOB_POLLING_TIMEOUT_MINUTES,
+      MAX_LONG_JOB_POLLING_TIMEOUT_MINUTES
+    );
+  }
+
   _shouldAutoRefreshSelected() {
     if (!this.selectedPublicId || this.isLoadingSelection || this.isSearching) {
       return false;
@@ -989,7 +1020,7 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
 
     const diagnostics = this.selectedDiagnostics || {};
     const mediaStatus = String(diagnostics?.status || this.selectedItem?.status || "");
-    if (["queued", "processing"].includes(mediaStatus)) {
+    if (LONG_JOB_ACTIVE_MEDIA_STATUSES.includes(mediaStatus)) {
       return true;
     }
 
@@ -997,27 +1028,41 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       diagnostics?.migration_copy?.status,
       diagnostics?.migration_cleanup?.status,
       diagnostics?.migration_finalize?.status,
+      diagnostics?.migration_verify?.status,
     ].filter(Boolean);
 
-    return activeStatuses.some((status) => ["queued", "copying", "cleaning", "pending_cleanup"].includes(String(status)));
+    return activeStatuses.some((status) => MIGRATION_LONG_JOB_ACTIVE_STATUSES.includes(String(status)));
   }
 
   _startAutoRefresh() {
-    if (this.autoRefreshTimer) {
+    const publicId = this.selectedPublicId;
+    if (!publicId || !this._shouldAutoRefreshSelected()) {
       return;
     }
 
-    this.autoRefreshTimer = window.setInterval(() => {
-      this._pollSelected();
-    }, this.autoRefreshIntervalMs);
+    if (this.autoRefreshPublicId === publicId) {
+      return;
+    }
+
+    this._stopAutoRefresh();
+    const pollRunId = ++this.autoRefreshRunId;
+    this.autoRefreshPublicId = publicId;
+    this.autoRefreshStartedAt = Date.now();
+    this.autoRefreshIntervalMs = LONG_JOB_POLLING_INITIAL_INTERVAL_MS;
+    this.autoRefreshFailureCount = 0;
+    this._scheduleAutoRefreshPoll(pollRunId, this.autoRefreshIntervalMs);
   }
 
   _stopAutoRefresh() {
+    this.autoRefreshRunId += 1;
     if (this.autoRefreshTimer) {
-      window.clearInterval(this.autoRefreshTimer);
-      this.autoRefreshTimer = null;
-      this.autoRefreshSearchCounter = 0;
+      window.clearTimeout(this.autoRefreshTimer);
     }
+    this.autoRefreshTimer = null;
+    this.autoRefreshPublicId = "";
+    this.autoRefreshStartedAt = 0;
+    this.autoRefreshIntervalMs = LONG_JOB_POLLING_INITIAL_INTERVAL_MS;
+    this.autoRefreshFailureCount = 0;
   }
 
   _syncAutoRefresh() {
@@ -1028,10 +1073,37 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
   }
 
-  async _pollSelected() {
+  _scheduleAutoRefreshPoll(pollRunId, intervalMs) {
+    if (pollRunId !== this.autoRefreshRunId || !this.autoRefreshPublicId) {
+      return;
+    }
+
+    if (this.autoRefreshTimer) {
+      window.clearTimeout(this.autoRefreshTimer);
+    }
+
+    this.autoRefreshTimer = window.setTimeout(() => {
+      this.autoRefreshTimer = null;
+      this._pollSelected(pollRunId);
+    }, intervalMs);
+  }
+
+  async _pollSelected(pollRunId) {
+    const publicId = this.autoRefreshPublicId;
+    if (pollRunId !== this.autoRefreshRunId || !publicId || this.selectedPublicId !== publicId) {
+      return;
+    }
+
+    if (Date.now() - this.autoRefreshStartedAt >= this._longJobPollingTimeoutMinutes() * 60 * 1000) {
+      if (this._shouldAutoRefreshSelected()) {
+        this.selectedError = `Automatic migration status refresh stopped after ${this._longJobPollingTimeoutMinutes()} minute(s). The background job may still be running; use Refresh or check Background jobs.`;
+      }
+      this._stopAutoRefresh();
+      return;
+    }
+
     if (
       document?.visibilityState === "hidden" ||
-      !this.selectedPublicId ||
       this.isLoadingSelection ||
       this.isCopying ||
       this.isSwitching ||
@@ -1040,10 +1112,52 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
       this.isRollingBack ||
       this.isFinalizing
     ) {
+      this._scheduleAutoRefreshPoll(pollRunId, this.autoRefreshIntervalMs);
       return;
     }
 
-    await this.refreshSelected({ preserveMessages: true, includeSearchRefresh: false, updateResults: false });
+    if (!this._shouldAutoRefreshSelected()) {
+      this._stopAutoRefresh();
+      return;
+    }
+
+    try {
+      await this.refreshSelected({
+        preserveMessages: true,
+        includeSearchRefresh: false,
+        updateResults: false,
+        ensurePolling: false,
+        throwOnError: true,
+      });
+      this.autoRefreshFailureCount = 0;
+    } catch (e) {
+      if (pollRunId !== this.autoRefreshRunId || this.selectedPublicId !== publicId) {
+        return;
+      }
+
+      this.autoRefreshFailureCount += 1;
+      if (this.autoRefreshFailureCount >= LONG_JOB_POLLING_MAX_REFRESH_FAILURES) {
+        const lastError = e?.message || String(e || "unknown error");
+        this.selectedError = `Automatic migration status refresh stopped after ${this.autoRefreshFailureCount} failed attempts. The background job may still be running; use Refresh or check Background jobs. Last error: ${lastError}`;
+        this._stopAutoRefresh();
+        return;
+      }
+    }
+
+    if (pollRunId !== this.autoRefreshRunId || this.selectedPublicId !== publicId) {
+      return;
+    }
+
+    if (!this._shouldAutoRefreshSelected()) {
+      this._stopAutoRefresh();
+      return;
+    }
+
+    this.autoRefreshIntervalMs = Math.min(
+      Math.round(this.autoRefreshIntervalMs * 1.35),
+      LONG_JOB_POLLING_MAX_INTERVAL_MS
+    );
+    this._scheduleAutoRefreshPoll(pollRunId, this.autoRefreshIntervalMs);
   }
 
 
@@ -1449,6 +1563,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     const preserveMessages = !!options.preserveMessages;
     const includeSearchRefresh = !!options.includeSearchRefresh;
     const updateResults = options.updateResults !== false;
+    const ensurePolling = options.ensurePolling !== false;
+    const throwOnError = !!options.throwOnError;
 
     this.isLoadingSelection = true;
     if (!preserveMessages) {
@@ -1486,12 +1602,17 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
         return;
       }
       this.selectedError = e?.message || String(e);
+      if (throwOnError) {
+        throw e;
+      }
     } finally {
       if (this.selectionAbortController === controller) {
         this.selectionAbortController = null;
       }
       this.isLoadingSelection = false;
-      this._syncAutoRefresh();
+      if (ensurePolling) {
+        this._syncAutoRefresh();
+      }
     }
   }
 
