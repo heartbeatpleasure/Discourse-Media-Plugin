@@ -9,6 +9,28 @@ function formatNumber(value) {
   return new Intl.NumberFormat().format(number);
 }
 
+function formatDateTime(value) {
+  if (!value) {
+    return null;
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function titleize(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function statusClass(group) {
   switch (String(group || "")) {
     case "active":
@@ -48,13 +70,38 @@ function progressLabel(progress) {
 }
 
 function compactRow(row) {
+  const group = row?.group;
+  const primaryUrl =
+    group === "migration"
+      ? row?.migrations_url
+      : group === "forensics"
+        ? row?.forensics_url
+        : group === "test_download"
+          ? row?.test_downloads_url
+          : row?.management_url;
+  const primaryLabel =
+    group === "migration"
+      ? "Open migration"
+      : group === "forensics"
+        ? "Open identify"
+        : group === "test_download"
+          ? "Open test downloads"
+          : "Open management";
+  const secondaryUrl =
+    primaryUrl !== row?.management_url && row?.management_url ? row.management_url : null;
+
   return {
     ...row,
     statusClass: statusClass(row?.status_group),
+    statusLabel: row?.status_label || titleize(row?.status),
     progressLabel: progressLabel(row?.progress),
     titleLabel: row?.title || row?.public_id || row?.operation || "Untitled job",
     itemMeta: [row?.public_id, row?.media_type, row?.username].filter(Boolean).join(" • "),
-    routeUrl: row?.group === "migration" ? row?.migrations_url : row?.management_url,
+    updatedAtDisplay: formatDateTime(row?.updated_at),
+    primaryUrl,
+    primaryLabel,
+    secondaryUrl,
+    secondaryLabel: secondaryUrl ? "Open management" : null,
   };
 }
 
@@ -84,6 +131,7 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
   @tracked limit = "50";
   @tracked error = null;
   @tracked generatedAtLabel = null;
+  @tracked generatedAt = null;
 
   loadModel(data = {}) {
     const filters = data.filters || {};
@@ -93,6 +141,7 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
     this.summary = data.summary || {};
     this.rows = (data.rows || []).map(compactRow);
     this.generatedAtLabel = data.generated_at_label || null;
+    this.generatedAt = data.generated_at || null;
     this.error = data.error || null;
   }
 
@@ -118,6 +167,10 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
 
   get totalCountLabel() {
     return formatNumber(this.summary?.total_count || 0);
+  }
+
+  get generatedAtDisplay() {
+    return formatDateTime(this.generatedAt) || this.generatedAtLabel;
   }
 
   get refreshUrl() {
@@ -154,7 +207,7 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
   get typeLinks() {
     return [
       { value: "all", label: "All job types" },
-      { value: "processing", label: "Processing" },
+      { value: "processing", label: "Media processing" },
       { value: "migration", label: "Migration" },
       { value: "aes", label: "AES / HLS" },
       { value: "forensics", label: "Forensics" },

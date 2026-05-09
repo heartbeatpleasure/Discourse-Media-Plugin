@@ -14,7 +14,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends Disc
       controller._statusPollTimer = null;
     }
 
-    controller.publicId = "";
+    const queryParams = new URLSearchParams(window.location.search);
+    const initialPublicId = (queryParams.get("public_id") || "").trim();
+
+    controller.publicId = initialPublicId;
     controller.file = null;
     controller.sourceUrl = "";
     controller.maxSamples = 60;
@@ -28,7 +31,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends Disc
     controller.statusMessage = "";
     controller.activeTaskId = null;
 
-    controller.searchQuery = "";
+    controller.searchQuery = initialPublicId;
     controller.searchResults = [];
     controller.isSearching = false;
     controller.searchError = "";

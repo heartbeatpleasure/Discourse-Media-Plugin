@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "cgi"
+require "json"
 
 module ::MediaGallery
   # Read-only admin dashboard for Media Gallery background-like operations.
@@ -14,17 +15,18 @@ module ::MediaGallery
     DEFAULT_LIMIT = 50
     MAX_LIMIT = 100
     RECENT_WINDOW_DAYS = 90
+    STALE_FORENSICS_TASK_AFTER = 6.hours
 
     ACTIVE_STATUSES = %w[
-      queued processing copying verifying cleaning pending pending_cleanup switching rolling_back finalizing
+      queued working running processing copying verifying cleaning pending pending_cleanup switching rolling_back finalizing
     ].freeze
-    FAILED_STATUSES = %w[failed error danger].freeze
+    FAILED_STATUSES = %w[failed error danger stale stale_queued stale_working].freeze
     COMPLETED_STATUSES = %w[
-      ready copied verified switched cleaned finalized rolled_back skipped cancelled cleared completed success
+      ready copied verified switched cleaned finalized rolled_back skipped cancelled cleared completed complete success logged
     ].freeze
 
     TYPE_GROUPS = {
-      "processing" => "Processing",
+      "processing" => "Media processing",
       "migration" => "Migration",
       "aes" => "AES / HLS",
       "forensics" => "Forensics",
@@ -36,14 +38,13 @@ module ::MediaGallery
       type_filter = normalize_type(filters[:type])
       limit = normalize_limit(filters[:limit])
 
-      rows = media_item_operation_rows
-      rows.concat(recent_activity_rows)
-      rows = apply_type_filter(rows, type_filter)
-      rows = apply_status_filter(rows, status_filter)
+      all_rows = all_operation_rows
+      status_rows = apply_status_filter(all_rows, status_filter)
+      rows = apply_type_filter(status_rows, type_filter)
       rows = sort_rows(rows)
 
       {
-        summary: summary_for(rows: rows, all_rows: media_item_operation_rows + recent_activity_rows),
+        summary: summary_for(rows: rows, all_rows: all_rows, type_count_rows: status_rows),
         rows: rows.first(limit),
         total_count: rows.length,
         limit: limit,
@@ -78,6 +79,13 @@ module ::MediaGallery
     end
 
     private
+
+    def all_operation_rows
+      rows = media_item_operation_rows
+      rows.concat(forensics_task_rows)
+      rows.concat(recent_activity_rows)
+      rows
+    end
 
     def media_item_operation_rows
       items = candidate_items
@@ -202,6 +210,68 @@ module ::MediaGallery
       }.compact
     end
 
+    def forensics_task_rows
+      return [] unless defined?(::MediaGallery::ForensicsIdentifyTasks)
+
+      root = ::MediaGallery::ForensicsIdentifyTasks.root_path
+      return [] if root.blank? || !Dir.exist?(root)
+
+      Dir.glob(File.join(root, "*", ".task.json"))
+        .sort_by { |path| File.mtime(path) rescue Time.at(0) }
+        .reverse
+        .first(50)
+        .map { |path| forensics_task_row(path) }
+        .compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] jobs dashboard forensics task rows failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def forensics_task_row(path)
+      payload = JSON.parse(File.read(path))
+      task_id = payload["task_id"].to_s.presence || File.basename(File.dirname(path))
+      public_id = payload["public_id"].to_s.presence
+      item = public_id.present? ? ::MediaGallery::MediaItem.find_by(public_id: public_id) : nil
+      raw_status = payload["status"].to_s.presence || "unknown"
+      updated_at = first_present(payload["updated_at"], payload["finished_at"], payload["created_at"], File.mtime(path).utc.iso8601)
+      status = stale_forensics_status(raw_status, updated_at)
+      error = payload["error"].to_s.presence
+
+      detail = if status.to_s.start_with?("stale_")
+        "Task marker still says #{raw_status}, but it has not changed for more than #{(STALE_FORENSICS_TASK_AFTER.to_i / 1.hour.to_i).to_i} hours. Review the identify page or logs before retrying."
+      elsif payload["original_filename"].present?
+        "Input file: #{payload["original_filename"]}"
+      end
+
+      {
+        id: "forensics-task-#{task_id}",
+        state_key: "forensics_task",
+        group: "forensics",
+        group_label: TYPE_GROUPS["forensics"],
+        label: "Forensics identify task",
+        operation: "forensics_identify",
+        status: status,
+        status_group: status_group(status),
+        status_label: status_label(status),
+        original_status: raw_status,
+        title: item&.title.to_s.presence || public_id || "Identify task #{task_id}",
+        public_id: public_id,
+        media_type: item&.media_type.to_s.presence,
+        item_status: item&.status.to_s.presence,
+        username: item&.user&.username,
+        updated_at: updated_at,
+        updated_at_label: time_label(updated_at),
+        detail: detail,
+        error: error,
+        management_url: public_id.present? ? "/admin/plugins/media-gallery-management?public_id=#{CGI.escape(public_id.to_s)}" : nil,
+        forensics_url: public_id.present? ? "/admin/plugins/media-gallery-forensics-identify?public_id=#{CGI.escape(public_id.to_s)}" : "/admin/plugins/media-gallery-forensics-identify",
+        logs_url: public_id.present? ? "/admin/plugins/media-gallery-logs?q=#{CGI.escape(public_id.to_s)}&event_type=forensics_identify&hours=720" : "/admin/plugins/media-gallery-logs?event_type=forensics_identify&hours=720",
+      }.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] jobs dashboard forensics task row failed #{path} #{e.class}: #{e.message}")
+      nil
+    end
+
     def recent_activity_rows
       return [] unless defined?(::MediaGallery::MediaLogEvent) && ::MediaGallery::LogEvents.table_present?
 
@@ -210,7 +280,7 @@ module ::MediaGallery
         .where("created_at >= ?", 7.days.ago)
         .where(patterns.map { "event_type LIKE ?" }.join(" OR "), *patterns.map { |p| "#{p}%" })
         .order(created_at: :desc)
-        .limit(25)
+        .limit(50)
         .to_a
 
       rows.map { |event| log_activity_row(event) }.compact
@@ -222,17 +292,19 @@ module ::MediaGallery
     def log_activity_row(event)
       item = event.media_item
       group = event.event_type.to_s.start_with?("test_download") ? "test_download" : "forensics"
-      status = event.details.is_a?(Hash) ? event.details["result"].to_s.presence : nil
-      status ||= event.severity.to_s == "danger" ? "failed" : "completed"
       public_id = event.media_public_id.presence || item&.public_id
       title = item&.title.to_s.presence || public_id || event.event_type.to_s
+      result = event.details.is_a?(Hash) ? event.details["result"].to_s.presence : nil
+      status = event.severity.to_s == "danger" ? "failed" : "logged"
+      label = group == "test_download" ? "Test download log" : "Forensics identify log"
+      detail = [event.message, result.present? ? "Result: #{result}" : nil].compact.join(" — ")
 
       {
         id: "log-#{event.id}",
         state_key: "log_event",
         group: group,
         group_label: TYPE_GROUPS[group] || group.humanize,
-        label: group == "test_download" ? "Test download activity" : "Forensics identify activity",
+        label: label,
         operation: event.event_type,
         status: status,
         status_group: status_group(status),
@@ -241,11 +313,23 @@ module ::MediaGallery
         public_id: public_id,
         username: event.user&.username,
         updated_at: event.created_at&.iso8601,
-        updated_at_label: event.created_at&.in_time_zone&.strftime("%Y-%m-%d %H:%M:%S"),
-        detail: event.message,
+        updated_at_label: time_label(event.created_at),
+        detail: detail.presence,
         management_url: public_id.present? ? "/admin/plugins/media-gallery-management?public_id=#{CGI.escape(public_id.to_s)}" : nil,
+        forensics_url: group == "forensics" ? (public_id.present? ? "/admin/plugins/media-gallery-forensics-identify?public_id=#{CGI.escape(public_id.to_s)}" : "/admin/plugins/media-gallery-forensics-identify") : nil,
+        test_downloads_url: group == "test_download" ? "/admin/plugins/media-gallery-test-downloads" : nil,
         logs_url: "/admin/plugins/media-gallery-logs?event_type=#{CGI.escape(event.event_type.to_s)}&hours=168",
       }.compact
+    end
+
+    def stale_forensics_status(status, updated_at)
+      normalized = status.to_s.downcase
+      return normalized unless %w[queued working running processing].include?(normalized)
+
+      time = parse_time(updated_at)
+      return normalized if time.blank? || time > STALE_FORENSICS_TASK_AFTER.ago
+
+      "stale_#{normalized}"
     end
 
     def progress_for(state)
@@ -300,25 +384,10 @@ module ::MediaGallery
     end
 
     def sort_rows(rows)
-      rows.sort_by do |row|
-        [status_sort_rank(row[:status_group]), -(parse_time(row[:updated_at])&.to_f || 0)]
-      end
+      rows.sort_by { |row| -(parse_time(row[:updated_at])&.to_f || 0) }
     end
 
-    def status_sort_rank(group)
-      case group.to_s
-      when "active"
-        0
-      when "failed"
-        1
-      when "other"
-        2
-      else
-        3
-      end
-    end
-
-    def summary_for(rows:, all_rows:)
+    def summary_for(rows:, all_rows:, type_count_rows: all_rows)
       active = all_rows.count { |row| row[:status_group].to_s == "active" }
       failed = all_rows.count { |row| row[:status_group].to_s == "failed" }
       completed = all_rows.count { |row| row[:status_group].to_s == "completed" }
@@ -330,7 +399,7 @@ module ::MediaGallery
         visible_count: rows.length,
         total_count: all_rows.length,
         by_type: TYPE_GROUPS.keys.map do |type|
-          { type: type, label: TYPE_GROUPS[type], count: all_rows.count { |row| row[:group].to_s == type } }
+          { type: type, label: TYPE_GROUPS[type], count: type_count_rows.count { |row| row[:group].to_s == type } }
         end,
       }
     end

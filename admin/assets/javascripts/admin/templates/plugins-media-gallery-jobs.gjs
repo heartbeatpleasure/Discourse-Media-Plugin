@@ -260,8 +260,8 @@ export default RouteTemplate(
           <p class="mg-jobs__muted">
             Central read-only overview of Media Gallery processing, migration, AES/HLS, identify, and test-download activity.
           </p>
-          {{#if @controller.generatedAtLabel}}
-            <p class="mg-jobs__meta">Last refreshed: {{@controller.generatedAtLabel}}</p>
+          {{#if @controller.generatedAtDisplay}}
+            <p class="mg-jobs__meta">Last refreshed: {{@controller.generatedAtDisplay}}</p>
           {{/if}}
         </div>
         <div class="mg-jobs__actions">
@@ -288,7 +288,7 @@ export default RouteTemplate(
         <div class="mg-jobs__card">
           <div class="mg-jobs__field-label">Completed</div>
           <div class="mg-jobs__card-value">{{@controller.completedCountLabel}}</div>
-          <p class="mg-jobs__meta">Recent completed/skipped states.</p>
+          <p class="mg-jobs__meta">Recently completed/logged.</p>
         </div>
         <div class="mg-jobs__card">
           <div class="mg-jobs__field-label">Showing</div>
@@ -301,7 +301,7 @@ export default RouteTemplate(
         <div class="mg-jobs__panel-header">
           <div class="mg-jobs__panel-copy">
             <h2>Job types</h2>
-            <p class="mg-jobs__muted">Open a type to filter the list below.</p>
+            <p class="mg-jobs__muted">Open a type to filter the list below. Counts follow the selected status filter.</p>
           </div>
         </div>
         <div class="mg-jobs__type-grid">
@@ -357,14 +357,14 @@ export default RouteTemplate(
                       <div class="mg-jobs__meta">{{row.itemMeta}}</div>
                     {{/if}}
                   </div>
-                  <span class="mg-jobs__badge {{row.statusClass}}">{{row.status_label}}</span>
+                  <span class="mg-jobs__badge {{row.statusClass}}">{{row.statusLabel}}</span>
                 </div>
 
                 <div class="mg-jobs__details">
-                  {{#if row.updated_at_label}}
+                  {{#if row.updatedAtDisplay}}
                     <div class="mg-jobs__detail">
                       <div class="mg-jobs__field-label">Updated</div>
-                      <div class="mg-jobs__detail-value">{{row.updated_at_label}}</div>
+                      <div class="mg-jobs__detail-value">{{row.updatedAtDisplay}}</div>
                     </div>
                   {{/if}}
                   {{#if row.source_profile}}
@@ -391,6 +391,12 @@ export default RouteTemplate(
                       <div class="mg-jobs__detail-value">{{row.current_object}}</div>
                     </div>
                   {{/if}}
+                  {{#if row.detail}}
+                    <div class="mg-jobs__detail">
+                      <div class="mg-jobs__field-label">Details</div>
+                      <div class="mg-jobs__detail-value">{{row.detail}}</div>
+                    </div>
+                  {{/if}}
                   {{#if row.error}}
                     <div class="mg-jobs__detail">
                       <div class="mg-jobs__field-label">Last error</div>
@@ -400,8 +406,11 @@ export default RouteTemplate(
                 </div>
 
                 <div class="mg-jobs__row-actions">
-                  {{#if row.routeUrl}}
-                    <a class="btn btn-small" href={{row.routeUrl}}>Open item</a>
+                  {{#if row.primaryUrl}}
+                    <a class="btn btn-small" href={{row.primaryUrl}}>{{row.primaryLabel}}</a>
+                  {{/if}}
+                  {{#if row.secondaryUrl}}
+                    <a class="btn btn-small" href={{row.secondaryUrl}}>{{row.secondaryLabel}}</a>
                   {{/if}}
                   {{#if row.logs_url}}
                     <a class="btn btn-small" href={{row.logs_url}}>View logs</a>
