@@ -137,6 +137,8 @@ module ::MediaGallery
         task_id: task_id,
         status: "queued",
         status_url: "/admin/plugins/media-gallery/forensics-identify/status/#{task_id}",
+        async_time_budget_minutes: setting_async_identify_time_budget_minutes,
+        polling_timeout_seconds: setting_async_identify_polling_timeout_seconds,
       )
     rescue => e
       debug_id = "mgfiq_#{SecureRandom.hex(6)}"
@@ -162,6 +164,10 @@ module ::MediaGallery
         result: task["result"],
         error: task["error"],
         public_id: task["public_id"],
+        created_at: task["created_at"],
+        updated_at: task["updated_at"],
+        async_time_budget_minutes: setting_async_identify_time_budget_minutes,
+        polling_timeout_seconds: setting_async_identify_polling_timeout_seconds,
       )
     rescue => e
       render json: { ok: false, error: "#{e.class}: #{e.message}", error_class: e.class.name }, status: 404
@@ -444,6 +450,14 @@ module ::MediaGallery
       soft = setting_filemode_soft_time_budget_seconds if soft <= 0
       max_engine = [soft - 1, 1].max
       [v, max_engine].min
+    end
+
+    def setting_async_identify_time_budget_minutes
+      ::MediaGallery::ForensicsIdentifyFileRunner.setting_async_time_budget_minutes
+    end
+
+    def setting_async_identify_polling_timeout_seconds
+      ::MediaGallery::ForensicsIdentifyFileRunner.async_polling_timeout_seconds
     end
 
     def setting_max_source_url_length

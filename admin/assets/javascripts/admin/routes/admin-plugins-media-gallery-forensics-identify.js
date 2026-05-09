@@ -14,7 +14,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends Disc
       controller._searchTimer = null;
     }
 
-    if (controller._statusPollTimer) {
+    if (typeof controller._cancelStatusPoll === "function") {
+      controller._cancelStatusPoll();
+    } else if (controller._statusPollTimer) {
       clearTimeout(controller._statusPollTimer);
       controller._statusPollTimer = null;
     }

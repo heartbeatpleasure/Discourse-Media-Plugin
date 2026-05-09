@@ -9,17 +9,14 @@ module ::MediaGallery
 
     DEFAULT_FILEMODE_SOFT_TIME_BUDGET_SECONDS = 24
     DEFAULT_FILEMODE_ENGINE_TIME_BUDGET_SECONDS = 22
+    DEFAULT_ASYNC_TIME_BUDGET_MINUTES = 30
+    MAX_ASYNC_TIME_BUDGET_MINUTES = 60
+    ASYNC_POLLING_GRACE_SECONDS = 15 * 60
 
     FILEMODE_AUTOCAP_MB_1 = 60
     FILEMODE_AUTOCAP_MB_2 = 120
     FILEMODE_AUTOCAP_MB_3 = 250
 
-    ASYNC_MIN_SOFT_BUDGET_MB_1 = 120
-    ASYNC_MIN_ENGINE_BUDGET_MB_1 = 105
-    ASYNC_MIN_SOFT_BUDGET_MB_2 = 300
-    ASYNC_MIN_ENGINE_BUDGET_MB_2 = 285
-    ASYNC_MIN_SOFT_BUDGET_MB_3 = 420
-    ASYNC_MIN_ENGINE_BUDGET_MB_3 = 390
 
     DEFAULT_POLICY_MIN_USABLE_STRONG = 12
     DEFAULT_POLICY_MIN_MATCH_STRONG = 0.85
@@ -77,6 +74,7 @@ module ::MediaGallery
         max_offset_segments: max_offset,
         configured_filemode_soft_time_budget_seconds: soft_budget,
         configured_filemode_engine_time_budget_seconds: engine_budget,
+        configured_async_time_budget_minutes: async_mode ? setting_async_time_budget_minutes : nil,
         file_size_mb: file_mb,
         max_samples_autocapped: (capped_max_samples != max_samples),
         effective_max_samples: capped_max_samples,
@@ -105,9 +103,9 @@ module ::MediaGallery
             conclusive: false,
             timeout_kind: async_mode ? "filemode_async_soft_budget" : "filemode_soft_budget",
             likely_timeout_layer: async_mode ? "background_job_budget" : "discourse_web_worker_or_reverse_proxy",
-            recommendation: async_mode ? "raise_filemode_budgets" : "raise_filemode_budget_or_infrastructure_timeouts",
+            recommendation: async_mode ? "raise_async_filemode_budget" : "raise_filemode_budget_or_infrastructure_timeouts",
             user_message: if async_mode
-              "Analysis reached the configured background job time limit (soft=#{soft_budget}s, engine=#{engine_budget}s). Increase the file-mode budgets in plugin settings for larger uploads."
+              "Analysis reached the configured background identify time limit (#{setting_async_time_budget_minutes} min; soft=#{soft_budget}s, engine=#{engine_budget}s). Increase the async identify budget in plugin settings if larger uploads need more analysis time."
             else
               "Analysis reached the configured file-mode time limit (soft=#{soft_budget}s, engine=#{engine_budget}s). In production, the Discourse backend timeout is often around 30s; only raise these budgets together with your infrastructure timeouts (for example Unicorn/web worker and any reverse proxy)."
             end,
@@ -154,26 +152,32 @@ module ::MediaGallery
     end
 
     def effective_budgets(file_mb:, async_mode: false)
-      soft = setting_filemode_soft_time_budget_seconds
-      engine = setting_filemode_engine_time_budget_seconds(soft_budget_seconds: soft)
-
       if async_mode
-        if file_mb >= FILEMODE_AUTOCAP_MB_2
-          soft = [soft, ASYNC_MIN_SOFT_BUDGET_MB_2].max
-          engine = [engine, ASYNC_MIN_ENGINE_BUDGET_MB_2].max
-        elsif file_mb >= FILEMODE_AUTOCAP_MB_1
-          soft = [soft, ASYNC_MIN_SOFT_BUDGET_MB_1].max
-          engine = [engine, ASYNC_MIN_ENGINE_BUDGET_MB_1].max
-        end
-
-        if file_mb >= FILEMODE_AUTOCAP_MB_3
-          soft = [soft, ASYNC_MIN_SOFT_BUDGET_MB_3].max
-          engine = [engine, ASYNC_MIN_ENGINE_BUDGET_MB_3].max
-        end
+        soft = setting_async_time_budget_minutes * 60
+        margin = async_engine_safety_margin_seconds(soft)
+        engine = [soft - margin, 1].max
+        return { soft: soft, engine: engine }
       end
 
+      soft = setting_filemode_soft_time_budget_seconds
+      engine = setting_filemode_engine_time_budget_seconds(soft_budget_seconds: soft)
       engine = [engine, [soft - 1, 1].max].min
       { soft: soft, engine: engine }
+    end
+
+    def setting_async_time_budget_minutes
+      v = SiteSetting.media_gallery_forensics_identify_async_time_budget_minutes.to_i
+      v = DEFAULT_ASYNC_TIME_BUDGET_MINUTES if v <= 0
+      [[v, 1].max, MAX_ASYNC_TIME_BUDGET_MINUTES].min
+    end
+
+    def async_polling_timeout_seconds
+      (setting_async_time_budget_minutes * 60) + ASYNC_POLLING_GRACE_SECONDS
+    end
+
+    def async_engine_safety_margin_seconds(soft_budget_seconds)
+      soft = soft_budget_seconds.to_i
+      [[(soft * 0.05).round, 10].max, 60].min
     end
 
     def setting_filemode_soft_time_budget_seconds
@@ -606,7 +610,7 @@ module ::MediaGallery
           meta["conclusive"] = false
           meta["timeout_kind"] ||= "filemode_engine_budget"
           meta["likely_timeout_layer"] ||= meta["async_mode"] ? "background_job_budget" : "plugin_budget_before_full_signal"
-          meta["recommendation"] = meta["async_mode"] ? "raise_filemode_budgets" : "raise_filemode_budget_or_infrastructure_timeouts"
+          meta["recommendation"] = meta["async_mode"] ? "raise_async_filemode_budget" : "raise_filemode_budget_or_infrastructure_timeouts"
           meta["user_message"] ||= begin
             msg = "Analysis stopped before enough watermark signal was accumulated"
             parts = []
@@ -614,7 +618,7 @@ module ::MediaGallery
             parts << "soft=#{soft_budget.to_i}s" if soft_budget > 0
             msg += " (#{parts.join(', ')})" if parts.present?
             msg + if meta["async_mode"]
-              ". This more often points to a configured job limit than to a wrong public_id. Increase the file-mode budgets in plugin settings for larger uploads."
+              ". This more often points to a configured job limit than to a wrong public_id. Increase the async identify budget in plugin settings for larger uploads."
             else
               ". This more often points to a timeout than to a wrong public_id. Increase the file-mode budgets in plugin settings first; only go towards ~30s or higher if you also increase the Discourse/web-worker timeout and any reverse-proxy timeout."
             end

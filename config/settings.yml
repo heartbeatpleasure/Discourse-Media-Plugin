@@ -1071,6 +1071,15 @@ plugins:
     max: 600
     client: false
 
+  # Background queued file-upload identify can safely run longer than the synchronous
+  # identify route because the web request returns immediately and the admin UI polls status.
+  media_gallery_forensics_identify_async_time_budget_minutes:
+    default: 30
+    type: integer
+    min: 1
+    max: 60
+    client: false
+
   # When URL-mode is used, we remux only a short sample locally before running identify.
   media_gallery_forensics_identify_max_url_sample_seconds:
     default: 1800

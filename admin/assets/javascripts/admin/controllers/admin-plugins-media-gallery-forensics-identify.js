@@ -25,6 +25,13 @@ function titleize(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+const IDENTIFY_STATUS_POLL_INITIAL_DELAY_MS = 1000;
+const IDENTIFY_STATUS_POLL_INITIAL_INTERVAL_MS = 1500;
+const IDENTIFY_STATUS_POLL_MAX_INTERVAL_MS = 15000;
+const IDENTIFY_STATUS_POLL_BACKOFF_FACTOR = 1.35;
+const IDENTIFY_STATUS_POLL_MAX_CONSECUTIVE_ERRORS = 5;
+const IDENTIFY_STATUS_POLL_DEFAULT_TIMEOUT_MS = 45 * 60 * 1000;
+
 function hlsReady(item) {
   return !!(
     item?.hls_ready ||
@@ -239,6 +246,13 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked preflightResult = null;
   @tracked isPreflighting = false;
   @tracked activeTaskId = null;
+
+  _statusPollTimer = null;
+  _statusPollRunId = 0;
+  _statusPollStartedAt = 0;
+  _statusPollIntervalMs = IDENTIFY_STATUS_POLL_INITIAL_INTERVAL_MS;
+  _statusPollTimeoutMs = IDENTIFY_STATUS_POLL_DEFAULT_TIMEOUT_MS;
+  _statusPollConsecutiveErrors = 0;
 
   // Overlay/session code lookup (fed from the main search bar)
   @tracked lookupMatches = [];
@@ -856,6 +870,16 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return Number.isFinite(f) ? f : null;
   }
 
+  get configuredAsyncTimeBudgetMinutes() {
+    const v = this.meta?.configured_async_time_budget_minutes;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get asyncMode() {
+    return this.meta?.async_mode === true;
+  }
+
   get timeoutKind() {
     return this.meta?.timeout_kind || "";
   }
@@ -1315,10 +1339,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     this.statusMessage = "";
     this.preflightResult = null;
     this.activeTaskId = null;
-    if (this._statusPollTimer) {
-      clearTimeout(this._statusPollTimer);
-      this._statusPollTimer = null;
-    }
+    this._cancelStatusPoll();
     this.result = null;
     this.resultJson = "";
   }
@@ -1396,18 +1417,84 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return `HTTP ${response.status}`;
   }
 
-  _scheduleStatusPoll(statusUrl) {
+  _cancelStatusPoll() {
+    this._statusPollRunId += 1;
+
+    if (this._statusPollTimer) {
+      clearTimeout(this._statusPollTimer);
+      this._statusPollTimer = null;
+    }
+
+    this._statusPollStartedAt = 0;
+    this._statusPollIntervalMs = IDENTIFY_STATUS_POLL_INITIAL_INTERVAL_MS;
+    this._statusPollTimeoutMs = IDENTIFY_STATUS_POLL_DEFAULT_TIMEOUT_MS;
+    this._statusPollConsecutiveErrors = 0;
+  }
+
+  _startStatusPoll(statusUrl, options = {}) {
+    if (!statusUrl) {
+      return;
+    }
+
+    this._cancelStatusPoll();
+    const runId = this._statusPollRunId;
+    this._statusPollStartedAt = Date.now();
+    this._statusPollIntervalMs = IDENTIFY_STATUS_POLL_INITIAL_INTERVAL_MS;
+    this._statusPollConsecutiveErrors = 0;
+
+    const pollingTimeoutSeconds = parseInt(options?.pollingTimeoutSeconds, 10);
+    this._statusPollTimeoutMs = Number.isFinite(pollingTimeoutSeconds) && pollingTimeoutSeconds > 0
+      ? pollingTimeoutSeconds * 1000
+      : IDENTIFY_STATUS_POLL_DEFAULT_TIMEOUT_MS;
+
+    this._scheduleStatusPoll(statusUrl, runId, IDENTIFY_STATUS_POLL_INITIAL_DELAY_MS);
+  }
+
+  _scheduleStatusPoll(statusUrl, runId, delayMs = null) {
+    if (runId !== this._statusPollRunId) {
+      return;
+    }
+
     if (this._statusPollTimer) {
       clearTimeout(this._statusPollTimer);
     }
 
+    const delay = Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : this._statusPollIntervalMs;
     this._statusPollTimer = setTimeout(() => {
       this._statusPollTimer = null;
-      this._pollStatus(statusUrl);
-    }, 1500);
+      this._pollStatus(statusUrl, runId);
+    }, delay);
   }
 
-  async _pollStatus(statusUrl) {
+  _advanceStatusPollInterval() {
+    this._statusPollIntervalMs = Math.min(
+      IDENTIFY_STATUS_POLL_MAX_INTERVAL_MS,
+      Math.ceil(this._statusPollIntervalMs * IDENTIFY_STATUS_POLL_BACKOFF_FACTOR)
+    );
+  }
+
+  _statusPollingTimedOut() {
+    return this._statusPollStartedAt > 0 && Date.now() - this._statusPollStartedAt >= this._statusPollTimeoutMs;
+  }
+
+  _formatPollingTimeoutMinutes() {
+    const minutes = Math.max(1, Math.round(this._statusPollTimeoutMs / 60000));
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+
+  async _pollStatus(statusUrl, runId) {
+    if (runId !== this._statusPollRunId) {
+      return;
+    }
+
+    if (this._statusPollingTimedOut()) {
+      this.error = `Automatic status refresh stopped after ${this._formatPollingTimeoutMinutes()}. The background analysis may still be running; refresh the page or check Background jobs to verify the final status.`;
+      this.statusMessage = "";
+      this.isRunning = false;
+      this._cancelStatusPoll();
+      return;
+    }
+
     try {
       const response = await fetch(statusUrl, {
         method: "GET",
@@ -1417,21 +1504,27 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
       if (!response.ok) {
         const err = await this._extractError(response);
-        this.error = `HTTP ${response.status}: ${err}`;
-        this.statusMessage = "";
-        this.isRunning = false;
-        return;
+        throw new Error(`HTTP ${response.status}: ${err}`);
       }
 
       const json = await response.json();
       const status = json?.status || "queued";
       this.activeTaskId = json?.task_id || this.activeTaskId;
+      this._statusPollConsecutiveErrors = 0;
+
+      if (json?.polling_timeout_seconds) {
+        const pollingTimeoutSeconds = parseInt(json.polling_timeout_seconds, 10);
+        if (Number.isFinite(pollingTimeoutSeconds) && pollingTimeoutSeconds > 0) {
+          this._statusPollTimeoutMs = pollingTimeoutSeconds * 1000;
+        }
+      }
 
       if (status === "complete") {
         this.result = json?.result || null;
         this.resultJson = this.result ? JSON.stringify(this.result, null, 2) : "";
         this.statusMessage = "Background analysis completed.";
         this.isRunning = false;
+        this._cancelStatusPoll();
         return;
       }
 
@@ -1439,15 +1532,32 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
         this.error = json?.error || "Background analysis failed.";
         this.statusMessage = "";
         this.isRunning = false;
+        this._cancelStatusPoll();
         return;
       }
 
       this.statusMessage = status === "working" ? "Background analysis running…" : "Background analysis queued…";
-      this._scheduleStatusPoll(statusUrl);
+      this._advanceStatusPollInterval();
+      this._scheduleStatusPoll(statusUrl, runId);
     } catch (e) {
-      this.error = e?.message || String(e);
-      this.statusMessage = "";
-      this.isRunning = false;
+      if (runId !== this._statusPollRunId) {
+        return;
+      }
+
+      this._statusPollConsecutiveErrors += 1;
+      const message = e?.message || String(e);
+
+      if (this._statusPollConsecutiveErrors >= IDENTIFY_STATUS_POLL_MAX_CONSECUTIVE_ERRORS) {
+        this.error = `Automatic status refresh stopped after ${this._statusPollConsecutiveErrors} consecutive errors: ${message}. The background analysis may still be running; refresh the page or check Background jobs to verify the final status.`;
+        this.statusMessage = "";
+        this.isRunning = false;
+        this._cancelStatusPoll();
+        return;
+      }
+
+      this.statusMessage = `Temporary status refresh issue; retrying (${this._statusPollConsecutiveErrors}/${IDENTIFY_STATUS_POLL_MAX_CONSECUTIVE_ERRORS})…`;
+      this._advanceStatusPollInterval();
+      this._scheduleStatusPoll(statusUrl, runId);
     }
   }
 
@@ -1576,7 +1686,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
           return;
         }
 
-        this._scheduleStatusPoll(statusUrl);
+        this._startStatusPoll(statusUrl, {
+          pollingTimeoutSeconds: json?.polling_timeout_seconds,
+        });
         return;
       }
 

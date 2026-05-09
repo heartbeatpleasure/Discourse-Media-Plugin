@@ -1258,7 +1258,7 @@ export default RouteTemplate(
                 <div><strong>Attempts:</strong> {{@controller.attempts}} {{#if @controller.autoExtended}}<span class="mg-fi__muted">(auto-extended)</span>{{/if}} {{#if @controller.maxSamplesUsed}}<span class="mg-fi__muted">(max {{@controller.maxSamplesUsed}})</span>{{/if}}</div>
               {{/if}}
               {{#if @controller.configuredFilemodeSoftBudgetSeconds}}
-                <div><strong>File-mode budgets:</strong> soft {{@controller.configuredFilemodeSoftBudgetSeconds}}s {{#if @controller.configuredFilemodeEngineBudgetSeconds}}<span class="mg-fi__muted">/ engine {{@controller.configuredFilemodeEngineBudgetSeconds}}s</span>{{/if}}</div>
+                <div><strong>{{if @controller.asyncMode "Background upload budget" "File-mode budgets"}}:</strong> {{#if @controller.configuredAsyncTimeBudgetMinutes}}async {{@controller.configuredAsyncTimeBudgetMinutes}} min <span class="mg-fi__muted">/</span> {{/if}}soft {{@controller.configuredFilemodeSoftBudgetSeconds}}s {{#if @controller.configuredFilemodeEngineBudgetSeconds}}<span class="mg-fi__muted">/ engine {{@controller.configuredFilemodeEngineBudgetSeconds}}s</span>{{/if}}</div>
               {{/if}}
               {{#if @controller.timeoutKind}}
                 <div><strong>Timeout kind:</strong> {{@controller.timeoutKind}} {{#if @controller.likelyTimeoutLayer}}<span class="mg-fi__muted">({{@controller.likelyTimeoutLayer}})</span>{{/if}}</div>
