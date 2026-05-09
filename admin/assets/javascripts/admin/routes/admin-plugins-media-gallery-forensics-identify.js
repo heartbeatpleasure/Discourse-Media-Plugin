@@ -1,6 +1,11 @@
 import DiscourseRoute from "discourse/routes/discourse";
 
 export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends DiscourseRoute {
+  beforeModel(transition) {
+    super.beforeModel?.(...arguments);
+    this._mediaGalleryQueryParams = transition?.to?.queryParams || {};
+  }
+
   setupController(controller) {
     super.setupController(...arguments);
 
@@ -14,10 +19,12 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends Disc
       controller._statusPollTimer = null;
     }
 
-    const queryParams = new URLSearchParams(window.location.search);
-    const initialPublicId = (queryParams.get("public_id") || "").trim();
+    const pendingParams = this._mediaGalleryQueryParams || {};
+    const browserParams = new URLSearchParams(window.location.search || "");
+    const initialPublicId = String(pendingParams.public_id || browserParams.get("public_id") || "").trim();
+    const initialQuery = String(pendingParams.q || browserParams.get("q") || initialPublicId || "").trim();
 
-    controller.publicId = initialPublicId;
+    controller.publicId = initialPublicId || initialQuery;
     controller.file = null;
     controller.sourceUrl = "";
     controller.maxSamples = 60;
@@ -31,7 +38,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends Disc
     controller.statusMessage = "";
     controller.activeTaskId = null;
 
-    controller.searchQuery = initialPublicId;
+    controller.searchQuery = initialQuery;
     controller.searchResults = [];
     controller.isSearching = false;
     controller.searchError = "";

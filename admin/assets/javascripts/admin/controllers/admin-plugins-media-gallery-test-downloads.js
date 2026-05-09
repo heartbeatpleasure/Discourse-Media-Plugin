@@ -311,13 +311,27 @@ export default class AdminPluginsMediaGalleryTestDownloadsController extends Con
     }));
   }
 
-  async loadInitialResults() {
+  async loadInitialResults(initialQueryParams = {}) {
     if (this._didInitialLoad) {
       return;
     }
 
+    const browserParams = new URLSearchParams(window.location?.search || "");
+    const q = String(initialQueryParams?.q || browserParams.get("q") || "").trim();
+    const publicId = String(initialQueryParams?.public_id || browserParams.get("public_id") || q || "").trim();
+    if (q || publicId) {
+      this.searchQuery = q || publicId;
+      this.publicId = publicId || q;
+    }
+
     this._didInitialLoad = true;
     await this.search();
+    if (this.publicId && !this.selectedItem) {
+      const exact = (this.searchResults || []).find((item) => item?.public_id === this.publicId) || null;
+      if (exact) {
+        await this._selectPublicId(this.publicId, exact);
+      }
+    }
   }
 
   @action

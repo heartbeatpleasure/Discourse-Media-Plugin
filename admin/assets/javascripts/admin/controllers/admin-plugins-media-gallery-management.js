@@ -585,18 +585,19 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.confirmResolver = null;
   }
 
-  async loadInitial() {
-    this.applyInitialQueryState();
+  async loadInitial(initialQueryParams = {}) {
+    this.applyInitialQueryState(initialQueryParams);
     await this.search();
     if (this.selectedPublicId) {
       await this.refreshSelected();
     }
   }
 
-  applyInitialQueryState() {
-    const params = new URLSearchParams(window.location?.search || "");
-    const publicId = String(params.get("public_id") || "").trim();
-    const query = String(params.get("q") || publicId || "").trim();
+  applyInitialQueryState(initialQueryParams = {}) {
+    const browserParams = new URLSearchParams(window.location?.search || "");
+    const getParam = (key) => initialQueryParams?.[key] ?? browserParams.get(key);
+    const publicId = String(getParam("public_id") || "").trim();
+    const query = String(getParam("q") || publicId || "").trim();
 
     if (query) {
       this.searchQuery = query;
@@ -605,18 +606,19 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       this.selectedPublicId = publicId;
     }
 
-    const userId = String(params.get("user_id") || "").replace(/\D/g, "").slice(0, 20);
+    const userId = String(getParam("user_id") || "").replace(/\D/g, "").slice(0, 20);
     if (userId) {
       this.userIdFilter = userId;
     }
 
-    const mediaType = String(params.get("media_type") || "").trim();
+    const mediaType = String(getParam("media_type") || "").trim();
     if (["audio", "image", "video"].includes(mediaType)) {
       this.mediaTypeFilter = mediaType;
     }
   }
 
   willDestroy() {
+    this.backfillPollRunId += 1;
     this.searchAbortController?.abort?.();
     this.selectionAbortController?.abort?.();
     super.willDestroy(...arguments);
@@ -2255,9 +2257,12 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   async _pollBackfillStatus(publicId, pollRunId) {
-    const intervals = [800, 1200, 1800, 2500, 3500, 5000, 7000, 10000];
+    const maxDurationMs = 45 * 60 * 1000;
+    const maxIntervalMs = 15000;
+    const startedAt = Date.now();
+    let interval = 800;
 
-    for (const interval of intervals) {
+    while (Date.now() - startedAt < maxDurationMs) {
       if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
         return;
       }
@@ -2287,6 +2292,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       } catch {
         return;
       }
+
+      interval = Math.min(Math.round(interval * 1.35), maxIntervalMs);
     }
   }
 
@@ -2302,9 +2309,12 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   }
 
   async _pollClearRollbackStatus(publicId, pollRunId) {
-    const intervals = [800, 1200, 1800, 2500, 3500, 5000, 7000, 10000];
+    const maxDurationMs = 45 * 60 * 1000;
+    const maxIntervalMs = 15000;
+    const startedAt = Date.now();
+    let interval = 800;
 
-    for (const interval of intervals) {
+    while (Date.now() - startedAt < maxDurationMs) {
       if (pollRunId !== this.backfillPollRunId || this.selectedPublicId !== publicId) {
         return;
       }
@@ -2325,6 +2335,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       } catch {
         return;
       }
+
+      interval = Math.min(Math.round(interval * 1.35), maxIntervalMs);
     }
   }
 

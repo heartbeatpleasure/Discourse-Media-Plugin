@@ -334,10 +334,11 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     this.lastSearchTimingBreakdown = null;
   }
 
-  applyInitialQueryState() {
-    const params = new URLSearchParams(window.location?.search || "");
-    const publicId = String(params.get("public_id") || "").trim();
-    const query = String(params.get("q") || publicId || "").trim();
+  applyInitialQueryState(initialQueryParams = {}) {
+    const browserParams = new URLSearchParams(window.location?.search || "");
+    const getParam = (key) => initialQueryParams?.[key] ?? browserParams.get(key);
+    const publicId = String(getParam("public_id") || "").trim();
+    const query = String(getParam("q") || publicId || "").trim();
 
     if (query) {
       this.searchQuery = query;
@@ -347,8 +348,8 @@ export default class AdminPluginsMediaGalleryMigrationsController extends Contro
     }
   }
 
-  async loadInitial() {
-    this.applyInitialQueryState();
+  async loadInitial(initialQueryParams = {}) {
+    this.applyInitialQueryState(initialQueryParams);
     await this.loadTargetProfiles();
     await this.search();
     if (this.selectedPublicId) {

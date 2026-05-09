@@ -204,8 +204,8 @@ module ::MediaGallery
         current_object: first_present(state["current_key"], state["current_role"], state["current_object"]),
         error: error.to_s.presence,
         error_code: first_present(state["last_error_code"], state["error_code"]),
-        management_url: "/admin/plugins/media-gallery-management?public_id=#{CGI.escape(item.public_id.to_s)}",
-        migrations_url: "/admin/plugins/media-gallery-migrations?public_id=#{CGI.escape(item.public_id.to_s)}",
+        management_url: media_management_url(item.public_id),
+        migrations_url: media_migrations_url(item.public_id),
         logs_url: "/admin/plugins/media-gallery-logs?q=#{CGI.escape(item.public_id.to_s)}&hours=720",
       }.compact
     end
@@ -263,8 +263,8 @@ module ::MediaGallery
         updated_at_label: time_label(updated_at),
         detail: detail,
         error: error,
-        management_url: public_id.present? ? "/admin/plugins/media-gallery-management?public_id=#{CGI.escape(public_id.to_s)}" : nil,
-        forensics_url: public_id.present? ? "/admin/plugins/media-gallery-forensics-identify?public_id=#{CGI.escape(public_id.to_s)}" : "/admin/plugins/media-gallery-forensics-identify",
+        management_url: public_id.present? ? media_management_url(public_id) : nil,
+        forensics_url: public_id.present? ? media_forensics_url(public_id) : "/admin/plugins/media-gallery-forensics-identify",
         logs_url: public_id.present? ? "/admin/plugins/media-gallery-logs?q=#{CGI.escape(public_id.to_s)}&event_type=forensics_identify&hours=720" : "/admin/plugins/media-gallery-logs?event_type=forensics_identify&hours=720",
       }.compact
     rescue => e
@@ -315,11 +315,32 @@ module ::MediaGallery
         updated_at: event.created_at&.iso8601,
         updated_at_label: time_label(event.created_at),
         detail: detail.presence,
-        management_url: public_id.present? ? "/admin/plugins/media-gallery-management?public_id=#{CGI.escape(public_id.to_s)}" : nil,
-        forensics_url: group == "forensics" ? (public_id.present? ? "/admin/plugins/media-gallery-forensics-identify?public_id=#{CGI.escape(public_id.to_s)}" : "/admin/plugins/media-gallery-forensics-identify") : nil,
-        test_downloads_url: group == "test_download" ? "/admin/plugins/media-gallery-test-downloads" : nil,
+        management_url: public_id.present? ? media_management_url(public_id) : nil,
+        forensics_url: group == "forensics" ? (public_id.present? ? media_forensics_url(public_id) : "/admin/plugins/media-gallery-forensics-identify") : nil,
+        test_downloads_url: group == "test_download" ? (public_id.present? ? media_test_downloads_url(public_id) : "/admin/plugins/media-gallery-test-downloads") : nil,
         logs_url: "/admin/plugins/media-gallery-logs?event_type=#{CGI.escape(event.event_type.to_s)}&hours=168",
       }.compact
+    end
+
+
+    def media_management_url(public_id)
+      escaped = CGI.escape(public_id.to_s)
+      "/admin/plugins/media-gallery-management?q=#{escaped}&public_id=#{escaped}"
+    end
+
+    def media_migrations_url(public_id)
+      escaped = CGI.escape(public_id.to_s)
+      "/admin/plugins/media-gallery-migrations?q=#{escaped}&public_id=#{escaped}"
+    end
+
+    def media_forensics_url(public_id)
+      escaped = CGI.escape(public_id.to_s)
+      "/admin/plugins/media-gallery-forensics-identify?q=#{escaped}&public_id=#{escaped}"
+    end
+
+    def media_test_downloads_url(public_id)
+      escaped = CGI.escape(public_id.to_s)
+      "/admin/plugins/media-gallery-test-downloads?q=#{escaped}&public_id=#{escaped}"
     end
 
     def stale_forensics_status(status, updated_at)
