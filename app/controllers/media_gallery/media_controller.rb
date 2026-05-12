@@ -69,14 +69,14 @@ module ::MediaGallery
       items = apply_library_filters(items)
 
       total = items.count
-      items = apply_library_sort(items).offset(offset).limit(per_page)
+      items = apply_library_sort(items).includes(:user).offset(offset).limit(per_page)
 
-      render_json_dump(
-        media_items: serialize_data(items, MediaGallery::MediaItemSerializer, root: false),
-        page: page,
-        per_page: per_page,
-        total: total
-      )
+      render_media_item_list(items: items, page: page, per_page: per_page, total: total)
+    rescue => e
+      Rails.logger.error("[media_gallery] media index failed request_id=#{request.request_id} error=#{e.class}: #{e.message}
+#{e.backtrace&.first(30)&.join("
+")}")
+      render_json_error("media_index_failed", status: 500, message: "Media could not be loaded.")
     end
 
     def my
@@ -88,14 +88,14 @@ module ::MediaGallery
       items = apply_library_filters(items, include_status: true)
 
       total = items.count
-      items = apply_library_sort(items).offset(offset).limit(per_page)
+      items = apply_library_sort(items).includes(:user).offset(offset).limit(per_page)
 
-      render_json_dump(
-        media_items: serialize_data(items, MediaGallery::MediaItemSerializer, root: false),
-        page: page,
-        per_page: per_page,
-        total: total
-      )
+      render_media_item_list(items: items, page: page, per_page: per_page, total: total)
+    rescue => e
+      Rails.logger.error("[media_gallery] my media index failed request_id=#{request.request_id} error=#{e.class}: #{e.message}
+#{e.backtrace&.first(30)&.join("
+")}")
+      render_json_error("media_index_failed", status: 500, message: "Media could not be loaded.")
     end
 
     def create
@@ -2028,6 +2028,148 @@ end
       ).to_s.downcase
 
       query.split(/\s+/).reject(&:blank?).first(10)
+    end
+
+    def render_media_item_list(items:, page:, per_page:, total:)
+      render_json_dump(
+        media_items: media_item_index_payloads(items),
+        page: page,
+        per_page: per_page,
+        total: total
+      )
+    end
+
+    def media_item_index_payloads(items)
+      items.to_a.map { |item| media_item_index_payload(item) }
+    end
+
+    def media_item_index_payload(item)
+      payload = {
+        public_id: safe_media_item_attr(item, :public_id).to_s,
+        title: safe_media_item_attr(item, :title).to_s,
+        description: safe_media_item_attr(item, :description),
+        media_type: safe_media_item_attr(item, :media_type),
+        gender: safe_media_item_attr(item, :gender),
+        tags: media_item_tags_payload(item),
+        duration_seconds: safe_media_item_attr(item, :duration_seconds),
+        width: safe_media_item_attr(item, :width),
+        height: safe_media_item_attr(item, :height),
+        filesize_processed_bytes: safe_media_item_attr(item, :filesize_processed_bytes).to_i,
+        views_count: safe_media_item_attr(item, :views_count).to_i,
+        likes_count: safe_media_item_attr(item, :likes_count).to_i,
+        comments_count: media_item_comments_count_payload(item),
+        last_commented_at: media_item_time_payload(media_item_last_commented_at_payload(item)),
+        created_at: media_item_time_payload(safe_media_item_attr(item, :created_at)),
+        uploader_username: media_item_uploader_username(item),
+        thumbnail_url: "/media/#{safe_media_item_attr(item, :public_id)}/thumbnail",
+        playable: media_item_playable_payload(item),
+        liked: media_item_liked_by_current_user?(item)
+      }
+
+      if media_item_status_visible?(item)
+        payload[:status] = safe_media_item_attr(item, :status).to_s
+        payload[:error_message] = safe_media_item_attr(item, :error_message)
+      end
+
+      payload
+    rescue => e
+      Rails.logger.warn("[media_gallery] media item payload failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
+      {
+        public_id: safe_media_item_attr(item, :public_id).to_s,
+        title: safe_media_item_attr(item, :title).to_s.presence || "Media",
+        description: nil,
+        media_type: safe_media_item_attr(item, :media_type),
+        gender: safe_media_item_attr(item, :gender),
+        tags: [],
+        duration_seconds: nil,
+        width: nil,
+        height: nil,
+        filesize_processed_bytes: 0,
+        views_count: 0,
+        likes_count: 0,
+        comments_count: 0,
+        last_commented_at: nil,
+        created_at: media_item_time_payload(safe_media_item_attr(item, :created_at)),
+        uploader_username: media_item_uploader_username(item),
+        thumbnail_url: "/media/#{safe_media_item_attr(item, :public_id)}/thumbnail",
+        playable: false,
+        liked: false
+      }
+    end
+
+    def safe_media_item_attr(item, attr_name, default = nil)
+      return default if item.blank?
+
+      name = attr_name.to_s
+      if item.respond_to?(:has_attribute?) && item.has_attribute?(name)
+        return item.public_send(attr_name)
+      end
+
+      item.respond_to?(attr_name) ? item.public_send(attr_name) : default
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      default
+    end
+
+    def media_item_tags_payload(item)
+      value = safe_media_item_attr(item, :tags, [])
+      value.is_a?(Array) ? value : []
+    end
+
+    def media_item_time_payload(value)
+      value.respond_to?(:iso8601) ? value.iso8601 : value
+    rescue
+      nil
+    end
+
+    def media_item_uploader_username(item)
+      item&.user&.username
+    rescue => e
+      Rails.logger.debug("[media_gallery] media item uploader payload failed item_id=#{item&.id}: #{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def media_item_playable_payload(item)
+      safe_media_item_attr(item, :status).to_s == "ready" && safe_media_item_attr(item, :filesize_processed_bytes).to_i > 0
+    end
+
+    def media_item_status_visible?(item)
+      return false if current_user.blank?
+
+      current_user.admin? || current_user.staff? || item&.user_id.to_i == current_user.id
+    end
+
+    def media_item_liked_by_current_user?(item)
+      return false if current_user.blank? || item.blank?
+      return false unless defined?(::MediaGallery::MediaLike)
+
+      ::MediaGallery::MediaLike.where(user_id: current_user.id, media_item_id: item.id).exists?
+    rescue ActiveRecord::StatementInvalid, NoMethodError => e
+      Rails.logger.debug("[media_gallery] media item liked payload failed item_id=#{item&.id}: #{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      false
+    end
+
+    def media_item_comments_count_payload(item)
+      if media_item_column_available?("comments_count")
+        return safe_media_item_attr(item, :comments_count, 0).to_i
+      end
+
+      return 0 unless item.respond_to?(:media_comments)
+      item.media_comments.visible.count
+    rescue ActiveRecord::StatementInvalid, ActiveModel::MissingAttributeError, NoMethodError => e
+      Rails.logger.debug("[media_gallery] media item comments_count payload failed item_id=#{item&.id}: #{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      0
+    end
+
+    def media_item_last_commented_at_payload(item)
+      if media_item_column_available?("last_commented_at")
+        return safe_media_item_attr(item, :last_commented_at)
+      end
+
+      return nil unless item.respond_to?(:media_comments)
+      item.media_comments.visible.order(id: :desc).pick(:created_at)
+    rescue ActiveRecord::StatementInvalid, ActiveModel::MissingAttributeError, NoMethodError => e
+      Rails.logger.debug("[media_gallery] media item last_commented_at payload failed item_id=#{item&.id}: #{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
     end
 
     def apply_library_sort(scope)
