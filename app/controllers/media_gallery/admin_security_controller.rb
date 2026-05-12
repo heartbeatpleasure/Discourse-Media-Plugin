@@ -150,6 +150,12 @@ module ::MediaGallery
           "Keep playlist and segment limits above normal playback needs but below abuse-friendly values."
         ),
         control(
+          "HLS anomaly detection",
+          hls_anomaly_control_status,
+          hls_anomaly_control_summary,
+          "Keep this log-only first. Use observed HLS anomaly events to tune thresholds before adding stricter enforcement."
+        ),
+        control(
           "Forensics export lifecycle",
           forensics_lifecycle_status,
           forensics_lifecycle_summary,
@@ -285,6 +291,10 @@ module ::MediaGallery
         hls_playlist_requests_per_token_per_minute: setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute),
         hls_segment_requests_per_token_per_minute: setting_int(:media_gallery_hls_segment_requests_per_token_per_minute),
         hls_key_requests_per_token_per_minute: setting_int(:media_gallery_hls_key_requests_per_token_per_minute),
+        log_hls_anomalies: setting_bool(:media_gallery_log_hls_anomalies),
+        hls_anomaly_playlist_requests_per_token_per_minute: setting_int(:media_gallery_hls_anomaly_playlist_requests_per_token_per_minute),
+        hls_anomaly_segment_requests_per_token_per_minute: setting_int(:media_gallery_hls_anomaly_segment_requests_per_token_per_minute),
+        hls_anomaly_key_requests_per_token_per_minute: setting_int(:media_gallery_hls_anomaly_key_requests_per_token_per_minute),
         hls_aes128_enabled: aes128_enabled,
         hls_aes128_required: aes128_required,
         hls_aes128_key_rotation_segments: setting_int(:media_gallery_hls_aes128_key_rotation_segments),
@@ -613,6 +623,10 @@ module ::MediaGallery
         setting_row(:media_gallery_hls_playlist_requests_per_token_per_minute, "HLS playlist rate limit", recommended: "> 0"),
         setting_row(:media_gallery_hls_segment_requests_per_token_per_minute, "HLS segment rate limit", recommended: "> 0"),
         setting_row(:media_gallery_hls_key_requests_per_token_per_minute, "HLS AES key rate limit", recommended: "> 0"),
+        setting_row(:media_gallery_log_hls_anomalies, "HLS anomaly logging", recommended: "true"),
+        setting_row(:media_gallery_hls_anomaly_playlist_requests_per_token_per_minute, "HLS playlist anomaly threshold", recommended: "observe and tune"),
+        setting_row(:media_gallery_hls_anomaly_segment_requests_per_token_per_minute, "HLS segment anomaly threshold", recommended: "observe and tune"),
+        setting_row(:media_gallery_hls_anomaly_key_requests_per_token_per_minute, "HLS AES key anomaly threshold", recommended: "observe and tune"),
         setting_row(:media_gallery_log_hls_aes128_key_denials, "Log denied HLS AES key requests", recommended: "true during QA, false or monitored in production"),
         setting_row(:media_gallery_forensics_playback_session_retention_days, "Playback-session retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_retention_days, "Export retention", recommended: "90 days or policy"),
@@ -725,6 +739,7 @@ module ::MediaGallery
       counts = rate_limit_tuning_counts(scope)
 
       stream_anomalies = counts["stream_scrape_anomaly"].to_i
+      hls_anomalies = counts["hls_scrape_anomaly"].to_i
       stream_rate_limited = counts["stream_rate_limited"].to_i
       hls_denied = counts["hls_denied"].to_i
       hls_key_denied = hls_key_denied_count(scope)
@@ -738,7 +753,7 @@ module ::MediaGallery
       ].sum { |event_type| counts[event_type].to_i }
 
       enforcement_hits = stream_rate_limited + play_rate_limited + token_session_limits
-      soft_hits = stream_anomalies + hls_denied + hls_key_denied
+      soft_hits = stream_anomalies + hls_anomalies + hls_denied + hls_key_denied
       status =
         if enforcement_hits.positive?
           "attention"
@@ -754,6 +769,7 @@ module ::MediaGallery
         summary: rate_limit_tuning_summary(status),
         rows: [
           tuning_row("stream_anomalies", "Stream anomaly events", stream_anomalies, stream_anomalies.positive? ? "warning" : "ok", "Soft F08 detections. Use these to tune thresholds before enabling hard blocking."),
+          tuning_row("hls_anomalies", "HLS anomaly events", hls_anomalies, hls_anomalies.positive? ? "warning" : "ok", "Soft HLS playlist/segment/key detections. Use these to tune thresholds before enabling stricter HLS policies."),
           tuning_row("stream_rate_limited", "Hard stream rate limits", stream_rate_limited, stream_rate_limited.positive? ? "attention" : "ok", "Requests blocked by /media/stream hard per-token limits."),
           tuning_row("hls_denied", "HLS denied requests", hls_denied, hls_denied.positive? ? "warning" : "ok", "Denied HLS playlist/segment/key requests, including token, policy, readiness or rate-limit denials."),
           tuning_row("hls_key_denied", "HLS AES key denials", hls_key_denied, hls_key_denied.positive? ? "warning" : "ok", "Denied requests to the AES-128 key endpoint. During QA, use this to detect token/session/key-id problems."),
@@ -784,6 +800,7 @@ module ::MediaGallery
     def rate_limit_tuning_counts(scope)
       interesting = %w[
         stream_scrape_anomaly
+        hls_scrape_anomaly
         stream_rate_limited
         hls_denied
         play_rate_limited
@@ -839,10 +856,14 @@ module ::MediaGallery
       hls_playlist = setting_int(:media_gallery_hls_playlist_requests_per_token_per_minute)
       hls_segments = setting_int(:media_gallery_hls_segment_requests_per_token_per_minute)
       hls_keys = setting_int(:media_gallery_hls_key_requests_per_token_per_minute)
+      hls_anomaly_playlist = setting_int(:media_gallery_hls_anomaly_playlist_requests_per_token_per_minute)
+      hls_anomaly_segments = setting_int(:media_gallery_hls_anomaly_segment_requests_per_token_per_minute)
+      hls_anomaly_keys = setting_int(:media_gallery_hls_anomaly_key_requests_per_token_per_minute)
       play_tokens = setting_int(:media_gallery_play_tokens_per_ip_per_minute)
 
       [
         tuning_row("stream_anomaly_thresholds", "Stream anomaly thresholds", "#{anomaly_stream}/#{anomaly_range}", setting_bool(:media_gallery_log_stream_anomalies) ? "ok" : "warning", "Soft logging thresholds: total requests per token/minute and range requests per token/minute."),
+        tuning_row("hls_anomaly_thresholds", "HLS anomaly thresholds", "#{hls_anomaly_playlist}/#{hls_anomaly_segments}/#{hls_anomaly_keys}", setting_bool(:media_gallery_log_hls_anomalies) ? "ok" : "warning", "Soft logging thresholds: playlist/segment/key requests per token per minute."),
         tuning_row("hard_stream_limits", "Hard stream limits", "#{hard_stream}/#{hard_range}", hard_stream.positive? || hard_range.positive? ? "warning" : "info", "Hard blocking limits: total stream requests/minute and range requests/minute. 0 means observe-only for that limit."),
         tuning_row("hls_rate_limits", "HLS rate limits", "#{hls_playlist}/#{hls_segments}", hls_playlist.positive? && hls_segments.positive? ? "ok" : "warning", "Playlist and segment requests allowed per HLS token per minute."),
         tuning_row("hls_key_rate_limit", "HLS AES key rate limit", hls_keys, hls_keys.positive? ? "ok" : "warning", "AES-128 key endpoint requests allowed per HLS token per minute. 0 disables this protection."),
@@ -967,6 +988,7 @@ module ::MediaGallery
         baseline_check("watermark_toggle", "User watermark opt-out", download[:watermark_user_can_toggle] ? "Allowed" : "Blocked", "Blocked for protected content", download[:watermark_user_can_toggle] ? "partial" : "ok", "Protected content is stronger when users cannot disable the visible watermark."),
         baseline_check("fingerprint", "HLS fingerprinting", yes_no(download[:fingerprint_enabled]), "Enabled for protected videos", download[:fingerprint_enabled] ? "ok" : "partial", "A/B HLS fingerprinting helps identify likely recipients of leaked streams."),
         baseline_check("hls_limits", "HLS request rate limits", "playlist #{playlist_limit}/min, segments #{segment_limit}/min, keys #{key_limit}/min", "All > 0", playlist_limit.positive? && segment_limit.positive? && key_limit.positive? ? "ok" : "partial", "Per-token HLS limits make automated playlist, segment and AES-key scraping noisier and easier to detect."),
+        baseline_check("hls_anomaly", "HLS anomaly logging", yes_no(setting_bool(:media_gallery_log_hls_anomalies)), "Enabled", setting_bool(:media_gallery_log_hls_anomalies) ? "ok" : "partial", "Soft log-only HLS anomaly events help tune thresholds and spot segment/key scraping without blocking normal playback."),
         baseline_check("direct_media_navigation", "Block direct media navigation", yes_no(download[:block_direct_media_navigation]), "Enabled", download[:block_direct_media_navigation] ? "ok" : "partial", "Blocks clear address-bar/new-tab navigation to tokenized play/stream/HLS endpoints while allowing normal player requests."),
         baseline_check("extra_media_headers", "Extra media response headers", yes_no(extra_headers_enabled), "Enabled", extra_headers_enabled ? "ok" : "partial", "Adds Referrer-Policy and CORP headers to Rails-served tokenized media responses. Redirect responses only receive Referrer-Policy so redirect/proxy/x-accel modes remain switchable."),
         baseline_check("storage_delivery", "Protected storage delivery mode", "#{active_backend.presence || 'local'} / #{delivery_mode}", "stream/proxy for protected R2 unless redirect is explicitly reviewed", storage_delivery_status(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache), storage_delivery_note(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache)),
@@ -1038,6 +1060,21 @@ module ::MediaGallery
       soft = setting_bool(:media_gallery_log_stream_anomalies) ? "enabled" : "disabled"
       hard = [setting_int(:media_gallery_stream_requests_per_token_per_minute), setting_int(:media_gallery_stream_range_requests_per_token_per_minute)].any?(&:positive?) ? "configured" : "disabled"
       "Soft anomaly logging is #{soft}; hard stream request limits are #{hard}."
+    end
+
+    def hls_anomaly_control_status
+      return "ok" if setting_bool(:media_gallery_log_hls_anomalies)
+      "partial"
+    end
+
+    def hls_anomaly_control_summary
+      soft = setting_bool(:media_gallery_log_hls_anomalies) ? "enabled" : "disabled"
+      thresholds = [
+        setting_int(:media_gallery_hls_anomaly_playlist_requests_per_token_per_minute),
+        setting_int(:media_gallery_hls_anomaly_segment_requests_per_token_per_minute),
+        setting_int(:media_gallery_hls_anomaly_key_requests_per_token_per_minute)
+      ].join("/")
+      "Soft HLS anomaly logging is #{soft}; playlist/segment/key thresholds are #{thresholds} per token per minute."
     end
 
     def forensic_http_policy_control_status
@@ -1193,6 +1230,7 @@ module ::MediaGallery
     def recent_event_counters(scope)
       interesting = %w[
         stream_scrape_anomaly
+        hls_scrape_anomaly
         stream_rate_limited
         hls_denied
         play_rate_limited

@@ -33,6 +33,7 @@ module ::MediaGallery
       enforce_aes128_required!(item, role: role, token: token)
       data = read_master_playlist!(item, role: role)
       data = rewrite_master_playlist(data, public_id: item.public_id, token: token)
+      record_hls_anomaly_signals!(kind: :playlist, token: token, payload: payload, item: item, variant: "master")
 
       set_playlist_headers!
       send_data(data, type: m3u8_content_type, disposition: "inline")
@@ -59,6 +60,7 @@ module ::MediaGallery
       enforce_aes128_required!(item, role: role, token: token)
       data = read_variant_playlist!(item, variant: variant, role: role)
       data = rewrite_variant_playlist(data, item: item, variant: variant, token: token, fingerprint_id: payload["fingerprint_id"], media_item_id: item.id, role: role)
+      record_hls_anomaly_signals!(kind: :playlist, token: token, payload: payload, item: item, variant: variant)
 
       set_playlist_headers!
       send_data(data, type: m3u8_content_type, disposition: "inline")
@@ -110,8 +112,9 @@ module ::MediaGallery
 
       role = hls_role_for(item)
       enforce_aes128_required!(item, role: role, token: token)
-      delivery = resolve_segment_delivery(item, variant: variant, segment: segment, ab: ab, role: role)
+      delivery = resolve_segment_delivery(item, variant: variant, segment: segment, ab: ab, role: role, token: token)
       raise Discourse::NotFound if delivery.blank?
+      record_hls_anomaly_signals!(kind: :segment, token: token, payload: payload, item: item, variant: variant, segment: segment, delivery_mode: delivery[:mode])
 
       set_segment_headers!(segment)
 
@@ -168,6 +171,7 @@ module ::MediaGallery
 
       key_bytes = MediaGallery::HlsAes128.fetch_key_bytes(item: item, key_id: key_id)
       deny!(:hls_aes128_key_missing, token: token) unless MediaGallery::HlsAes128.valid_key_bytes?(key_bytes)
+      record_hls_anomaly_signals!(kind: :key, token: token, payload: payload, item: item, key_id: key_id)
 
       set_key_headers!
       response.headers["Content-Length"] = key_bytes.b.bytesize.to_s
@@ -393,7 +397,7 @@ module ::MediaGallery
       read_local_playlist!(path, cache_kind: "variant:#{variant}")
     end
 
-    def resolve_segment_delivery(item, variant:, segment:, ab:, role: nil)
+    def resolve_segment_delivery(item, variant:, segment:, ab:, role: nil, token: nil)
       if role.present?
         store = hls_store_for(item, role)
         raise Discourse::NotFound if store.blank?
@@ -415,7 +419,8 @@ module ::MediaGallery
                 role: role,
                 expires_in: ttl,
                 response_content_type: content_type,
-                response_content_disposition: "inline"
+                response_content_disposition: hls_presign_content_disposition(segment, token),
+                token: token
               )
             }
           end
@@ -552,7 +557,7 @@ module ::MediaGallery
       raise Discourse::NotFound
     end
 
-    def presigned_hls_segment_url(store, key, item:, role:, expires_in:, response_content_type:, response_content_disposition:)
+    def presigned_hls_segment_url(store, key, item:, role:, expires_in:, response_content_type:, response_content_disposition:, token: nil)
       ttl = hls_s3_presign_cache_seconds(expires_in: expires_in)
       if ttl <= 0
         return store.presigned_get_url(
@@ -564,7 +569,7 @@ module ::MediaGallery
       end
 
       Rails.cache.fetch(
-        hls_cache_key("presigned", item: item, role: role, parts: [key, response_content_type, response_content_disposition, expires_in]),
+        hls_cache_key("presigned", item: item, role: role, parts: [key, response_content_type, response_content_disposition, expires_in, hls_presign_token_cache_scope(token)]),
         expires_in: ttl.seconds
       ) do
         store.presigned_get_url(
@@ -602,6 +607,94 @@ module ::MediaGallery
       ].join("|")
 
       "media_gallery:hls:#{kind}:#{Digest::SHA256.hexdigest(payload)}"
+    end
+
+    def hls_presign_token_cache_scope(token)
+      return "token:none" if token.blank?
+
+      "token_sha256:#{Digest::SHA256.hexdigest(token.to_s)}"
+    rescue
+      "token:error"
+    end
+
+    def hls_presign_content_disposition(segment, token)
+      token_prefix = Digest::SHA256.hexdigest(token.to_s)[0, 12]
+      safe_segment = File.basename(segment.to_s).gsub(/[^A-Za-z0-9.\-_]/, "_")
+      ext = File.extname(safe_segment)
+      base = File.basename(safe_segment, ext).presence || "segment"
+      filename = "#{base}-#{token_prefix}#{ext.presence || '.ts'}"
+      %(inline; filename="#{filename}")
+    rescue
+      "inline"
+    end
+
+    def hls_anomaly_logging_enabled?
+      SiteSetting.respond_to?(:media_gallery_log_hls_anomalies) && SiteSetting.media_gallery_log_hls_anomalies
+    rescue
+      false
+    end
+
+    def record_hls_anomaly_signals!(kind:, token:, payload:, item:, variant: nil, segment: nil, key_id: nil, delivery_mode: nil)
+      return unless hls_anomaly_logging_enabled?
+
+      threshold = hls_anomaly_threshold_for(kind)
+      return if threshold <= 0
+
+      token_ip_digest = hls_token_ip_digest(token)
+      metric = "#{kind}_requests_per_token_per_minute"
+      redis = Discourse.redis
+      minute = Time.now.utc.strftime("%Y%m%d%H%M")
+      key = "media_gallery:hls:anomaly:#{metric}:#{minute}:sha256:#{token_ip_digest}"
+      count = redis.incr(key).to_i
+      redis.expire(key, 2.minutes.to_i)
+
+      # Log once per token/IP/minute when the soft threshold is crossed; do not block playback.
+      return unless count == threshold + 1
+
+      ::MediaGallery::LogEvents.record(
+        event_type: "hls_scrape_anomaly",
+        severity: "warning",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+        fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+        message: metric,
+        details: {
+          metric: metric,
+          count: count,
+          threshold: threshold,
+          endpoint: kind.to_s,
+          public_id: item&.public_id,
+          variant: variant.to_s.presence,
+          segment: segment.to_s.presence,
+          key_id: key_id.to_s.presence,
+          delivery_mode: delivery_mode.to_s.presence,
+          token_kind: payload.is_a?(Hash) ? payload["kind"] : nil,
+          token_sha256: token_sha256_label(token),
+        },
+      )
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS anomaly tracking failed kind=#{kind} request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def hls_anomaly_threshold_for(kind)
+      case kind.to_s
+      when "playlist"
+        site_setting_integer(:media_gallery_hls_anomaly_playlist_requests_per_token_per_minute, default: 60, min: 0, max: 20000)
+      when "key"
+        site_setting_integer(:media_gallery_hls_anomaly_key_requests_per_token_per_minute, default: 30, min: 0, max: 20000)
+      else
+        site_setting_integer(:media_gallery_hls_anomaly_segment_requests_per_token_per_minute, default: 180, min: 0, max: 20000)
+      end
+    end
+
+    def hls_token_ip_digest(token)
+      Digest::SHA256.hexdigest("#{token}|#{request.remote_ip}")
+    rescue
+      Digest::SHA256.hexdigest(token.to_s)
     end
 
     def hls_managed_readiness_cache_seconds

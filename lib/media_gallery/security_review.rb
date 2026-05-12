@@ -84,6 +84,7 @@ module ::MediaGallery
         admin_controllers_require_admin: "implemented",
         stream_requires_logged_in_and_valid_token: "implemented",
         hls_requires_logged_in_and_valid_token: "implemented",
+        hls_anomaly_logging: hls_anomaly_logging_status,
         extra_media_security_response_headers: response_security_headers_status,
         hls_only_video_download_prevention: hls_only_video_status,
         watermark_and_fingerprint_controls: watermark_fingerprint_status,
@@ -104,6 +105,13 @@ module ::MediaGallery
       "unknown"
     end
     private_class_method :hls_only_video_status
+
+    def hls_anomaly_logging_status
+      SiteSetting.respond_to?(:media_gallery_log_hls_anomalies) && SiteSetting.media_gallery_log_hls_anomalies ? "enabled" : "available_but_disabled"
+    rescue
+      "unknown"
+    end
+    private_class_method :hls_anomaly_logging_status
 
     def watermark_fingerprint_status
       watermark = SiteSetting.respond_to?(:media_gallery_watermark_enabled) && SiteSetting.media_gallery_watermark_enabled
@@ -159,6 +167,8 @@ module ::MediaGallery
         s3_presign_ttl_seconds: presign_ttl,
         hls_presign_ttl_seconds: site_setting_int(:media_gallery_hls_s3_presign_ttl_seconds, default: 60),
         hls_presign_cache_seconds: site_setting_int(:media_gallery_hls_s3_presign_cache_seconds, default: 15),
+        hls_presign_cache_scope: "token_sha256",
+        hls_anomaly_logging: hls_anomaly_logging_status,
         rails_media_security_headers: response_security_headers_status,
         expected_delivery_model: expected_delivery_model(active_backend),
         cloudflare_r2_note: active_backend == "s3" ? "For Cloudflare R2, keep the bucket private. CORS matters mainly when using redirect delivery; stream/proxy keeps browser traffic on the forum origin." : nil,

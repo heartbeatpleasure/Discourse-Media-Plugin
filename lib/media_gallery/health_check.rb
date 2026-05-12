@@ -785,6 +785,7 @@ module ::MediaGallery
       active_backend = ::MediaGallery::StorageSettingsResolver.active_backend.to_s.presence || "local"
       delivery_mode = ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s.presence || "stream"
       extra_headers_enabled = setting_bool(:media_gallery_extra_media_security_headers_enabled, true)
+      hls_anomaly_logging_enabled = setting_bool(:media_gallery_log_hls_anomalies, true)
       hls_presign_ttl = setting_int(:media_gallery_hls_s3_presign_ttl_seconds, 60)
       hls_presign_cache = setting_int(:media_gallery_hls_s3_presign_cache_seconds, 15)
 
@@ -798,6 +799,15 @@ module ::MediaGallery
         detail: "This is a low-risk hardening layer for Rails-served media. Disable only if a browser/CDN integration problem appears."
       )
 
+      rows << issue(
+        id: "hls_anomaly_logging",
+        label: "HLS anomaly logging",
+        severity: hls_anomaly_logging_enabled ? "ok" : "warning",
+        count: hls_anomaly_logging_enabled ? 0 : 1,
+        message: hls_anomaly_logging_enabled ? "HLS soft anomaly logging is enabled." : "HLS soft anomaly logging is disabled.",
+        detail: "This is log-only and does not block playback. It helps observe playlist, segment and key request patterns before stricter policies are considered."
+      )
+
       if active_backend == "s3"
         redirect_mode = delivery_mode == "redirect"
         presign_ok = hls_presign_ttl.positive? && hls_presign_ttl <= 120 && hls_presign_cache <= 30
@@ -808,7 +818,7 @@ module ::MediaGallery
           severity: severity,
           count: severity == "ok" ? 0 : 1,
           message: redirect_mode ? "S3/R2 redirect delivery is configured; review CORS and presigned URL windows." : "S3/R2 is configured with #{delivery_mode} delivery.",
-          detail: redirect_mode ? "Use a private bucket, allow only the forum origin in CORS, and keep HLS presigned TTL/cache short. Current HLS TTL #{hls_presign_ttl}s, cache #{hls_presign_cache}s." : "Current stream/proxy-style delivery keeps browser media requests on the forum origin. If you later switch to redirect, review Cloudflare R2 CORS and presigned URL settings first."
+          detail: redirect_mode ? "Use a private bucket, allow only the forum origin in CORS, and keep HLS presigned TTL/cache short. Presigned segment URL caching is scoped by playback token. Current HLS TTL #{hls_presign_ttl}s, cache #{hls_presign_cache}s." : "Current stream/proxy-style delivery keeps browser media requests on the forum origin. If you later switch to redirect, review Cloudflare R2 CORS and presigned URL settings first."
         )
       end
 

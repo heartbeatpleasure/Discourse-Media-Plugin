@@ -626,6 +626,33 @@ plugins:
     max: 20000
     client: false
 
+  # HLS scraping/anomaly controls. These are soft log-only signals and do not
+  # block playback. Tune using Admin > Media Gallery > Security after observing traffic.
+  media_gallery_log_hls_anomalies:
+    default: true
+    client: false
+
+  media_gallery_hls_anomaly_playlist_requests_per_token_per_minute:
+    default: 60
+    type: integer
+    min: 0
+    max: 20000
+    client: false
+
+  media_gallery_hls_anomaly_segment_requests_per_token_per_minute:
+    default: 180
+    type: integer
+    min: 0
+    max: 20000
+    client: false
+
+  media_gallery_hls_anomaly_key_requests_per_token_per_minute:
+    default: 30
+    type: integer
+    min: 0
+    max: 20000
+    client: false
+
   # HLS AES-128 content hardening (iterative rollout).
   # This is not DRM: authorized clients still receive decryption keys for playback.
   # Keep disabled until the packaging pipeline, key storage and key endpoint iterations are complete.
@@ -779,7 +806,8 @@ plugins:
     client: false
 
   # 0 disables presigned segment URL caching. This cache is used only after all
-  # token/session/rate-limit checks pass, and is capped below the presign TTL.
+  # token/session/rate-limit checks pass, is scoped by playback-token digest,
+  # and is capped below the presign TTL.
   media_gallery_hls_s3_presign_cache_seconds:
     default: 15
     type: integer

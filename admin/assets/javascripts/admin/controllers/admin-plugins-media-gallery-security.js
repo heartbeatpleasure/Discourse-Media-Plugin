@@ -720,6 +720,15 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
             : "warning"
         ),
       },
+      {
+        key: "hls_anomalies",
+        label: "HLS anomaly logging",
+        value: this.download?.log_hls_anomalies ? "Enabled" : "Disabled",
+        detail: `Soft thresholds: ${formatNumber(this.download?.hls_anomaly_playlist_requests_per_token_per_minute)} playlist / ${formatNumber(this.download?.hls_anomaly_segment_requests_per_token_per_minute)} segment / ${formatNumber(this.download?.hls_anomaly_key_requests_per_token_per_minute)} key requests per token per minute.`,
+        statusText: this.download?.log_hls_anomalies ? "Observe" : "Off",
+        statusChipClass: statusChipClass(this.download?.log_hls_anomalies ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.download?.log_hls_anomalies ? "ok" : "warning"),
+      },
     ];
   }
 
@@ -934,6 +943,15 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         statusText: this.download?.log_stream_anomalies ? "OK" : "Check",
         statusChipClass: statusChipClass(this.download?.log_stream_anomalies ? "ok" : "warning"),
         statusDotClass: statusDotClass(this.download?.log_stream_anomalies ? "ok" : "warning"),
+      },
+      {
+        key: "hls_soft",
+        label: "HLS anomaly logging",
+        value: this.download?.log_hls_anomalies ? "Enabled" : "Disabled",
+        detail: `Soft thresholds: ${formatNumber(this.download?.hls_anomaly_playlist_requests_per_token_per_minute)} playlist/min, ${formatNumber(this.download?.hls_anomaly_segment_requests_per_token_per_minute)} segments/min, ${formatNumber(this.download?.hls_anomaly_key_requests_per_token_per_minute)} keys/min.`,
+        statusText: this.download?.log_hls_anomalies ? "OK" : "Check",
+        statusChipClass: statusChipClass(this.download?.log_hls_anomalies ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.download?.log_hls_anomalies ? "ok" : "warning"),
       },
       {
         key: "aes_key_logging",
