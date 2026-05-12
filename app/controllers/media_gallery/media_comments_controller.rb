@@ -11,7 +11,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
     before_action :ensure_comments_enabled
     before_action :ensure_can_view
-    before_action :ensure_secure_write_request!, only: [:create, :destroy]
+    before_action :ensure_secure_write_request!, only: [:create, :destroy, :like, :unlike]
 
     def index
       item = find_item_by_public_id!(params[:public_id])
@@ -131,6 +131,65 @@ module ::MediaGallery
       render_json_error("comment_delete_failed", status: 500, message: "Comment could not be deleted.")
     end
 
+    def like
+      item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
+      raise Discourse::NotFound unless item.ready?
+
+      comment = find_visible_comment!(item)
+      return render_json_error("comment_likes_forbidden", status: 403, message: "You are not allowed to like comments.") unless can_like_comment?
+
+      comment.with_lock do
+        existing = ::MediaGallery::MediaCommentLike.find_by(media_comment_id: comment.id, user_id: current_user.id)
+        if existing.blank?
+          ::MediaGallery::MediaCommentLike.create!(
+            media_item_id: item.id,
+            media_comment_id: comment.id,
+            user_id: current_user.id
+          )
+          update_comment_like_counter!(comment)
+        end
+      end
+
+      comment.reload
+      log_comment_event("media_comment_liked", item: item, comment: comment, severity: "info")
+      render_json_dump(ok: true, liked: true, likes_count: comment_likes_count_for(comment))
+    rescue ActiveRecord::RecordNotUnique
+      comment = find_visible_comment!(find_item_by_public_id!(params[:public_id]))
+      render_json_dump(ok: true, liked: true, likes_count: comment_likes_count_for(comment))
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.error("[media_gallery] comment like failed request_id=#{request.request_id} public_id=#{params[:public_id]} comment_id=#{params[:comment_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}")
+      render_json_error("comment_like_failed", status: 500, message: "Comment like could not be updated.")
+    end
+
+    def unlike
+      item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
+      raise Discourse::NotFound unless item.ready?
+
+      comment = find_visible_comment!(item)
+      return render_json_error("comment_likes_forbidden", status: 403, message: "You are not allowed to like comments.") unless can_like_comment?
+
+      comment.with_lock do
+        existing = ::MediaGallery::MediaCommentLike.find_by(media_comment_id: comment.id, user_id: current_user.id)
+        if existing.present?
+          existing.destroy!
+          update_comment_like_counter!(comment)
+        end
+      end
+
+      comment.reload
+      log_comment_event("media_comment_unliked", item: item, comment: comment, severity: "info")
+      render_json_dump(ok: true, liked: false, likes_count: comment_likes_count_for(comment))
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.error("[media_gallery] comment unlike failed request_id=#{request.request_id} public_id=#{params[:public_id]} comment_id=#{params[:comment_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}")
+      render_json_error("comment_like_failed", status: 500, message: "Comment like could not be updated.")
+    end
+
     private
 
     def ensure_plugin_enabled
@@ -185,6 +244,24 @@ module ::MediaGallery
       current_user.staff? || current_user.admin? || comment.user_id == current_user.id
     end
 
+    def can_like_comment?
+      return false if current_user.blank?
+      return false unless SiteSetting.respond_to?(:media_gallery_comment_likes_enabled) && SiteSetting.media_gallery_comment_likes_enabled
+      return false unless comment_like_table_available?
+
+      current_user.trust_level.to_i >= comment_likes_min_trust_level
+    end
+
+    def comment_likes_min_trust_level
+      SiteSetting.respond_to?(:media_gallery_comment_likes_min_trust_level) ? SiteSetting.media_gallery_comment_likes_min_trust_level.to_i : 0
+    end
+
+    def find_visible_comment!(item)
+      comment = item.media_comments.visible.find_by(id: params[:comment_id].to_i)
+      raise Discourse::NotFound if comment.blank?
+      comment
+    end
+
     def comment_max_length
       value = SiteSetting.media_gallery_comments_max_length.to_i
       value.positive? ? [[value, 50].max, 5_000].min : 1_000
@@ -224,6 +301,24 @@ module ::MediaGallery
       item.media_comments.visible.order(id: :desc).pick(:created_at)
     end
 
+    def comment_likes_count_for(comment)
+      if media_comment_column_available?("likes_count")
+        return comment.likes_count.to_i
+      end
+
+      return 0 unless comment_like_table_available?
+
+      comment.media_comment_likes.count
+    rescue ActiveModel::MissingAttributeError, NoMethodError, ActiveRecord::StatementInvalid
+      comment_like_table_available? ? comment.media_comment_likes.count : 0
+    end
+
+    def update_comment_like_counter!(comment)
+      return unless media_comment_column_available?("likes_count")
+
+      comment.update_columns(likes_count: comment.media_comment_likes.count, updated_at: Time.now)
+    end
+
     def update_item_comment_counters!(item, last_comment:)
       updates = { updated_at: Time.now }
       updates[:comments_count] = item.media_comments.visible.count if media_item_column_available?("comments_count")
@@ -236,6 +331,20 @@ module ::MediaGallery
       MediaGallery::MediaItem.columns_hash.key?(column_name.to_s)
     rescue => e
       Rails.logger.warn("[media_gallery] media item column check failed column=#{column_name}: #{e.class}: #{e.message}")
+      false
+    end
+
+    def media_comment_column_available?(column_name)
+      MediaGallery::MediaComment.columns_hash.key?(column_name.to_s)
+    rescue => e
+      Rails.logger.warn("[media_gallery] media comment column check failed column=#{column_name}: #{e.class}: #{e.message}")
+      false
+    end
+
+    def comment_like_table_available?
+      defined?(::MediaGallery::MediaCommentLike) && ::MediaGallery::MediaCommentLike.table_exists?
+    rescue ActiveRecord::StatementInvalid, NoMethodError => e
+      Rails.logger.warn("[media_gallery] media comment like table check failed: #{e.class}: #{e.message}")
       false
     end
 

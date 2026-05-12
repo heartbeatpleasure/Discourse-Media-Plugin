@@ -1364,6 +1364,17 @@ plugins:
     type: string
     client: false
 
+  media_gallery_comment_likes_enabled:
+    default: true
+    client: false
+
+  media_gallery_comment_likes_min_trust_level:
+    default: 0
+    type: integer
+    min: 0
+    max: 4
+    client: false
+
   media_gallery_health_watchdog_enabled:
     default: true
     client: false

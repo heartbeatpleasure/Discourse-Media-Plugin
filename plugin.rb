@@ -92,6 +92,7 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/hls_aes128_key.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_comment.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/media_comment_like.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_fingerprint.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_playback_session.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_overlay_session.rb", __dir__)
@@ -258,6 +259,8 @@ after_initialize do
 
     get "/media/:public_id/comments" => "media_gallery/media_comments#index", defaults: { format: :json }
     post "/media/:public_id/comments" => "media_gallery/media_comments#create", defaults: { format: :json }
+    post "/media/:public_id/comments/:comment_id/like" => "media_gallery/media_comments#like", defaults: { format: :json }
+    post "/media/:public_id/comments/:comment_id/unlike" => "media_gallery/media_comments#unlike", defaults: { format: :json }
     delete "/media/:public_id/comments/:comment_id" => "media_gallery/media_comments#destroy", defaults: { format: :json }
 
     get "/media/:public_id" => "media_gallery/media#show", defaults: { format: :json }

@@ -1549,12 +1549,17 @@ end
     REPORT_AUTO_HIDE_GROUP_SETTING_SEPARATOR = /[\|,\n]/
 
     def media_comments_config_payload
+      comment_likes_enabled = SiteSetting.respond_to?(:media_gallery_comment_likes_enabled) && SiteSetting.media_gallery_comment_likes_enabled && comment_like_table_available?
+      comment_likes_min_trust_level = SiteSetting.respond_to?(:media_gallery_comment_likes_min_trust_level) ? SiteSetting.media_gallery_comment_likes_min_trust_level.to_i : 0
+
       {
         enabled: SiteSetting.respond_to?(:media_gallery_comments_enabled) && SiteSetting.media_gallery_comments_enabled,
         page_size: SiteSetting.respond_to?(:media_gallery_comments_page_size) ? SiteSetting.media_gallery_comments_page_size.to_i : 20,
         max_length: SiteSetting.respond_to?(:media_gallery_comments_max_length) ? SiteSetting.media_gallery_comments_max_length.to_i : 1000,
         can_comment: current_user.present? && current_user.trust_level.to_i >= (SiteSetting.respond_to?(:media_gallery_comments_min_trust_level) ? SiteSetting.media_gallery_comments_min_trust_level.to_i : 0),
         deep_link_path: media_comments_deep_link_path,
+        likes_enabled: comment_likes_enabled,
+        can_like: current_user.present? && comment_likes_enabled && current_user.trust_level.to_i >= comment_likes_min_trust_level,
       }
     end
 
@@ -2067,6 +2072,13 @@ end
       MediaGallery::MediaItem.columns_hash.key?(column_name.to_s)
     rescue => e
       Rails.logger.warn("[media_gallery] media item column check failed column=#{column_name}: #{e.class}: #{e.message}")
+      false
+    end
+
+    def comment_like_table_available?
+      defined?(::MediaGallery::MediaCommentLike) && ::MediaGallery::MediaCommentLike.table_exists?
+    rescue ActiveRecord::StatementInvalid, NoMethodError => e
+      Rails.logger.warn("[media_gallery] media comment like table check failed: #{e.class}: #{e.message}")
       false
     end
 
