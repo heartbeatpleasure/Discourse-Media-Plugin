@@ -1186,6 +1186,11 @@ module ::MediaGallery
       response.headers["Pragma"] = "no-cache"
       response.headers["Expires"] = "0"
       response.headers["X-Content-Type-Options"] = "nosniff"
+      apply_response_security_headers!(include_corp: true)
+    end
+
+    def apply_response_security_headers!(include_corp: true)
+      ::MediaGallery::ResponseSecurityHeaders.apply!(response.headers, include_corp: include_corp)
     end
 
     def ensure_plugin_enabled
@@ -2167,6 +2172,7 @@ end
     def set_thumbnail_cache_headers!(max_age_seconds)
       response.headers["Cache-Control"] = thumbnail_cache_control_header(max_age_seconds)
       response.headers["X-Content-Type-Options"] = "nosniff"
+      apply_response_security_headers!(include_corp: true)
 
       return unless thumbnail_no_store_enabled?
 

@@ -117,6 +117,8 @@ module ::MediaGallery
 
       if delivery[:mode] == :redirect
         response.headers["Cache-Control"] = "no-store"
+        response.headers.delete("Cross-Origin-Resource-Policy")
+        apply_response_security_headers!(include_corp: false)
         return redirect_to(delivery[:redirect_url], allow_other_host: true, status: 307)
       end
 
@@ -261,6 +263,7 @@ module ::MediaGallery
       log_denial!("rate_limited_#{kind}", token: token)
       response.headers["Cache-Control"] = "no-store"
       response.headers["X-Content-Type-Options"] = "nosniff"
+      apply_response_security_headers!(include_corp: true)
       response.headers["Retry-After"] = "60"
       render plain: "rate_limited", status: 429
       false
@@ -654,6 +657,7 @@ module ::MediaGallery
       response.headers["Expires"] = "0"
       response.headers["Vary"] = "Cookie"
       response.headers["X-Content-Type-Options"] = "nosniff"
+      apply_response_security_headers!(include_corp: true)
     end
 
     def set_segment_headers!(segment)
@@ -661,6 +665,7 @@ module ::MediaGallery
       response.headers["Vary"] = "Cookie"
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Content-Type"] = segment_content_type(segment)
+      apply_response_security_headers!(include_corp: true)
     end
 
     def set_key_headers!
@@ -670,6 +675,11 @@ module ::MediaGallery
       response.headers["Vary"] = "Cookie"
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Content-Type"] = "application/octet-stream"
+      apply_response_security_headers!(include_corp: true)
+    end
+
+    def apply_response_security_headers!(include_corp: true)
+      ::MediaGallery::ResponseSecurityHeaders.apply!(response.headers, include_corp: include_corp)
     end
 
     def m3u8_content_type

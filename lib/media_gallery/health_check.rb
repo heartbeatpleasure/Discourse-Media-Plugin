@@ -761,6 +761,7 @@ module ::MediaGallery
       items.concat(group_setting_issues)
       items.concat(url_setting_issues)
       items.concat(mode_setting_issues)
+      items.concat(media_hardening_setting_issues)
 
       items << issue(
         id: "processing_notifications_setting",
@@ -778,6 +779,51 @@ module ::MediaGallery
         help: "These checks find missing groups, invalid modes, and URL settings that would make UI notices or moderation alerts fail.",
         items: items.presence || [issue(id: "settings_ok", label: "Settings", severity: "ok", message: "No obvious configuration issues found.")]
       )
+    end
+
+    def media_hardening_setting_issues
+      active_backend = ::MediaGallery::StorageSettingsResolver.active_backend.to_s.presence || "local"
+      delivery_mode = ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s.presence || "stream"
+      extra_headers_enabled = setting_bool(:media_gallery_extra_media_security_headers_enabled, true)
+      hls_presign_ttl = setting_int(:media_gallery_hls_s3_presign_ttl_seconds, 60)
+      hls_presign_cache = setting_int(:media_gallery_hls_s3_presign_cache_seconds, 15)
+
+      rows = []
+      rows << issue(
+        id: "extra_media_security_headers",
+        label: "Extra media security headers",
+        severity: extra_headers_enabled ? "ok" : "warning",
+        count: extra_headers_enabled ? 0 : 1,
+        message: extra_headers_enabled ? "Tokenized media responses add Referrer-Policy/CORP headers." : "Extra media response headers are disabled.",
+        detail: "This is a low-risk hardening layer for Rails-served media. Disable only if a browser/CDN integration problem appears."
+      )
+
+      if active_backend == "s3"
+        redirect_mode = delivery_mode == "redirect"
+        presign_ok = hls_presign_ttl.positive? && hls_presign_ttl <= 120 && hls_presign_cache <= 30
+        severity = redirect_mode && !presign_ok ? "warning" : "ok"
+        rows << issue(
+          id: "s3_r2_delivery_review",
+          label: "S3/R2 protected delivery review",
+          severity: severity,
+          count: severity == "ok" ? 0 : 1,
+          message: redirect_mode ? "S3/R2 redirect delivery is configured; review CORS and presigned URL windows." : "S3/R2 is configured with #{delivery_mode} delivery.",
+          detail: redirect_mode ? "Use a private bucket, allow only the forum origin in CORS, and keep HLS presigned TTL/cache short. Current HLS TTL #{hls_presign_ttl}s, cache #{hls_presign_cache}s." : "Current stream/proxy-style delivery keeps browser media requests on the forum origin. If you later switch to redirect, review Cloudflare R2 CORS and presigned URL settings first."
+        )
+      end
+
+      rows
+    rescue => e
+      [
+        issue(
+          id: "media_hardening_settings_error",
+          label: "Media hardening settings",
+          severity: "warning",
+          count: 1,
+          message: "Could not evaluate media hardening settings.",
+          detail: "#{e.class}: #{e.message}".truncate(500)
+        )
+      ]
     end
 
     def permissions_section
@@ -1408,6 +1454,14 @@ module ::MediaGallery
       return fallback unless SiteSetting.respond_to?(name)
       value = SiteSetting.public_send(name).to_i
       value.positive? ? value : fallback
+    rescue
+      fallback
+    end
+
+    def setting_bool(name, fallback = false)
+      return fallback unless SiteSetting.respond_to?(name)
+      value = SiteSetting.public_send(name)
+      value.nil? ? fallback : !!value
     rescue
       fallback
     end

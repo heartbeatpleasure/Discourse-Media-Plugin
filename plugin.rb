@@ -35,6 +35,7 @@ after_initialize do
   require_relative "lib/media_gallery/path_security"
   require_relative "lib/media_gallery/storage_settings_resolver"
   require_relative "lib/media_gallery/request_security"
+  require_relative "lib/media_gallery/response_security_headers"
   require_relative "lib/media_gallery/security_review"
   require_relative "lib/media_gallery/operation_errors"
   require_relative "lib/media_gallery/operation_logger"

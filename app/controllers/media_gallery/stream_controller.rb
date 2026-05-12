@@ -59,6 +59,7 @@ module ::MediaGallery
 
       if delivery[:mode] == :redirect
         response.headers["Cache-Control"] = "no-store, no-cache, private, max-age=0"
+        apply_response_security_headers!(include_corp: false)
         return redirect_to(delivery[:redirect_url], allow_other_host: true, status: 307)
       end
 
@@ -170,6 +171,7 @@ module ::MediaGallery
       )
       response.headers["Cache-Control"] = "no-store"
       response.headers["X-Content-Type-Options"] = "nosniff"
+      apply_response_security_headers!(include_corp: true)
       response.headers["Retry-After"] = "60"
       render plain: "rate_limited", status: 429
       false
@@ -265,6 +267,11 @@ module ::MediaGallery
       response.headers["X-Content-Type-Options"] = "nosniff"
       response.headers["Accept-Ranges"] = "bytes"
       response.headers["Content-Disposition"] = "inline"
+      apply_response_security_headers!(include_corp: true)
+    end
+
+    def apply_response_security_headers!(include_corp: true)
+      ::MediaGallery::ResponseSecurityHeaders.apply!(response.headers, include_corp: include_corp)
     end
 
     def extract_range_header

@@ -8,11 +8,12 @@ module ::MediaGallery
       active_backend = ::MediaGallery::StorageSettingsResolver.active_backend.to_s
       hls_enabled = SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled
       presign_ttl = SiteSetting.respond_to?(:media_gallery_s3_presign_ttl_seconds) ? SiteSetting.media_gallery_s3_presign_ttl_seconds.to_i : 0
+      delivery_mode = ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s
 
       warnings = []
       warnings << "S3 presigned URL TTL is high; keep it short for private playback." if presign_ttl > 600
-      if active_backend == "s3" && hls_enabled && ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect"
-        warnings << "When using S3 HLS redirect delivery, verify bucket CORS only allows the forum origin and required methods/headers."
+      if active_backend == "s3" && hls_enabled && delivery_mode == "redirect"
+        warnings << "When using S3/R2 HLS redirect delivery, verify bucket CORS only allows the forum origin and required methods/headers, and keep HLS presigned TTL/cache short."
       end
       warnings << "Confirm the S3 bucket is not publicly readable; playback should rely on app-auth plus proxy delivery or short-lived redirects." if active_backend == "s3"
       if !SiteSetting.media_gallery_bind_stream_to_user && !SiteSetting.media_gallery_bind_stream_to_ip && !(SiteSetting.respond_to?(:media_gallery_bind_stream_to_session) && SiteSetting.media_gallery_bind_stream_to_session)
@@ -26,8 +27,8 @@ module ::MediaGallery
         endpoint_controls: endpoint_controls,
         token_policy: token_policy,
         hidden_visibility_controls: hidden_visibility_controls,
-        cors_signed_url_review: cors_signed_url_review(active_backend: active_backend, hls_enabled: hls_enabled, presign_ttl: presign_ttl),
-        manual_checks_required: manual_checks_required(active_backend: active_backend, hls_enabled: hls_enabled),
+        cors_signed_url_review: cors_signed_url_review(active_backend: active_backend, hls_enabled: hls_enabled, presign_ttl: presign_ttl, delivery_mode: delivery_mode),
+        manual_checks_required: manual_checks_required(active_backend: active_backend, hls_enabled: hls_enabled, delivery_mode: delivery_mode),
         warnings: warnings,
       }
     end
@@ -83,11 +84,19 @@ module ::MediaGallery
         admin_controllers_require_admin: "implemented",
         stream_requires_logged_in_and_valid_token: "implemented",
         hls_requires_logged_in_and_valid_token: "implemented",
+        extra_media_security_response_headers: response_security_headers_status,
         hls_only_video_download_prevention: hls_only_video_status,
         watermark_and_fingerprint_controls: watermark_fingerprint_status,
       }
     end
     private_class_method :endpoint_controls
+
+    def response_security_headers_status
+      ::MediaGallery::ResponseSecurityHeaders.enabled? ? "enabled" : "available_but_disabled"
+    rescue
+      "unknown"
+    end
+    private_class_method :response_security_headers_status
 
     def hls_only_video_status
       SiteSetting.respond_to?(:media_gallery_protected_video_hls_only) && SiteSetting.media_gallery_protected_video_hls_only ? "enabled" : "available_but_disabled"
@@ -142,13 +151,18 @@ module ::MediaGallery
     end
     private_class_method :hidden_visibility_controls
 
-    def cors_signed_url_review(active_backend:, hls_enabled:, presign_ttl:)
+    def cors_signed_url_review(active_backend:, hls_enabled:, presign_ttl:, delivery_mode:)
       {
         active_backend: active_backend,
         hls_enabled: hls_enabled,
+        delivery_mode: delivery_mode.presence || "stream",
         s3_presign_ttl_seconds: presign_ttl,
+        hls_presign_ttl_seconds: site_setting_int(:media_gallery_hls_s3_presign_ttl_seconds, default: 60),
+        hls_presign_cache_seconds: site_setting_int(:media_gallery_hls_s3_presign_cache_seconds, default: 15),
+        rails_media_security_headers: response_security_headers_status,
         expected_delivery_model: expected_delivery_model(active_backend),
-      }
+        cloudflare_r2_note: active_backend == "s3" ? "For Cloudflare R2, keep the bucket private. CORS matters mainly when using redirect delivery; stream/proxy keeps browser traffic on the forum origin." : nil,
+      }.compact
     end
     private_class_method :cors_signed_url_review
 
@@ -163,7 +177,7 @@ module ::MediaGallery
     end
     private_class_method :expected_delivery_model
 
-    def manual_checks_required(active_backend:, hls_enabled:)
+    def manual_checks_required(active_backend:, hls_enabled:, delivery_mode:)
       checks = [
         "Confirm reverse proxy and app timeouts are compatible with your largest processing and diagnostics paths.",
         "Confirm production secrets and credentials are stored securely and not checked into source control.",
@@ -174,14 +188,24 @@ module ::MediaGallery
         checks << "Confirm endpoint/region/path-style settings match the intended provider and bucket."
       end
 
-      if active_backend == "s3" && hls_enabled && ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s == "redirect"
-        checks << "Confirm bucket CORS explicitly allows the forum origin for segment delivery."
-        checks << "Validate real browser HLS playback end-to-end with short-lived presigned URLs."
+      if active_backend == "s3" && hls_enabled && delivery_mode.to_s == "redirect"
+        checks << "Confirm bucket CORS explicitly allows only the forum origin for HLS segment delivery; avoid wildcard origins when credentials are used."
+        checks << "Validate real browser HLS playback end-to-end with short-lived presigned URLs and no public object access."
+      elsif active_backend == "s3" && hls_enabled
+        checks << "If you later switch S3/R2 delivery from stream/proxy to redirect, re-check bucket CORS and presigned URL TTL/cache settings before production use."
       end
 
       checks
     end
     private_class_method :manual_checks_required
+
+    def site_setting_int(name, default:)
+      return default unless SiteSetting.respond_to?(name)
+      SiteSetting.public_send(name).to_i
+    rescue
+      default
+    end
+    private_class_method :site_setting_int
 
     def finding(title, status, summary)
       { title: title, status: status, summary: summary }

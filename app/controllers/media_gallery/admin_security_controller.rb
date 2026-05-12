@@ -299,6 +299,11 @@ module ::MediaGallery
         forensics_http_source_url_policy: setting_string(:media_gallery_forensics_http_source_url_policy, default: "deny_all"),
         fail_closed_on_unrecognized_media: setting_bool(:media_gallery_fail_closed_on_unrecognized_media, default: true),
         block_direct_media_navigation: setting_bool(:media_gallery_block_direct_media_navigation, default: true),
+        extra_media_security_headers: setting_bool(:media_gallery_extra_media_security_headers_enabled, default: true),
+        storage_delivery_mode: ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s.presence || "stream",
+        active_storage_backend: ::MediaGallery::StorageSettingsResolver.active_backend.to_s.presence || "local",
+        hls_s3_presign_ttl_seconds: setting_int(:media_gallery_hls_s3_presign_ttl_seconds),
+        hls_s3_presign_cache_seconds: setting_int(:media_gallery_hls_s3_presign_cache_seconds),
       }
     end
 
@@ -613,6 +618,7 @@ module ::MediaGallery
         setting_row(:media_gallery_forensics_export_retention_days, "Export retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_archive_retention_days, "Archive retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_block_direct_media_navigation, "Block direct media navigation", recommended: "true"),
+        setting_row(:media_gallery_extra_media_security_headers_enabled, "Extra media response headers", recommended: "true"),
         setting_row(:media_gallery_log_stream_anomalies, "Stream anomaly logging", recommended: "true"),
         setting_row(:media_gallery_stream_anomaly_requests_per_token_per_minute, "Stream anomaly request threshold", recommended: "observe and tune"),
         setting_row(:media_gallery_stream_anomaly_range_requests_per_token_per_minute, "Stream anomaly range threshold", recommended: "observe and tune"),
@@ -943,6 +949,11 @@ module ::MediaGallery
       key_limit = setting_int(:media_gallery_hls_key_requests_per_token_per_minute)
       aes_enabled = setting_bool(:media_gallery_hls_aes128_enabled)
       aes_required = aes_enabled && setting_bool(:media_gallery_hls_aes128_required)
+      extra_headers_enabled = setting_bool(:media_gallery_extra_media_security_headers_enabled, default: true)
+      active_backend = download[:active_storage_backend].to_s.presence || ::MediaGallery::StorageSettingsResolver.active_backend.to_s
+      delivery_mode = download[:storage_delivery_mode].to_s.presence || ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s.presence || "stream"
+      hls_presign_ttl = download[:hls_s3_presign_ttl_seconds].to_i
+      hls_presign_cache = download[:hls_s3_presign_cache_seconds].to_i
 
       [
         baseline_check("production_https", "Production HTTPS/canonical URL", environment[:https_ok] ? "HTTPS" : "Review", "HTTPS canonical production URL", environment[:status], environment[:summary]),
@@ -957,6 +968,9 @@ module ::MediaGallery
         baseline_check("fingerprint", "HLS fingerprinting", yes_no(download[:fingerprint_enabled]), "Enabled for protected videos", download[:fingerprint_enabled] ? "ok" : "partial", "A/B HLS fingerprinting helps identify likely recipients of leaked streams."),
         baseline_check("hls_limits", "HLS request rate limits", "playlist #{playlist_limit}/min, segments #{segment_limit}/min, keys #{key_limit}/min", "All > 0", playlist_limit.positive? && segment_limit.positive? && key_limit.positive? ? "ok" : "partial", "Per-token HLS limits make automated playlist, segment and AES-key scraping noisier and easier to detect."),
         baseline_check("direct_media_navigation", "Block direct media navigation", yes_no(download[:block_direct_media_navigation]), "Enabled", download[:block_direct_media_navigation] ? "ok" : "partial", "Blocks clear address-bar/new-tab navigation to tokenized play/stream/HLS endpoints while allowing normal player requests."),
+        baseline_check("extra_media_headers", "Extra media response headers", yes_no(extra_headers_enabled), "Enabled", extra_headers_enabled ? "ok" : "partial", "Adds Referrer-Policy and CORP headers to Rails-served tokenized media responses. Redirect responses only receive Referrer-Policy so redirect/proxy/x-accel modes remain switchable."),
+        baseline_check("storage_delivery", "Protected storage delivery mode", "#{active_backend.presence || 'local'} / #{delivery_mode}", "stream/proxy for protected R2 unless redirect is explicitly reviewed", storage_delivery_status(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache), storage_delivery_note(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache)),
+        baseline_check("storage_cors_manual", "S3/R2 CORS and bucket policy", active_backend == "s3" ? "Manual review required" : "Local storage", "Private bucket; CORS only forum origin if redirect is used", active_backend == "s3" ? "manual" : "ok", active_backend == "s3" ? "The plugin cannot read Cloudflare R2 bucket CORS/policy. With stream/proxy this is mainly a configuration check; with redirect it is required for safe browser playback." : "Local/private Rails delivery does not require bucket CORS."),
         baseline_check("stream_anomaly", "Stream anomaly logging", yes_no(setting_bool(:media_gallery_log_stream_anomalies)), "Enabled", setting_bool(:media_gallery_log_stream_anomalies) ? "ok" : "partial", "Soft anomaly logging is safer than immediate blocking while thresholds are tuned."),
         baseline_check("f11_policy", "Forensic HTTP source URL policy", f11_policy, "deny_all in production", f11_policy == "deny_all" ? "ok" : f11_policy == "canonical_only" ? "partial" : "attention", "Controls whether admin forensic identify may use http:// source URLs."),
         baseline_check("thumbnail_no_store", "Thumbnail no-store", yes_no(setting_bool(:media_gallery_no_store_thumbnails)), "Enabled for privacy-sensitive libraries", setting_bool(:media_gallery_no_store_thumbnails) ? "ok" : "partial", "No-store thumbnails reduce browser/proxy caching of stable thumbnail URLs."),
@@ -965,6 +979,27 @@ module ::MediaGallery
         baseline_check("export_retention", "Forensics export retention", "#{setting_int(:media_gallery_forensics_export_retention_days)} days", "90 days or policy", setting_int(:media_gallery_forensics_export_retention_days).positive? ? "ok" : "partial", "Export files should not remain available forever unless a policy explicitly requires that."),
         baseline_check("archive_retention", "Forensics archive retention", archive_enabled ? "#{archive_days} days" : "Archive disabled", "90 days or policy when archive is enabled", !archive_enabled || archive_days.positive? ? "ok" : "partial", "Archive copies should have explicit retention if enabled."),
       ]
+    end
+
+    def storage_delivery_status(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache)
+      return "ok" unless active_backend.to_s == "s3"
+      return "ok" if %w[stream x_accel].include?(delivery_mode.to_s)
+
+      ttl_ok = hls_presign_ttl.to_i.positive? && hls_presign_ttl.to_i <= 120
+      cache_ok = hls_presign_cache.to_i <= 30
+      ttl_ok && cache_ok ? "partial" : "attention"
+    rescue
+      "manual"
+    end
+
+    def storage_delivery_note(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache)
+      return "Local storage is delivered through Rails/private storage after plugin authorization." unless active_backend.to_s == "s3"
+
+      if %w[stream x_accel].include?(delivery_mode.to_s)
+        "Current mode keeps browser media requests on the forum origin after plugin authorization. If you later switch to redirect, review Cloudflare R2 CORS and presigned TTL/cache first."
+      else
+        "Redirect mode exposes short-lived S3/R2 object URLs to the browser after authorization. Keep HLS presigned TTL low (current #{hls_presign_ttl}s) and presign cache short (current #{hls_presign_cache}s), and restrict CORS to the forum origin."
+      end
     end
 
     def baseline_check(key, label, current, recommended, status, note)

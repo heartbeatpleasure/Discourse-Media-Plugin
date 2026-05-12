@@ -551,6 +551,8 @@ en:
     media_gallery_log_hls_denials_title: "Log denied HLS requests"
     media_gallery_log_stream_anomalies: "Logs suspicious /media/stream patterns such as many requests or range requests per token. This is detection only unless hard stream limits are also configured."
     media_gallery_log_stream_anomalies_title: "Log stream scraping anomalies"
+    media_gallery_extra_media_security_headers_enabled: "Adds Referrer-Policy: no-referrer and Cross-Origin-Resource-Policy: same-origin to tokenized media responses served by Rails. Redirect responses only receive the referrer policy so future redirect/proxy/x-accel modes remain switchable."
+    media_gallery_extra_media_security_headers_enabled_title: "Extra media security response headers"
     media_gallery_max_active_tokens_per_ip: "Maximum active playback tokens from one IP. Use cautiously because many legitimate users can share an IP."
     media_gallery_max_active_tokens_per_ip_title: "Max active playback tokens per IP"
     media_gallery_max_active_tokens_per_user: "Maximum number of active playback tokens a user may hold. Helps limit token churn and scraping. Too low may affect normal multi-tab usage."
