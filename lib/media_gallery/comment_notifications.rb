@@ -32,7 +32,10 @@ module ::MediaGallery
     end
 
     def comment_url_for(item, comment)
-      "#{Discourse.base_url}#{comment_path_for(item, comment)}"
+      base_url = Discourse.respond_to?(:base_url) ? Discourse.base_url.to_s : ""
+      "#{base_url}#{comment_path_for(item, comment)}"
+    rescue
+      comment_path_for(item, comment)
     end
 
     def notify_owner(item, comment)

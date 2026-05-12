@@ -1,53 +1,74 @@
 # frozen_string_literal: true
 
 module ::MediaGallery
-  class MediaCommentSerializer < ::ApplicationSerializer
+  class MediaItemSerializer < ::ApplicationSerializer
     attributes(
-      :id,
-      :body,
+      :public_id,
+      :title,
+      :description,
+      :media_type,
+      :gender,
+      :tags,
+      :duration_seconds,
+      :width,
+      :height,
+      :filesize_processed_bytes,
+      :views_count,
+      :likes_count,
+      :comments_count,
+      :last_commented_at,
       :created_at,
-      :updated_at,
-      :mine,
-      :can_delete,
-      :user,
-      :owner_comment,
-      :staff_comment
+      :uploader_username,
+      :thumbnail_url,
+      :playable,
+      :liked
     )
 
-    def mine
-      current_user.present? && object.user_id == current_user.id
+    attribute :status, if: :can_see_status?
+    attribute :error_message, if: :can_see_status?
+
+    def comments_count
+      return object.comments_count.to_i if object.respond_to?(:has_attribute?) && object.has_attribute?("comments_count")
+      return object.comments_count.to_i if object.respond_to?(:comments_count)
+
+      0
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      0
     end
 
-    def can_delete
-      return false if current_user.blank?
-      current_user.staff? || current_user.admin? || object.user_id == current_user.id
+    def last_commented_at
+      return object.last_commented_at if object.respond_to?(:has_attribute?) && object.has_attribute?("last_commented_at")
+      return object.last_commented_at if object.respond_to?(:last_commented_at)
+
+      nil
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      nil
     end
 
-    def user
-      u = object.user
-      return nil if u.blank?
-
-      {
-        id: u.id,
-        username: u.username,
-        name: u.name.to_s.presence,
-        avatar_template: u.avatar_template.to_s.presence,
-        profile_url: "/u/#{u.username}"
-      }.compact
+    def uploader_username
+      object.user&.username
     end
 
-    def owner_comment
-      object.media_item&.user_id.to_i == object.user_id.to_i
+    def thumbnail_url
+      # Stable URL that serves the thumbnail directly (with Cache-Control + ETag/Last-Modified).
+      # This keeps raw Upload URLs out of HTML/JS AND allows browser caching across gallery pages.
+      "/media/#{object.public_id}/thumbnail"
     end
 
-    def staff_comment
-      !!object.user&.staff?
+    def playable
+      object.status == "ready" && object.filesize_processed_bytes.to_i > 0
     end
 
-    private
+    def liked
+      u = scope&.user
+      return false if u.nil?
+      MediaGallery::MediaLike.exists?(user_id: u.id, media_item_id: object.id)
+    end
 
-    def current_user
-      scope&.user
+    def can_see_status?
+      u = scope&.user
+      return false if u.nil?
+      u.admin? || u.staff? || u.id == object.user_id
     end
   end
 end

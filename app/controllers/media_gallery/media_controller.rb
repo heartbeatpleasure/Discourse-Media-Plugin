@@ -1554,7 +1554,7 @@ end
         page_size: SiteSetting.respond_to?(:media_gallery_comments_page_size) ? SiteSetting.media_gallery_comments_page_size.to_i : 20,
         max_length: SiteSetting.respond_to?(:media_gallery_comments_max_length) ? SiteSetting.media_gallery_comments_max_length.to_i : 1000,
         can_comment: current_user.present? && current_user.trust_level.to_i >= (SiteSetting.respond_to?(:media_gallery_comments_min_trust_level) ? SiteSetting.media_gallery_comments_min_trust_level.to_i : 0),
-        deep_link_path: ::MediaGallery::CommentNotifications.deep_link_path,
+        deep_link_path: media_comments_deep_link_path,
       }
     end
 
@@ -2034,10 +2034,40 @@ end
       when "most_viewed"
         scope.order(views_count: :desc, created_at: :desc, id: :desc)
       when "most_commented"
-        scope.order(comments_count: :desc, last_commented_at: :desc, created_at: :desc, id: :desc)
+        apply_most_commented_sort(scope)
+      when "newest"
+        scope.order(created_at: :desc, id: :desc)
       else
         scope.order(created_at: :desc, id: :desc)
       end
+    end
+
+    def apply_most_commented_sort(scope)
+      unless media_item_column_available?("comments_count")
+        return scope.order(created_at: :desc, id: :desc)
+      end
+
+      if media_item_column_available?("last_commented_at")
+        scope.order(comments_count: :desc, last_commented_at: :desc, created_at: :desc, id: :desc)
+      else
+        scope.order(comments_count: :desc, created_at: :desc, id: :desc)
+      end
+    end
+
+    def media_comments_deep_link_path
+      return "/media-library" unless defined?(::MediaGallery::CommentNotifications)
+
+      ::MediaGallery::CommentNotifications.deep_link_path
+    rescue => e
+      Rails.logger.warn("[media_gallery] comments deep link path fallback: #{e.class}: #{e.message}")
+      "/media-library"
+    end
+
+    def media_item_column_available?(column_name)
+      MediaGallery::MediaItem.columns_hash.key?(column_name.to_s)
+    rescue => e
+      Rails.logger.warn("[media_gallery] media item column check failed column=#{column_name}: #{e.class}: #{e.message}")
+      false
     end
 
     def find_item_by_public_id!(public_id)

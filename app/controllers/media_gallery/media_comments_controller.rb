@@ -41,10 +41,10 @@ module ::MediaGallery
 
       render_json_dump(
         comments: serialize_data(comments, MediaGallery::MediaCommentSerializer, root: false),
-        total: item.comments_count.to_i,
+        total: comments_count_for(item),
         has_more_before: has_more_before,
         next_before_id: has_more_before ? rows.last&.id : nil,
-        comments_count: item.comments_count.to_i,
+        comments_count: comments_count_for(item),
         focused_comment_id: focused_comment&.id,
         comment_found: comment_found
       )
@@ -76,11 +76,7 @@ module ::MediaGallery
       comment = nil
       item.with_lock do
         comment = item.media_comments.create!(user_id: current_user.id, body: body, status: "visible")
-        item.update_columns(
-          comments_count: item.media_comments.visible.count,
-          last_commented_at: comment.created_at,
-          updated_at: Time.now
-        )
+        update_item_comment_counters!(item, last_comment: comment)
       end
 
       item.reload
@@ -90,8 +86,8 @@ module ::MediaGallery
       render_json_dump(
         ok: true,
         comment: serialize_data(comment, MediaGallery::MediaCommentSerializer, root: false),
-        comments_count: item.comments_count.to_i,
-        last_commented_at: item.last_commented_at&.iso8601
+        comments_count: comments_count_for(item),
+        last_commented_at: last_commented_at_for(item)&.iso8601
       )
     rescue RateLimiter::LimitExceeded
       render_json_error("rate_limited", status: 429, message: "You are commenting too quickly. Please wait and try again.")
@@ -121,17 +117,13 @@ module ::MediaGallery
           updated_at: Time.now
         )
         last_visible_comment = item.media_comments.visible.order(id: :desc).first
-        item.update_columns(
-          comments_count: item.media_comments.visible.count,
-          last_commented_at: last_visible_comment&.created_at,
-          updated_at: Time.now
-        )
+        update_item_comment_counters!(item, last_comment: last_visible_comment)
       end
 
       item.reload
       log_comment_event("media_comment_deleted", item: item, comment: comment, severity: "info")
 
-      render_json_dump(ok: true, comments_count: item.comments_count.to_i, last_commented_at: item.last_commented_at&.iso8601)
+      render_json_dump(ok: true, comments_count: comments_count_for(item), last_commented_at: last_commented_at_for(item)&.iso8601)
     rescue Discourse::NotFound
       raise
     rescue => e
@@ -210,6 +202,41 @@ module ::MediaGallery
         max_length: comment_max_length,
         allow_newlines: true
       ).to_s.strip
+    end
+
+    def comments_count_for(item)
+      if media_item_column_available?("comments_count")
+        return item.comments_count.to_i
+      end
+
+      item.media_comments.visible.count
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      item.media_comments.visible.count
+    end
+
+    def last_commented_at_for(item)
+      if media_item_column_available?("last_commented_at")
+        return item.last_commented_at
+      end
+
+      item.media_comments.visible.order(id: :desc).pick(:created_at)
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      item.media_comments.visible.order(id: :desc).pick(:created_at)
+    end
+
+    def update_item_comment_counters!(item, last_comment:)
+      updates = { updated_at: Time.now }
+      updates[:comments_count] = item.media_comments.visible.count if media_item_column_available?("comments_count")
+      updates[:last_commented_at] = last_comment&.created_at if media_item_column_available?("last_commented_at")
+
+      item.update_columns(updates) if updates.present?
+    end
+
+    def media_item_column_available?(column_name)
+      MediaGallery::MediaItem.columns_hash.key?(column_name.to_s)
+    rescue => e
+      Rails.logger.warn("[media_gallery] media item column check failed column=#{column_name}: #{e.class}: #{e.message}")
+      false
     end
 
     def enforce_comment_rate_limit!
