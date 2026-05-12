@@ -5,6 +5,7 @@ module ::MediaGallery
     self.table_name = "media_gallery_media_comments"
 
     STATUSES = %w[visible deleted].freeze
+    LEGACY_VISIBLE_STATUSES = ["visible", nil, ""].freeze
 
     # IMPORTANT: inside the MediaGallery namespace, `belongs_to :user` would try
     # to resolve MediaGallery::User (which does not exist). We must point to ::User.
@@ -20,10 +21,15 @@ module ::MediaGallery
     validates :body, presence: true, length: { maximum: 5_000 }
     validates :status, inclusion: { in: STATUSES }
 
-    scope :visible, -> { where(status: "visible", deleted_at: nil) }
+    # Treat blank/nil status as visible for legacy/incomplete rows. The
+    # current migration writes "visible" by default, but this keeps older
+    # comments from disappearing if a previous iteration or partial migration
+    # created rows without an explicit status. Deleted comments remain excluded
+    # because deleted_at must still be blank and status "deleted" is not allowed.
+    scope :visible, -> { where(deleted_at: nil).where(status: LEGACY_VISIBLE_STATUSES) }
 
     def visible?
-      status == "visible" && deleted_at.blank?
+      deleted_at.blank? && (status.blank? || status == "visible")
     end
   end
 end

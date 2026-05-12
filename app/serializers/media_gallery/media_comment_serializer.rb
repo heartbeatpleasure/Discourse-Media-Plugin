@@ -66,7 +66,6 @@ module ::MediaGallery
       return false if u.blank?
       return false if object.user_id.to_i == u.id.to_i
       return false unless comment_reports_enabled?
-      return false unless comment_report_table_available?
 
       u.trust_level.to_i >= comment_reports_min_trust_level
     end

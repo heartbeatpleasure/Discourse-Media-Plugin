@@ -20,6 +20,7 @@ module ::MediaGallery
 
       page_size = comments_page_size
       base_scope = item.media_comments.visible.includes(:user)
+      actual_comments_count = item.media_comments.visible.count
 
       focus_comment_id = params[:comment_id].to_i
       focused_comment = nil
@@ -58,10 +59,10 @@ module ::MediaGallery
 
       render_json_dump(
         comments: serialize_data(comments, MediaGallery::MediaCommentSerializer, root: false),
-        total: comments_count_for(item),
+        total: actual_comments_count,
         has_more_before: has_more_before,
         next_before_id: has_more_before ? comments.first&.id : nil,
-        comments_count: comments_count_for(item),
+        comments_count: actual_comments_count,
         focused_comment_id: focused_comment&.id,
         comment_found: comment_found
       )
@@ -216,6 +217,7 @@ module ::MediaGallery
 
       comment = find_visible_comment!(item)
       return render_json_error("comment_reports_disabled", status: 404, message: "Comment reports are not enabled.") unless comment_reports_enabled?
+      return render_json_error("comment_reports_unavailable", status: 503, message: "Comment reports are not available yet. Please try again after the site has finished migrating.") unless comment_report_table_available?
       return render_json_error("comment_reports_forbidden", status: 403, message: "You are not allowed to report this comment.") unless can_report_comment?(comment)
 
       reason = normalize_comment_report_reason(params[:reason])
@@ -305,7 +307,7 @@ module ::MediaGallery
     end
 
     def comment_reports_enabled?
-      SiteSetting.respond_to?(:media_gallery_comment_reports_enabled) && SiteSetting.media_gallery_comment_reports_enabled && comment_report_table_available?
+      SiteSetting.respond_to?(:media_gallery_comment_reports_enabled) && SiteSetting.media_gallery_comment_reports_enabled
     end
 
     def can_report_comment?(comment)
@@ -514,12 +516,22 @@ module ::MediaGallery
     end
 
     def comments_count_for(item)
-      if media_item_column_available?("comments_count")
-        return item.comments_count.to_i
+      actual_count = item.media_comments.visible.count
+
+      if media_item_column_available?("comments_count") && item.respond_to?(:comments_count)
+        stored_count = item.comments_count.to_i
+        if stored_count != actual_count
+          begin
+            item.update_columns(comments_count: actual_count, updated_at: Time.now)
+            item.comments_count = actual_count if item.respond_to?(:comments_count=)
+          rescue => e
+            Rails.logger.warn("[media_gallery] comments_count self-heal failed item_id=#{item&.id}: #{e.class}: #{e.message}")
+          end
+        end
       end
 
-      item.media_comments.visible.count
-    rescue ActiveModel::MissingAttributeError, NoMethodError
+      actual_count
+    rescue ActiveModel::MissingAttributeError, NoMethodError, ActiveRecord::StatementInvalid
       item.media_comments.visible.count
     end
 

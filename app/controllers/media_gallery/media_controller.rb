@@ -1556,7 +1556,10 @@ end
     def media_comments_config_payload
       comment_likes_enabled = SiteSetting.respond_to?(:media_gallery_comment_likes_enabled) && SiteSetting.media_gallery_comment_likes_enabled && comment_like_table_available?
       comment_likes_min_trust_level = SiteSetting.respond_to?(:media_gallery_comment_likes_min_trust_level) ? SiteSetting.media_gallery_comment_likes_min_trust_level.to_i : 0
-      comment_reports_enabled = SiteSetting.respond_to?(:media_gallery_comment_reports_enabled) && SiteSetting.media_gallery_comment_reports_enabled && comment_report_table_available?
+      # Do not hide the frontend action just because a schema/table check is
+      # temporarily unavailable during boot/cache refresh. The POST endpoint
+      # still verifies table availability before creating a report.
+      comment_reports_enabled = SiteSetting.respond_to?(:media_gallery_comment_reports_enabled) && SiteSetting.media_gallery_comment_reports_enabled
       comment_reports_min_trust_level = SiteSetting.respond_to?(:media_gallery_comment_reports_min_trust_level) ? SiteSetting.media_gallery_comment_reports_min_trust_level.to_i : 0
 
       {
