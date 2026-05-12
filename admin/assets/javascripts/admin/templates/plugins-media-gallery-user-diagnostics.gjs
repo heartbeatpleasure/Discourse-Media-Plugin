@@ -497,10 +497,10 @@ export default RouteTemplate(
       }
 
       .mg-userdiag__trend-card-header {
-        min-height: 6.5rem;
+        min-height: 4.15rem;
         display: flex;
         flex-direction: column;
-        gap: 0.35rem;
+        gap: 0.25rem;
       }
 
       .mg-userdiag__trend-card-header h3 {
@@ -515,7 +515,7 @@ export default RouteTemplate(
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0.5rem;
-        margin-top: 0.7rem;
+        margin-top: 0.45rem;
         padding: 0.7rem;
         border: 1px solid var(--mg-border);
         border-radius: 14px;
