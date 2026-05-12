@@ -1375,6 +1375,22 @@ plugins:
     max: 4
     client: false
 
+  media_gallery_comment_reports_enabled:
+    default: true
+    client: false
+
+  media_gallery_comment_reports_min_trust_level:
+    default: 0
+    type: integer
+    min: 0
+    max: 4
+    client: false
+
+  media_gallery_comment_reports_notify_group:
+    default: "staff"
+    type: list
+    client: false
+
   media_gallery_health_watchdog_enabled:
     default: true
     client: false

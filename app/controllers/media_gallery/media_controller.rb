@@ -376,6 +376,7 @@ module ::MediaGallery
         # direct has_many association to the comment-like model. This keeps normal
         # gallery loading independent from the comment-like table/reflection.
         delete_comment_likes_for_item!(item)
+        delete_comment_reports_for_item!(item)
         item.destroy!
       end
 
@@ -1555,6 +1556,8 @@ end
     def media_comments_config_payload
       comment_likes_enabled = SiteSetting.respond_to?(:media_gallery_comment_likes_enabled) && SiteSetting.media_gallery_comment_likes_enabled && comment_like_table_available?
       comment_likes_min_trust_level = SiteSetting.respond_to?(:media_gallery_comment_likes_min_trust_level) ? SiteSetting.media_gallery_comment_likes_min_trust_level.to_i : 0
+      comment_reports_enabled = SiteSetting.respond_to?(:media_gallery_comment_reports_enabled) && SiteSetting.media_gallery_comment_reports_enabled && comment_report_table_available?
+      comment_reports_min_trust_level = SiteSetting.respond_to?(:media_gallery_comment_reports_min_trust_level) ? SiteSetting.media_gallery_comment_reports_min_trust_level.to_i : 0
 
       {
         enabled: SiteSetting.respond_to?(:media_gallery_comments_enabled) && SiteSetting.media_gallery_comments_enabled,
@@ -1564,7 +1567,25 @@ end
         deep_link_path: media_comments_deep_link_path,
         likes_enabled: comment_likes_enabled,
         can_like: current_user.present? && comment_likes_enabled && current_user.trust_level.to_i >= comment_likes_min_trust_level,
+        reports_enabled: comment_reports_enabled,
+        can_report: current_user.present? && comment_reports_enabled && current_user.trust_level.to_i >= comment_reports_min_trust_level,
+        report_reasons: comment_report_reason_payloads,
       }
+    end
+
+    def comment_report_reason_payloads
+      comment_report_reason_options.map { |reason| { id: reason[:id], label: reason[:label] } }
+    end
+
+    def comment_report_reason_options
+      [
+        { id: "harassment", label: "Harassment or abuse" },
+        { id: "personal_info", label: "Personal or private information" },
+        { id: "illegal", label: "Illegal or prohibited content" },
+        { id: "spam", label: "Spam or unwanted content" },
+        { id: "rule_violation", label: "Comment guideline violation" },
+        { id: "other", label: "Other" },
+      ]
     end
 
     def media_reports_config_payload
@@ -2230,6 +2251,15 @@ end
       false
     end
 
+    def comment_report_table_available?
+      return false unless defined?(::MediaGallery::MediaCommentReport)
+
+      ActiveRecord::Base.connection.data_source_exists?("media_gallery_media_comment_reports")
+    rescue ActiveRecord::StatementInvalid, ActiveRecord::NoDatabaseError, NoMethodError => e
+      Rails.logger.warn("[media_gallery] media comment report table check failed: #{e.class}: #{e.message}")
+      false
+    end
+
     def delete_comment_likes_for_item!(item)
       return if item.blank?
       return unless defined?(::MediaGallery::MediaCommentLike)
@@ -2238,6 +2268,16 @@ end
       ::MediaGallery::MediaCommentLike.where(media_item_id: item.id).delete_all
     rescue => e
       Rails.logger.warn("[media_gallery] comment-like cleanup failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
+    end
+
+    def delete_comment_reports_for_item!(item)
+      return if item.blank?
+      return unless defined?(::MediaGallery::MediaCommentReport)
+      return unless comment_report_table_available?
+
+      ::MediaGallery::MediaCommentReport.where(media_item_id: item.id).delete_all
+    rescue => e
+      Rails.logger.warn("[media_gallery] comment-report cleanup failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
     end
 
     def find_item_by_public_id!(public_id)

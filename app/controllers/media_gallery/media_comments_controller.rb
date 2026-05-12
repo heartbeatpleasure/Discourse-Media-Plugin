@@ -11,7 +11,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
     before_action :ensure_comments_enabled
     before_action :ensure_can_view
-    before_action :ensure_secure_write_request!, only: [:create, :destroy, :like, :unlike]
+    before_action :ensure_secure_write_request!, only: [:create, :destroy, :like, :unlike, :report]
 
     def index
       item = find_item_by_public_id!(params[:public_id])
@@ -190,6 +190,35 @@ module ::MediaGallery
       render_json_error("comment_like_failed", status: 500, message: "Comment like could not be updated.")
     end
 
+    def report
+      item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
+      raise Discourse::NotFound unless item.ready?
+
+      comment = find_visible_comment!(item)
+      return render_json_error("comment_reports_disabled", status: 404, message: "Comment reports are not enabled.") unless comment_reports_enabled?
+      return render_json_error("comment_reports_forbidden", status: 403, message: "You are not allowed to report this comment.") unless can_report_comment?(comment)
+
+      reason = normalize_comment_report_reason(params[:reason])
+      return render_json_error("invalid_comment_report_reason", status: 422, message: "Please choose a report reason.") if reason.blank?
+
+      message = sanitize_comment_report_message(params[:message]).presence
+
+      result = create_comment_report!(item, comment, reason: reason, message: message)
+
+      render_json_dump(
+        ok: true,
+        duplicate: result[:duplicate],
+        report: result[:report],
+        message: result[:duplicate] ? "You already reported this comment. Staff can review your existing report." : "Comment report submitted. Staff will review it."
+      )
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.error("[media_gallery] comment report failed request_id=#{request.request_id} public_id=#{params[:public_id]} comment_id=#{params[:comment_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}")
+      render_json_error("comment_report_failed", status: 500, message: "Comment report failed. Please try again.")
+    end
+
     private
 
     def ensure_plugin_enabled
@@ -256,6 +285,190 @@ module ::MediaGallery
       SiteSetting.respond_to?(:media_gallery_comment_likes_min_trust_level) ? SiteSetting.media_gallery_comment_likes_min_trust_level.to_i : 0
     end
 
+    def comment_reports_enabled?
+      SiteSetting.respond_to?(:media_gallery_comment_reports_enabled) && SiteSetting.media_gallery_comment_reports_enabled && comment_report_table_available?
+    end
+
+    def can_report_comment?(comment)
+      return false if current_user.blank?
+      return false if comment.blank?
+      return false unless comment_reports_enabled?
+      return false if comment.user_id.to_i == current_user.id.to_i
+
+      current_user.trust_level.to_i >= comment_reports_min_trust_level
+    end
+
+    def comment_reports_min_trust_level
+      SiteSetting.respond_to?(:media_gallery_comment_reports_min_trust_level) ? SiteSetting.media_gallery_comment_reports_min_trust_level.to_i : 0
+    end
+
+    def comment_report_reason_options
+      [
+        { id: "harassment", label: "Harassment or abuse" },
+        { id: "personal_info", label: "Personal or private information" },
+        { id: "illegal", label: "Illegal or prohibited content" },
+        { id: "spam", label: "Spam or unwanted content" },
+        { id: "rule_violation", label: "Comment guideline violation" },
+        { id: "other", label: "Other" },
+      ]
+    end
+
+    def normalize_comment_report_reason(value)
+      reason = ::MediaGallery::TextSanitizer.plain_text(value, max_length: 40, allow_newlines: false).to_s.strip
+      comment_report_reason_options.any? { |entry| entry[:id] == reason } ? reason : nil
+    end
+
+    def sanitize_comment_report_message(value)
+      ::MediaGallery::TextSanitizer.plain_text(value, max_length: 1200, allow_newlines: true).to_s.strip
+    end
+
+    def create_comment_report!(item, comment, reason:, message: nil)
+      duplicate = false
+      report_payload = nil
+      report = nil
+
+      comment.with_lock do
+        report = ::MediaGallery::MediaCommentReport.where(
+          media_comment_id: comment.id,
+          user_id: current_user.id,
+          status: "open"
+        ).first
+
+        if report.present?
+          duplicate = true
+        else
+          report = ::MediaGallery::MediaCommentReport.create!(
+            media_item_id: item.id,
+            media_comment_id: comment.id,
+            comment_user_id: comment.user_id,
+            user_id: current_user.id,
+            reason: reason,
+            message: message,
+            status: "open",
+            snapshot: comment_report_snapshot(item, comment, reason: reason)
+          )
+          update_comment_report_counter!(comment)
+        end
+
+        report_payload = public_comment_report_payload(report)
+      end
+
+      if duplicate
+        ::MediaGallery::OperationLogger.info("media_comment_report_duplicate_ignored", item: item, operation: "comment_report", data: { comment_id: comment.id, reporter_user_id: current_user.id, reporter_username: current_user.username })
+      else
+        ::MediaGallery::OperationLogger.warn("media_comment_report_created", item: item, operation: "comment_report", data: { comment_id: comment.id, comment_user_id: comment.user_id, reporter_user_id: current_user.id, reporter_username: current_user.username, reason: reason })
+        log_comment_report_event(item: item, comment: comment, report: report, reason: reason)
+        notify_comment_report_group(item, comment, report: report, reason: reason)
+      end
+
+      { duplicate: duplicate, report: report_payload }
+    end
+
+    def comment_report_snapshot(item, comment, reason:)
+      {
+        "media_item_id" => item.id,
+        "public_id" => item.public_id.to_s,
+        "title" => item.title.to_s.presence,
+        "media_type" => item.media_type.to_s.presence,
+        "comment_id" => comment.id,
+        "comment_body" => comment.body.to_s.truncate(1000),
+        "comment_created_at" => comment.created_at&.iso8601,
+        "comment_user_id" => comment.user_id,
+        "comment_username" => comment.user&.username.to_s.presence,
+        "reporter_user_id" => current_user.id,
+        "reporter_username" => current_user.username,
+        "reporter_trust_level" => current_user.trust_level.to_i,
+        "reporter_staff" => current_user.staff?,
+        "reason" => reason,
+        "reason_label" => comment_report_reason_options.find { |entry| entry[:id] == reason }&.dig(:label).to_s.presence || reason.to_s,
+      }.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] comment report snapshot failed item_id=#{item&.id} comment_id=#{comment&.id}: #{e.class}: #{e.message}")
+      {
+        "media_item_id" => item&.id,
+        "public_id" => item&.public_id.to_s,
+        "comment_id" => comment&.id,
+      }.compact
+    end
+
+    def public_comment_report_payload(report)
+      return {} if report.blank?
+
+      {
+        id: report.id,
+        status: report.status.to_s,
+        reason: report.reason.to_s,
+        reason_label: comment_report_reason_options.find { |entry| entry[:id] == report.reason.to_s }&.dig(:label).to_s.presence || report.reason.to_s,
+        created_at: report.created_at&.iso8601,
+      }.compact
+    end
+
+    def notify_comment_report_group(item, comment, report:, reason:)
+      group_names = comment_report_notify_group_names
+      return if group_names.blank?
+
+      comment_url = ::MediaGallery::CommentNotifications.comment_url_for(item, comment)
+      reason_label = comment_report_reason_options.find { |entry| entry[:id] == reason }&.dig(:label).to_s.presence || reason.to_s
+      title = "Comment report: #{item.title.to_s.presence || item.public_id}"
+      raw = <<~MD
+        A media comment has been reported and needs staff review.
+
+        Media: #{item.title.to_s.presence || "Untitled media"}
+        Public ID: #{item.public_id}
+        Comment ID: #{comment.id}
+        Comment author: #{comment.user&.username || "unknown"}
+        Reporter: #{current_user.username}
+        Reason: #{reason_label}
+        Report ID: #{report&.id}
+
+        Comment:
+        #{comment.body.to_s.truncate(1200)}
+
+        View the comment: #{comment_url}
+      MD
+
+      ::PostCreator.create!(
+        Discourse.system_user,
+        target_group_names: group_names,
+        archetype: Archetype.private_message,
+        title: title.truncate(200),
+        raw: raw
+      )
+    rescue => e
+      Rails.logger.warn("[media_gallery] comment report notification failed item_id=#{item&.id} comment_id=#{comment&.id} groups=#{defined?(group_names) ? group_names.inspect : 'unknown'}: #{e.class}: #{e.message}")
+    end
+
+    def comment_report_notify_group_names
+      raw = if SiteSetting.respond_to?(:media_gallery_comment_reports_notify_group)
+        SiteSetting.media_gallery_comment_reports_notify_group
+      else
+        SiteSetting.respond_to?(:media_gallery_report_notify_group) ? SiteSetting.media_gallery_report_notify_group : "staff"
+      end
+
+      ::MediaGallery::Permissions
+        .list_setting(raw)
+        .map { |name| ::MediaGallery::TextSanitizer.plain_text(name, max_length: 100, allow_newlines: false).to_s.strip }
+        .reject(&:blank?)
+        .uniq
+    end
+
+    def log_comment_report_event(item:, comment:, report:, reason:)
+      return unless defined?(::MediaGallery::LogEvents) && ::MediaGallery::LogEvents.respond_to?(:record)
+
+      ::MediaGallery::LogEvents.record(
+        event_type: "media_comment_report_created",
+        severity: "warning",
+        category: "comment_reports",
+        request: request,
+        user: current_user,
+        media_item: item,
+        message: reason,
+        details: { comment_id: comment&.id, comment_user_id: comment&.user_id, report_id: report&.id, reason: reason }
+      )
+    rescue => e
+      Rails.logger.warn("[media_gallery] comment report audit failed item_id=#{item&.id} comment_id=#{comment&.id}: #{e.class}: #{e.message}")
+    end
+
     def find_visible_comment!(item)
       comment = item.media_comments.visible.find_by(id: params[:comment_id].to_i)
       raise Discourse::NotFound if comment.blank?
@@ -319,6 +532,15 @@ module ::MediaGallery
       comment.update_columns(likes_count: ::MediaGallery::MediaCommentLike.where(media_comment_id: comment.id).count, updated_at: Time.now)
     end
 
+    def update_comment_report_counter!(comment)
+      return unless media_comment_column_available?("reports_count")
+
+      count = comment_report_table_available? ? ::MediaGallery::MediaCommentReport.where(media_comment_id: comment.id, status: "open").count : 0
+      comment.update_columns(reports_count: count, updated_at: Time.now)
+    rescue ActiveRecord::StatementInvalid, ActiveModel::MissingAttributeError, NoMethodError => e
+      Rails.logger.warn("[media_gallery] media comment report counter update failed comment_id=#{comment&.id}: #{e.class}: #{e.message}")
+    end
+
     def update_item_comment_counters!(item, last_comment:)
       updates = { updated_at: Time.now }
       updates[:comments_count] = item.media_comments.visible.count if media_item_column_available?("comments_count")
@@ -345,6 +567,13 @@ module ::MediaGallery
       defined?(::MediaGallery::MediaCommentLike) && ::MediaGallery::MediaCommentLike.table_exists?
     rescue ActiveRecord::StatementInvalid, NoMethodError => e
       Rails.logger.warn("[media_gallery] media comment like table check failed: #{e.class}: #{e.message}")
+      false
+    end
+
+    def comment_report_table_available?
+      defined?(::MediaGallery::MediaCommentReport) && ::MediaGallery::MediaCommentReport.table_exists?
+    rescue ActiveRecord::StatementInvalid, NoMethodError => e
+      Rails.logger.warn("[media_gallery] media comment report table check failed: #{e.class}: #{e.message}")
       false
     end
 

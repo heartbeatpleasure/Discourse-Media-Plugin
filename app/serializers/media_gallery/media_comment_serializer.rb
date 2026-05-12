@@ -12,6 +12,8 @@ module ::MediaGallery
       :liked,
       :liked_by_current_user,
       :can_like,
+      :can_report,
+      :reported_by_current_user,
       :mine,
       :can_delete,
       :user,
@@ -59,6 +61,26 @@ module ::MediaGallery
       u.trust_level.to_i >= comment_likes_min_trust_level
     end
 
+    def can_report
+      u = current_user
+      return false if u.blank?
+      return false if object.user_id.to_i == u.id.to_i
+      return false unless comment_reports_enabled?
+      return false unless comment_report_table_available?
+
+      u.trust_level.to_i >= comment_reports_min_trust_level
+    end
+
+    def reported_by_current_user
+      u = current_user
+      return false if u.blank?
+      return false unless comment_report_table_available?
+
+      ::MediaGallery::MediaCommentReport.exists?(user_id: u.id, media_comment_id: object.id, status: "open")
+    rescue ActiveRecord::StatementInvalid, ActiveModel::MissingAttributeError
+      false
+    end
+
     def mine
       current_user.present? && object.user_id == current_user.id
     end
@@ -103,8 +125,23 @@ module ::MediaGallery
       SiteSetting.respond_to?(:media_gallery_comment_likes_min_trust_level) ? SiteSetting.media_gallery_comment_likes_min_trust_level.to_i : 0
     end
 
+    def comment_reports_enabled?
+      SiteSetting.respond_to?(:media_gallery_comment_reports_enabled) && SiteSetting.media_gallery_comment_reports_enabled
+    end
+
+    def comment_reports_min_trust_level
+      SiteSetting.respond_to?(:media_gallery_comment_reports_min_trust_level) ? SiteSetting.media_gallery_comment_reports_min_trust_level.to_i : 0
+    end
+
     def comment_like_table_available?
       defined?(::MediaGallery::MediaCommentLike) && ::MediaGallery::MediaCommentLike.table_exists?
+    rescue ActiveRecord::StatementInvalid, NoMethodError
+      false
+    end
+
+
+    def comment_report_table_available?
+      defined?(::MediaGallery::MediaCommentReport) && ::MediaGallery::MediaCommentReport.table_exists?
     rescue ActiveRecord::StatementInvalid, NoMethodError
       false
     end

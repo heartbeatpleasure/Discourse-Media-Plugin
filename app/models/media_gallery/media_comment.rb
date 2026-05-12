@@ -13,6 +13,7 @@ module ::MediaGallery
     belongs_to :deleted_by, class_name: "::User", optional: true
 
     has_many :media_comment_likes, class_name: "MediaGallery::MediaCommentLike", foreign_key: :media_comment_id, dependent: :delete_all
+    has_many :media_comment_reports, class_name: "MediaGallery::MediaCommentReport", foreign_key: :media_comment_id, dependent: :delete_all
 
     validates :user_id, presence: true
     validates :media_item_id, presence: true
