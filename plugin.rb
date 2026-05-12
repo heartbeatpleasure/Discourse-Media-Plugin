@@ -263,6 +263,8 @@ after_initialize do
     post "/media/:public_id/comments/:comment_id/like" => "media_gallery/media_comments#like", defaults: { format: :json }
     post "/media/:public_id/comments/:comment_id/unlike" => "media_gallery/media_comments#unlike", defaults: { format: :json }
     post "/media/:public_id/comments/:comment_id/report" => "media_gallery/media_comments#report", defaults: { format: :json }
+    patch "/media/:public_id/comments/:comment_id" => "media_gallery/media_comments#update", defaults: { format: :json }
+    put "/media/:public_id/comments/:comment_id" => "media_gallery/media_comments#update", defaults: { format: :json }
     delete "/media/:public_id/comments/:comment_id" => "media_gallery/media_comments#destroy", defaults: { format: :json }
 
     get "/media/:public_id" => "media_gallery/media#show", defaults: { format: :json }

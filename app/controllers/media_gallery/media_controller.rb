@@ -1561,6 +1561,8 @@ end
       # still verifies table availability before creating a report.
       comment_reports_enabled = SiteSetting.respond_to?(:media_gallery_comment_reports_enabled) && SiteSetting.media_gallery_comment_reports_enabled
       comment_reports_min_trust_level = SiteSetting.respond_to?(:media_gallery_comment_reports_min_trust_level) ? SiteSetting.media_gallery_comment_reports_min_trust_level.to_i : 0
+      comment_edit_enabled = SiteSetting.respond_to?(:media_gallery_comments_edit_enabled) && SiteSetting.media_gallery_comments_edit_enabled
+      comment_edit_window_minutes = SiteSetting.respond_to?(:media_gallery_comments_edit_window_minutes) ? SiteSetting.media_gallery_comments_edit_window_minutes.to_i : 15
 
       {
         enabled: SiteSetting.respond_to?(:media_gallery_comments_enabled) && SiteSetting.media_gallery_comments_enabled,
@@ -1568,6 +1570,9 @@ end
         max_length: SiteSetting.respond_to?(:media_gallery_comments_max_length) ? SiteSetting.media_gallery_comments_max_length.to_i : 1000,
         can_comment: current_user.present? && current_user.trust_level.to_i >= (SiteSetting.respond_to?(:media_gallery_comments_min_trust_level) ? SiteSetting.media_gallery_comments_min_trust_level.to_i : 0),
         deep_link_path: media_comments_deep_link_path,
+        edit_enabled: comment_edit_enabled,
+        edit_window_minutes: [[comment_edit_window_minutes, 0].max, 1440].min,
+        can_edit: current_user.present? && comment_edit_enabled,
         likes_enabled: comment_likes_enabled,
         can_like: current_user.present? && comment_likes_enabled && current_user.trust_level.to_i >= comment_likes_min_trust_level,
         reports_enabled: comment_reports_enabled,

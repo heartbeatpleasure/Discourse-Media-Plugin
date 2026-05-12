@@ -11,7 +11,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
     before_action :ensure_comments_enabled
     before_action :ensure_can_view
-    before_action :ensure_secure_write_request!, only: [:create, :destroy, :like, :unlike, :report]
+    before_action :ensure_secure_write_request!, only: [:create, :update, :destroy, :like, :unlike, :report]
 
     def index
       item = find_item_by_public_id!(params[:public_id])
@@ -118,6 +118,50 @@ module ::MediaGallery
     rescue => e
       Rails.logger.error("[media_gallery] comments create failed request_id=#{request.request_id} public_id=#{params[:public_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}")
       render_json_error("comment_failed", status: 500, message: "Comment could not be posted.")
+    end
+
+    def update
+      item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
+      raise Discourse::NotFound unless item.ready?
+
+      comment = find_visible_comment!(item)
+      return render_json_error("comment_edit_forbidden", status: 403, message: comment_edit_forbidden_message(comment)) unless can_edit_comment?(comment)
+
+      body = sanitize_comment_body(params[:body])
+      if body.blank?
+        return render_json_error("comment_body_required", status: 422, message: "Comment cannot be empty.")
+      end
+
+      max_length = comment_max_length
+      if body.length > max_length
+        return render_json_error("comment_too_long", status: 422, message: "Comment is too long. Maximum is #{max_length} characters.")
+      end
+
+      now = Time.now.utc
+      metadata = comment_extra_metadata(comment)
+      metadata["edit_count"] = metadata["edit_count"].to_i + 1
+      metadata["last_edited_at"] = now.iso8601
+      metadata["last_edited_by_id"] = current_user.id
+
+      comment.update_columns(
+        body: body,
+        extra_metadata: metadata,
+        updated_at: now
+      )
+      comment.reload
+
+      log_comment_event("media_comment_edited", item: item, comment: comment, severity: "info")
+
+      render_json_dump(
+        ok: true,
+        comment: serialize_data(comment, MediaGallery::MediaCommentSerializer, root: false)
+      )
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.error("[media_gallery] comments update failed request_id=#{request.request_id} public_id=#{params[:public_id]} comment_id=#{params[:comment_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}")
+      render_json_error("comment_edit_failed", status: 500, message: "Comment could not be updated.")
     end
 
     def destroy
@@ -292,6 +336,58 @@ module ::MediaGallery
     def can_delete_comment?(comment)
       return false if current_user.blank?
       current_user.staff? || current_user.admin? || comment.user_id == current_user.id
+    end
+
+    def comments_edit_enabled?
+      SiteSetting.respond_to?(:media_gallery_comments_edit_enabled) && SiteSetting.media_gallery_comments_edit_enabled
+    end
+
+    def comment_edit_window_minutes
+      value = SiteSetting.respond_to?(:media_gallery_comments_edit_window_minutes) ? SiteSetting.media_gallery_comments_edit_window_minutes.to_i : 15
+      [[value, 0].max, 1440].min
+    end
+
+    def can_edit_comment?(comment)
+      return false if current_user.blank?
+      return false if comment.blank?
+      return false unless comments_edit_enabled?
+      return false unless comment.visible?
+      return false unless comment.user_id.to_i == current_user.id.to_i
+      return false if comment_has_open_report?(comment)
+
+      window = comment_edit_window_minutes
+      return false if window <= 0
+      return false if comment.created_at.blank?
+
+      comment.created_at >= window.minutes.ago
+    end
+
+    def comment_edit_forbidden_message(comment)
+      return "Comment editing is disabled." unless comments_edit_enabled?
+      return "You can only edit your own visible comments." if comment.blank? || comment.user_id.to_i != current_user&.id.to_i
+      return "This comment can no longer be edited because it has been reported." if comment_has_open_report?(comment)
+      return "The edit window for this comment has expired."
+    end
+
+    def comment_has_open_report?(comment)
+      return false if comment.blank?
+      return false unless comment_report_table_available?
+
+      ::MediaGallery::MediaCommentReport.exists?(media_comment_id: comment.id, status: "open")
+    rescue ActiveRecord::StatementInvalid, ActiveModel::MissingAttributeError, NoMethodError
+      false
+    end
+
+    def comment_extra_metadata(comment)
+      raw = if comment.respond_to?(:has_attribute?) && comment.has_attribute?("extra_metadata")
+        comment.extra_metadata
+      else
+        nil
+      end
+
+      raw.is_a?(Hash) ? raw.deep_dup : {}
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      {}
     end
 
     def can_like_comment?

@@ -1359,6 +1359,17 @@ plugins:
     default: true
     client: false
 
+  media_gallery_comments_edit_enabled:
+    default: true
+    client: false
+
+  media_gallery_comments_edit_window_minutes:
+    default: 15
+    type: integer
+    min: 0
+    max: 1440
+    client: false
+
   media_gallery_comments_deep_link_path:
     default: "/media-library"
     type: string

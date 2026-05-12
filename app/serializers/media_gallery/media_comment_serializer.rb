@@ -14,7 +14,11 @@ module ::MediaGallery
       :can_like,
       :can_report,
       :reported_by_current_user,
+      :edited,
+      :last_edited_at,
+      :edit_count,
       :mine,
+      :can_edit,
       :can_delete,
       :user,
       :owner_comment,
@@ -80,8 +84,36 @@ module ::MediaGallery
       false
     end
 
+    def edited
+      edit_count.positive? || last_edited_at.present?
+    end
+
+    def last_edited_at
+      value = comment_extra_metadata["last_edited_at"]
+      value.to_s.presence
+    end
+
+    def edit_count
+      comment_extra_metadata["edit_count"].to_i
+    end
+
     def mine
       current_user.present? && object.user_id == current_user.id
+    end
+
+    def can_edit
+      u = current_user
+      return false if u.blank?
+      return false unless comments_edit_enabled?
+      return false unless object.visible?
+      return false unless object.user_id.to_i == u.id.to_i
+      return false if comment_has_open_report?
+
+      window = comment_edit_window_minutes
+      return false if window <= 0
+      return false if object.created_at.blank?
+
+      object.created_at >= window.minutes.ago
     end
 
     def can_delete
@@ -111,6 +143,35 @@ module ::MediaGallery
     end
 
     private
+
+    def comment_extra_metadata
+      raw = if object.respond_to?(:has_attribute?) && object.has_attribute?("extra_metadata")
+        object.extra_metadata
+      else
+        nil
+      end
+
+      raw.is_a?(Hash) ? raw : {}
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      {}
+    end
+
+    def comments_edit_enabled?
+      SiteSetting.respond_to?(:media_gallery_comments_edit_enabled) && SiteSetting.media_gallery_comments_edit_enabled
+    end
+
+    def comment_edit_window_minutes
+      value = SiteSetting.respond_to?(:media_gallery_comments_edit_window_minutes) ? SiteSetting.media_gallery_comments_edit_window_minutes.to_i : 15
+      [[value, 0].max, 1440].min
+    end
+
+    def comment_has_open_report?
+      return false unless comment_report_table_available?
+
+      ::MediaGallery::MediaCommentReport.exists?(media_comment_id: object.id, status: "open")
+    rescue ActiveRecord::StatementInvalid, ActiveModel::MissingAttributeError, NoMethodError
+      false
+    end
 
     def current_user
       scope&.user
