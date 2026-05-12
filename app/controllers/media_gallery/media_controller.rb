@@ -880,6 +880,7 @@ module ::MediaGallery
         end
 
         MediaGallery::Security.open_or_touch_session!(token: token, user_id: user_id, ip: ip)
+        touch_hls_playback_session_heartbeat!(token: token, payload: payload, ip: ip)
 
         ok, err = MediaGallery::Security.enforce_session_limits!(user_id: user_id, ip: ip)
         if !ok
@@ -906,6 +907,28 @@ module ::MediaGallery
     rescue => e
       Rails.logger.warn("[media_gallery] heartbeat failed request_id=#{request.request_id} error=#{e.class}: #{e.message}")
       render_json_error("internal_error", status: 500)
+    end
+
+    def touch_hls_playback_session_heartbeat!(token:, payload:, ip:)
+      return unless payload.is_a?(Hash)
+      return unless payload["kind"].to_s == "hls"
+
+      session_id = payload["playback_session_id"].to_s.presence
+      return if session_id.blank?
+
+      current_time = params[:current_time].to_s
+      paused = params[:paused].to_s
+      attrs = {
+        hls_last_heartbeat_at: Time.now.utc.iso8601,
+        hls_last_heartbeat_ip: ip.to_s.presence,
+        hls_last_playhead_seconds: current_time.present? ? current_time.to_f : nil,
+        hls_last_heartbeat_paused: paused.present? ? paused : nil,
+      }.compact
+
+      MediaGallery::Security.touch_hls_playback_session!(session_id: session_id, token: token, attrs: attrs)
+    rescue => e
+      Rails.logger.debug("[media_gallery] hls heartbeat session touch failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
     end
 
     # POST /media/revoke

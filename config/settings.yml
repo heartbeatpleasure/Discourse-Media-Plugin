@@ -668,6 +668,46 @@ plugins:
     default: false
     client: false
 
+  # Iteration 4: log-only first controls for HLS heartbeat/context/behavior hardening.
+  # Keep enforcement disabled until Safari/iOS/native HLS telemetry is validated.
+  media_gallery_hls_recent_heartbeat_logging_enabled:
+    default: true
+    client: false
+
+  media_gallery_hls_recent_heartbeat_required:
+    default: false
+    client: false
+
+  media_gallery_hls_recent_heartbeat_grace_seconds:
+    default: 120
+    type: integer
+    min: 30
+    max: 900
+    client: false
+
+  media_gallery_hls_behavior_score_enabled:
+    default: true
+    client: false
+
+  media_gallery_hls_behavior_score_revoke_enabled:
+    default: false
+    client: false
+
+  media_gallery_hls_behavior_score_revoke_threshold:
+    default: 100
+    type: integer
+    min: 10
+    max: 1000
+    client: false
+
+  media_gallery_log_strict_media_context_violations:
+    default: true
+    client: false
+
+  media_gallery_strict_media_context_required:
+    default: false
+    client: false
+
   # HLS AES-128 content hardening (iterative rollout).
   # This is not DRM: authorized clients still receive decryption keys for playback.
   # Keep disabled until the packaging pipeline, key storage and key endpoint iterations are complete.

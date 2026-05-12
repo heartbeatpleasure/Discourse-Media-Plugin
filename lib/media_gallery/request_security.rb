@@ -25,6 +25,45 @@ module ::MediaGallery
       false
     end
 
+    def strict_media_context_violation_reason(request)
+      return nil if request.blank?
+
+      expected = trusted_base_urls
+      return "trusted_base_url_missing" if expected.blank?
+
+      origin = request.headers["Origin"].to_s.strip
+      referer = request.referer.to_s.strip
+      fetch_site = request.headers["Sec-Fetch-Site"].to_s.strip.downcase
+      fetch_mode = request.headers["Sec-Fetch-Mode"].to_s.strip.downcase
+      fetch_dest = request.headers["Sec-Fetch-Dest"].to_s.strip.downcase
+
+      if origin.present?
+        return nil if same_origin_url_any?(origin, expected)
+        return "origin_mismatch"
+      end
+
+      if referer.present?
+        return "referer_mismatch" unless same_origin_url_any?(referer, expected)
+        return "referer_is_media_endpoint" if media_endpoint_url?(referer)
+        return nil
+      end
+
+      return "top_level_navigation" if fetch_mode == "navigate" || fetch_dest == "document"
+
+      if fetch_site.blank?
+        return "missing_origin_referer_fetch_metadata"
+      end
+
+      # Treat Fetch Metadata without Origin/Referer as a weak-but-allowed context.
+      # Native HLS/Safari and some media fetches can be sparse; log-only telemetry
+      # lets admins see patterns before enabling strict enforcement.
+      return "fetch_metadata_only_#{fetch_site}" if %w[same-origin same-site].include?(fetch_site) && canonical_request_origin?(request, expected)
+
+      "untrusted_fetch_site_#{fetch_site.presence || 'blank'}"
+    rescue
+      "strict_context_check_error"
+    end
+
     def direct_navigation_request?(request)
       return false if request.blank?
 

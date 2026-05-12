@@ -29,6 +29,7 @@ module ::MediaGallery
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
       deny_direct_media_navigation!(:master, token: token, item: item)
       enforce_hls_playback_session!(token: token, payload: payload, item: item)
+      check_strict_media_context!(token: token, payload: payload, item: item, endpoint: :master)
 
       role = hls_role_for(item)
       enforce_aes128_required!(item, role: role, token: token)
@@ -55,6 +56,7 @@ module ::MediaGallery
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
       deny_direct_media_navigation!(:variant, token: token, item: item)
       enforce_hls_playback_session!(token: token, payload: payload, item: item)
+      check_strict_media_context!(token: token, payload: payload, item: item, endpoint: :variant)
 
       variant = params[:variant].to_s
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
@@ -84,6 +86,7 @@ module ::MediaGallery
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
       deny_direct_media_navigation!(:segment, token: token, item: item)
       enforce_hls_playback_session!(token: token, payload: payload, item: item)
+      check_strict_media_context!(token: token, payload: payload, item: item, endpoint: :segment)
 
       variant = params[:variant].to_s
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
@@ -116,6 +119,7 @@ module ::MediaGallery
       end
 
       check_hls_manifest_receipt!(token: token, payload: payload, item: item, endpoint: :segment, variant: variant, segment: segment)
+      check_hls_recent_heartbeat!(token: token, payload: payload, item: item, endpoint: :segment, variant: variant, segment: segment)
 
       role = hls_role_for(item)
       enforce_aes128_required!(item, role: role, token: token)
@@ -167,6 +171,7 @@ module ::MediaGallery
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
       deny_direct_media_navigation!(:key, token: token, item: item)
       enforce_hls_playback_session!(token: token, payload: payload, item: item)
+      check_strict_media_context!(token: token, payload: payload, item: item, endpoint: :key)
 
       role = hls_role_for(item)
       deny!(:hls_aes128_role_missing, token: token) unless role.present?
@@ -258,15 +263,134 @@ module ::MediaGallery
       reason = :hls_manifest_receipt_missing
       if ::MediaGallery::Security.hls_manifest_receipt_required?
         log_hls_manifest_receipt_gap!(token: token, payload: payload, item: item, endpoint: endpoint, variant: variant, segment: segment, key_id: key_id, enforced: true)
+        record_hls_behavior_signal!(signal: reason.to_s, points: 20, token: token, payload: payload, item: item, details: { endpoint: endpoint.to_s, enforced: true })
         deny!(reason, token: token)
       elsif ::MediaGallery::Security.hls_manifest_receipt_logging_enabled?
         log_hls_manifest_receipt_gap!(token: token, payload: payload, item: item, endpoint: endpoint, variant: variant, segment: segment, key_id: key_id, enforced: false)
+        record_hls_behavior_signal!(signal: reason.to_s, points: 20, token: token, payload: payload, item: item, details: { endpoint: endpoint.to_s, enforced: false })
       end
     rescue Discourse::NotFound
       raise
     rescue => e
       Rails.logger.debug("[media_gallery] HLS manifest receipt check failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
       nil
+    end
+
+    def check_hls_recent_heartbeat!(token:, payload:, item:, endpoint:, variant: nil, segment: nil, key_id: nil)
+      session_id = payload.is_a?(Hash) ? payload["playback_session_id"].to_s.presence : nil
+      return if session_id.blank?
+
+      ok, reason, data = ::MediaGallery::Security.hls_playback_session_recent_heartbeat_status(
+        session_id,
+        grace_seconds: hls_recent_heartbeat_grace_seconds
+      )
+      return if ok
+
+      if ::MediaGallery::Security.hls_recent_heartbeat_required?
+        log_hls_recent_heartbeat_gap!(token: token, payload: payload, item: item, endpoint: endpoint, variant: variant, segment: segment, key_id: key_id, reason: reason, session_payload: data, enforced: true)
+        record_hls_behavior_signal!(signal: reason || "hls_recent_heartbeat_missing", points: 15, token: token, payload: payload, item: item, details: { endpoint: endpoint.to_s, enforced: true })
+        deny!(reason || :hls_recent_heartbeat_missing, token: token)
+      elsif ::MediaGallery::Security.hls_recent_heartbeat_logging_enabled?
+        log_hls_recent_heartbeat_gap!(token: token, payload: payload, item: item, endpoint: endpoint, variant: variant, segment: segment, key_id: key_id, reason: reason, session_payload: data, enforced: false)
+        record_hls_behavior_signal!(signal: reason || "hls_recent_heartbeat_missing", points: 15, token: token, payload: payload, item: item, details: { endpoint: endpoint.to_s, enforced: false })
+      end
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS recent heartbeat check failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def log_hls_recent_heartbeat_gap!(token:, payload:, item:, endpoint:, variant: nil, segment: nil, key_id: nil, reason:, session_payload: nil, enforced: false)
+      token_ip_digest = hls_token_ip_digest(token)
+      minute = Time.now.utc.strftime("%Y%m%d%H%M")
+      key = "media_gallery:hls:heartbeat_gap:#{endpoint}:#{reason}:#{minute}:sha256:#{token_ip_digest}"
+      count = Discourse.redis.incr(key).to_i
+      Discourse.redis.expire(key, 2.minutes.to_i)
+      return unless count == 1
+
+      ::MediaGallery::LogEvents.record(
+        event_type: enforced ? "hls_recent_heartbeat_blocked" : "hls_recent_heartbeat_missing",
+        severity: enforced ? "warning" : "info",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+        fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+        message: reason.to_s,
+        details: {
+          reason: reason.to_s,
+          endpoint: endpoint.to_s,
+          public_id: item&.public_id,
+          variant: variant.to_s.presence,
+          segment: segment.to_s.presence,
+          key_id: key_id.to_s.presence,
+          token_sha256: token_sha256_label(token),
+          playback_session_id_present: payload.is_a?(Hash) && payload["playback_session_id"].present?,
+          last_heartbeat_at: session_payload.is_a?(Hash) ? session_payload["hls_last_heartbeat_at"] : nil,
+          session_created_at: session_payload.is_a?(Hash) ? session_payload["created_at"] : nil,
+          grace_seconds: hls_recent_heartbeat_grace_seconds,
+          enforced: enforced,
+        },
+      )
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS recent heartbeat gap log failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def check_strict_media_context!(token:, payload:, item:, endpoint:)
+      reason = ::MediaGallery::RequestSecurity.strict_media_context_violation_reason(request)
+      return if reason.blank?
+
+      if strict_media_context_required?
+        log_strict_media_context_violation!(token: token, payload: payload, item: item, endpoint: endpoint, reason: reason, enforced: true)
+        record_hls_behavior_signal!(signal: "strict_media_context_#{reason}", points: strict_media_context_score_points(reason), token: token, payload: payload, item: item, details: { endpoint: endpoint.to_s, enforced: true })
+        deny!(:strict_media_context_violation, token: token)
+      elsif strict_media_context_logging_enabled?
+        log_strict_media_context_violation!(token: token, payload: payload, item: item, endpoint: endpoint, reason: reason, enforced: false)
+        record_hls_behavior_signal!(signal: "strict_media_context_#{reason}", points: strict_media_context_score_points(reason), token: token, payload: payload, item: item, details: { endpoint: endpoint.to_s, enforced: false })
+      end
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS strict media context check failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def log_strict_media_context_violation!(token:, payload:, item:, endpoint:, reason:, enforced: false)
+      token_ip_digest = hls_token_ip_digest(token)
+      minute = Time.now.utc.strftime("%Y%m%d%H%M")
+      key = "media_gallery:hls:strict_context:#{endpoint}:#{reason}:#{minute}:sha256:#{token_ip_digest}"
+      count = Discourse.redis.incr(key).to_i
+      Discourse.redis.expire(key, 2.minutes.to_i)
+      return unless count == 1
+
+      ::MediaGallery::LogEvents.record(
+        event_type: enforced ? "hls_strict_media_context_blocked" : "hls_strict_media_context_weak",
+        severity: enforced ? "warning" : "info",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+        fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+        message: reason.to_s,
+        details: {
+          reason: reason.to_s,
+          endpoint: endpoint.to_s,
+          public_id: item&.public_id,
+          token_sha256: token_sha256_label(token),
+          enforced: enforced,
+        }.merge(::MediaGallery::RequestSecurity.fetch_metadata_details(request)),
+      )
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS strict context log failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def strict_media_context_score_points(reason)
+      reason.to_s.start_with?("fetch_metadata_only_") ? 0 : 10
     end
 
     def log_hls_manifest_receipt_gap!(token:, payload:, item:, endpoint:, variant: nil, segment: nil, key_id: nil, enforced: false)
@@ -773,9 +897,156 @@ module ::MediaGallery
           token_sha256: token_sha256_label(token),
         },
       )
+
+      record_hls_behavior_signal!(
+        signal: metric,
+        points: hls_anomaly_behavior_points(kind),
+        token: token,
+        payload: payload,
+        item: item,
+        details: {
+          endpoint: kind.to_s,
+          count: count,
+          threshold: threshold,
+          delivery_mode: delivery_mode.to_s.presence,
+        }
+      )
     rescue => e
       Rails.logger.debug("[media_gallery] HLS anomaly tracking failed kind=#{kind} request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
       nil
+    end
+
+    def record_hls_behavior_signal!(signal:, points:, token:, payload:, item:, details: {})
+      return unless hls_behavior_score_enabled?
+      points = points.to_i
+      return if points <= 0
+
+      redis = Discourse.redis
+      key = hls_behavior_score_key(token: token, payload: payload)
+      score = redis.incrby(key, points).to_i
+      redis.expire(key, hls_behavior_score_ttl_seconds(payload))
+
+      threshold = hls_behavior_score_revoke_threshold
+      return if threshold <= 0 || score < threshold
+
+      log_key = "#{key}:threshold_logged:#{threshold}"
+      first_threshold_crossing = redis.setnx(log_key, "1")
+      redis.expire(log_key, hls_behavior_score_ttl_seconds(payload)) if first_threshold_crossing
+
+      if first_threshold_crossing
+        ::MediaGallery::LogEvents.record(
+          event_type: "hls_behavior_score_threshold_reached",
+          severity: "warning",
+          category: "playback",
+          request: request,
+          user: current_user,
+          media_item: item,
+          overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+          fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+          message: signal.to_s,
+          details: {
+            signal: signal.to_s,
+            points: points,
+            score: score,
+            threshold: threshold,
+            token_sha256: token_sha256_label(token),
+            playback_session_id_present: payload.is_a?(Hash) && payload["playback_session_id"].present?,
+            auto_revoke_enabled: hls_behavior_score_revoke_enabled?,
+          }.merge(Hash(details || {})),
+        )
+      end
+
+      return unless hls_behavior_score_revoke_enabled?
+
+      ::MediaGallery::Security.revoke!(
+        token: token,
+        exp: payload.is_a?(Hash) ? payload["exp"] : nil,
+        user_id: current_user&.id,
+        ip: request.remote_ip.to_s,
+        playback_session_id: payload.is_a?(Hash) ? payload["playback_session_id"] : nil
+      )
+
+      ::MediaGallery::LogEvents.record(
+        event_type: "hls_behavior_score_revoked",
+        severity: "warning",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+        fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+        message: signal.to_s,
+        details: {
+          signal: signal.to_s,
+          score: score,
+          threshold: threshold,
+          token_sha256: token_sha256_label(token),
+        }.merge(Hash(details || {})),
+      )
+
+      deny!(:hls_behavior_score_revoked, token: token)
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS behavior scoring failed signal=#{signal} request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def hls_behavior_score_key(token:, payload:)
+      session_id = payload.is_a?(Hash) ? payload["playback_session_id"].to_s.presence : nil
+      if session_id.present?
+        return "media_gallery:hls:behavior_score:session_sha256:#{Digest::SHA256.hexdigest(session_id)}"
+      end
+
+      "media_gallery:hls:behavior_score:token_sha256:#{Digest::SHA256.hexdigest(token.to_s)}"
+    end
+
+    def hls_behavior_score_ttl_seconds(payload)
+      exp = payload.is_a?(Hash) ? payload["exp"].to_i : 0
+      ttl = exp.positive? ? exp - Time.now.to_i + 600 : 0
+      [[ttl, 30.minutes.to_i].max, 6.hours.to_i].min
+    rescue
+      2.hours.to_i
+    end
+
+    def hls_anomaly_behavior_points(kind)
+      case kind.to_s
+      when "key" then 35
+      when "segment" then 25
+      else 10
+      end
+    end
+
+    def hls_behavior_score_enabled?
+      SiteSetting.respond_to?(:media_gallery_hls_behavior_score_enabled) && SiteSetting.media_gallery_hls_behavior_score_enabled
+    rescue
+      false
+    end
+
+    def hls_behavior_score_revoke_enabled?
+      SiteSetting.respond_to?(:media_gallery_hls_behavior_score_revoke_enabled) && SiteSetting.media_gallery_hls_behavior_score_revoke_enabled
+    rescue
+      false
+    end
+
+    def hls_behavior_score_revoke_threshold
+      site_setting_integer(:media_gallery_hls_behavior_score_revoke_threshold, default: 100, min: 10, max: 1000)
+    end
+
+    def hls_recent_heartbeat_grace_seconds
+      site_setting_integer(:media_gallery_hls_recent_heartbeat_grace_seconds, default: 120, min: 30, max: 900)
+    end
+
+    def strict_media_context_logging_enabled?
+      SiteSetting.respond_to?(:media_gallery_log_strict_media_context_violations) && SiteSetting.media_gallery_log_strict_media_context_violations
+    rescue
+      false
+    end
+
+    def strict_media_context_required?
+      SiteSetting.respond_to?(:media_gallery_strict_media_context_required) && SiteSetting.media_gallery_strict_media_context_required
+    rescue
+      false
     end
 
     def hls_anomaly_threshold_for(kind)

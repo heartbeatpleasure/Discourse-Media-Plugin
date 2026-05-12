@@ -789,6 +789,12 @@ module ::MediaGallery
       hls_playback_sessions_enabled = setting_bool(:media_gallery_hls_playback_sessions_enabled, true)
       hls_manifest_receipt_logging_enabled = setting_bool(:media_gallery_hls_manifest_receipt_logging_enabled, true)
       hls_manifest_receipt_required = setting_bool(:media_gallery_hls_manifest_receipt_required, false)
+      hls_recent_heartbeat_logging_enabled = setting_bool(:media_gallery_hls_recent_heartbeat_logging_enabled, true)
+      hls_recent_heartbeat_required = setting_bool(:media_gallery_hls_recent_heartbeat_required, false)
+      hls_behavior_score_enabled = setting_bool(:media_gallery_hls_behavior_score_enabled, true)
+      hls_behavior_score_revoke_enabled = setting_bool(:media_gallery_hls_behavior_score_revoke_enabled, false)
+      strict_context_logging_enabled = setting_bool(:media_gallery_log_strict_media_context_violations, true)
+      strict_context_required = setting_bool(:media_gallery_strict_media_context_required, false)
       hls_presign_ttl = setting_int(:media_gallery_hls_s3_presign_ttl_seconds, 60)
       hls_presign_cache = setting_int(:media_gallery_hls_s3_presign_cache_seconds, 15)
 
@@ -827,6 +833,33 @@ module ::MediaGallery
         count: hls_manifest_receipt_required || !hls_manifest_receipt_logging_enabled ? 1 : 0,
         message: hls_manifest_receipt_required ? "Manifest receipt gating is enforcing." : hls_manifest_receipt_logging_enabled ? "Manifest receipt gaps are logged only." : "Manifest receipt gap logging is disabled.",
         detail: hls_manifest_receipt_required ? "Disable enforcement until Safari/iOS native HLS telemetry is validated." : "Log-only mode is the recommended safe default for native HLS/Safari compatibility."
+      )
+
+      rows << issue(
+        id: "hls_recent_heartbeat_policy",
+        label: "HLS recent-heartbeat policy",
+        severity: hls_recent_heartbeat_required ? "warning" : hls_recent_heartbeat_logging_enabled ? "ok" : "warning",
+        count: hls_recent_heartbeat_required || !hls_recent_heartbeat_logging_enabled ? 1 : 0,
+        message: hls_recent_heartbeat_required ? "Recent-heartbeat gating is enforcing." : hls_recent_heartbeat_logging_enabled ? "Recent-heartbeat gaps are logged only." : "Recent-heartbeat gap logging is disabled.",
+        detail: hls_recent_heartbeat_required ? "Disable enforcement until mobile/Safari/native HLS telemetry is validated." : "Log-only mode is the recommended safe default while pause, background-tab and mobile sleep behavior is observed."
+      )
+
+      rows << issue(
+        id: "hls_behavior_score_policy",
+        label: "HLS behavior score policy",
+        severity: hls_behavior_score_revoke_enabled ? "warning" : hls_behavior_score_enabled ? "ok" : "warning",
+        count: hls_behavior_score_revoke_enabled || !hls_behavior_score_enabled ? 1 : 0,
+        message: hls_behavior_score_revoke_enabled ? "HLS behavior-score auto-revoke is enabled." : hls_behavior_score_enabled ? "HLS behavior scoring is enabled in score-only mode." : "HLS behavior scoring is disabled.",
+        detail: hls_behavior_score_revoke_enabled ? "Keep auto-revoke disabled until log-only thresholds are tuned." : "Score-only mode is the safe default for iteration 4."
+      )
+
+      rows << issue(
+        id: "hls_strict_media_context_policy",
+        label: "HLS strict media-context policy",
+        severity: strict_context_required ? "warning" : strict_context_logging_enabled ? "ok" : "warning",
+        count: strict_context_required || !strict_context_logging_enabled ? 1 : 0,
+        message: strict_context_required ? "Strict media-context enforcement is enabled." : strict_context_logging_enabled ? "Strict media-context violations are logged only." : "Strict media-context logging is disabled.",
+        detail: strict_context_required ? "Disable enforcement until Safari/native HLS Fetch Metadata telemetry is validated." : "Log-only mode helps observe Origin/Referer/Fetch-Metadata patterns without blocking playback."
       )
 
       if active_backend == "s3"

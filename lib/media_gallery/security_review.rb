@@ -25,6 +25,15 @@ module ::MediaGallery
       if SiteSetting.respond_to?(:media_gallery_hls_manifest_receipt_required) && SiteSetting.media_gallery_hls_manifest_receipt_required
         warnings << "HLS manifest receipt enforcement is enabled; verify Safari/iOS native HLS behaviour before using this in production."
       end
+      if SiteSetting.respond_to?(:media_gallery_hls_recent_heartbeat_required) && SiteSetting.media_gallery_hls_recent_heartbeat_required
+        warnings << "HLS recent-heartbeat enforcement is enabled; verify pause/resume, mobile sleep, background tabs and Safari/iOS before using this in production."
+      end
+      if SiteSetting.respond_to?(:media_gallery_strict_media_context_required) && SiteSetting.media_gallery_strict_media_context_required
+        warnings << "Strict HLS media-context enforcement is enabled; keep it log-only until Origin/Referer/Fetch-Metadata telemetry is understood."
+      end
+      if SiteSetting.respond_to?(:media_gallery_hls_behavior_score_revoke_enabled) && SiteSetting.media_gallery_hls_behavior_score_revoke_enabled
+        warnings << "HLS behavior-score auto-revoke is enabled; use only after log-only tuning to avoid false positives."
+      end
 
       {
         generated_at: Time.now.utc.iso8601,
@@ -92,6 +101,9 @@ module ::MediaGallery
         hls_requires_logged_in_and_valid_token: "implemented",
         hls_server_side_playback_sessions: hls_playback_sessions_status,
         hls_manifest_receipt_monitoring: hls_manifest_receipt_status,
+        hls_recent_heartbeat_monitoring: hls_recent_heartbeat_status,
+        hls_behavior_scoring: hls_behavior_score_status,
+        hls_strict_media_context: hls_strict_media_context_status,
         hls_anomaly_logging: hls_anomaly_logging_status,
         extra_media_security_response_headers: response_security_headers_status,
         hls_only_video_download_prevention: hls_only_video_status,
@@ -141,6 +153,45 @@ module ::MediaGallery
     end
     private_class_method :hls_manifest_receipt_status
 
+    def hls_recent_heartbeat_status
+      if SiteSetting.respond_to?(:media_gallery_hls_recent_heartbeat_required) && SiteSetting.media_gallery_hls_recent_heartbeat_required
+        "enforced_review_mobile_hls_first"
+      elsif SiteSetting.respond_to?(:media_gallery_hls_recent_heartbeat_logging_enabled) && SiteSetting.media_gallery_hls_recent_heartbeat_logging_enabled
+        "log_only"
+      else
+        "available_but_disabled"
+      end
+    rescue
+      "unknown"
+    end
+    private_class_method :hls_recent_heartbeat_status
+
+    def hls_behavior_score_status
+      if SiteSetting.respond_to?(:media_gallery_hls_behavior_score_revoke_enabled) && SiteSetting.media_gallery_hls_behavior_score_revoke_enabled
+        "auto_revoke_enabled_review_first"
+      elsif SiteSetting.respond_to?(:media_gallery_hls_behavior_score_enabled) && SiteSetting.media_gallery_hls_behavior_score_enabled
+        "score_only"
+      else
+        "available_but_disabled"
+      end
+    rescue
+      "unknown"
+    end
+    private_class_method :hls_behavior_score_status
+
+    def hls_strict_media_context_status
+      if SiteSetting.respond_to?(:media_gallery_strict_media_context_required) && SiteSetting.media_gallery_strict_media_context_required
+        "enforced_review_native_hls_first"
+      elsif SiteSetting.respond_to?(:media_gallery_log_strict_media_context_violations) && SiteSetting.media_gallery_log_strict_media_context_violations
+        "log_only"
+      else
+        "available_but_disabled"
+      end
+    rescue
+      "unknown"
+    end
+    private_class_method :hls_strict_media_context_status
+
     def watermark_fingerprint_status
       watermark = SiteSetting.respond_to?(:media_gallery_watermark_enabled) && SiteSetting.media_gallery_watermark_enabled
       fingerprint = SiteSetting.respond_to?(:media_gallery_fingerprint_enabled) && SiteSetting.media_gallery_fingerprint_enabled
@@ -167,6 +218,12 @@ module ::MediaGallery
         hls_playback_sessions_enabled: (SiteSetting.respond_to?(:media_gallery_hls_playback_sessions_enabled) && !!SiteSetting.media_gallery_hls_playback_sessions_enabled),
         hls_manifest_receipt_logging_enabled: (SiteSetting.respond_to?(:media_gallery_hls_manifest_receipt_logging_enabled) && !!SiteSetting.media_gallery_hls_manifest_receipt_logging_enabled),
         hls_manifest_receipt_required: (SiteSetting.respond_to?(:media_gallery_hls_manifest_receipt_required) && !!SiteSetting.media_gallery_hls_manifest_receipt_required),
+        hls_recent_heartbeat_logging_enabled: (SiteSetting.respond_to?(:media_gallery_hls_recent_heartbeat_logging_enabled) && !!SiteSetting.media_gallery_hls_recent_heartbeat_logging_enabled),
+        hls_recent_heartbeat_required: (SiteSetting.respond_to?(:media_gallery_hls_recent_heartbeat_required) && !!SiteSetting.media_gallery_hls_recent_heartbeat_required),
+        hls_behavior_score_enabled: (SiteSetting.respond_to?(:media_gallery_hls_behavior_score_enabled) && !!SiteSetting.media_gallery_hls_behavior_score_enabled),
+        hls_behavior_score_revoke_enabled: (SiteSetting.respond_to?(:media_gallery_hls_behavior_score_revoke_enabled) && !!SiteSetting.media_gallery_hls_behavior_score_revoke_enabled),
+        strict_media_context_logging_enabled: (SiteSetting.respond_to?(:media_gallery_log_strict_media_context_violations) && !!SiteSetting.media_gallery_log_strict_media_context_violations),
+        strict_media_context_required: (SiteSetting.respond_to?(:media_gallery_strict_media_context_required) && !!SiteSetting.media_gallery_strict_media_context_required),
         playback_overlay_video_enabled: (SiteSetting.respond_to?(:media_gallery_playback_overlay_video_enabled) && !!SiteSetting.media_gallery_playback_overlay_video_enabled),
         playback_overlay_image_enabled: (SiteSetting.respond_to?(:media_gallery_playback_overlay_image_enabled) && !!SiteSetting.media_gallery_playback_overlay_image_enabled),
         max_active_tokens_per_user: SiteSetting.media_gallery_max_active_tokens_per_user.to_i,
@@ -200,6 +257,9 @@ module ::MediaGallery
         hls_presign_cache_seconds: site_setting_int(:media_gallery_hls_s3_presign_cache_seconds, default: 15),
         hls_presign_cache_scope: "token_sha256",
         hls_anomaly_logging: hls_anomaly_logging_status,
+        hls_recent_heartbeat_monitoring: hls_recent_heartbeat_status,
+        hls_behavior_scoring: hls_behavior_score_status,
+        hls_strict_media_context: hls_strict_media_context_status,
         rails_media_security_headers: response_security_headers_status,
         expected_delivery_model: expected_delivery_model(active_backend),
         cloudflare_r2_note: active_backend == "s3" ? "For Cloudflare R2, keep the bucket private. CORS matters mainly when using redirect delivery; stream/proxy keeps browser traffic on the forum origin." : nil,

@@ -81,6 +81,26 @@ module ::MediaGallery
       false
     end
 
+    def hls_recent_heartbeat_logging_enabled?
+      SiteSetting.respond_to?(:media_gallery_hls_recent_heartbeat_logging_enabled) && SiteSetting.media_gallery_hls_recent_heartbeat_logging_enabled
+    rescue
+      false
+    end
+
+    def hls_recent_heartbeat_required?
+      SiteSetting.respond_to?(:media_gallery_hls_recent_heartbeat_required) && SiteSetting.media_gallery_hls_recent_heartbeat_required
+    rescue
+      false
+    end
+
+    def hls_recent_heartbeat_grace_seconds
+      v = SiteSetting.respond_to?(:media_gallery_hls_recent_heartbeat_grace_seconds) ? SiteSetting.media_gallery_hls_recent_heartbeat_grace_seconds.to_i : 120
+      v = 120 if v <= 0
+      [[v, 30].max, 900].min
+    rescue
+      120
+    end
+
     # -----------------
     # Redis keys
     # -----------------
@@ -378,6 +398,37 @@ module ::MediaGallery
     rescue
       false
     end
+
+    def hls_playback_session_recent_heartbeat_status(session_id, grace_seconds: nil)
+      data = hls_playback_session_payload(session_id)
+      return [false, "hls_playback_session_not_active", nil] unless data.present?
+
+      grace = grace_seconds.to_i
+      grace = hls_recent_heartbeat_grace_seconds if grace <= 0
+      now = Time.now.utc
+
+      heartbeat_at = parse_iso8601_utc(data["hls_last_heartbeat_at"])
+      return [true, nil, data] if heartbeat_at.present? && heartbeat_at >= now - grace
+
+      created_at = parse_iso8601_utc(data["created_at"])
+      if heartbeat_at.blank? && created_at.present? && created_at >= now - grace
+        return [true, nil, data]
+      end
+
+      reason = heartbeat_at.present? ? "hls_recent_heartbeat_stale" : "hls_recent_heartbeat_missing"
+      [false, reason, data]
+    rescue => e
+      Rails.logger.debug("[media_gallery] hls heartbeat status check failed session_id=#{session_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      [false, "hls_recent_heartbeat_check_error", nil]
+    end
+
+    def parse_iso8601_utc(value)
+      return nil if value.blank?
+      Time.iso8601(value.to_s).utc
+    rescue
+      nil
+    end
+    private_class_method :parse_iso8601_utc
 
     def write_hls_playback_session_payload!(session_id, payload)
       key = hls_playback_session_key(session_id)

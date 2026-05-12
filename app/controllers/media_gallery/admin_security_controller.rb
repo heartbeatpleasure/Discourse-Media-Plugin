@@ -162,6 +162,12 @@ module ::MediaGallery
           "Keep server-side playback sessions enabled. Keep manifest receipt gating log-only until Safari/native HLS telemetry is reviewed."
         ),
         control(
+          "HLS heartbeat and behavior policies",
+          hls_behavior_policy_control_status,
+          hls_behavior_policy_control_summary,
+          "Keep heartbeat/context policies log-only first. Enable auto-revoke or strict enforcement only after Chrome/Firefox/Safari telemetry is reviewed."
+        ),
+        control(
           "Forensics export lifecycle",
           forensics_lifecycle_status,
           forensics_lifecycle_summary,
@@ -304,6 +310,14 @@ module ::MediaGallery
         hls_playback_sessions_enabled: setting_bool(:media_gallery_hls_playback_sessions_enabled),
         hls_manifest_receipt_logging_enabled: setting_bool(:media_gallery_hls_manifest_receipt_logging_enabled),
         hls_manifest_receipt_required: setting_bool(:media_gallery_hls_manifest_receipt_required),
+        hls_recent_heartbeat_logging_enabled: setting_bool(:media_gallery_hls_recent_heartbeat_logging_enabled),
+        hls_recent_heartbeat_required: setting_bool(:media_gallery_hls_recent_heartbeat_required),
+        hls_recent_heartbeat_grace_seconds: setting_int(:media_gallery_hls_recent_heartbeat_grace_seconds),
+        hls_behavior_score_enabled: setting_bool(:media_gallery_hls_behavior_score_enabled),
+        hls_behavior_score_revoke_enabled: setting_bool(:media_gallery_hls_behavior_score_revoke_enabled),
+        hls_behavior_score_revoke_threshold: setting_int(:media_gallery_hls_behavior_score_revoke_threshold),
+        log_strict_media_context_violations: setting_bool(:media_gallery_log_strict_media_context_violations),
+        strict_media_context_required: setting_bool(:media_gallery_strict_media_context_required),
         hls_aes128_enabled: aes128_enabled,
         hls_aes128_required: aes128_required,
         hls_aes128_key_rotation_segments: setting_int(:media_gallery_hls_aes128_key_rotation_segments),
@@ -639,6 +653,14 @@ module ::MediaGallery
         setting_row(:media_gallery_hls_playback_sessions_enabled, "HLS server-side playback sessions", recommended: "true"),
         setting_row(:media_gallery_hls_manifest_receipt_logging_enabled, "Log HLS manifest receipt gaps", recommended: "true"),
         setting_row(:media_gallery_hls_manifest_receipt_required, "Require HLS manifest receipt", recommended: "false until Safari/native HLS telemetry is validated"),
+        setting_row(:media_gallery_hls_recent_heartbeat_logging_enabled, "Log HLS recent-heartbeat gaps", recommended: "true"),
+        setting_row(:media_gallery_hls_recent_heartbeat_required, "Require recent HLS heartbeat", recommended: "false until mobile/native telemetry is validated"),
+        setting_row(:media_gallery_hls_recent_heartbeat_grace_seconds, "HLS heartbeat grace seconds", recommended: "120 or higher for mobile/Safari"),
+        setting_row(:media_gallery_hls_behavior_score_enabled, "HLS behavior scoring", recommended: "true"),
+        setting_row(:media_gallery_hls_behavior_score_revoke_enabled, "HLS behavior auto-revoke", recommended: "false until log-only tuning is complete"),
+        setting_row(:media_gallery_hls_behavior_score_revoke_threshold, "HLS behavior auto-revoke threshold", recommended: "observe and tune"),
+        setting_row(:media_gallery_log_strict_media_context_violations, "Log strict media context violations", recommended: "true"),
+        setting_row(:media_gallery_strict_media_context_required, "Require strict media context", recommended: "false until Safari/native HLS telemetry is validated"),
         setting_row(:media_gallery_log_hls_aes128_key_denials, "Log denied HLS AES key requests", recommended: "true during QA, false or monitored in production"),
         setting_row(:media_gallery_forensics_playback_session_retention_days, "Playback-session retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_retention_days, "Export retention", recommended: "90 days or policy"),
@@ -871,6 +893,9 @@ module ::MediaGallery
       hls_anomaly_playlist = setting_int(:media_gallery_hls_anomaly_playlist_requests_per_token_per_minute)
       hls_anomaly_segments = setting_int(:media_gallery_hls_anomaly_segment_requests_per_token_per_minute)
       hls_anomaly_keys = setting_int(:media_gallery_hls_anomaly_key_requests_per_token_per_minute)
+      hls_behavior_revoke = setting_bool(:media_gallery_hls_behavior_score_revoke_enabled)
+      hls_heartbeat_required = setting_bool(:media_gallery_hls_recent_heartbeat_required)
+      hls_context_required = setting_bool(:media_gallery_strict_media_context_required)
       play_tokens = setting_int(:media_gallery_play_tokens_per_ip_per_minute)
 
       [
@@ -1003,6 +1028,9 @@ module ::MediaGallery
         baseline_check("hls_anomaly", "HLS anomaly logging", yes_no(setting_bool(:media_gallery_log_hls_anomalies)), "Enabled", setting_bool(:media_gallery_log_hls_anomalies) ? "ok" : "partial", "Soft log-only HLS anomaly events help tune thresholds and spot segment/key scraping without blocking normal playback."),
         baseline_check("hls_server_sessions", "HLS server-side playback sessions", yes_no(download[:hls_playback_sessions_enabled]), "Enabled", download[:hls_playback_sessions_enabled] ? "ok" : "partial", "HLS tokens are tied to Redis playback-session state created by the play endpoint, making copied tokens easier to revoke and observe."),
         baseline_check("hls_manifest_receipt", "HLS manifest receipt monitoring", download[:hls_manifest_receipt_required] ? "Enforced" : download[:hls_manifest_receipt_logging_enabled] ? "Log-only" : "Disabled", "Log-only until native HLS telemetry is validated", download[:hls_manifest_receipt_required] ? "attention" : download[:hls_manifest_receipt_logging_enabled] ? "ok" : "partial", "Logs segment/key requests that appear before the same server-side playback session received a playlist. Enforcement should remain disabled until Safari/iOS patterns are known."),
+        baseline_check("hls_recent_heartbeat", "HLS recent heartbeat policy", download[:hls_recent_heartbeat_required] ? "Enforced" : download[:hls_recent_heartbeat_logging_enabled] ? "Log-only" : "Disabled", "Log-only until mobile/native telemetry is validated", download[:hls_recent_heartbeat_required] ? "attention" : download[:hls_recent_heartbeat_logging_enabled] ? "ok" : "partial", "Logs segment/key requests without a recent playback heartbeat after a grace period. Enforcement can affect Safari/iOS/background tabs if enabled too early."),
+        baseline_check("hls_behavior_score", "HLS behavior scoring", download[:hls_behavior_score_revoke_enabled] ? "Auto-revoke" : download[:hls_behavior_score_enabled] ? "Score-only" : "Disabled", "Score-only until tuned", download[:hls_behavior_score_revoke_enabled] ? "attention" : download[:hls_behavior_score_enabled] ? "ok" : "partial", "Aggregates HLS anomaly/context/heartbeat signals into a soft score. Auto-revoke should remain disabled until false positives are understood."),
+        baseline_check("hls_strict_context", "HLS strict media context", download[:strict_media_context_required] ? "Enforced" : download[:log_strict_media_context_violations] ? "Log-only" : "Disabled", "Log-only until native HLS telemetry is validated", download[:strict_media_context_required] ? "attention" : download[:log_strict_media_context_violations] ? "ok" : "partial", "Logs weak Origin/Referer/Fetch-Metadata context for HLS requests. Native HLS can be sparse, so enforcement is not recommended yet."),
         baseline_check("direct_media_navigation", "Block direct media navigation", yes_no(download[:block_direct_media_navigation]), "Enabled", download[:block_direct_media_navigation] ? "ok" : "partial", "Blocks clear address-bar/new-tab navigation to tokenized play/stream/HLS endpoints while allowing normal player requests."),
         baseline_check("extra_media_headers", "Extra media response headers", yes_no(extra_headers_enabled), "Enabled", extra_headers_enabled ? "ok" : "partial", "Adds Referrer-Policy and CORP headers to Rails-served tokenized media responses. Redirect responses only receive Referrer-Policy so redirect/proxy/x-accel modes remain switchable."),
         baseline_check("storage_delivery", "Protected storage delivery mode", "#{active_backend.presence || 'local'} / #{delivery_mode}", "stream/proxy for protected R2 unless redirect is explicitly reviewed", storage_delivery_status(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache), storage_delivery_note(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache)),
@@ -1107,6 +1135,19 @@ module ::MediaGallery
         "disabled"
       end
       "Server-side HLS playback sessions are #{sessions}; manifest receipt checks are #{receipt}."
+    end
+
+    def hls_behavior_policy_control_status
+      return "attention" if setting_bool(:media_gallery_hls_recent_heartbeat_required) || setting_bool(:media_gallery_strict_media_context_required) || setting_bool(:media_gallery_hls_behavior_score_revoke_enabled)
+      return "ok" if setting_bool(:media_gallery_hls_recent_heartbeat_logging_enabled) && setting_bool(:media_gallery_hls_behavior_score_enabled) && setting_bool(:media_gallery_log_strict_media_context_violations)
+      "partial"
+    end
+
+    def hls_behavior_policy_control_summary
+      heartbeat = setting_bool(:media_gallery_hls_recent_heartbeat_required) ? "enforced" : setting_bool(:media_gallery_hls_recent_heartbeat_logging_enabled) ? "log-only" : "disabled"
+      context = setting_bool(:media_gallery_strict_media_context_required) ? "enforced" : setting_bool(:media_gallery_log_strict_media_context_violations) ? "log-only" : "disabled"
+      behavior = setting_bool(:media_gallery_hls_behavior_score_revoke_enabled) ? "auto-revoke" : setting_bool(:media_gallery_hls_behavior_score_enabled) ? "score-only" : "disabled"
+      "Heartbeat is #{heartbeat}; strict media context is #{context}; behavior score is #{behavior}."
     end
 
     def forensic_http_policy_control_status
