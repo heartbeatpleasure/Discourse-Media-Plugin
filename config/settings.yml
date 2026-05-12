@@ -1359,6 +1359,11 @@ plugins:
     default: true
     client: false
 
+  media_gallery_comments_deep_link_path:
+    default: "/media-library"
+    type: string
+    client: false
+
   media_gallery_health_watchdog_enabled:
     default: true
     client: false

@@ -1554,6 +1554,7 @@ end
         page_size: SiteSetting.respond_to?(:media_gallery_comments_page_size) ? SiteSetting.media_gallery_comments_page_size.to_i : 20,
         max_length: SiteSetting.respond_to?(:media_gallery_comments_max_length) ? SiteSetting.media_gallery_comments_max_length.to_i : 1000,
         can_comment: current_user.present? && current_user.trust_level.to_i >= (SiteSetting.respond_to?(:media_gallery_comments_min_trust_level) ? SiteSetting.media_gallery_comments_min_trust_level.to_i : 0),
+        deep_link_path: ::MediaGallery::CommentNotifications.deep_link_path,
       }
     end
 

@@ -238,6 +238,8 @@ en:
     media_gallery_comments_per_minute: "Per-user rate limit for creating comments. Set to 0 to disable this rate limit."
     media_gallery_comments_notify_owner_title: "Notify media owner about comments"
     media_gallery_comments_notify_owner: "Send a private message to the media owner when another user posts a comment."
+    media_gallery_comments_deep_link_path_title: "Media gallery comments deep link path"
+    media_gallery_comments_deep_link_path: "Path to the frontend media library page used in comment notification and permalink URLs. Use a same-site path without query string, for example /media-library."
     media_gallery_blocked_groups_title: "Media gallery view blocked groups"
     media_gallery_blocked_groups: "Members of these groups cannot view media gallery items. A view block also prevents uploading, even if the user is also in an allowed uploader group. Staff and admins are not blocked by this setting."
     media_gallery_upload_blocked_groups_title: "Media gallery upload blocked groups"

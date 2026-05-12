@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "cgi"
-
 module ::MediaGallery
   class MediaCommentsController < ::ApplicationController
     requires_plugin "Discourse-Media-Plugin"
@@ -23,8 +21,17 @@ module ::MediaGallery
       page_size = comments_page_size
       scope = item.media_comments.visible.includes(:user).order(id: :desc)
 
-      before_id = params[:before_id].to_i
-      scope = scope.where("id < ?", before_id) if before_id.positive?
+      focus_comment_id = params[:comment_id].to_i
+      focused_comment = nil
+      comment_found = nil
+      if focus_comment_id.positive?
+        focused_comment = item.media_comments.visible.find_by(id: focus_comment_id)
+        comment_found = focused_comment.present?
+        scope = scope.where("id <= ?", focused_comment.id) if focused_comment.present?
+      else
+        before_id = params[:before_id].to_i
+        scope = scope.where("id < ?", before_id) if before_id.positive?
+      end
 
       rows = scope.limit(page_size + 1).to_a
       has_more_before = rows.length > page_size
@@ -37,7 +44,9 @@ module ::MediaGallery
         total: item.comments_count.to_i,
         has_more_before: has_more_before,
         next_before_id: has_more_before ? rows.last&.id : nil,
-        comments_count: item.comments_count.to_i
+        comments_count: item.comments_count.to_i,
+        focused_comment_id: focused_comment&.id,
+        comment_found: comment_found
       )
     rescue Discourse::NotFound
       raise
@@ -75,7 +84,7 @@ module ::MediaGallery
       end
 
       item.reload
-      notify_media_owner_about_comment(item, comment)
+      ::MediaGallery::CommentNotifications.notify_owner(item, comment)
       log_comment_event("media_comment_created", item: item, comment: comment, severity: "info")
 
       render_json_dump(
@@ -208,36 +217,6 @@ module ::MediaGallery
       return if per_minute <= 0
 
       RateLimiter.new(current_user, "media_gallery_comments_create_#{current_user.id}", per_minute, 1.minute).performed!
-    end
-
-    def notify_media_owner_about_comment(item, comment)
-      return unless SiteSetting.media_gallery_comments_notify_owner
-      return if item.user.blank?
-      return if item.user_id.to_i == comment.user_id.to_i
-
-      commenter = comment.user
-      title = "New comment on your media: #{item.title.to_s.presence || item.public_id}"
-      media_url = Discourse.base_url + "/media-library?media=#{CGI.escape(item.public_id.to_s)}&comment=#{comment.id}"
-      raw = <<~MD
-        #{commenter&.username || "A user"} commented on your media item.
-
-        Media: #{item.title.to_s.presence || "Untitled media"}
-        Commenter: #{commenter&.username}
-
-        #{comment.body.to_s.truncate(500)}
-
-        View it here: #{media_url}
-      MD
-
-      ::PostCreator.create!(
-        Discourse.system_user,
-        target_usernames: item.user.username,
-        archetype: Archetype.private_message,
-        title: title.truncate(200),
-        raw: raw
-      )
-    rescue => e
-      Rails.logger.warn("[media_gallery] comment notification failed item_id=#{item&.id} comment_id=#{comment&.id}: #{e.class}: #{e.message}")
     end
 
     def log_comment_event(event_type, item:, comment:, severity: "info")

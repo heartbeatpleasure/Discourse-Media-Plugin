@@ -83,6 +83,7 @@ after_initialize do
   require_relative "lib/media_gallery/playback_overlay"
   require_relative "lib/media_gallery/forensics_identify"
   require_relative "lib/media_gallery/log_events"
+  require_relative "lib/media_gallery/comment_notifications"
   require_relative "lib/media_gallery/processing_notifications"
   require_relative "lib/media_gallery/health_check"
   require_relative "lib/media_gallery/jobs_dashboard"
