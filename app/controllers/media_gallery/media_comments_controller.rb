@@ -19,31 +19,48 @@ module ::MediaGallery
       raise Discourse::NotFound unless item.ready?
 
       page_size = comments_page_size
-      scope = item.media_comments.visible.includes(:user).order(id: :desc)
+      base_scope = item.media_comments.visible.includes(:user)
 
       focus_comment_id = params[:comment_id].to_i
       focused_comment = nil
       comment_found = nil
-      if focus_comment_id.positive?
-        focused_comment = item.media_comments.visible.find_by(id: focus_comment_id)
-        comment_found = focused_comment.present?
-        scope = scope.where("id <= ?", focused_comment.id) if focused_comment.present?
+      before_id = params[:before_id].to_i
+
+      if before_id.positive?
+        # Normal pagination: load comments older than the oldest comment the
+        # client already has. Keep this path unchanged for the regular comment
+        # tab and the "load earlier" button.
+        rows = base_scope.where("id < ?", before_id).order(id: :desc).limit(page_size + 1).to_a
+        has_more_before = rows.length > page_size
+        rows = rows.first(page_size)
       else
-        before_id = params[:before_id].to_i
-        scope = scope.where("id < ?", before_id) if before_id.positive?
+        # Default/deeplink load: always start with the latest page. If a
+        # specific comment is requested and it is not in the latest page, add it
+        # to the response instead of replacing the whole list with only comments
+        # older than that focused comment. This prevents old comment links from
+        # making newer comments disappear from the preview.
+        rows = base_scope.order(id: :desc).limit(page_size + 1).to_a
+        rows = rows.first(page_size) if rows.length > page_size
+
+        if focus_comment_id.positive?
+          focused_comment = base_scope.find_by(id: focus_comment_id)
+          comment_found = focused_comment.present?
+          if focused_comment.present? && rows.none? { |row| row.id.to_i == focused_comment.id.to_i }
+            rows << focused_comment
+          end
+        end
+
+        oldest_id = rows.map { |row| row&.id }.compact.min
+        has_more_before = oldest_id.present? && item.media_comments.visible.where("id < ?", oldest_id).exists?
       end
 
-      rows = scope.limit(page_size + 1).to_a
-      has_more_before = rows.length > page_size
-      rows = rows.first(page_size)
-
-      comments = rows.reverse
+      comments = rows.compact.uniq { |row| row.id }.sort_by(&:id)
 
       render_json_dump(
         comments: serialize_data(comments, MediaGallery::MediaCommentSerializer, root: false),
         total: comments_count_for(item),
         has_more_before: has_more_before,
-        next_before_id: has_more_before ? rows.last&.id : nil,
+        next_before_id: has_more_before ? comments.first&.id : nil,
         comments_count: comments_count_for(item),
         focused_comment_id: focused_comment&.id,
         comment_found: comment_found
@@ -51,7 +68,9 @@ module ::MediaGallery
     rescue Discourse::NotFound
       raise
     rescue => e
-      Rails.logger.error("[media_gallery] comments index failed request_id=#{request.request_id} public_id=#{params[:public_id]} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}")
+      Rails.logger.error("[media_gallery] comments index failed request_id=#{request.request_id} public_id=#{params[:public_id]} error=#{e.class}: #{e.message}
+#{e.backtrace&.first(30)&.join("
+")}")
       render_json_error("comments_failed", status: 500, message: "Comments could not be loaded.")
     end
 
