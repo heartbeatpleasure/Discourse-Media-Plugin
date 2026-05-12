@@ -445,6 +445,7 @@ module ::MediaGallery
         Comment:
         #{comment.body.to_s.truncate(1200)}
 
+        Review the comment report: #{Discourse.base_url}/admin/plugins/media-gallery-reports?report_id=comment-#{report&.id}
         View the comment: #{comment_url}
       MD
 

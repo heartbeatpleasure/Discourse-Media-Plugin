@@ -220,7 +220,10 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     const username = this.selectedUser?.username || "";
     const managementUrl = userId ? `/admin/plugins/media-gallery-management?user_id=${encodeParam(userId)}` : "";
     const reportsByUserUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&reporter_user_id=${encodeParam(userId)}` : "";
-    const reportsOnUserMediaUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&media_owner_user_id=${encodeParam(userId)}` : "";
+    const reportsOnUserMediaUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=media&media_owner_user_id=${encodeParam(userId)}` : "";
+    const commentReportsByUserUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=comment&reporter_user_id=${encodeParam(userId)}` : "";
+    const commentReportsOnCommentsUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=comment&comment_author_user_id=${encodeParam(userId)}` : "";
+    const commentReportsOnMediaUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=comment&media_owner_user_id=${encodeParam(userId)}` : "";
     const logsUrl = username ? `/admin/plugins/media-gallery-logs?q=${encodeParam(username)}&hours=720` : "";
 
     return [
@@ -233,6 +236,9 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       { label: "Open reports submitted", value: stats.report_involvement?.submitted?.open ?? 0, url: reportsByUserUrl },
       { label: "Reports on user's media", value: stats.reports_against_media ?? 0, url: reportsOnUserMediaUrl },
       { label: "Open reports on user's media", value: stats.report_involvement?.on_user_media?.open ?? 0, url: reportsOnUserMediaUrl },
+      { label: "Comment reports submitted", value: stats.comment_reports_submitted ?? 0, url: commentReportsByUserUrl },
+      { label: "Comment reports on user's comments", value: stats.comment_reports_on_user_comments ?? 0, url: commentReportsOnCommentsUrl },
+      { label: "Comment reports on user's media", value: stats.comment_reports_on_user_media ?? 0, url: commentReportsOnMediaUrl },
       { label: "Likes given", value: stats.likes_given ?? 0 },
       { label: "Playback sessions", value: stats.playback_sessions ?? 0 },
       { label: "Log events 30d", value: stats.log_events_30d ?? 0, url: logsUrl },
@@ -242,8 +248,11 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   get reportInvolvementSections() {
     const involvement = this.stats?.report_involvement || {};
     return [
-      { title: "Reports submitted by user", rows: this.reportInvolvementRows(involvement.submitted || {}) },
-      { title: "Reports on user's media", rows: this.reportInvolvementRows(involvement.on_user_media || {}) },
+      { title: "Media reports submitted by user", rows: this.reportInvolvementRows(involvement.submitted || {}) },
+      { title: "Media reports on user's media", rows: this.reportInvolvementRows(involvement.on_user_media || {}) },
+      { title: "Comment reports submitted by user", rows: this.reportInvolvementRows(involvement.comment_submitted || {}) },
+      { title: "Comment reports on user's comments", rows: this.reportInvolvementRows(involvement.comment_on_user_comments || {}) },
+      { title: "Comment reports on user's media", rows: this.reportInvolvementRows(involvement.comment_on_user_media || {}) },
     ];
   }
 
@@ -262,8 +271,11 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
   get moderationTrendSections() {
     const trends = this.stats?.moderation_trends || {};
     return [
-      { title: "Reports submitted trend", subtitle: "Reports created by this user", rows: this.moderationTrendRows(trends.submitted || []) },
-      { title: "Reports on user's media trend", subtitle: "Reports created on this user's uploads", rows: this.moderationTrendRows(trends.on_user_media || []) },
+      { title: "Media reports submitted trend", subtitle: "Media reports created by this user", rows: this.moderationTrendRows(trends.submitted || []) },
+      { title: "Media reports on user's media trend", subtitle: "Media reports created on this user's uploads", rows: this.moderationTrendRows(trends.on_user_media || []) },
+      { title: "Comment reports submitted trend", subtitle: "Comment reports created by this user", rows: this.moderationTrendRows(trends.comment_submitted || []) },
+      { title: "Comment reports on user's comments trend", subtitle: "Reports received on comments authored by this user", rows: this.moderationTrendRows(trends.comment_on_user_comments || []) },
+      { title: "Comment reports on user's media trend", subtitle: "Comment reports created on uploads owned by this user", rows: this.moderationTrendRows(trends.comment_on_user_media || []) },
     ];
   }
 
@@ -420,6 +432,7 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     return (this.recent?.reports || []).map((report) => ({
       ...report,
       createdAtLabel: formatDateTime(report.created_at),
+      typeLabel: report.type_label || (report.report_type === "comment" ? "Comment report" : "Media report"),
       statusLabel: titleize(report.status),
       statusClass: report.status === "open" ? "is-warning" : report.status === "accepted" ? "is-danger" : report.status === "rejected" ? "is-warning" : report.status === "resolved" ? "is-success" : "",
       reportUrl: report.report_url || (report.id ? `/admin/plugins/media-gallery-reports?report_id=${encodeParam(report.id)}` : `/admin/plugins/media-gallery-reports?status=all&reporter_user_id=${encodeParam(this.selectedUser?.id)}`),

@@ -757,7 +757,7 @@ export default RouteTemplate(
           <div class="mg-userdiag__panel-header">
             <div class="mg-userdiag__copy">
               <h2>Report involvement</h2>
-              <p class="mg-userdiag__muted">Exact report counters split between reports submitted by this user and reports on this user's media.</p>
+              <p class="mg-userdiag__muted">Exact media/comment report counters split between reports submitted by this user, reports on this user's media, and reports on this user's comments.</p>
             </div>
           </div>
 
@@ -821,7 +821,7 @@ export default RouteTemplate(
           <div class="mg-userdiag__panel-header">
             <div class="mg-userdiag__copy">
               <h2>Moderation trends</h2>
-              <p class="mg-userdiag__muted">Report activity over the last 7, 30, and 90 days. Totals include open and reviewed reports.</p>
+              <p class="mg-userdiag__muted">Media and comment report activity over the last 7, 30, and 90 days. Totals include open and reviewed reports.</p>
             </div>
           </div>
 
@@ -910,7 +910,7 @@ export default RouteTemplate(
                     <article class="mg-userdiag__activity-row">
                       <div>
                         <div class="mg-userdiag__row-title">{{report.reason_label}}</div>
-                        <div class="mg-userdiag__row-meta">{{report.media_title}}</div>
+                        <div class="mg-userdiag__row-meta">{{report.typeLabel}} · {{report.media_title}}</div>
                       </div>
                       <div class="mg-userdiag__row-help">{{report.createdAtLabel}} · {{report.media_public_id}}</div>
                       <div class="mg-userdiag__actions">

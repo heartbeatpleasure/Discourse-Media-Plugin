@@ -18,9 +18,10 @@ module ::MediaGallery
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       timing = {}
 
-      all_reports = timed_phase!(timing, :scope) { report_scope.flat_map { |item| report_payloads_for_item(item) } }
+      all_reports = timed_phase!(timing, :scope) { combined_report_payloads }
       reports = timed_phase!(timing, :filters) do
-        filtered = apply_status_filter(all_reports)
+        filtered = apply_report_type_filter(all_reports)
+        filtered = apply_status_filter(filtered)
         filtered = apply_user_filter(filtered)
         filtered = apply_report_time_window_filter(filtered)
         apply_report_search_filter(filtered)
@@ -55,9 +56,15 @@ module ::MediaGallery
       return render_json_error("invalid_report_id", status: 422) if report_id.blank?
 
       decision = params[:decision].to_s.strip
-      unless %w[accept_hide accept_delete_asset reject resolve].include?(decision)
+      unless %w[accept_hide accept_delete_asset accept_delete_comment reject resolve].include?(decision)
         return render_json_error("invalid_report_decision", status: 422)
       end
+
+      parsed_report = parsed_report_identifier(report_id)
+      if parsed_report[:type] == "comment"
+        return review_comment_report(parsed_report[:id], decision: decision)
+      end
+      return render_json_error("invalid_report_decision", status: 422, message: "This action is only available for comment reports.") if decision == "accept_delete_comment"
 
       note = ::MediaGallery::TextSanitizer.plain_text(params[:note], max_length: 2000, allow_newlines: true).presence
       item = find_item_by_report_id!(report_id)
@@ -174,12 +181,87 @@ module ::MediaGallery
     end
 
 
+    def review_comment_report(comment_report_id, decision:)
+      unless %w[accept_delete_comment reject resolve].include?(decision)
+        return render_json_error("invalid_comment_report_decision", status: 422, message: "Choose a valid comment-report decision.")
+      end
+      return render_json_error("comment_reports_unavailable", status: 503, message: "Comment reports are not available yet.") unless comment_report_table_available?
+
+      note = ::MediaGallery::TextSanitizer.plain_text(params[:note], max_length: 2000, allow_newlines: true).presence
+      report = ::MediaGallery::MediaCommentReport.includes(:user, :comment_user, :reviewed_by, media_item: :user, media_comment: :user).find_by(id: comment_report_id.to_i)
+      raise Discourse::NotFound if report.blank?
+
+      report.with_lock do
+        report.reload
+        if report.status.to_s != "open"
+          return render_json_error("report_already_reviewed", status: 422, message: "This comment report has already been reviewed.")
+        end
+
+        now = Time.now.utc
+        status = decision == "reject" ? "rejected" : (decision == "resolve" ? "resolved" : "accepted")
+        snapshot = report.snapshot.is_a?(Hash) ? report.snapshot.deep_dup : {}
+        snapshot["decision"] = decision
+        snapshot["reviewed_at"] = now.iso8601
+        snapshot["reviewed_by_user_id"] = current_user.id
+        snapshot["reviewed_by_username"] = current_user.username
+        snapshot["review_note"] = note if note.present?
+
+        if decision == "accept_delete_comment"
+          comment = report.media_comment
+          if comment.present? && comment.visible?
+            snapshot["comment_removed"] = true
+            snapshot["comment_removed_at"] = now.iso8601
+            snapshot["comment_removed_by_user_id"] = current_user.id
+            snapshot["comment_removed_by_username"] = current_user.username
+            comment.update_columns(status: "deleted", deleted_at: now, deleted_by_id: current_user.id, updated_at: Time.now)
+            update_item_comment_counters_for_comment_report!(report.media_item)
+          else
+            snapshot["comment_removed"] = false
+            snapshot["comment_remove_skipped_reason"] = "comment_already_removed_or_missing"
+          end
+        end
+
+        report.update_columns(
+          status: status,
+          reviewed_at: now,
+          reviewed_by_id: current_user.id,
+          review_note: note,
+          snapshot: snapshot,
+          updated_at: Time.now
+        )
+        update_comment_report_counter_for_comment_report!(report.media_comment)
+      end
+
+      report.reload
+      ::MediaGallery::OperationLogger.warn(
+        "media_comment_report_reviewed",
+        item: report.media_item,
+        operation: "comment_report_review",
+        data: {
+          report_id: comment_report_public_id(report),
+          comment_report_id: report.id,
+          comment_id: report.media_comment_id,
+          decision: decision,
+          reviewed_by: current_user.username,
+          note_present: note.present?,
+        }.compact
+      )
+
+      render_json_dump(ok: true, report: comment_report_payload_for(report), message: comment_review_message(decision))
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.error("[media_gallery] comment report review failed report_id=#{comment_report_id} request_id=#{request.request_id}: #{e.class}: #{e.message}\n#{e.backtrace&.first(40)&.join("\n")}")
+      render_json_error("comment_report_review_failed", status: 422, message: "Comment report review failed. Please try again.")
+    end
+
+
 
     def acknowledge_false_reporter
       user_id = params[:user_id].to_i
       return render_json_error("invalid_user_id", status: 422, message: "Invalid user ID.") unless user_id.positive?
 
-      reports = report_scope.flat_map { |item| report_payloads_for_item(item) }
+      reports = combined_report_payloads
       reporter = false_reporters_payload(reports, include_acknowledged: true).find { |entry| entry[:user_id].to_i == user_id }
       return render_json_error("false_reporter_signal_not_found", status: 404, message: "No repeated rejected-report signal was found for this user.") if reporter.blank?
 
@@ -237,6 +319,31 @@ end
         .limit(1000)
     end
 
+    def combined_report_payloads
+      media_reports = report_scope.flat_map { |item| report_payloads_for_item(item) }
+      comment_reports = comment_report_payloads
+      media_reports + comment_reports
+    rescue => e
+      Rails.logger.warn("[media_gallery] combined report payload failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      report_scope.flat_map { |item| report_payloads_for_item(item) }
+    end
+
+    def comment_report_payloads
+      return [] unless comment_report_table_available?
+
+      comment_report_scope.map { |report| comment_report_payload_for(report) }
+    rescue => e
+      Rails.logger.warn("[media_gallery] comment report payload failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      []
+    end
+
+    def comment_report_scope
+      ::MediaGallery::MediaCommentReport
+        .includes(:user, :comment_user, :reviewed_by, media_item: :user, media_comment: :user)
+        .order(created_at: :desc)
+        .limit(1000)
+    end
+
     def report_payloads_for_item(item)
       reports_from_meta(metadata_for(item)).map { |report| report_payload_for(item, report) }
     end
@@ -245,6 +352,9 @@ end
       snapshot = report["item_snapshot"].is_a?(Hash) ? report["item_snapshot"] : {}
       {
         id: report["id"].to_s,
+        report_type: "media",
+        type: "media",
+        type_label: "Media report",
         status: report["status"].to_s.presence || "open",
         decision: report["decision"].to_s.presence,
         reason: report["reason"].to_s,
@@ -268,6 +378,106 @@ end
         owner_access: owner_media_access_payload(item.user),
         delete_summary: report["delete_summary"].is_a?(Hash) ? report["delete_summary"] : nil,
       }.compact
+    end
+
+
+    def comment_report_payload_for(report)
+      snapshot = report.snapshot.is_a?(Hash) ? report.snapshot : {}
+      item = report.media_item
+      comment = report.media_comment
+      reporter = report.user
+      comment_user = report.comment_user || comment&.user
+      status = normalize_report_status(report.status)
+      decision = snapshot["decision"].to_s.presence
+
+      {
+        id: comment_report_public_id(report),
+        numeric_id: report.id,
+        report_type: "comment",
+        type: "comment",
+        type_label: "Comment report",
+        status: status,
+        decision: decision,
+        reason: report.reason.to_s,
+        reason_label: comment_report_reason_label(report.reason, snapshot: snapshot),
+        message: report.message.to_s.presence,
+        created_at: report.created_at&.iso8601,
+        reporter_user_id: reporter&.id || snapshot["reporter_user_id"],
+        reporter_username: reporter&.username.to_s.presence || snapshot["reporter_username"].to_s.presence,
+        reporter_trust_level: reporter&.trust_level || snapshot["reporter_trust_level"],
+        reporter_staff: reporter&.staff? || ActiveModel::Type::Boolean.new.cast(snapshot["reporter_staff"]),
+        reviewed_at: report.reviewed_at&.iso8601,
+        reviewed_by_username: report.reviewed_by&.username.to_s.presence || snapshot["reviewed_by_username"].to_s.presence,
+        review_note: report.review_note.to_s.presence,
+        media: comment_report_media_payload(item, snapshot: snapshot),
+        item_snapshot: snapshot_payload(snapshot, item: item),
+        comment: comment_summary_payload_for_report(report, comment: comment, comment_user: comment_user, snapshot: snapshot),
+        owner_access: owner_media_access_payload(item&.user),
+      }.compact
+    end
+
+    def comment_report_media_payload(item, snapshot: nil)
+      snapshot ||= {}
+      if item.present?
+        return item_summary_payload(item, snapshot: snapshot)
+      end
+
+      {
+        id: snapshot["media_item_id"],
+        public_id: snapshot["public_id"].to_s.presence,
+        title: snapshot["title"].to_s.presence || "Untitled media",
+        status: snapshot["status"].to_s.presence,
+        media_type: snapshot["media_type"].to_s.presence,
+        uploader_user_id: snapshot["uploader_user_id"],
+        uploader_username: snapshot["uploader_username"].to_s.presence,
+        created_at: snapshot["created_at"].to_s.presence,
+        hidden: false,
+        asset_deleted: false,
+        thumbnail_url: snapshot["public_id"].present? ? "/media/#{snapshot["public_id"]}/thumbnail?admin_preview=1" : nil,
+      }.compact
+    end
+
+    def comment_summary_payload_for_report(report, comment:, comment_user:, snapshot: nil)
+      snapshot ||= {}
+      current_body = comment&.body.to_s.presence
+      snapshot_body = snapshot["comment_body"].to_s.presence
+      status = comment&.status.to_s.presence || snapshot["comment_status"].to_s.presence || "unknown"
+      deleted = comment.present? ? !comment.visible? : false
+
+      {
+        id: comment&.id || report.media_comment_id || snapshot["comment_id"],
+        body: current_body || snapshot_body,
+        snapshot_body: snapshot_body,
+        body_changed: current_body.present? && snapshot_body.present? && current_body != snapshot_body,
+        status: status,
+        deleted: deleted,
+        deleted_at: comment&.deleted_at&.iso8601,
+        user_id: comment_user&.id || report.comment_user_id || snapshot["comment_user_id"],
+        username: comment_user&.username.to_s.presence || snapshot["comment_username"].to_s.presence,
+        created_at: comment&.created_at&.iso8601 || snapshot["comment_created_at"].to_s.presence,
+        likes_count: comment.respond_to?(:likes_count) ? comment.likes_count.to_i : nil,
+        reports_count: comment.respond_to?(:reports_count) ? comment.reports_count.to_i : nil,
+      }.compact
+    end
+
+    def comment_report_public_id(report)
+      "comment-#{report.id}"
+    end
+
+    def comment_report_reason_label(reason, snapshot: nil)
+      snapshot ||= {}
+      snapshot["reason_label"].to_s.presence || comment_report_reason_options.find { |entry| entry[:id] == reason.to_s }&.dig(:label).to_s.presence || reason.to_s
+    end
+
+    def comment_report_reason_options
+      [
+        { id: "harassment", label: "Harassment or abuse" },
+        { id: "personal_info", label: "Personal or private information" },
+        { id: "illegal", label: "Illegal or prohibited content" },
+        { id: "spam", label: "Spam or unwanted content" },
+        { id: "rule_violation", label: "Comment guideline violation" },
+        { id: "other", label: "Other" },
+      ]
     end
 
     def item_summary_payload(item, snapshot: nil)
@@ -358,6 +568,11 @@ end
           status = normalize_report_status(report[:status] || report["status"])
           counts[:total] += 1
           counts[status.to_sym] += 1
+          if (report[:report_type] || report["report_type"] || report[:type] || report["type"]).to_s == "comment"
+            counts[:comment_reports] += 1
+          else
+            counts[:media_reports] += 1
+          end
           counts[:auto_hidden] += 1 if ActiveModel::Type::Boolean.new.cast(report[:auto_hidden] || report["auto_hidden"])
         end
         counts
@@ -417,7 +632,8 @@ end
       times = Array(reports).filter_map do |report|
         reporter_id = (report[:reporter_user_id] || report["reporter_user_id"]).to_i
         owner_id = report.dig(:media, :uploader_user_id).to_i
-        next unless reporter_id == uid || owner_id == uid
+        comment_author_id = report.dig(:comment, :user_id).to_i
+        next unless reporter_id == uid || owner_id == uid || comment_author_id == uid
 
         parse_report_time(report[:created_at] || report["created_at"])
       end
@@ -447,6 +663,8 @@ end
         rejected: 0,
         resolved: 0,
         auto_hidden: 0,
+        media_reports: 0,
+        comment_reports: 0,
       }
     end
 
@@ -485,9 +703,11 @@ end
     def active_report_filters_payload
       {
         status: params[:status].to_s.strip.presence || "open",
+        report_type: report_type_filter,
         q: params[:q].to_s.strip.presence,
         reporter_user_id: params[:reporter_user_id].to_i.positive? ? params[:reporter_user_id].to_i : nil,
         media_owner_user_id: params[:media_owner_user_id].to_i.positive? ? params[:media_owner_user_id].to_i : nil,
+        comment_author_user_id: params[:comment_author_user_id].to_i.positive? ? params[:comment_author_user_id].to_i : nil,
         since_days: bounded_since_days,
         show_acknowledged_reporter_signals: show_acknowledged_false_reporters? ? true : nil,
       }.compact
@@ -509,6 +729,19 @@ end
       [7, 30, 90].include?(value) ? value : nil
     end
 
+    def report_type_filter
+      value = params[:report_type].presence || params[:type].presence
+      value = value.to_s.strip.downcase
+      %w[media comment].include?(value) ? value : "all"
+    end
+
+    def apply_report_type_filter(reports)
+      type = report_type_filter
+      return reports if type == "all"
+
+      reports.select { |report| report[:report_type].to_s == type || report[:type].to_s == type }
+    end
+
     def apply_status_filter(reports)
       status = params[:status].to_s.strip.presence || "open"
       return reports if status == "all"
@@ -520,6 +753,7 @@ end
     def apply_user_filter(reports)
       reporter_user_id = params[:reporter_user_id].to_i
       media_owner_user_id = params[:media_owner_user_id].to_i
+      comment_author_user_id = params[:comment_author_user_id].to_i
 
       if reporter_user_id.positive?
         reports = reports.select { |report| report[:reporter_user_id].to_i == reporter_user_id }
@@ -527,6 +761,10 @@ end
 
       if media_owner_user_id.positive?
         reports = reports.select { |report| report.dig(:media, :uploader_user_id).to_i == media_owner_user_id }
+      end
+
+      if comment_author_user_id.positive?
+        reports = reports.select { |report| report.dig(:comment, :user_id).to_i == comment_author_user_id }
       end
 
       reports
@@ -548,6 +786,8 @@ end
 
       [
         report[:id],
+        report[:report_type],
+        report[:type_label],
         status,
         closed,
         status == "open" ? "needs review" : "reviewed",
@@ -564,6 +804,11 @@ end
         report.dig(:item_snapshot, :public_id),
         report.dig(:item_snapshot, :title),
         report.dig(:item_snapshot, :uploader_username),
+        report.dig(:comment, :id),
+        report.dig(:comment, :username),
+        report.dig(:comment, :body),
+        report.dig(:comment, :snapshot_body),
+        report.dig(:comment, :status),
       ]
     end
 
@@ -577,6 +822,8 @@ end
         "accepted hidden accept hide"
       when "accept_delete_asset"
         "accepted files deleted accept delete asset"
+      when "accept_delete_comment"
+        "accepted comment removed accept remove delete comment"
       when "reject"
         "rejected reject"
       when "resolve"
@@ -599,7 +846,20 @@ end
     end
 
     def safe_report_id(value)
-      value.to_s.strip.match?(/\A[a-f0-9\-]{20,80}\z/i) ? value.to_s.strip : nil
+      id = value.to_s.strip
+      return id if id.match?(/\Acomment-\d+\z/i)
+      return id if id.match?(/\A[a-f0-9\-]{20,80}\z/i)
+
+      nil
+    end
+
+    def parsed_report_identifier(value)
+      id = value.to_s.strip
+      if id.match?(/\Acomment-(\d+)\z/i)
+        return { type: "comment", id: Regexp.last_match(1).to_i }
+      end
+
+      { type: "media", id: id }
     end
 
     def metadata_for(item)
@@ -1155,12 +1415,70 @@ def append_owner_access_log!(meta, item, owner:, action:, note:, group:, block_t
   append_management_log!(meta, action: action, item: item, note: note, changes: { change_key => [from_blocked, to_blocked], "owner" => [owner.username, owner.username], group_key => [group.name, group.name] })
 end
 
+
+def comment_report_table_available?
+  defined?(::MediaGallery::MediaCommentReport) && ::MediaGallery::MediaCommentReport.table_exists?
+rescue ActiveRecord::StatementInvalid, NoMethodError => e
+  Rails.logger.warn("[media_gallery] comment report table check failed: #{e.class}: #{e.message}")
+  false
+end
+
+def media_comment_column_available?(column_name)
+  defined?(::MediaGallery::MediaComment) && ::MediaGallery::MediaComment.columns_hash.key?(column_name.to_s)
+rescue => e
+  Rails.logger.warn("[media_gallery] media comment column check failed column=#{column_name}: #{e.class}: #{e.message}")
+  false
+end
+
+def media_item_column_available?(column_name)
+  defined?(::MediaGallery::MediaItem) && ::MediaGallery::MediaItem.columns_hash.key?(column_name.to_s)
+rescue => e
+  Rails.logger.warn("[media_gallery] media item column check failed column=#{column_name}: #{e.class}: #{e.message}")
+  false
+end
+
+def update_comment_report_counter_for_comment_report!(comment)
+  return if comment.blank?
+  return unless media_comment_column_available?("reports_count")
+
+  open_count = comment_report_table_available? ? ::MediaGallery::MediaCommentReport.where(media_comment_id: comment.id, status: "open").count : 0
+  comment.update_columns(reports_count: open_count, updated_at: Time.now)
+rescue => e
+  Rails.logger.warn("[media_gallery] comment report counter update failed comment_id=#{comment&.id}: #{e.class}: #{e.message}")
+end
+
+def update_item_comment_counters_for_comment_report!(item)
+  return if item.blank?
+
+  updates = { updated_at: Time.now }
+  updates[:comments_count] = item.media_comments.visible.count if media_item_column_available?("comments_count")
+  updates[:last_commented_at] = item.media_comments.visible.order(id: :desc).pick(:created_at) if media_item_column_available?("last_commented_at")
+  item.update_columns(updates) if updates.present?
+rescue => e
+  Rails.logger.warn("[media_gallery] comment report item counter update failed item_id=#{item&.id}: #{e.class}: #{e.message}")
+end
+
+    def comment_review_message(decision)
+      case decision
+      when "accept_delete_comment"
+        "Comment report accepted. The comment was removed and the audit record was kept."
+      when "reject"
+        "Comment report rejected."
+      when "resolve"
+        "Comment report resolved without further action."
+      else
+        "Comment report updated."
+      end
+    end
+
     def review_message(decision)
       case decision
       when "accept_hide"
         "Report accepted. The media item is hidden."
       when "accept_delete_asset"
         "Report accepted. The asset files were deleted and the audit record was kept."
+      when "accept_delete_comment"
+        "Comment report accepted. The comment was removed and the audit record was kept."
       when "reject"
         "Report rejected. If this report auto-hidden the asset, it has been restored."
       when "resolve"

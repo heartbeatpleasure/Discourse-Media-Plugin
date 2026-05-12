@@ -92,7 +92,7 @@ export default RouteTemplate(
 
       .mg-reports__filters {
         display: grid;
-        grid-template-columns: minmax(260px, 1fr) 180px 140px auto;
+        grid-template-columns: minmax(260px, 1fr) 160px 170px 140px auto;
         gap: 0.75rem;
         align-items: end;
       }
@@ -232,6 +232,22 @@ export default RouteTemplate(
         background: var(--secondary);
         border: 1px solid var(--mg-border);
         color: var(--primary);
+      }
+
+      .mg-reports__comment-preview,
+      .mg-reports__comment-body {
+        padding: 0.6rem 0.7rem;
+        border-radius: 12px;
+        background: var(--secondary);
+        border: 1px solid var(--mg-border);
+        color: var(--primary);
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+
+      .mg-reports__comment-preview {
+        font-size: var(--font-down-1);
+        color: var(--primary-high);
       }
 
       .mg-reports__badge-row,
@@ -583,7 +599,7 @@ export default RouteTemplate(
         <div class="mg-reports__panel-header">
           <div>
             <h2>Find reports</h2>
-            <p class="mg-reports__muted">Search reports by media, reporter, reason, or public ID.</p>
+            <p class="mg-reports__muted">Search media and comment reports by media, reporter, comment author, reason, text, or public ID.</p>
           </div>
         </div>
 
@@ -602,6 +618,15 @@ export default RouteTemplate(
               <option value="rejected">Rejected</option>
               <option value="resolved">Resolved</option>
               <option value="all">All</option>
+            </select>
+          </div>
+
+          <div class="mg-reports__field">
+            <label>Type</label>
+            <select value={{@controller.reportTypeFilter}} {{on "change" @controller.onReportTypeFilterChange}}>
+              <option value="all">All reports</option>
+              <option value="media">Media reports</option>
+              <option value="comment">Comment reports</option>
             </select>
           </div>
 
@@ -639,7 +664,7 @@ export default RouteTemplate(
         <div class="mg-reports__panel-header">
           <div>
             <h2>Moderation overview</h2>
-            <p class="mg-reports__muted">Global report trends and repeated rejected-report signals. Click a time window to filter the report list; acknowledging a user hides the signal until they submit or receive a new report.</p>
+            <p class="mg-reports__muted">Global media/comment report trends and repeated rejected-report signals. Click a time window to filter the report list; acknowledging a user hides the signal until they submit or receive a new report.</p>
           </div>
           <button class="btn" type="button" {{on "click" @controller.toggleAcknowledgedFalseReporters}}>
             {{@controller.falseReporterToggleLabel}}
@@ -655,6 +680,8 @@ export default RouteTemplate(
                 <span>Accepted {{trend.accepted}}</span>
                 <span>Rejected {{trend.rejected}}</span>
                 <span>Resolved {{trend.resolved}}</span>
+                <span>Media {{trend.mediaReports}}</span>
+                <span>Comments {{trend.commentReports}}</span>
                 <span>Auto-hidden {{trend.autoHidden}}</span>
               </div>
             </button>
@@ -696,7 +723,7 @@ export default RouteTemplate(
           <div class="mg-reports__panel-header">
             <div>
               <h2>Reports</h2>
-              <span class="mg-reports__muted">Open a report to review the media snapshot and take action.</span>
+              <span class="mg-reports__muted">Open a media or comment report to review the snapshot and take action.</span>
               <div class="mg-reports__performance">{{@controller.reportsCountLabel}}</div>
               {{#if @controller.performanceTimingLabel}}
                 <div class="mg-reports__performance">{{@controller.performanceTimingLabel}}</div>
@@ -717,15 +744,22 @@ export default RouteTemplate(
                   <div class="mg-reports__copy">
                     <div class="mg-reports__title">{{report.mediaTitle}}</div>
                     <div class="mg-reports__subtitle">{{report.mediaPublicId}}</div>
+                    {{#if report.isCommentReport}}
+                      <div class="mg-reports__subtitle">Comment by {{report.commentAuthor}} · #{{report.commentId}}</div>
+                      {{#if report.commentPreview}}
+                        <div class="mg-reports__comment-preview">{{report.commentPreview}}</div>
+                      {{/if}}
+                    {{/if}}
                   </div>
 
                   <button class="btn" type="button" {{on "click" (fn @controller.selectReport report)}}>
                     {{if report.isSelected "Selected" "Open"}}
                   </button>
 
-                  <div class="mg-reports__report-meta">Reported by {{report.reporterLabel}} on {{report.createdAtLabel}}</div>
+                  <div class="mg-reports__report-meta">{{report.typeLabel}} · Reported by {{report.reporterLabel}} on {{report.createdAtLabel}}</div>
 
                   <div class="mg-reports__badge-row mg-reports__report-badges">
+                    <span class="mg-reports__badge">{{report.typeLabel}}</span>
                     <span class="mg-reports__badge {{report.statusBadgeClass}}">{{report.statusLabel}}</span>
                     <span class="mg-reports__badge {{report.statusDetailBadgeClass}}">{{report.statusDetailLabel}}</span>
                     <span class="mg-reports__badge {{report.hiddenBadgeClass}}">{{report.hiddenLabel}}</span>
@@ -749,7 +783,7 @@ export default RouteTemplate(
           <div class="mg-reports__panel-header">
             <div>
               <h2>Selected report</h2>
-              <p class="mg-reports__muted">Accept, hide, delete asset files, reject, or resolve without action.</p>
+              <p class="mg-reports__muted">Review media reports and comment reports without mixing up the target being moderated.</p>
             </div>
           </div>
 
@@ -759,6 +793,10 @@ export default RouteTemplate(
 
           {{#if @controller.hasSelectedReport}}
             <div class="mg-reports__summary-grid">
+              <div class="mg-reports__summary-card">
+                <div class="mg-reports__summary-label">Report type</div>
+                <div class="mg-reports__summary-value">{{@controller.selectedReport.typeLabel}}</div>
+              </div>
               <div class="mg-reports__summary-card is-wide">
                 <div class="mg-reports__summary-label">Title</div>
                 <div class="mg-reports__summary-value">{{@controller.selectedReport.mediaTitle}}</div>
@@ -791,6 +829,27 @@ export default RouteTemplate(
               {{/if}}
             </div>
 
+            {{#if @controller.selectedIsCommentReport}}
+              <section class="mg-reports__section" style="margin-top: 1rem;">
+                <h3>Reported comment</h3>
+                <p class="mg-reports__muted" style="margin-top: 0.3rem;">This section targets the individual comment. The existing Report media flow remains separate.</p>
+                <div class="mg-reports__summary-grid" style="margin-top: 1rem;">
+                  {{#each @controller.selectedCommentRows as |row|}}
+                    <div class="mg-reports__summary-card">
+                      <div class="mg-reports__summary-label">{{row.label}}</div>
+                      <div class="mg-reports__summary-value">{{row.value}}</div>
+                    </div>
+                  {{/each}}
+                </div>
+                {{#if @controller.selectedReport.comment.body}}
+                  <div class="mg-reports__comment-body" style="margin-top: 1rem;">{{@controller.selectedReport.comment.body}}</div>
+                {{/if}}
+                {{#if @controller.selectedReport.comment.body_changed}}
+                  <p class="mg-reports__muted" style="margin-top: 0.6rem;">The current comment text differs from the original report snapshot.</p>
+                {{/if}}
+              </section>
+            {{/if}}
+
             {{#if @controller.selectedReport.message}}
               <section class="mg-reports__section" style="margin-top: 1rem;">
                 <h3>Reporter note</h3>
@@ -800,7 +859,7 @@ export default RouteTemplate(
 
             <section class="mg-reports__section" style="margin-top: 1rem;">
               <h3>Media snapshot</h3>
-              <p class="mg-reports__muted" style="margin-top: 0.3rem;">This snapshot is kept for audit even if the asset files are deleted.</p>
+              <p class="mg-reports__muted" style="margin-top: 0.3rem;">This media snapshot is kept for audit even if the asset files or reported comment are later removed.</p>
               <div class="mg-reports__summary-grid" style="margin-top: 1rem;">
                 {{#each @controller.selectedSnapshotRows as |row|}}
                   <div class="mg-reports__summary-card {{if row.wide "is-wide"}}">
@@ -813,32 +872,34 @@ export default RouteTemplate(
 
 
 
-            <section class="mg-reports__section" style="margin-top: 1rem;">
-              <div class="mg-reports__section-title-row">
-                <h3>Uploader access to media section</h3>
-                <div class="mg-reports__help-item">
-                  <span class="mg-reports__help-icon" tabindex="0" aria-label="Uploader access help">i</span>
-                  <div class="mg-reports__help-text">
-                    <p>{{@controller.ownerAccessHelp}}</p>
+            {{#if @controller.selectedIsMediaReport}}
+              <section class="mg-reports__section" style="margin-top: 1rem;">
+                <div class="mg-reports__section-title-row">
+                  <h3>Uploader access to media section</h3>
+                  <div class="mg-reports__help-item">
+                    <span class="mg-reports__help-icon" tabindex="0" aria-label="Uploader access help">i</span>
+                    <div class="mg-reports__help-text">
+                      <p>{{@controller.ownerAccessHelp}}</p>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <p class="mg-reports__muted" style="margin-top: 0.35rem;">{{@controller.ownerAccessSummary}}</p>
-              <div class="mg-reports__actions" style="margin-top: 1rem;">
-                <button class="btn btn-danger" type="button" disabled={{@controller.ownerViewBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "view-block")}}>
-                  Block view & upload
-                </button>
-                <button class="btn" type="button" disabled={{@controller.ownerViewUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "view-unblock")}}>
-                  Restore view
-                </button>
-                <button class="btn btn-danger" type="button" disabled={{@controller.ownerUploadBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "upload-block")}}>
-                  Block upload only
-                </button>
-                <button class="btn" type="button" disabled={{@controller.ownerUploadUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "upload-unblock")}}>
-                  Restore upload
-                </button>
-              </div>
-            </section>
+                <p class="mg-reports__muted" style="margin-top: 0.35rem;">{{@controller.ownerAccessSummary}}</p>
+                <div class="mg-reports__actions" style="margin-top: 1rem;">
+                  <button class="btn btn-danger" type="button" disabled={{@controller.ownerViewBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "view-block")}}>
+                    Block view & upload
+                  </button>
+                  <button class="btn" type="button" disabled={{@controller.ownerViewUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "view-unblock")}}>
+                    Restore view
+                  </button>
+                  <button class="btn btn-danger" type="button" disabled={{@controller.ownerUploadBlockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "upload-block")}}>
+                    Block upload only
+                  </button>
+                  <button class="btn" type="button" disabled={{@controller.ownerUploadUnblockDisabled}} {{on "click" (fn @controller.toggleOwnerBlock "upload-unblock")}}>
+                    Restore upload
+                  </button>
+                </div>
+              </section>
+            {{/if}}
 
             {{#if @controller.selectedIsOpen}}
               <section class="mg-reports__section" style="margin-top: 1rem;">
@@ -859,12 +920,18 @@ export default RouteTemplate(
                 </div>
 
                 <div class="mg-reports__actions" style="margin-top: 1rem;">
-                  <button class="btn btn-danger" type="button" disabled={{@controller.reviewDisabled}} {{on "click" (fn @controller.reviewSelected "accept_hide")}}>
-                    Accept / Hide asset
-                  </button>
-                  <button class="btn btn-danger" type="button" disabled={{@controller.reviewDisabled}} {{on "click" (fn @controller.reviewSelected "accept_delete_asset")}}>
-                    Accept / Delete asset
-                  </button>
+                  {{#if @controller.selectedIsCommentReport}}
+                    <button class="btn btn-danger" type="button" disabled={{@controller.reviewDisabled}} {{on "click" (fn @controller.reviewSelected "accept_delete_comment")}}>
+                      Accept / Remove comment
+                    </button>
+                  {{else}}
+                    <button class="btn btn-danger" type="button" disabled={{@controller.reviewDisabled}} {{on "click" (fn @controller.reviewSelected "accept_hide")}}>
+                      Accept / Hide asset
+                    </button>
+                    <button class="btn btn-danger" type="button" disabled={{@controller.reviewDisabled}} {{on "click" (fn @controller.reviewSelected "accept_delete_asset")}}>
+                      Accept / Delete asset
+                    </button>
+                  {{/if}}
                   <button class="btn" type="button" disabled={{@controller.reviewDisabled}} {{on "click" (fn @controller.reviewSelected "resolve")}}>
                     Resolve without action
                   </button>

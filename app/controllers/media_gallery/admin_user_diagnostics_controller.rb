@@ -361,6 +361,9 @@ module ::MediaGallery
         uploads_hidden: safe_count(item_scope.where("COALESCE((extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = true")),
         reports_submitted: report_involvement.dig(:submitted, :total).to_i,
         reports_against_media: report_involvement.dig(:on_user_media, :total).to_i,
+        comment_reports_submitted: report_involvement.dig(:comment_submitted, :total).to_i,
+        comment_reports_on_user_comments: report_involvement.dig(:comment_on_user_comments, :total).to_i,
+        comment_reports_on_user_media: report_involvement.dig(:comment_on_user_media, :total).to_i,
         report_involvement: report_involvement,
         moderation_trends: moderation_trends_payload(user),
         false_report_signal: false_report_signal_payload(user, report_involvement.dig(:submitted)),
@@ -469,21 +472,48 @@ module ::MediaGallery
 
     def recent_reports_by_user(user)
       reports = []
-      reports_with_media_reports_scope.limit(200).to_a.each do |item|
-          media_reports_for(item).each do |report|
-            next unless report["reporter_user_id"].to_i == user.id
 
+      reports_with_media_reports_scope.limit(200).to_a.each do |item|
+        media_reports_for(item).each do |report|
+          next unless report["reporter_user_id"].to_i == user.id
+
+          reports << {
+            id: report["id"],
+            report_type: "media",
+            type_label: "Media report",
+            created_at: report["created_at"],
+            status: report["status"],
+            reason_label: report["reason_label"].presence || report["reason"],
+            media_public_id: item.public_id,
+            media_title: item.title,
+            report_url: report["id"].present? ? "/admin/plugins/media-gallery-reports?report_id=#{report["id"]}" : "/admin/plugins/media-gallery-reports?status=all&report_type=media&reporter_user_id=#{user.id}",
+          }
+        end
+      end
+
+      if comment_report_table_available?
+        ::MediaGallery::MediaCommentReport
+          .includes(:media_item, media_comment: :user)
+          .where(user_id: user.id)
+          .order(created_at: :desc)
+          .limit(RECENT_LIMIT * 3)
+          .each do |report|
             reports << {
-              id: report["id"],
-              created_at: report["created_at"],
-              status: report["status"],
-              reason_label: report["reason_label"].presence || report["reason"],
-              media_public_id: item.public_id,
-              media_title: item.title,
-              report_url: report["id"].present? ? "/admin/plugins/media-gallery-reports?report_id=#{report["id"]}" : "/admin/plugins/media-gallery-reports?status=all&reporter_user_id=#{user.id}",
+              id: "comment-#{report.id}",
+              report_type: "comment",
+              type_label: "Comment report",
+              created_at: report.created_at&.iso8601,
+              status: report.status,
+              reason_label: comment_report_reason_label(report),
+              media_public_id: report.media_item&.public_id,
+              media_title: report.media_item&.title,
+              comment_id: report.media_comment_id,
+              comment_author_username: report.media_comment&.user&.username,
+              report_url: "/admin/plugins/media-gallery-reports?report_id=comment-#{report.id}",
             }
           end
-        end
+      end
+
       reports.sort_by { |report| report[:created_at].to_s }.reverse.first(RECENT_LIMIT)
     rescue
       []
@@ -509,6 +539,9 @@ module ::MediaGallery
       {
         submitted: report_counts_by_reporter(user),
         on_user_media: report_counts_on_user_media(user),
+        comment_submitted: comment_report_counts_by_reporter(user),
+        comment_on_user_comments: comment_report_counts_on_user_comments(user),
+        comment_on_user_media: comment_report_counts_on_user_media(user),
       }
     end
 
@@ -560,6 +593,43 @@ module ::MediaGallery
       empty_report_counts
     end
 
+    def comment_report_counts_by_reporter(user)
+      return empty_report_counts unless comment_report_table_available?
+
+      count_comment_reports(::MediaGallery::MediaCommentReport.where(user_id: user.id))
+    rescue
+      empty_report_counts
+    end
+
+    def comment_report_counts_on_user_comments(user)
+      return empty_report_counts unless comment_report_table_available?
+
+      count_comment_reports(::MediaGallery::MediaCommentReport.where(comment_user_id: user.id))
+    rescue
+      empty_report_counts
+    end
+
+    def comment_report_counts_on_user_media(user)
+      return empty_report_counts unless comment_report_table_available?
+
+      scope = ::MediaGallery::MediaCommentReport.joins(:media_item).where(::MediaGallery::MediaItem.table_name => { user_id: user.id })
+      count_comment_reports(scope)
+    rescue
+      empty_report_counts
+    end
+
+    def count_comment_reports(scope)
+      counts = empty_report_counts
+      scope.find_each(batch_size: 200) do |report|
+        status = normalize_report_status(report.status)
+        counts[:total] += 1
+        counts[status.to_sym] += 1
+      end
+      counts
+    rescue
+      empty_report_counts
+    end
+
     def normalize_report_status(value)
       status = value.to_s.downcase.presence || "open"
       %w[open accepted rejected resolved].include?(status) ? status : "open"
@@ -569,9 +639,12 @@ module ::MediaGallery
       {
         submitted: report_trends_by_reporter(user),
         on_user_media: report_trends_on_user_media(user),
+        comment_submitted: comment_report_trends_by_reporter(user),
+        comment_on_user_comments: comment_report_trends_on_user_comments(user),
+        comment_on_user_media: comment_report_trends_on_user_media(user),
       }
     rescue
-      { submitted: empty_trend_windows, on_user_media: empty_trend_windows }
+      { submitted: empty_trend_windows, on_user_media: empty_trend_windows, comment_submitted: empty_trend_windows, comment_on_user_comments: empty_trend_windows, comment_on_user_media: empty_trend_windows }
     end
 
     def empty_trend_windows
@@ -625,6 +698,53 @@ module ::MediaGallery
       end
 
       [7, 30, 90].map { |days| windows[days] }
+    end
+
+    def comment_report_trends_by_reporter(user)
+      return empty_trend_windows unless comment_report_table_available?
+
+      build_comment_report_trend_windows(::MediaGallery::MediaCommentReport.where(user_id: user.id))
+    rescue
+      empty_trend_windows
+    end
+
+    def comment_report_trends_on_user_comments(user)
+      return empty_trend_windows unless comment_report_table_available?
+
+      build_comment_report_trend_windows(::MediaGallery::MediaCommentReport.where(comment_user_id: user.id))
+    rescue
+      empty_trend_windows
+    end
+
+    def comment_report_trends_on_user_media(user)
+      return empty_trend_windows unless comment_report_table_available?
+
+      scope = ::MediaGallery::MediaCommentReport.joins(:media_item).where(::MediaGallery::MediaItem.table_name => { user_id: user.id })
+      build_comment_report_trend_windows(scope)
+    rescue
+      empty_trend_windows
+    end
+
+    def build_comment_report_trend_windows(scope)
+      windows = [7, 30, 90].to_h { |days| [days, empty_trend_window(days)] }
+      oldest = 90.days.ago
+
+      scope.find_each(batch_size: 200) do |report|
+        created_at = report.created_at
+        next if created_at.blank? || created_at < oldest
+
+        status = normalize_report_status(report.status)
+        windows.each do |days, counts|
+          next if created_at < days.days.ago
+
+          counts[:total] += 1
+          counts[status.to_sym] += 1
+        end
+      end
+
+      [7, 30, 90].map { |days| windows[days] }
+    rescue
+      empty_trend_windows
     end
 
     def false_report_signal_payload(user, submitted_counts = nil)
@@ -720,6 +840,28 @@ module ::MediaGallery
 
     def last_report_at_for(user)
       recent_reports_by_user(user).map { |report| Time.zone.parse(report[:created_at].to_s) rescue nil }.compact.max
+    end
+
+    def comment_report_table_available?
+      defined?(::MediaGallery::MediaCommentReport) && ::MediaGallery::MediaCommentReport.table_exists?
+    rescue ActiveRecord::StatementInvalid, NoMethodError
+      false
+    end
+
+    def comment_report_reason_label(report)
+      snapshot = report.snapshot.is_a?(Hash) ? report.snapshot : {}
+      snapshot["reason_label"].to_s.presence || comment_report_reason_options.find { |entry| entry[:id] == report.reason.to_s }&.dig(:label).to_s.presence || report.reason.to_s
+    end
+
+    def comment_report_reason_options
+      [
+        { id: "harassment", label: "Harassment or abuse" },
+        { id: "personal_info", label: "Personal or private information" },
+        { id: "illegal", label: "Illegal or prohibited content" },
+        { id: "spam", label: "Spam or unwanted content" },
+        { id: "rule_violation", label: "Comment guideline violation" },
+        { id: "other", label: "Other" },
+      ]
     end
 
     def media_reports_for(item)

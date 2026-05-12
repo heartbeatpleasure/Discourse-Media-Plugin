@@ -79,6 +79,8 @@ function decisionLabel(value) {
       return "Accepted / hidden";
     case "accept_delete_asset":
       return "Accepted / files deleted";
+    case "accept_delete_comment":
+      return "Accepted / comment removed";
     case "reject":
       return "Rejected";
     case "resolve":
@@ -101,23 +103,31 @@ function paragraphs(value) {
 
 function reportConfirmRows(report) {
   const rows = [];
-  if (report?.title) {
-    rows.push({ label: "Media", value: report.title });
+  rows.push({ label: "Report type", value: report?.typeLabel || report?.type_label || "Report" });
+  if (report?.mediaTitle || report?.title) {
+    rows.push({ label: "Media", value: report.mediaTitle || report.title });
   }
-  if (report?.public_id) {
-    rows.push({ label: "Public ID", value: report.public_id, className: "is-code" });
+  if (report?.mediaPublicId || report?.public_id) {
+    rows.push({ label: "Public ID", value: report.mediaPublicId || report.public_id, className: "is-code" });
+  }
+  if (report?.comment?.id) {
+    rows.push({ label: "Comment ID", value: report.comment.id, className: "is-code" });
+  }
+  if (report?.comment?.username) {
+    rows.push({ label: "Comment author", value: report.comment.username });
   }
   if (report?.reporter_username) {
     rows.push({ label: "Reporter", value: report.reporter_username });
   }
-  if (report?.owner_username) {
-    rows.push({ label: "Uploader", value: report.owner_username });
+  if (report?.mediaUploader || report?.owner_username) {
+    rows.push({ label: "Uploader", value: report.mediaUploader || report.owner_username });
   }
   return rows;
 }
 
 export default class AdminPluginsMediaGalleryReportsController extends Controller {
   @tracked statusFilter = "open";
+  @tracked reportTypeFilter = "all";
   @tracked searchQuery = "";
   @tracked limit = "50";
   @tracked reports = [];
@@ -139,6 +149,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   @tracked requestedReportId = "";
   @tracked reporterUserIdFilter = "";
   @tracked mediaOwnerUserIdFilter = "";
+  @tracked commentAuthorUserIdFilter = "";
   @tracked isReviewing = false;
   @tracked reviewNote = "";
   @tracked confirmModal = null;
@@ -153,7 +164,9 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     const initialStatus = String(initialParams.get("status") || "").trim();
     const reporterUserId = String(initialParams.get("reporter_user_id") || "").replace(/\D/g, "").slice(0, 20);
     const mediaOwnerUserId = String(initialParams.get("media_owner_user_id") || "").replace(/\D/g, "").slice(0, 20);
+    const commentAuthorUserId = String(initialParams.get("comment_author_user_id") || "").replace(/\D/g, "").slice(0, 20);
     const sinceDays = String(initialParams.get("since_days") || "").replace(/\D/g, "").slice(0, 3);
+    const reportType = String(initialParams.get("report_type") || initialParams.get("type") || "").trim();
 
     this.statusFilter = ["open", "closed", "accepted", "rejected", "resolved", "all"].includes(initialStatus)
       ? initialStatus
@@ -161,6 +174,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         ? "all"
         : "open";
     this.searchQuery = initialQuery || deepLinkedReportId || "";
+    this.reportTypeFilter = ["media", "comment"].includes(reportType) ? reportType : "all";
     this.limit = "50";
     this.reports = [];
     this.moderationTrends = [];
@@ -181,6 +195,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     this.requestedReportId = deepLinkedReportId || "";
     this.reporterUserIdFilter = reporterUserId;
     this.mediaOwnerUserIdFilter = mediaOwnerUserId;
+    this.commentAuthorUserIdFilter = commentAuthorUserId;
     this.isReviewing = false;
     this.reviewNote = "";
     this.confirmModal = null;
@@ -193,7 +208,7 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     }
 
     const value = new URLSearchParams(window.location.search || "").get("report_id");
-    return String(value || "").match(/^[a-f0-9-]{20,80}$/i) ? String(value) : "";
+    return String(value || "").match(/^(?:comment-\d+|[a-f0-9-]{20,80})$/i) ? String(value) : "";
   }
 
   async loadInitial() {
@@ -270,12 +285,20 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     return this.selectedReport?.status === "open";
   }
 
+  get selectedIsCommentReport() {
+    return this.selectedReport?.reportType === "comment" || this.selectedReport?.report_type === "comment";
+  }
+
+  get selectedIsMediaReport() {
+    return this.hasSelectedReport && !this.selectedIsCommentReport;
+  }
+
   get reviewDisabled() {
     return !this.hasSelectedReport || !this.selectedIsOpen || this.isReviewing;
   }
 
   get selectedOwnerAccess() {
-    return this.selectedReport?.owner_access || {};
+    return this.selectedIsMediaReport ? (this.selectedReport?.owner_access || {}) : {};
   }
 
   get selectedOwnerBlocked() {
@@ -344,6 +367,14 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   }
 
   get actionHelpItems() {
+    if (this.selectedIsCommentReport) {
+      return [
+        { label: "Accept / Remove comment", text: "Marks the report as accepted and removes the reported comment from the media item. The report audit snapshot remains available." },
+        { label: "Resolve without action", text: "Closes the comment report without removing the comment." },
+        { label: "Reject report", text: "Closes the comment report as rejected." },
+      ];
+    }
+
     return [
       { label: "Accept / Hide asset", text: "Marks the report as accepted and hides the media item from normal users. The asset files remain stored." },
       { label: "Accept / Delete asset", text: "Marks the report as accepted, hides the media item, deletes stored asset files, and keeps the audit snapshot/report history." },
@@ -365,6 +396,10 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         isSelected: report?.id === this.selectedReportId,
         createdAtLabel: formatDateTime(report?.created_at),
         reviewedAtLabel: formatDateTime(report?.reviewed_at),
+        reportType: report?.report_type || report?.type || "media",
+        typeLabel: report?.type_label || (report?.report_type === "comment" || report?.type === "comment" ? "Comment report" : "Media report"),
+        isCommentReport: (report?.report_type || report?.type) === "comment",
+        isMediaReport: (report?.report_type || report?.type || "media") !== "comment",
         statusLabel: status === "open" ? "Open" : "Closed",
         statusDetailLabel: status === "open" ? "Needs review" : titleize(status),
         decisionLabel: decisionLabel(report?.decision),
@@ -387,6 +422,10 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         hiddenBadgeClass: media.hidden ? "is-danger" : "is-success",
         assetLabel: media.asset_deleted ? "Files deleted" : "Files present",
         assetBadgeClass: media.asset_deleted ? "is-danger" : "",
+        commentAuthor: report?.comment?.username || "—",
+        commentId: report?.comment?.id || "—",
+        commentPreview: String(report?.comment?.body || report?.comment?.snapshot_body || "").slice(0, 220),
+        commentDeleted: !!report?.comment?.deleted,
         autoHideLabel:
           report?.auto_hide_mode === "score_threshold"
             ? `Score threshold ${report?.auto_hide_score ?? "—"}/${report?.auto_hide_threshold ?? "—"}`
@@ -408,6 +447,8 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       rejected: window.rejected ?? 0,
       resolved: window.resolved ?? 0,
       autoHidden: window.auto_hidden ?? 0,
+      mediaReports: window.media_reports ?? 0,
+      commentReports: window.comment_reports ?? 0,
       isActive: String(this.timeWindowDays || "") === String(window.days ?? ""),
     }));
   }
@@ -459,6 +500,12 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     if (String(this.mediaOwnerUserIdFilter || "").trim()) {
       parts.push(`media owner #${this.mediaOwnerUserIdFilter}`);
     }
+    if (String(this.commentAuthorUserIdFilter || "").trim()) {
+      parts.push(`comment author #${this.commentAuthorUserIdFilter}`);
+    }
+    if (["media", "comment"].includes(String(this.reportTypeFilter || ""))) {
+      parts.push(`${this.reportTypeFilter} reports only`);
+    }
     return parts.length ? `Additional filter active: ${parts.join(" · ")}` : "";
   }
 
@@ -468,9 +515,11 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     const total = Number(this.activeFilters?.total_count || 0);
     const status = String(this.activeFilters?.status || this.statusFilter || "open");
     const sinceDays = Number(this.activeFilters?.since_days || this.timeWindowDays || 0);
+    const reportType = String(this.activeFilters?.report_type || this.reportTypeFilter || "all");
     const base = `${filtered} report${filtered === 1 ? "" : "s"} found`;
     const statusLabel = status === "all" ? "all statuses" : status;
-    const parts = [base, statusLabel];
+    const typeLabel = reportType === "media" ? "media reports" : reportType === "comment" ? "comment reports" : "all report types";
+    const parts = [base, statusLabel, typeLabel];
     if ([7, 30, 90].includes(sinceDays)) {
       parts.push(`last ${sinceDays} days`);
     }
@@ -496,6 +545,18 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       { label: "Source size", value: formatBytes(snapshot.filesize_original_bytes || snapshot.original_upload_filesize) },
       { label: "Processed size", value: formatBytes(snapshot.filesize_processed_bytes || snapshot.processed_upload_filesize) },
       { label: "Storage", value: [snapshot.managed_storage_backend, snapshot.managed_storage_profile_name || snapshot.managed_storage_profile].filter(Boolean).join(" / ") || "—" },
+    ];
+  }
+
+  get selectedCommentRows() {
+    const comment = this.selectedReport?.comment || {};
+    return [
+      { label: "Comment ID", value: comment.id || "—" },
+      { label: "Author", value: comment.username ? `${comment.username} (#${comment.user_id || "—"})` : "—" },
+      { label: "Status", value: comment.deleted ? "Removed" : titleize(comment.status || "visible") },
+      { label: "Created", value: formatDateTime(comment.created_at) },
+      { label: "Likes", value: comment.likes_count ?? "—" },
+      { label: "Open reports", value: comment.reports_count ?? "—" },
     ];
   }
 
@@ -549,6 +610,9 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     const params = new URLSearchParams();
     params.set("status", this.statusFilter || "open");
     params.set("limit", this.limit || "50");
+    if (["media", "comment"].includes(String(this.reportTypeFilter || ""))) {
+      params.set("report_type", String(this.reportTypeFilter));
+    }
     if (String(this.searchQuery || "").trim()) {
       params.set("q", String(this.searchQuery || "").trim());
     }
@@ -557,6 +621,9 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
     }
     if (String(this.mediaOwnerUserIdFilter || "").trim()) {
       params.set("media_owner_user_id", String(this.mediaOwnerUserIdFilter || "").trim());
+    }
+    if (String(this.commentAuthorUserIdFilter || "").trim()) {
+      params.set("comment_author_user_id", String(this.commentAuthorUserIdFilter || "").trim());
     }
     if (["7", "30", "90"].includes(String(this.timeWindowDays || ""))) {
       params.set("since_days", String(this.timeWindowDays));
@@ -604,6 +671,13 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   }
 
   @action
+  onReportTypeFilterChange(event) {
+    const value = event?.target?.value || "all";
+    this.reportTypeFilter = ["media", "comment"].includes(value) ? value : "all";
+    this.loadReports();
+  }
+
+  @action
   onLimitChange(event) {
     this.limit = event?.target?.value || "50";
     this.loadReports();
@@ -617,11 +691,13 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
   @action
   resetFilters() {
     this.statusFilter = "open";
+    this.reportTypeFilter = "all";
     this.searchQuery = "";
     this.limit = "50";
     this.requestedReportId = "";
     this.reporterUserIdFilter = "";
     this.mediaOwnerUserIdFilter = "";
+    this.commentAuthorUserIdFilter = "";
     this.timeWindowDays = "";
     this.loadReports();
   }
@@ -700,6 +776,10 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
       return;
     }
 
+    if (decision === "accept_delete_asset" && this.selectedIsCommentReport) {
+      return;
+    }
+
     if (decision === "accept_delete_asset") {
       const ok = await this._confirmAction({
         title: "Accept report and delete asset files",
@@ -709,6 +789,21 @@ export default class AdminPluginsMediaGalleryReportsController extends Controlle
         confirmLabel: "Delete asset files",
         danger: true,
         riskLabel: "Destructive asset action",
+      });
+      if (!ok) {
+        return;
+      }
+    }
+
+    if (decision === "accept_delete_comment") {
+      const ok = await this._confirmAction({
+        title: "Accept report and remove comment",
+        subtitle: "The comment report snapshot and audit trail will be kept.",
+        rows: reportConfirmRows(report),
+        body: "This removes the reported comment from the media comments list. The action cannot be undone from the reports page.",
+        confirmLabel: "Remove comment",
+        danger: true,
+        riskLabel: "Comment removal",
       });
       if (!ok) {
         return;
