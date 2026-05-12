@@ -19,6 +19,12 @@ module ::MediaGallery
       if !SiteSetting.media_gallery_bind_stream_to_user && !SiteSetting.media_gallery_bind_stream_to_ip && !(SiteSetting.respond_to?(:media_gallery_bind_stream_to_session) && SiteSetting.media_gallery_bind_stream_to_session)
         warnings << "Bind stream tokens to user, browser session, and/or IP for stronger replay resistance when acceptable for your audience."
       end
+      unless SiteSetting.respond_to?(:media_gallery_hls_playback_sessions_enabled) && SiteSetting.media_gallery_hls_playback_sessions_enabled
+        warnings << "Enable HLS server-side playback sessions so copied HLS tokens depend on live server state."
+      end
+      if SiteSetting.respond_to?(:media_gallery_hls_manifest_receipt_required) && SiteSetting.media_gallery_hls_manifest_receipt_required
+        warnings << "HLS manifest receipt enforcement is enabled; verify Safari/iOS native HLS behaviour before using this in production."
+      end
 
       {
         generated_at: Time.now.utc.iso8601,
@@ -84,6 +90,8 @@ module ::MediaGallery
         admin_controllers_require_admin: "implemented",
         stream_requires_logged_in_and_valid_token: "implemented",
         hls_requires_logged_in_and_valid_token: "implemented",
+        hls_server_side_playback_sessions: hls_playback_sessions_status,
+        hls_manifest_receipt_monitoring: hls_manifest_receipt_status,
         hls_anomaly_logging: hls_anomaly_logging_status,
         extra_media_security_response_headers: response_security_headers_status,
         hls_only_video_download_prevention: hls_only_video_status,
@@ -113,6 +121,26 @@ module ::MediaGallery
     end
     private_class_method :hls_anomaly_logging_status
 
+    def hls_playback_sessions_status
+      SiteSetting.respond_to?(:media_gallery_hls_playback_sessions_enabled) && SiteSetting.media_gallery_hls_playback_sessions_enabled ? "enabled" : "available_but_disabled"
+    rescue
+      "unknown"
+    end
+    private_class_method :hls_playback_sessions_status
+
+    def hls_manifest_receipt_status
+      if SiteSetting.respond_to?(:media_gallery_hls_manifest_receipt_required) && SiteSetting.media_gallery_hls_manifest_receipt_required
+        "enforced_review_native_hls_first"
+      elsif SiteSetting.respond_to?(:media_gallery_hls_manifest_receipt_logging_enabled) && SiteSetting.media_gallery_hls_manifest_receipt_logging_enabled
+        "log_only"
+      else
+        "available_but_disabled"
+      end
+    rescue
+      "unknown"
+    end
+    private_class_method :hls_manifest_receipt_status
+
     def watermark_fingerprint_status
       watermark = SiteSetting.respond_to?(:media_gallery_watermark_enabled) && SiteSetting.media_gallery_watermark_enabled
       fingerprint = SiteSetting.respond_to?(:media_gallery_fingerprint_enabled) && SiteSetting.media_gallery_fingerprint_enabled
@@ -136,6 +164,9 @@ module ::MediaGallery
         bind_to_session: (SiteSetting.respond_to?(:media_gallery_bind_stream_to_session) && !!SiteSetting.media_gallery_bind_stream_to_session),
         revoke_enabled: !!SiteSetting.media_gallery_revoke_enabled,
         heartbeat_enabled: !!SiteSetting.media_gallery_heartbeat_enabled,
+        hls_playback_sessions_enabled: (SiteSetting.respond_to?(:media_gallery_hls_playback_sessions_enabled) && !!SiteSetting.media_gallery_hls_playback_sessions_enabled),
+        hls_manifest_receipt_logging_enabled: (SiteSetting.respond_to?(:media_gallery_hls_manifest_receipt_logging_enabled) && !!SiteSetting.media_gallery_hls_manifest_receipt_logging_enabled),
+        hls_manifest_receipt_required: (SiteSetting.respond_to?(:media_gallery_hls_manifest_receipt_required) && !!SiteSetting.media_gallery_hls_manifest_receipt_required),
         playback_overlay_video_enabled: (SiteSetting.respond_to?(:media_gallery_playback_overlay_video_enabled) && !!SiteSetting.media_gallery_playback_overlay_video_enabled),
         playback_overlay_image_enabled: (SiteSetting.respond_to?(:media_gallery_playback_overlay_image_enabled) && !!SiteSetting.media_gallery_playback_overlay_image_enabled),
         max_active_tokens_per_user: SiteSetting.media_gallery_max_active_tokens_per_user.to_i,

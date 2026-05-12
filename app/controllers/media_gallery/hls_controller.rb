@@ -28,11 +28,13 @@ module ::MediaGallery
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
       deny_direct_media_navigation!(:master, token: token, item: item)
+      enforce_hls_playback_session!(token: token, payload: payload, item: item)
 
       role = hls_role_for(item)
       enforce_aes128_required!(item, role: role, token: token)
       data = read_master_playlist!(item, role: role)
       data = rewrite_master_playlist(data, public_id: item.public_id, token: token)
+      record_hls_playlist_receipt!(token: token, payload: payload, item: item, playlist_kind: :master, variant: "master")
       record_hls_anomaly_signals!(kind: :playlist, token: token, payload: payload, item: item, variant: "master")
 
       set_playlist_headers!
@@ -52,6 +54,7 @@ module ::MediaGallery
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
       deny_direct_media_navigation!(:variant, token: token, item: item)
+      enforce_hls_playback_session!(token: token, payload: payload, item: item)
 
       variant = params[:variant].to_s
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
@@ -60,6 +63,7 @@ module ::MediaGallery
       enforce_aes128_required!(item, role: role, token: token)
       data = read_variant_playlist!(item, variant: variant, role: role)
       data = rewrite_variant_playlist(data, item: item, variant: variant, token: token, fingerprint_id: payload["fingerprint_id"], media_item_id: item.id, role: role)
+      record_hls_playlist_receipt!(token: token, payload: payload, item: item, playlist_kind: :variant, variant: variant)
       record_hls_anomaly_signals!(kind: :playlist, token: token, payload: payload, item: item, variant: variant)
 
       set_playlist_headers!
@@ -79,6 +83,7 @@ module ::MediaGallery
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
       deny_direct_media_navigation!(:segment, token: token, item: item)
+      enforce_hls_playback_session!(token: token, payload: payload, item: item)
 
       variant = params[:variant].to_s
       deny!(:variant_not_allowed, token: token) unless MediaGallery::Hls.variant_allowed?(variant)
@@ -109,6 +114,8 @@ module ::MediaGallery
           deny!(:ab_mismatch, token: token) if expected.to_s != ab.to_s
         end
       end
+
+      check_hls_manifest_receipt!(token: token, payload: payload, item: item, endpoint: :segment, variant: variant, segment: segment)
 
       role = hls_role_for(item)
       enforce_aes128_required!(item, role: role, token: token)
@@ -159,6 +166,7 @@ module ::MediaGallery
       enforce_asset_binding!(item, payload: payload, kind: "hls", token: token)
       deny!(:hls_not_ready, token: token) unless MediaGallery::Hls.ready?(item)
       deny_direct_media_navigation!(:key, token: token, item: item)
+      enforce_hls_playback_session!(token: token, payload: payload, item: item)
 
       role = hls_role_for(item)
       deny!(:hls_aes128_role_missing, token: token) unless role.present?
@@ -168,6 +176,7 @@ module ::MediaGallery
       key_id = normalized_hls_aes128_key_id!(params[:key_id].to_s, token: token)
       expected_key_id = encryption["key_id"].to_s
       deny!(:hls_aes128_key_mismatch, token: token) if expected_key_id.blank? || expected_key_id != key_id
+      check_hls_manifest_receipt!(token: token, payload: payload, item: item, endpoint: :key, key_id: key_id)
 
       key_bytes = MediaGallery::HlsAes128.fetch_key_bytes(item: item, key_id: key_id)
       deny!(:hls_aes128_key_missing, token: token) unless MediaGallery::HlsAes128.valid_key_bytes?(key_bytes)
@@ -203,6 +212,95 @@ module ::MediaGallery
       return if ::MediaGallery::Token.asset_binding_valid?(media_item: item, kind: kind, payload: payload)
 
       deny!(:asset_binding_mismatch, token: token)
+    end
+
+    def enforce_hls_playback_session!(token:, payload:, item:)
+      ok, reason = ::MediaGallery::Security.validate_hls_playback_session(
+        session_id: payload.is_a?(Hash) ? payload["playback_session_id"] : nil,
+        token: token,
+        payload: payload,
+        user_id: current_user&.id,
+        media_item_id: item&.id
+      )
+      deny!(reason || :hls_playback_session_invalid, token: token) unless ok
+
+      ::MediaGallery::Security.touch_hls_playback_session!(
+        session_id: payload["playback_session_id"],
+        token: token,
+        attrs: {
+          last_hls_endpoint: params[:action].to_s,
+          last_hls_endpoint_at: Time.now.utc.iso8601,
+        }
+      ) if payload.is_a?(Hash) && payload["playback_session_id"].present?
+    end
+
+    def record_hls_playlist_receipt!(token:, payload:, item:, playlist_kind:, variant: nil)
+      session_id = payload.is_a?(Hash) ? payload["playback_session_id"].to_s.presence : nil
+      return if session_id.blank?
+
+      now = Time.now.utc.iso8601
+      attrs = {
+        "hls_#{playlist_kind}_playlist_received_at" => now,
+        "hls_last_playlist_variant" => variant.to_s.presence,
+        "hls_last_playlist_public_id" => item&.public_id.to_s.presence,
+      }.compact
+      ::MediaGallery::Security.touch_hls_playback_session!(session_id: session_id, token: token, attrs: attrs)
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS playlist receipt tracking failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def check_hls_manifest_receipt!(token:, payload:, item:, endpoint:, variant: nil, segment: nil, key_id: nil)
+      session_id = payload.is_a?(Hash) ? payload["playback_session_id"].to_s.presence : nil
+      return if session_id.blank?
+      return if ::MediaGallery::Security.hls_playback_session_manifest_received?(session_id)
+
+      reason = :hls_manifest_receipt_missing
+      if ::MediaGallery::Security.hls_manifest_receipt_required?
+        log_hls_manifest_receipt_gap!(token: token, payload: payload, item: item, endpoint: endpoint, variant: variant, segment: segment, key_id: key_id, enforced: true)
+        deny!(reason, token: token)
+      elsif ::MediaGallery::Security.hls_manifest_receipt_logging_enabled?
+        log_hls_manifest_receipt_gap!(token: token, payload: payload, item: item, endpoint: endpoint, variant: variant, segment: segment, key_id: key_id, enforced: false)
+      end
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS manifest receipt check failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
+    end
+
+    def log_hls_manifest_receipt_gap!(token:, payload:, item:, endpoint:, variant: nil, segment: nil, key_id: nil, enforced: false)
+      token_ip_digest = hls_token_ip_digest(token)
+      minute = Time.now.utc.strftime("%Y%m%d%H%M")
+      key = "media_gallery:hls:manifest_receipt_gap:#{endpoint}:#{minute}:sha256:#{token_ip_digest}"
+      count = Discourse.redis.incr(key).to_i
+      Discourse.redis.expire(key, 2.minutes.to_i)
+      return unless count == 1
+
+      ::MediaGallery::LogEvents.record(
+        event_type: enforced ? "hls_manifest_receipt_blocked" : "hls_manifest_receipt_missing",
+        severity: enforced ? "warning" : "info",
+        category: "playback",
+        request: request,
+        user: current_user,
+        media_item: item,
+        overlay_code: payload.is_a?(Hash) ? payload["overlay_code"] : nil,
+        fingerprint_id: payload.is_a?(Hash) ? payload["fingerprint_id"] : nil,
+        message: endpoint.to_s,
+        details: {
+          endpoint: endpoint.to_s,
+          public_id: item&.public_id,
+          variant: variant.to_s.presence,
+          segment: segment.to_s.presence,
+          key_id: key_id.to_s.presence,
+          token_sha256: token_sha256_label(token),
+          playback_session_id_present: payload.is_a?(Hash) && payload["playback_session_id"].present?,
+          enforced: enforced,
+        },
+      )
+    rescue => e
+      Rails.logger.debug("[media_gallery] HLS manifest receipt gap log failed request_id=#{request.request_id} error=#{e.class}: #{e.message}") if Rails.logger.respond_to?(:debug)
+      nil
     end
 
     def normalized_hls_aes128_key_id!(raw_key_id, token:)

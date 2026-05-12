@@ -786,6 +786,9 @@ module ::MediaGallery
       delivery_mode = ::MediaGallery::StorageSettingsResolver.default_delivery_mode.to_s.presence || "stream"
       extra_headers_enabled = setting_bool(:media_gallery_extra_media_security_headers_enabled, true)
       hls_anomaly_logging_enabled = setting_bool(:media_gallery_log_hls_anomalies, true)
+      hls_playback_sessions_enabled = setting_bool(:media_gallery_hls_playback_sessions_enabled, true)
+      hls_manifest_receipt_logging_enabled = setting_bool(:media_gallery_hls_manifest_receipt_logging_enabled, true)
+      hls_manifest_receipt_required = setting_bool(:media_gallery_hls_manifest_receipt_required, false)
       hls_presign_ttl = setting_int(:media_gallery_hls_s3_presign_ttl_seconds, 60)
       hls_presign_cache = setting_int(:media_gallery_hls_s3_presign_cache_seconds, 15)
 
@@ -806,6 +809,24 @@ module ::MediaGallery
         count: hls_anomaly_logging_enabled ? 0 : 1,
         message: hls_anomaly_logging_enabled ? "HLS soft anomaly logging is enabled." : "HLS soft anomaly logging is disabled.",
         detail: "This is log-only and does not block playback. It helps observe playlist, segment and key request patterns before stricter policies are considered."
+      )
+
+      rows << issue(
+        id: "hls_playback_sessions",
+        label: "HLS server-side playback sessions",
+        severity: hls_playback_sessions_enabled ? "ok" : "warning",
+        count: hls_playback_sessions_enabled ? 0 : 1,
+        message: hls_playback_sessions_enabled ? "HLS playback tokens require server-side playback-session state." : "HLS server-side playback sessions are disabled.",
+        detail: "This ties new HLS tokens to Redis state created by the play endpoint. Copied tokens become easier to revoke/observe without changing the player."
+      )
+
+      rows << issue(
+        id: "hls_manifest_receipt_policy",
+        label: "HLS manifest receipt policy",
+        severity: hls_manifest_receipt_required ? "warning" : hls_manifest_receipt_logging_enabled ? "ok" : "warning",
+        count: hls_manifest_receipt_required || !hls_manifest_receipt_logging_enabled ? 1 : 0,
+        message: hls_manifest_receipt_required ? "Manifest receipt gating is enforcing." : hls_manifest_receipt_logging_enabled ? "Manifest receipt gaps are logged only." : "Manifest receipt gap logging is disabled.",
+        detail: hls_manifest_receipt_required ? "Disable enforcement until Safari/iOS native HLS telemetry is validated." : "Log-only mode is the recommended safe default for native HLS/Safari compatibility."
       )
 
       if active_backend == "s3"

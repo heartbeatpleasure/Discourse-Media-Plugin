@@ -653,6 +653,21 @@ plugins:
     max: 20000
     client: false
 
+  # Server-side HLS playback session controls. These keep HLS tokens tied to
+  # live Redis state created by /media/:public_id/play. Manifest receipt checks
+  # are log-only by default for native HLS/Safari safety.
+  media_gallery_hls_playback_sessions_enabled:
+    default: true
+    client: false
+
+  media_gallery_hls_manifest_receipt_logging_enabled:
+    default: true
+    client: false
+
+  media_gallery_hls_manifest_receipt_required:
+    default: false
+    client: false
+
   # HLS AES-128 content hardening (iterative rollout).
   # This is not DRM: authorized clients still receive decryption keys for playback.
   # Keep disabled until the packaging pipeline, key storage and key endpoint iterations are complete.

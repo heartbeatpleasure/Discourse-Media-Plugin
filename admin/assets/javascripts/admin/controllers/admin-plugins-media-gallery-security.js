@@ -729,6 +729,19 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         statusChipClass: statusChipClass(this.download?.log_hls_anomalies ? "ok" : "warning"),
         statusDotClass: statusDotClass(this.download?.log_hls_anomalies ? "ok" : "warning"),
       },
+      {
+        key: "hls_playback_sessions",
+        label: "HLS playback sessions",
+        value: this.download?.hls_playback_sessions_enabled ? "Server-side" : "Token-only",
+        detail: this.download?.hls_manifest_receipt_required
+          ? "Manifest receipt is currently enforced. Keep this disabled until native HLS/Safari telemetry is validated."
+          : this.download?.hls_manifest_receipt_logging_enabled
+            ? "Server-side sessions are enforced for new HLS tokens; manifest receipt gaps are log-only."
+            : "Server-side sessions may be active, but manifest receipt gaps are not logged.",
+        statusText: this.download?.hls_manifest_receipt_required ? "Review" : this.download?.hls_playback_sessions_enabled ? "OK" : "Off",
+        statusChipClass: statusChipClass(this.download?.hls_manifest_receipt_required ? "warning" : this.download?.hls_playback_sessions_enabled ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.download?.hls_manifest_receipt_required ? "warning" : this.download?.hls_playback_sessions_enabled ? "ok" : "warning"),
+      },
     ];
   }
 
@@ -952,6 +965,15 @@ export default class AdminPluginsMediaGallerySecurityController extends Controll
         statusText: this.download?.log_hls_anomalies ? "OK" : "Check",
         statusChipClass: statusChipClass(this.download?.log_hls_anomalies ? "ok" : "warning"),
         statusDotClass: statusDotClass(this.download?.log_hls_anomalies ? "ok" : "warning"),
+      },
+      {
+        key: "hls_server_session",
+        label: "HLS server session",
+        value: this.download?.hls_playback_sessions_enabled ? "Enabled" : "Disabled",
+        detail: this.download?.hls_manifest_receipt_required ? "Manifest receipt is enforcing; validate Safari/iOS first." : this.download?.hls_manifest_receipt_logging_enabled ? "Manifest receipt gaps are logged without blocking." : "Manifest receipt gap logging is disabled.",
+        statusText: this.download?.hls_playback_sessions_enabled && !this.download?.hls_manifest_receipt_required ? "OK" : "Review",
+        statusChipClass: statusChipClass(this.download?.hls_playback_sessions_enabled && !this.download?.hls_manifest_receipt_required ? "ok" : "warning"),
+        statusDotClass: statusDotClass(this.download?.hls_playback_sessions_enabled && !this.download?.hls_manifest_receipt_required ? "ok" : "warning"),
       },
       {
         key: "aes_key_logging",

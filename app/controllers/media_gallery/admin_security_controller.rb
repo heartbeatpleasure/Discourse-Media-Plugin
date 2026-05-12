@@ -156,6 +156,12 @@ module ::MediaGallery
           "Keep this log-only first. Use observed HLS anomaly events to tune thresholds before adding stricter enforcement."
         ),
         control(
+          "HLS server-side playback sessions",
+          hls_playback_session_control_status,
+          hls_playback_session_control_summary,
+          "Keep server-side playback sessions enabled. Keep manifest receipt gating log-only until Safari/native HLS telemetry is reviewed."
+        ),
+        control(
           "Forensics export lifecycle",
           forensics_lifecycle_status,
           forensics_lifecycle_summary,
@@ -295,6 +301,9 @@ module ::MediaGallery
         hls_anomaly_playlist_requests_per_token_per_minute: setting_int(:media_gallery_hls_anomaly_playlist_requests_per_token_per_minute),
         hls_anomaly_segment_requests_per_token_per_minute: setting_int(:media_gallery_hls_anomaly_segment_requests_per_token_per_minute),
         hls_anomaly_key_requests_per_token_per_minute: setting_int(:media_gallery_hls_anomaly_key_requests_per_token_per_minute),
+        hls_playback_sessions_enabled: setting_bool(:media_gallery_hls_playback_sessions_enabled),
+        hls_manifest_receipt_logging_enabled: setting_bool(:media_gallery_hls_manifest_receipt_logging_enabled),
+        hls_manifest_receipt_required: setting_bool(:media_gallery_hls_manifest_receipt_required),
         hls_aes128_enabled: aes128_enabled,
         hls_aes128_required: aes128_required,
         hls_aes128_key_rotation_segments: setting_int(:media_gallery_hls_aes128_key_rotation_segments),
@@ -627,6 +636,9 @@ module ::MediaGallery
         setting_row(:media_gallery_hls_anomaly_playlist_requests_per_token_per_minute, "HLS playlist anomaly threshold", recommended: "observe and tune"),
         setting_row(:media_gallery_hls_anomaly_segment_requests_per_token_per_minute, "HLS segment anomaly threshold", recommended: "observe and tune"),
         setting_row(:media_gallery_hls_anomaly_key_requests_per_token_per_minute, "HLS AES key anomaly threshold", recommended: "observe and tune"),
+        setting_row(:media_gallery_hls_playback_sessions_enabled, "HLS server-side playback sessions", recommended: "true"),
+        setting_row(:media_gallery_hls_manifest_receipt_logging_enabled, "Log HLS manifest receipt gaps", recommended: "true"),
+        setting_row(:media_gallery_hls_manifest_receipt_required, "Require HLS manifest receipt", recommended: "false until Safari/native HLS telemetry is validated"),
         setting_row(:media_gallery_log_hls_aes128_key_denials, "Log denied HLS AES key requests", recommended: "true during QA, false or monitored in production"),
         setting_row(:media_gallery_forensics_playback_session_retention_days, "Playback-session retention", recommended: "90 days or policy"),
         setting_row(:media_gallery_forensics_export_retention_days, "Export retention", recommended: "90 days or policy"),
@@ -989,6 +1001,8 @@ module ::MediaGallery
         baseline_check("fingerprint", "HLS fingerprinting", yes_no(download[:fingerprint_enabled]), "Enabled for protected videos", download[:fingerprint_enabled] ? "ok" : "partial", "A/B HLS fingerprinting helps identify likely recipients of leaked streams."),
         baseline_check("hls_limits", "HLS request rate limits", "playlist #{playlist_limit}/min, segments #{segment_limit}/min, keys #{key_limit}/min", "All > 0", playlist_limit.positive? && segment_limit.positive? && key_limit.positive? ? "ok" : "partial", "Per-token HLS limits make automated playlist, segment and AES-key scraping noisier and easier to detect."),
         baseline_check("hls_anomaly", "HLS anomaly logging", yes_no(setting_bool(:media_gallery_log_hls_anomalies)), "Enabled", setting_bool(:media_gallery_log_hls_anomalies) ? "ok" : "partial", "Soft log-only HLS anomaly events help tune thresholds and spot segment/key scraping without blocking normal playback."),
+        baseline_check("hls_server_sessions", "HLS server-side playback sessions", yes_no(download[:hls_playback_sessions_enabled]), "Enabled", download[:hls_playback_sessions_enabled] ? "ok" : "partial", "HLS tokens are tied to Redis playback-session state created by the play endpoint, making copied tokens easier to revoke and observe."),
+        baseline_check("hls_manifest_receipt", "HLS manifest receipt monitoring", download[:hls_manifest_receipt_required] ? "Enforced" : download[:hls_manifest_receipt_logging_enabled] ? "Log-only" : "Disabled", "Log-only until native HLS telemetry is validated", download[:hls_manifest_receipt_required] ? "attention" : download[:hls_manifest_receipt_logging_enabled] ? "ok" : "partial", "Logs segment/key requests that appear before the same server-side playback session received a playlist. Enforcement should remain disabled until Safari/iOS patterns are known."),
         baseline_check("direct_media_navigation", "Block direct media navigation", yes_no(download[:block_direct_media_navigation]), "Enabled", download[:block_direct_media_navigation] ? "ok" : "partial", "Blocks clear address-bar/new-tab navigation to tokenized play/stream/HLS endpoints while allowing normal player requests."),
         baseline_check("extra_media_headers", "Extra media response headers", yes_no(extra_headers_enabled), "Enabled", extra_headers_enabled ? "ok" : "partial", "Adds Referrer-Policy and CORP headers to Rails-served tokenized media responses. Redirect responses only receive Referrer-Policy so redirect/proxy/x-accel modes remain switchable."),
         baseline_check("storage_delivery", "Protected storage delivery mode", "#{active_backend.presence || 'local'} / #{delivery_mode}", "stream/proxy for protected R2 unless redirect is explicitly reviewed", storage_delivery_status(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache), storage_delivery_note(active_backend, delivery_mode, hls_presign_ttl, hls_presign_cache)),
@@ -1075,6 +1089,24 @@ module ::MediaGallery
         setting_int(:media_gallery_hls_anomaly_key_requests_per_token_per_minute)
       ].join("/")
       "Soft HLS anomaly logging is #{soft}; playlist/segment/key thresholds are #{thresholds} per token per minute."
+    end
+
+    def hls_playback_session_control_status
+      return "attention" if setting_bool(:media_gallery_hls_manifest_receipt_required)
+      return "ok" if setting_bool(:media_gallery_hls_playback_sessions_enabled) && setting_bool(:media_gallery_hls_manifest_receipt_logging_enabled)
+      "partial"
+    end
+
+    def hls_playback_session_control_summary
+      sessions = setting_bool(:media_gallery_hls_playback_sessions_enabled) ? "enabled" : "disabled"
+      receipt = if setting_bool(:media_gallery_hls_manifest_receipt_required)
+        "enforced"
+      elsif setting_bool(:media_gallery_hls_manifest_receipt_logging_enabled)
+        "log-only"
+      else
+        "disabled"
+      end
+      "Server-side HLS playback sessions are #{sessions}; manifest receipt checks are #{receipt}."
     end
 
     def forensic_http_policy_control_status

@@ -664,8 +664,13 @@ module ::MediaGallery
         session_binding: session_binding
       )
 
+      if use_hls && MediaGallery::Security.hls_playback_sessions_enabled?
+        payload["playback_session_id"] = MediaGallery::Security.new_hls_playback_session_id
+      end
+
       token = MediaGallery::Token.generate(payload, purpose: (use_hls ? "hls" : "stream"))
       expires_at = payload["exp"]
+
 
       overlay_payload = nil
       if item.media_type.to_s == "video" || item.media_type.to_s == "image"
@@ -713,11 +718,38 @@ module ::MediaGallery
             message: err3,
             details: { ip: ip, media_public_id: item.public_id, playback: (use_hls ? "hls" : "stream") },
           )
-          MediaGallery::Security.revoke!(token: token, exp: expires_at, user_id: user_id, ip: ip)
+          MediaGallery::Security.revoke!(token: token, exp: expires_at, user_id: user_id, ip: ip, playback_session_id: payload["playback_session_id"])
           return render_json_error(err3, status: 429, message: playback_limit_message(err3))
         end
       end
 
+
+      if use_hls && payload["playback_session_id"].present?
+        opened = MediaGallery::Security.open_hls_playback_session!(
+          session_id: payload["playback_session_id"],
+          token: token,
+          exp: expires_at,
+          user_id: user_id,
+          media_item_id: item.id,
+          ip: ip,
+          user_agent: request.user_agent,
+          fingerprint_id: fingerprint_id
+        )
+        unless opened
+          log_security_event(
+            event_type: "hls_playback_session_unavailable",
+            severity: "warning",
+            category: "playback",
+            user: current_user,
+            media_item: item,
+            fingerprint_id: fingerprint_id,
+            message: "could_not_open_server_side_session",
+            details: { media_public_id: item.public_id, playback: "hls" },
+          )
+          MediaGallery::Security.revoke!(token: token, exp: expires_at, user_id: user_id, ip: ip, playback_session_id: payload["playback_session_id"])
+          return render_json_error("hls_playback_session_unavailable", status: 503, message: "Playback session could not be prepared. Please try again.")
+        end
+      end
       # keep this lightweight: avoid callbacks/validations
       MediaGallery::MediaItem.where(id: item.id).update_all("views_count = views_count + 1")
 
@@ -735,6 +767,7 @@ module ::MediaGallery
           media_public_id: item.public_id,
           playback: (use_hls ? "hls" : "stream"),
           heartbeat_enabled: heartbeat_enabled,
+          hls_playback_session_enabled: use_hls && payload["playback_session_id"].present?,
           overlay_enabled: overlay_payload.present?,
         },
       )
@@ -753,7 +786,8 @@ module ::MediaGallery
             heartbeat_ttl_seconds: MediaGallery::Security.heartbeat_ttl_seconds,
             hls_only: hls_only_required,
             stream_fallback_allowed: !hls_protection_required,
-            aes128: aes128_status
+            aes128: aes128_status,
+            hls_playback_session: payload["playback_session_id"].present?
           },
           overlay: overlay_payload
         )
@@ -860,7 +894,7 @@ module ::MediaGallery
             message: err,
             details: { media_public_id: item.public_id, ip: ip },
           )
-          MediaGallery::Security.revoke!(token: token, exp: payload["exp"], user_id: user_id, ip: ip)
+          MediaGallery::Security.revoke!(token: token, exp: payload["exp"], user_id: user_id, ip: ip, playback_session_id: payload["playback_session_id"])
           return render_json_error(err, status: 429, message: playback_limit_message(err))
         end
       end
@@ -905,7 +939,8 @@ module ::MediaGallery
         token: token,
         exp: payload["exp"],
         user_id: current_user.id,
-        ip: request.remote_ip.to_s
+        ip: request.remote_ip.to_s,
+        playback_session_id: payload["playback_session_id"]
       )
 
       set_sensitive_json_headers!
