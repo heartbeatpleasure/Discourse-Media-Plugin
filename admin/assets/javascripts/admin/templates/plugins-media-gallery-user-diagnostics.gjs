@@ -474,10 +474,21 @@ export default RouteTemplate(
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
         gap: 1rem;
+        align-items: stretch;
+      }
+
+      .mg-userdiag__trend-grid--behavior {
+        grid-template-columns: repeat(2, minmax(320px, 1fr));
       }
 
       .mg-userdiag__context-grid {
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      }
+
+      @media (max-width: 900px) {
+        .mg-userdiag__trend-grid--behavior {
+          grid-template-columns: 1fr;
+        }
       }
 
       .mg-userdiag__trend-card {
@@ -486,7 +497,7 @@ export default RouteTemplate(
       }
 
       .mg-userdiag__trend-card-header {
-        min-height: 5.35rem;
+        min-height: 6.5rem;
         display: flex;
         flex-direction: column;
         gap: 0.35rem;
@@ -567,10 +578,6 @@ export default RouteTemplate(
       }
 
       @media (max-width: 1100px) {
-        .mg-userdiag__trend-card-header {
-          min-height: 0;
-        }
-
         .mg-userdiag__main-grid,
         .mg-userdiag__report-involvement-grid,
         .mg-userdiag__setting-row,
@@ -594,6 +601,10 @@ export default RouteTemplate(
       }
 
       @media (max-width: 700px) {
+        .mg-userdiag__trend-card-header {
+          min-height: 0;
+        }
+
         .mg-userdiag__hero,
         .mg-userdiag__result {
           flex-direction: column;
@@ -907,7 +918,7 @@ export default RouteTemplate(
             </div>
           </div>
 
-          <div class="mg-userdiag__trend-grid">
+          <div class="mg-userdiag__trend-grid mg-userdiag__trend-grid--behavior">
             {{#each @controller.moderationTrendSections as |trendSection|}}
               <section class="mg-userdiag__section mg-userdiag__trend-card">
                 <div class="mg-userdiag__trend-card-header">
