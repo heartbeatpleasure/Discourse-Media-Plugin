@@ -13,7 +13,6 @@ module ::MediaGallery
 
     has_many :media_likes, class_name: "MediaGallery::MediaLike", dependent: :delete_all
     has_many :media_comments, class_name: "MediaGallery::MediaComment", dependent: :delete_all
-    has_many :media_comment_likes, class_name: "MediaGallery::MediaCommentLike", dependent: :delete_all
     has_many :hls_aes128_keys, class_name: "MediaGallery::HlsAes128Key", dependent: :delete_all
 
     STATUSES = %w[queued processing ready failed].freeze

@@ -371,7 +371,11 @@ module ::MediaGallery
 
         audit_user_delete!(item, delete_summary: delete_summary)
 
-        # Finally delete DB record (also deletes likes via dependent: :delete_all)
+        # Finally delete DB record (also deletes media likes/comments via dependent: :delete_all).
+        # Comment likes are removed explicitly so the media-item index does not need a
+        # direct has_many association to the comment-like model. This keeps normal
+        # gallery loading independent from the comment-like table/reflection.
+        delete_comment_likes_for_item!(item)
         item.destroy!
       end
 
@@ -2076,10 +2080,22 @@ end
     end
 
     def comment_like_table_available?
-      defined?(::MediaGallery::MediaCommentLike) && ::MediaGallery::MediaCommentLike.table_exists?
-    rescue ActiveRecord::StatementInvalid, NoMethodError => e
+      return false unless defined?(::MediaGallery::MediaCommentLike)
+
+      ActiveRecord::Base.connection.data_source_exists?("media_gallery_media_comment_likes")
+    rescue ActiveRecord::StatementInvalid, ActiveRecord::NoDatabaseError, NoMethodError => e
       Rails.logger.warn("[media_gallery] media comment like table check failed: #{e.class}: #{e.message}")
       false
+    end
+
+    def delete_comment_likes_for_item!(item)
+      return if item.blank?
+      return unless defined?(::MediaGallery::MediaCommentLike)
+      return unless comment_like_table_available?
+
+      ::MediaGallery::MediaCommentLike.where(media_item_id: item.id).delete_all
+    rescue => e
+      Rails.logger.warn("[media_gallery] comment-like cleanup failed item_id=#{item&.id} error=#{e.class}: #{e.message}")
     end
 
     def find_item_by_public_id!(public_id)

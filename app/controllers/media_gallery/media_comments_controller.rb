@@ -308,15 +308,15 @@ module ::MediaGallery
 
       return 0 unless comment_like_table_available?
 
-      comment.media_comment_likes.count
+      ::MediaGallery::MediaCommentLike.where(media_comment_id: comment.id).count
     rescue ActiveModel::MissingAttributeError, NoMethodError, ActiveRecord::StatementInvalid
-      comment_like_table_available? ? comment.media_comment_likes.count : 0
+      comment_like_table_available? ? ::MediaGallery::MediaCommentLike.where(media_comment_id: comment.id).count : 0
     end
 
     def update_comment_like_counter!(comment)
       return unless media_comment_column_available?("likes_count")
 
-      comment.update_columns(likes_count: comment.media_comment_likes.count, updated_at: Time.now)
+      comment.update_columns(likes_count: ::MediaGallery::MediaCommentLike.where(media_comment_id: comment.id).count, updated_at: Time.now)
     end
 
     def update_item_comment_counters!(item, last_comment:)

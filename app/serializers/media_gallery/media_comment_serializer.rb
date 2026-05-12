@@ -31,9 +31,9 @@ module ::MediaGallery
       return object.likes_count.to_i if object.respond_to?(:likes_count)
       return 0 unless comment_like_table_available?
 
-      object.media_comment_likes.count
-    rescue ActiveModel::MissingAttributeError, NoMethodError
-      comment_like_table_available? ? object.media_comment_likes.count : 0
+      ::MediaGallery::MediaCommentLike.where(media_comment_id: object.id).count
+    rescue ActiveModel::MissingAttributeError, NoMethodError, ActiveRecord::StatementInvalid
+      comment_like_table_available? ? ::MediaGallery::MediaCommentLike.where(media_comment_id: object.id).count : 0
     end
 
     def liked
