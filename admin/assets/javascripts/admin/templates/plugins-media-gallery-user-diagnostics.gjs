@@ -469,10 +469,35 @@ export default RouteTemplate(
       }
 
 
-      .mg-userdiag__trend-grid {
+      .mg-userdiag__trend-grid,
+      .mg-userdiag__context-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
         gap: 1rem;
+      }
+
+      .mg-userdiag__context-grid {
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      }
+
+      .mg-userdiag__trend-card {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .mg-userdiag__trend-card-header {
+        min-height: 5.35rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+
+      .mg-userdiag__trend-card-header h3 {
+        line-height: 1.2;
+      }
+
+      .mg-userdiag__trend-card-header p {
+        line-height: 1.35;
       }
 
       .mg-userdiag__trend-window {
@@ -542,6 +567,10 @@ export default RouteTemplate(
       }
 
       @media (max-width: 1100px) {
+        .mg-userdiag__trend-card-header {
+          min-height: 0;
+        }
+
         .mg-userdiag__main-grid,
         .mg-userdiag__report-involvement-grid,
         .mg-userdiag__setting-row,
@@ -757,7 +786,7 @@ export default RouteTemplate(
           <div class="mg-userdiag__panel-header">
             <div class="mg-userdiag__copy">
               <h2>Report involvement</h2>
-              <p class="mg-userdiag__muted">Exact media/comment report counters split between reports submitted by this user, reports on this user's media, and reports on this user's comments.</p>
+              <p class="mg-userdiag__muted">Exact media/comment report counters split between reports submitted by this user, reports on this user's uploads, and reports on comments authored by this user.</p>
             </div>
           </div>
 
@@ -773,6 +802,59 @@ export default RouteTemplate(
                     </div>
                   {{/each}}
                 </div>
+              </section>
+            {{/each}}
+          </div>
+        </section>
+
+        <section class="mg-userdiag__panel">
+          <div class="mg-userdiag__panel-header">
+            <div class="mg-userdiag__copy">
+              <h2>Context signals</h2>
+              <p class="mg-userdiag__muted">Contextual indicators about activity under this user's uploads. These numbers can help explain noisy media threads, but they do not directly indicate misconduct by this user.</p>
+            </div>
+          </div>
+
+          <div class="mg-userdiag__context-grid">
+            {{#each @controller.contextReportInvolvementSections as |contextSection|}}
+              <section class="mg-userdiag__section">
+                <div class="mg-userdiag__panel-header">
+                  <div class="mg-userdiag__copy">
+                    <h3>{{contextSection.title}}</h3>
+                    <p class="mg-userdiag__muted">{{contextSection.subtitle}}</p>
+                  </div>
+                  {{#if contextSection.url}}
+                    <a class="btn" href={{contextSection.url}} target="_blank" rel="noopener noreferrer">Open reports</a>
+                  {{/if}}
+                </div>
+                <div class="mg-userdiag__report-counts">
+                  {{#each contextSection.rows as |row|}}
+                    <div class="mg-userdiag__report-count-card {{row.tone}}">
+                      <div class="mg-userdiag__card-label">{{row.label}}</div>
+                      <div class="mg-userdiag__card-value">{{row.value}}</div>
+                    </div>
+                  {{/each}}
+                </div>
+              </section>
+            {{/each}}
+
+            {{#each @controller.contextModerationTrendSections as |trendSection|}}
+              <section class="mg-userdiag__section mg-userdiag__trend-card">
+                <div class="mg-userdiag__trend-card-header">
+                  <h3>{{trendSection.title}}</h3>
+                  <p class="mg-userdiag__muted">{{trendSection.subtitle}}</p>
+                </div>
+                {{#each trendSection.rows as |window|}}
+                  <div class="mg-userdiag__trend-window">
+                    <div class="mg-userdiag__trend-window-title">{{window.label}}</div>
+                    <div><div class="mg-userdiag__mini-stat-label">Total</div><div class="mg-userdiag__mini-stat-value">{{window.total}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Open</div><div class="mg-userdiag__mini-stat-value">{{window.open}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Accepted</div><div class="mg-userdiag__mini-stat-value">{{window.accepted}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Rejected</div><div class="mg-userdiag__mini-stat-value">{{window.rejected}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Resolved</div><div class="mg-userdiag__mini-stat-value">{{window.resolved}}</div></div>
+                    <div><div class="mg-userdiag__mini-stat-label">Auto-hidden</div><div class="mg-userdiag__mini-stat-value">{{window.autoHidden}}</div></div>
+                  </div>
+                {{/each}}
               </section>
             {{/each}}
           </div>
@@ -827,9 +909,11 @@ export default RouteTemplate(
 
           <div class="mg-userdiag__trend-grid">
             {{#each @controller.moderationTrendSections as |trendSection|}}
-              <section class="mg-userdiag__section">
-                <h3>{{trendSection.title}}</h3>
-                <p class="mg-userdiag__muted">{{trendSection.subtitle}}</p>
+              <section class="mg-userdiag__section mg-userdiag__trend-card">
+                <div class="mg-userdiag__trend-card-header">
+                  <h3>{{trendSection.title}}</h3>
+                  <p class="mg-userdiag__muted">{{trendSection.subtitle}}</p>
+                </div>
                 {{#each trendSection.rows as |window|}}
                   <div class="mg-userdiag__trend-window">
                     <div class="mg-userdiag__trend-window-title">{{window.label}}</div>

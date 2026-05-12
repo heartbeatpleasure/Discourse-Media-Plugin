@@ -223,7 +223,6 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
     const reportsOnUserMediaUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=media&media_owner_user_id=${encodeParam(userId)}` : "";
     const commentReportsByUserUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=comment&reporter_user_id=${encodeParam(userId)}` : "";
     const commentReportsOnCommentsUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=comment&comment_author_user_id=${encodeParam(userId)}` : "";
-    const commentReportsOnMediaUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=comment&media_owner_user_id=${encodeParam(userId)}` : "";
     const logsUrl = username ? `/admin/plugins/media-gallery-logs?q=${encodeParam(username)}&hours=720` : "";
 
     return [
@@ -238,7 +237,6 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       { label: "Open reports on user's media", value: stats.report_involvement?.on_user_media?.open ?? 0, url: reportsOnUserMediaUrl },
       { label: "Comment reports submitted", value: stats.comment_reports_submitted ?? 0, url: commentReportsByUserUrl },
       { label: "Comment reports on user's comments", value: stats.comment_reports_on_user_comments ?? 0, url: commentReportsOnCommentsUrl },
-      { label: "Comment reports on user's media", value: stats.comment_reports_on_user_media ?? 0, url: commentReportsOnMediaUrl },
       { label: "Likes given", value: stats.likes_given ?? 0 },
       { label: "Playback sessions", value: stats.playback_sessions ?? 0 },
       { label: "Log events 30d", value: stats.log_events_30d ?? 0, url: logsUrl },
@@ -252,7 +250,21 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       { title: "Media reports on user's media", rows: this.reportInvolvementRows(involvement.on_user_media || {}) },
       { title: "Comment reports submitted by user", rows: this.reportInvolvementRows(involvement.comment_submitted || {}) },
       { title: "Comment reports on user's comments", rows: this.reportInvolvementRows(involvement.comment_on_user_comments || {}) },
-      { title: "Comment reports on user's media", rows: this.reportInvolvementRows(involvement.comment_on_user_media || {}) },
+    ];
+  }
+
+  get contextReportInvolvementSections() {
+    const involvement = this.stats?.report_involvement || {};
+    const userId = this.selectedUser?.id;
+    const commentReportsOnMediaUrl = userId ? `/admin/plugins/media-gallery-reports?status=all&report_type=comment&media_owner_user_id=${encodeParam(userId)}` : "";
+
+    return [
+      {
+        title: "Comment reports under user's media",
+        subtitle: "Reports on comments posted by others under this user's uploads. This is contextual and does not directly indicate misconduct by this user.",
+        rows: this.reportInvolvementRows(involvement.comment_on_user_media || {}),
+        url: commentReportsOnMediaUrl,
+      },
     ];
   }
 
@@ -275,7 +287,17 @@ export default class AdminPluginsMediaGalleryUserDiagnosticsController extends C
       { title: "Media reports on user's media trend", subtitle: "Media reports created on this user's uploads", rows: this.moderationTrendRows(trends.on_user_media || []) },
       { title: "Comment reports submitted trend", subtitle: "Comment reports created by this user", rows: this.moderationTrendRows(trends.comment_submitted || []) },
       { title: "Comment reports on user's comments trend", subtitle: "Reports received on comments authored by this user", rows: this.moderationTrendRows(trends.comment_on_user_comments || []) },
-      { title: "Comment reports on user's media trend", subtitle: "Comment reports created on uploads owned by this user", rows: this.moderationTrendRows(trends.comment_on_user_media || []) },
+    ];
+  }
+
+  get contextModerationTrendSections() {
+    const trends = this.stats?.moderation_trends || {};
+    return [
+      {
+        title: "Reports under user's media trend",
+        subtitle: "Comment reports created on comments under this user's uploads. Context only; review the comment author and media thread before drawing conclusions.",
+        rows: this.moderationTrendRows(trends.comment_on_user_media || []),
+      },
     ];
   }
 
