@@ -55,7 +55,8 @@ module ::MediaGallery
         playback_overlay: can_view ? MediaGallery::PlaybackOverlay.client_enabled_config : nil,
         permissions: media_gallery_permissions_payload,
         upload_policy: can_upload ? upload_policy_payload : nil,
-        reports: can_view ? media_reports_config_payload : { enabled: false }
+        reports: can_view ? media_reports_config_payload : { enabled: false },
+        comments: can_view ? media_comments_config_payload : { enabled: false }
       )
     end
     
@@ -1547,6 +1548,15 @@ end
     REPORTS_METADATA_KEY = "media_reports"
     REPORT_AUTO_HIDE_GROUP_SETTING_SEPARATOR = /[\|,\n]/
 
+    def media_comments_config_payload
+      {
+        enabled: SiteSetting.respond_to?(:media_gallery_comments_enabled) && SiteSetting.media_gallery_comments_enabled,
+        page_size: SiteSetting.respond_to?(:media_gallery_comments_page_size) ? SiteSetting.media_gallery_comments_page_size.to_i : 20,
+        max_length: SiteSetting.respond_to?(:media_gallery_comments_max_length) ? SiteSetting.media_gallery_comments_max_length.to_i : 1000,
+        can_comment: current_user.present? && current_user.trust_level.to_i >= (SiteSetting.respond_to?(:media_gallery_comments_min_trust_level) ? SiteSetting.media_gallery_comments_min_trust_level.to_i : 0),
+      }
+    end
+
     def media_reports_config_payload
       {
         enabled: SiteSetting.media_gallery_reports_enabled,
@@ -2022,6 +2032,8 @@ end
         scope.order(likes_count: :desc, created_at: :desc, id: :desc)
       when "most_viewed"
         scope.order(views_count: :desc, created_at: :desc, id: :desc)
+      when "most_commented"
+        scope.order(comments_count: :desc, last_commented_at: :desc, created_at: :desc, id: :desc)
       else
         scope.order(created_at: :desc, id: :desc)
       end

@@ -15,6 +15,8 @@ module ::MediaGallery
       :filesize_processed_bytes,
       :views_count,
       :likes_count,
+      :comments_count,
+      :last_commented_at,
       :created_at,
       :uploader_username,
       :thumbnail_url,

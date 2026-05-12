@@ -90,12 +90,14 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/media_item.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/hls_aes128_key.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_like.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/media_comment.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_fingerprint.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_playback_session.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_overlay_session.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_forensics_export.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_log_event.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
+  require_dependency File.expand_path("app/serializers/media_gallery/media_comment_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_fingerprints_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
@@ -109,6 +111,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_user_diagnostics_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/media_comments_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/hls_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/library_controller.rb", __dir__)
@@ -251,6 +254,10 @@ after_initialize do
     post "/media" => "media_gallery/media#create", defaults: { format: :json }
     put "/media/:public_id" => "media_gallery/media#update", defaults: { format: :json }
     patch "/media/:public_id" => "media_gallery/media#update", defaults: { format: :json }
+
+    get "/media/:public_id/comments" => "media_gallery/media_comments#index", defaults: { format: :json }
+    post "/media/:public_id/comments" => "media_gallery/media_comments#create", defaults: { format: :json }
+    delete "/media/:public_id/comments/:comment_id" => "media_gallery/media_comments#destroy", defaults: { format: :json }
 
     get "/media/:public_id" => "media_gallery/media#show", defaults: { format: :json }
     delete "/media/:public_id" => "media_gallery/media#destroy", defaults: { format: :json }
