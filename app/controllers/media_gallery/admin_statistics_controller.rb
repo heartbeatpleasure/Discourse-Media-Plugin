@@ -29,7 +29,11 @@ module ::MediaGallery
       period_summary = timed_phase!(timing, :period_summary) { period_summary_payload(period, since, limit) }
       contributors = timed_phase!(timing, :contributors) { contributors_payload(since) }
       watchlist = timed_phase!(timing, :watchlist) { watchlist_payload }
-      insights = timed_phase!(timing, :insights) { insights_payload(summary, moderation, quality, watchlist) }
+      content_profile = timed_phase!(timing, :content_profile) { content_profile_payload }
+      engagement_quality = timed_phase!(timing, :engagement_quality) { engagement_quality_payload(since, summary) }
+      delivery_integrity = timed_phase!(timing, :delivery_integrity) { delivery_integrity_payload(since) }
+      content_curation = timed_phase!(timing, :content_curation) { content_curation_payload(since) }
+      insights = timed_phase!(timing, :insights) { insights_payload(summary, moderation, quality, watchlist, engagement_quality, delivery_integrity, content_curation) }
 
       payload = {
         filters: {
@@ -46,6 +50,10 @@ module ::MediaGallery
         period_summary: period_summary,
         contributors: contributors,
         watchlist: watchlist,
+        content_profile: content_profile,
+        engagement_quality: engagement_quality,
+        delivery_integrity: delivery_integrity,
+        content_curation: content_curation,
         insights: insights,
         generated_at: Time.zone.now.utc.iso8601,
         notes: analytics_notes,
@@ -70,6 +78,10 @@ module ::MediaGallery
         period_summary: empty_period_summary,
         contributors: empty_contributors,
         watchlist: empty_watchlist,
+        content_profile: empty_content_profile,
+        engagement_quality: empty_engagement_quality,
+        delivery_integrity: empty_delivery_integrity,
+        content_curation: empty_content_curation,
         insights: [],
         generated_at: Time.zone.now.utc.iso8601,
         notes: analytics_notes,
@@ -216,7 +228,7 @@ module ::MediaGallery
       empty_watchlist
     end
 
-    def insights_payload(summary, moderation, quality, watchlist)
+    def insights_payload(summary, moderation, quality, watchlist, engagement_quality = nil, delivery_integrity = nil, content_curation = nil)
       rows = []
       open_reports = summary[:open_reports].to_i
       failed_items = summary[:failed_items].to_i
@@ -267,6 +279,36 @@ module ::MediaGallery
           "Reported content watchlist available",
           "#{reported_items} item#{'s' if reported_items != 1} with report activity are listed below.",
           "Prioritize content with open reports or repeated reports from different users."
+        )
+      end
+
+      quiet_ready_count = Array(content_curation&.dig(:quiet_ready_media)).length
+      if quiet_ready_count.positive?
+        rows << insight_row(
+          "info",
+          "Quiet ready media detected",
+          "#{quiet_ready_count} ready item#{'s' if quiet_ready_count != 1} with little or no engagement are listed for curation review.",
+          "Consider featuring, retagging, renaming or archiving content that consistently gets no activity."
+        )
+      end
+
+      missing_receipts = Array(delivery_integrity&.dig(:missing_delivery_receipts)).length
+      if missing_receipts.positive?
+        rows << insight_row(
+          "warning",
+          "Playback delivery receipts incomplete",
+          "#{missing_receipts} recent playback session#{'s' if missing_receipts != 1} are missing one or more HLS delivery receipt fields.",
+          "Check whether older playback records are expected, or investigate HLS delivery logging if this persists for new sessions."
+        )
+      end
+
+      report_pressure = engagement_quality&.dig(:rates, :reports_per_1000_views).to_f
+      if report_pressure.positive? && report_pressure >= 10.0
+        rows << insight_row(
+          "warning",
+          "High report pressure",
+          "Reports per 1,000 views is currently #{report_pressure.round(1)}.",
+          "Review reported media and comment report patterns to distinguish real content issues from false-report behavior."
         )
       end
 
@@ -416,11 +458,35 @@ module ::MediaGallery
       { recent_failures: [], processing_queue: [], most_reported_media: [] }
     end
 
+    def empty_content_profile
+      {
+        duration_buckets: [],
+        processed_size_buckets: [],
+        resolution_buckets: [],
+        tag_usage: [],
+        visibility: [],
+        hls_catalog: [],
+      }
+    end
+
+    def empty_engagement_quality
+      { rates: {}, rising_content: [] }
+    end
+
+    def empty_delivery_integrity
+      { receipt_summary: {}, hls_variants: [], missing_delivery_receipts: [] }
+    end
+
+    def empty_content_curation
+      { quiet_ready_media: [], stale_ready_media: [] }
+    end
+
     def analytics_notes
       [
         "This statistics dashboard is read-only and uses existing Media Gallery tables and metadata.",
         "Upload, like, comment, playback and log trends are grouped by the selected time unit.",
         "Iteration 2 adds period comparison, contributor leaderboards, recent failure watchlists and actionable admin insights without adding migrations.",
+        "Iterations 3 and 4 add content profile, engagement quality, delivery integrity and curation watchlists using existing records only.",
         "Media report history is stored in item metadata; report timestamps are parsed where available, while comment reports use their own table timestamps.",
       ]
     end
@@ -863,6 +929,342 @@ module ::MediaGallery
     rescue => e
       Rails.logger.warn("[media_gallery] statistics most reported media failed #{e.class}: #{e.message}")
       []
+    end
+
+    def content_profile_payload
+      {
+        duration_buckets: duration_bucket_rows,
+        processed_size_buckets: processed_size_bucket_rows,
+        resolution_buckets: resolution_bucket_rows,
+        tag_usage: tag_usage_rows,
+        visibility: admin_visibility_rows,
+        hls_catalog: hls_catalog_rows,
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics content profile failed #{e.class}: #{e.message}")
+      empty_content_profile
+    end
+
+    def engagement_quality_payload(since, summary = nil)
+      summary ||= summary_payload
+      total_items = summary[:total_items].to_i
+      ready_items = summary[:ready_items].to_i
+      views = summary[:total_views].to_i
+      playbacks = summary[:playback_sessions].to_i
+      likes = summary[:media_likes].to_i
+      comments = summary[:comment_count].to_i
+      reports = summary[:total_reports].to_i
+
+      {
+        rates: {
+          views_per_item: safe_ratio(views, total_items, 2),
+          playbacks_per_ready_item: safe_ratio(playbacks, ready_items, 2),
+          likes_per_100_views: safe_ratio(likes * 100, views, 1),
+          comments_per_100_views: safe_ratio(comments * 100, views, 1),
+          reports_per_1000_views: safe_ratio(reports * 1000, views, 1),
+          engagement_per_ready_item: safe_ratio(likes + comments, ready_items, 2),
+        },
+        rising_content: rising_content_payload(since),
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics engagement quality failed #{e.class}: #{e.message}")
+      empty_engagement_quality
+    end
+
+    def delivery_integrity_payload(since)
+      playback_scope = time_window_scope(playback_session_scope, playback_timestamp_column, since, nil)
+      total_playbacks = safe_count(playback_scope)
+      with_signature = column_available?(playback_scope.klass.table_name, :hls_delivery_signature) ? safe_count(playback_scope.where.not(hls_delivery_signature: [nil, ""])) : 0
+      with_manifest = column_available?(playback_scope.klass.table_name, :hls_manifest_sha256) ? safe_count(playback_scope.where.not(hls_manifest_sha256: [nil, ""])) : 0
+      with_sequence = column_available?(playback_scope.klass.table_name, :hls_variant_sequence_sha256) ? safe_count(playback_scope.where.not(hls_variant_sequence_sha256: [nil, ""])) : 0
+      average_sequence_length = column_available?(playback_scope.klass.table_name, :hls_variant_sequence_length) ? playback_scope.average(:hls_variant_sequence_length)&.to_f&.round(1) : nil
+
+      {
+        receipt_summary: {
+          total_playbacks: total_playbacks,
+          with_delivery_signature: with_signature,
+          with_manifest_sha: with_manifest,
+          with_variant_sequence: with_sequence,
+          signature_coverage_percent: total_playbacks.positive? ? ((with_signature.to_f / total_playbacks) * 100).round(1) : nil,
+          manifest_coverage_percent: total_playbacks.positive? ? ((with_manifest.to_f / total_playbacks) * 100).round(1) : nil,
+          sequence_coverage_percent: total_playbacks.positive? ? ((with_sequence.to_f / total_playbacks) * 100).round(1) : nil,
+          average_variant_sequence_length: average_sequence_length,
+        },
+        hls_variants: hls_variant_rows(playback_scope),
+        missing_delivery_receipts: missing_delivery_receipts_payload(playback_scope),
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics delivery integrity failed #{e.class}: #{e.message}")
+      empty_delivery_integrity
+    end
+
+    def content_curation_payload(since)
+      {
+        quiet_ready_media: quiet_ready_media_payload(since),
+        stale_ready_media: stale_ready_media_payload,
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics content curation failed #{e.class}: #{e.message}")
+      empty_content_curation
+    end
+
+    def duration_bucket_rows
+      buckets = [
+        ["unknown", "Unknown", nil, nil],
+        ["under_1_min", "Under 1 min", 0, 60],
+        ["1_to_5_min", "1–5 min", 60, 300],
+        ["5_to_15_min", "5–15 min", 300, 900],
+        ["15_to_30_min", "15–30 min", 900, 1800],
+        ["over_30_min", "Over 30 min", 1800, nil],
+      ]
+      bucket_count_rows(:duration_seconds, buckets)
+    end
+
+    def processed_size_bucket_rows
+      buckets = [
+        ["unknown", "Unknown", nil, nil],
+        ["under_10_mb", "Under 10 MB", 0, 10.megabytes],
+        ["10_to_50_mb", "10–50 MB", 10.megabytes, 50.megabytes],
+        ["50_to_200_mb", "50–200 MB", 50.megabytes, 200.megabytes],
+        ["200_mb_to_1_gb", "200 MB–1 GB", 200.megabytes, 1.gigabyte],
+        ["over_1_gb", "Over 1 GB", 1.gigabyte, nil],
+      ]
+      bucket_count_rows(:filesize_processed_bytes, buckets)
+    end
+
+    def bucket_count_rows(column, buckets)
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, column)
+
+      buckets.map do |key, label, min, max|
+        scope = media_item_scope
+        if key == "unknown"
+          scope = scope.where(column => nil)
+        else
+          scope = scope.where("#{table}.#{column} >= ?", min) if min.present?
+          scope = scope.where("#{table}.#{column} < ?", max) if max.present?
+        end
+        { name: key, label: label, count: safe_count(scope) }
+      end.select { |row| row[:count].positive? }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics bucket count failed column=#{column} #{e.class}: #{e.message}")
+      []
+    end
+
+    def resolution_bucket_rows
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, :width) && column_available?(table, :height)
+
+      scopes = {
+        unknown: media_item_scope.where("#{table}.width IS NULL OR #{table}.height IS NULL"),
+        vertical: media_item_scope.where("#{table}.width IS NOT NULL AND #{table}.height IS NOT NULL AND #{table}.height > #{table}.width"),
+        square: media_item_scope.where("#{table}.width IS NOT NULL AND #{table}.height IS NOT NULL AND #{table}.width = #{table}.height"),
+        landscape: media_item_scope.where("#{table}.width IS NOT NULL AND #{table}.height IS NOT NULL AND #{table}.width > #{table}.height"),
+        hd_or_larger: media_item_scope.where("#{table}.width >= 1280 OR #{table}.height >= 720"),
+        full_hd_or_larger: media_item_scope.where("#{table}.width >= 1920 OR #{table}.height >= 1080"),
+      }
+
+      scopes.map do |key, scope|
+        { name: key.to_s, label: humanize_token(key), count: safe_count(scope) }
+      end.select { |row| row[:count].positive? }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics resolution buckets failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def tag_usage_rows
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, :tags)
+
+      sql = <<~SQL
+        SELECT tag, COUNT(*) AS count
+        FROM #{table}, LATERAL unnest(#{table}.tags) AS tag
+        WHERE tag IS NOT NULL AND tag <> ''
+        GROUP BY tag
+        ORDER BY count DESC, tag ASC
+        LIMIT 20
+      SQL
+
+      ::ActiveRecord::Base.connection.exec_query(sql).map do |row|
+        { name: row["tag"].to_s, label: row["tag"].to_s, count: row["count"].to_i }
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics tag usage failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def admin_visibility_rows
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, :extra_metadata)
+
+      hidden = safe_count(media_item_scope.where("COALESCE((#{table}.extra_metadata -> 'admin_visibility' ->> 'hidden')::boolean, false) = true"))
+      visible = [safe_count(media_item_scope) - hidden, 0].max
+      [
+        { name: "visible", label: "Visible", count: visible },
+        { name: "admin_hidden", label: "Admin hidden", count: hidden },
+      ].select { |row| row[:count].positive? }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics admin visibility failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def hls_catalog_rows
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, :storage_manifest)
+
+      hls_scope = media_item_scope.where("#{table}.storage_manifest -> 'roles' -> 'hls' IS NOT NULL")
+      aes_scope = hls_scope.where("#{table}.storage_manifest -> 'roles' -> 'hls' -> 'encryption' IS NOT NULL")
+      clear_hls_scope = hls_scope.where("#{table}.storage_manifest -> 'roles' -> 'hls' -> 'encryption' IS NULL")
+      no_hls_scope = media_item_scope.where("#{table}.storage_manifest -> 'roles' -> 'hls' IS NULL")
+
+      [
+        { name: "hls_ready", label: "HLS ready", count: safe_count(hls_scope) },
+        { name: "aes_hls", label: "AES protected HLS", count: safe_count(aes_scope) },
+        { name: "clear_hls", label: "Clear HLS", count: safe_count(clear_hls_scope) },
+        { name: "no_hls", label: "No HLS role", count: safe_count(no_hls_scope) },
+      ].select { |row| row[:count].positive? }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics hls catalog failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def rising_content_payload(since)
+      timestamp_column = playback_timestamp_column
+      play_scope = time_window_scope(playback_session_scope, timestamp_column, since, nil)
+      play_counts = top_group_counts(play_scope, :media_item_id, 15)
+      like_counts = safe_group_count(time_window_scope(media_like_scope, :created_at, since, nil), :media_item_id)
+      comment_counts = safe_group_count(time_window_scope(media_comment_scope, :created_at, since, nil), :media_item_id)
+
+      ids = (play_counts.keys + like_counts.keys + comment_counts.keys).compact.uniq
+      items = media_item_scope.includes(:user).where(id: ids).index_by(&:id)
+      ranked = ids.map do |id|
+        item = items[id]
+        next if item.blank?
+
+        plays = play_counts[id].to_i
+        likes = like_counts[id].to_i
+        comments = comment_counts[id].to_i
+        score = plays + (likes * 3) + (comments * 4)
+        next if score <= 0
+
+        {
+          public_id: item.public_id,
+          title: item.title,
+          uploader: item.user&.username,
+          media_type: item.media_type,
+          status: item.status,
+          playbacks: plays,
+          likes: likes,
+          comments: comments,
+          score: score,
+          created_at: item.created_at&.utc&.iso8601,
+        }
+      end.compact
+
+      ranked.sort_by { |row| [-row[:score].to_i, -row[:playbacks].to_i, row[:title].to_s] }.first(10)
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics rising content failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def hls_variant_rows(scope)
+      return [] unless column_available?(scope.klass.table_name, :hls_variant)
+
+      to_name_count_rows(safe_group_count(scope, :hls_variant)).first(12)
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics hls variants failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def missing_delivery_receipts_payload(scope)
+      table = scope.klass.table_name
+      return [] unless column_available?(table, :hls_delivery_signature) || column_available?(table, :hls_manifest_sha256) || column_available?(table, :hls_variant_sequence_sha256)
+
+      conditions = []
+      conditions << "#{table}.hls_delivery_signature IS NULL OR #{table}.hls_delivery_signature = ''" if column_available?(table, :hls_delivery_signature)
+      conditions << "#{table}.hls_manifest_sha256 IS NULL OR #{table}.hls_manifest_sha256 = ''" if column_available?(table, :hls_manifest_sha256)
+      conditions << "#{table}.hls_variant_sequence_sha256 IS NULL OR #{table}.hls_variant_sequence_sha256 = ''" if column_available?(table, :hls_variant_sequence_sha256)
+      return [] if conditions.blank?
+
+      scope
+        .includes(:user, :media_item)
+        .where(conditions.map { |condition| "(#{condition})" }.join(" OR "))
+        .order(Arel.sql("COALESCE(#{table}.#{playback_timestamp_column}, #{table}.created_at) DESC"))
+        .limit(10)
+        .map do |session|
+          item = session.media_item
+          {
+            id: session.id,
+            public_id: item&.public_id,
+            title: item&.title,
+            user: session.user&.username,
+            hls_variant: session.respond_to?(:hls_variant) ? session.hls_variant : nil,
+            played_at: playback_time_for(session)&.utc&.iso8601,
+            missing_signature: session.respond_to?(:hls_delivery_signature) && session.hls_delivery_signature.blank?,
+            missing_manifest: session.respond_to?(:hls_manifest_sha256) && session.hls_manifest_sha256.blank?,
+            missing_sequence: session.respond_to?(:hls_variant_sequence_sha256) && session.hls_variant_sequence_sha256.blank?,
+          }
+        end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics missing delivery receipts failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def quiet_ready_media_payload(since)
+      table = ::MediaGallery::MediaItem.table_name
+      scope = media_item_scope.includes(:user).where(status: "ready")
+      scope = scope.where("#{table}.created_at >= ?", since) if since.present?
+      scope = scope.where("COALESCE(#{table}.views_count, 0) = 0") if column_available?(table, :views_count)
+      scope = scope.where("COALESCE(#{table}.likes_count, 0) = 0") if column_available?(table, :likes_count)
+      scope = scope.where("COALESCE(#{table}.comments_count, 0) = 0") if column_available?(table, :comments_count)
+      scope.order(created_at: :desc).limit(10).map { |item| curation_item_row(item) }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics quiet ready media failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def stale_ready_media_payload
+      table = ::MediaGallery::MediaItem.table_name
+      cutoff = 90.days.ago
+      scope = media_item_scope.includes(:user).where(status: "ready").where("#{table}.created_at < ?", cutoff)
+      scope = scope.where("COALESCE(#{table}.views_count, 0) <= 1") if column_available?(table, :views_count)
+      scope = scope.where("COALESCE(#{table}.likes_count, 0) = 0") if column_available?(table, :likes_count)
+      scope = scope.where("COALESCE(#{table}.comments_count, 0) = 0") if column_available?(table, :comments_count)
+      scope.order(created_at: :asc).limit(10).map { |item| curation_item_row(item) }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics stale ready media failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def curation_item_row(item)
+      {
+        public_id: item.public_id,
+        title: item.title,
+        uploader: item.user&.username,
+        media_type: item.media_type,
+        views_count: item.respond_to?(:views_count) ? item.views_count.to_i : 0,
+        likes_count: item.respond_to?(:likes_count) ? item.likes_count.to_i : 0,
+        comments_count: item.respond_to?(:comments_count) ? item.comments_count.to_i : 0,
+        created_at: item.created_at&.utc&.iso8601,
+      }
+    rescue
+      {}
+    end
+
+    def playback_time_for(session)
+      value = session.respond_to?(:played_at) ? session.played_at : nil
+      value.presence || session.created_at
+    rescue
+      nil
+    end
+
+    def safe_ratio(numerator, denominator, precision = 1)
+      denominator = denominator.to_f
+      return nil unless denominator.positive?
+
+      (numerator.to_f / denominator).round(precision)
+    rescue
+      nil
     end
 
     def insight_row(severity, title, message, action)

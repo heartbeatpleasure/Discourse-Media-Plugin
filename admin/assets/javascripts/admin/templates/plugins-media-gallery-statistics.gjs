@@ -652,6 +652,372 @@ export default RouteTemplate(
         </article>
       </section>
 
+      <section class="mg-stats__breakdown-grid">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Duration profile</h2>
+              <p class="mg-stats__muted">Length distribution for audio and video content.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.durationBuckets as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No duration data available.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Processed size profile</h2>
+              <p class="mg-stats__muted">How processed files are distributed by storage size.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.processedSizeBuckets as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No processed size data available.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Resolution and orientation</h2>
+              <p class="mg-stats__muted">Visual media dimensions grouped into practical review buckets.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.resolutionBuckets as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No resolution data available.</div>
+            {{/each}}
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__breakdown-grid">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Top tags</h2>
+              <p class="mg-stats__muted">Most used content tags, useful for navigation and cleanup.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.tagUsageRows as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No tag data available.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Visibility state</h2>
+              <p class="mg-stats__muted">Admin-visible versus admin-hidden content.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.visibilityRows as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No visibility data available.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>HLS catalog</h2>
+              <p class="mg-stats__muted">Current HLS and AES protection state across media items.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.hlsCatalogRows as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No HLS catalog data available.</div>
+            {{/each}}
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
+            <h2>Engagement quality</h2>
+            <p class="mg-stats__muted">Rates that help distinguish high-volume usage from high-quality interaction.</p>
+          </div>
+        </div>
+        <div class="mg-stats__kpi-grid">
+          {{#each @controller.engagementRateCards as |card|}}
+            <article class="mg-stats__card">
+              <div class="mg-stats__kpi-label">{{card.label}}</div>
+              <div class="mg-stats__kpi-value">{{card.value}}</div>
+              <div class="mg-stats__meta">{{card.meta}}</div>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-stats__two-column">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Rising content</h2>
+              <p class="mg-stats__muted">Items with recent playbacks, likes or comments in the selected range.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>Media</th>
+                  <th>Plays</th>
+                  <th>Likes</th>
+                  <th>Comments</th>
+                  <th>Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.risingContent as |item|}}
+                  <tr>
+                    <td>
+                      <div class="mg-stats__mini-title">{{item.title}}</div>
+                      <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                    </td>
+                    <td>{{item.playsLabel}}</td>
+                    <td>{{item.likesLabel}}</td>
+                    <td>{{item.commentsLabel}}</td>
+                    <td>{{item.scoreLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="5">No rising content found for this range.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Quiet ready media</h2>
+              <p class="mg-stats__muted">Ready items in the selected range without views, likes or comments.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>Media</th>
+                  <th>Uploader</th>
+                  <th>Type</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.quietReadyMedia as |item|}}
+                  <tr>
+                    <td>
+                      <div class="mg-stats__mini-title">{{item.title}}</div>
+                      <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                    </td>
+                    <td>{{item.uploader}}</td>
+                    <td><span class="mg-stats__badge">{{item.typeLabel}}</span></td>
+                    <td>{{item.createdLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="4">No quiet ready media found.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
+            <h2>Delivery and HLS integrity</h2>
+            <p class="mg-stats__muted">Playback receipt coverage and HLS variant distribution for the selected range.</p>
+          </div>
+        </div>
+        <div class="mg-stats__kpi-grid">
+          {{#each @controller.deliveryReceiptCards as |card|}}
+            <article class="mg-stats__card">
+              <div class="mg-stats__kpi-label">{{card.label}}</div>
+              <div class="mg-stats__kpi-value">{{card.value}}</div>
+              <div class="mg-stats__meta">{{card.meta}}</div>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-stats__two-column">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>HLS variants</h2>
+              <p class="mg-stats__muted">Variant labels recorded on playback sessions.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.hlsVariantRows as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No HLS variant data available.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Missing delivery receipts</h2>
+              <p class="mg-stats__muted">Recent playback sessions missing HLS receipt fields.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>Media</th>
+                  <th>User</th>
+                  <th>Variant</th>
+                  <th>Missing</th>
+                  <th>Played</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.missingDeliveryReceipts as |row|}}
+                  <tr>
+                    <td>
+                      <div class="mg-stats__mini-title">{{row.title}}</div>
+                      <div class="mg-stats__mini-code">{{row.publicId}}</div>
+                    </td>
+                    <td>{{row.user}}</td>
+                    <td>{{row.variant}}</td>
+                    <td>{{row.missingLabel}}</td>
+                    <td>{{row.playedLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="5">No missing receipt records found.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
+            <h2>Stale low-engagement media</h2>
+            <p class="mg-stats__muted">Older ready items with almost no interaction, useful for cleanup or featuring decisions.</p>
+          </div>
+        </div>
+        <div class="mg-stats__table-wrap">
+          <table class="mg-stats__mini-table">
+            <thead>
+              <tr>
+                <th>Media</th>
+                <th>Uploader</th>
+                <th>Type</th>
+                <th>Views</th>
+                <th>Likes</th>
+                <th>Comments</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{#each @controller.staleReadyMedia as |item|}}
+                <tr>
+                  <td>
+                    <div class="mg-stats__mini-title">{{item.title}}</div>
+                    <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                  </td>
+                  <td>{{item.uploader}}</td>
+                  <td><span class="mg-stats__badge">{{item.typeLabel}}</span></td>
+                  <td>{{item.viewsLabel}}</td>
+                  <td>{{item.likesLabel}}</td>
+                  <td>{{item.commentsLabel}}</td>
+                  <td>{{item.createdLabel}}</td>
+                </tr>
+              {{else}}
+                <tr><td colspan="7">No stale low-engagement media found.</td></tr>
+              {{/each}}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="mg-stats__two-column">
         <article class="mg-stats__panel">
           <div class="mg-stats__panel-header">

@@ -193,6 +193,10 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   @tracked periodSummary = {};
   @tracked contributors = {};
   @tracked watchlist = {};
+  @tracked contentProfile = {};
+  @tracked engagementQuality = {};
+  @tracked deliveryIntegrity = {};
+  @tracked contentCuration = {};
   @tracked insights = [];
   @tracked topContent = [];
   @tracked notes = [];
@@ -217,6 +221,10 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.periodSummary = {};
     this.contributors = {};
     this.watchlist = {};
+    this.contentProfile = {};
+    this.engagementQuality = {};
+    this.deliveryIntegrity = {};
+    this.contentCuration = {};
     this.insights = [];
     this.topContent = [];
     this.notes = [];
@@ -250,6 +258,10 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.periodSummary = safeObject(data?.period_summary);
     this.contributors = safeObject(data?.contributors);
     this.watchlist = safeObject(data?.watchlist);
+    this.contentProfile = safeObject(data?.content_profile);
+    this.engagementQuality = safeObject(data?.engagement_quality);
+    this.deliveryIntegrity = safeObject(data?.delivery_integrity);
+    this.contentCuration = safeObject(data?.content_curation);
     this.insights = coerceArray(data?.insights);
     this.topContent = coerceArray(data?.top_content);
     this.notes = coerceArray(data?.notes);
@@ -444,6 +456,59 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     ];
   }
 
+  get durationBuckets() {
+    return coerceArray(this.contentProfile?.duration_buckets).map((row) => decorateBreakdown(row, this.summary?.total_items));
+  }
+
+  get processedSizeBuckets() {
+    return coerceArray(this.contentProfile?.processed_size_buckets).map((row) => decorateBreakdown(row, this.summary?.total_items));
+  }
+
+  get resolutionBuckets() {
+    return coerceArray(this.contentProfile?.resolution_buckets).map((row) => decorateBreakdown(row, this.summary?.total_items));
+  }
+
+  get tagUsageRows() {
+    const total = coerceArray(this.contentProfile?.tag_usage).reduce((sum, row) => sum + numberValue(row?.count), 0);
+    return coerceArray(this.contentProfile?.tag_usage).map((row) => decorateBreakdown(row, total));
+  }
+
+  get visibilityRows() {
+    return coerceArray(this.contentProfile?.visibility).map((row) => decorateBreakdown(row, this.summary?.total_items));
+  }
+
+  get hlsCatalogRows() {
+    return coerceArray(this.contentProfile?.hls_catalog).map((row) => decorateBreakdown(row, this.summary?.total_items));
+  }
+
+  get engagementRateCards() {
+    const rates = safeObject(this.engagementQuality?.rates);
+    return [
+      { key: "views", label: "Views per item", value: formatMetric(rates.views_per_item), meta: "All-time total views divided by all media items" },
+      { key: "plays", label: "Plays per ready item", value: formatMetric(rates.playbacks_per_ready_item), meta: "Playback sessions divided by ready media" },
+      { key: "likes", label: "Likes per 100 views", value: formatMetric(rates.likes_per_100_views), meta: "Useful signal for content appreciation" },
+      { key: "comments", label: "Comments per 100 views", value: formatMetric(rates.comments_per_100_views), meta: "Conversation depth relative to views" },
+      { key: "reports", label: "Reports per 1k views", value: formatMetric(rates.reports_per_1000_views), meta: "Moderation pressure relative to views" },
+      { key: "engagement", label: "Engagement per ready item", value: formatMetric(rates.engagement_per_ready_item), meta: "Likes plus comments divided by ready media" },
+    ];
+  }
+
+  get deliveryReceiptCards() {
+    const receipt = safeObject(this.deliveryIntegrity?.receipt_summary);
+    return [
+      { key: "total", label: "Playback sessions", value: formatNumber(receipt.total_playbacks), meta: "Selected range" },
+      { key: "signature", label: "Signature coverage", value: formatPercent(receipt.signature_coverage_percent), meta: `${formatNumber(receipt.with_delivery_signature)} with delivery signature` },
+      { key: "manifest", label: "Manifest SHA coverage", value: formatPercent(receipt.manifest_coverage_percent), meta: `${formatNumber(receipt.with_manifest_sha)} with manifest SHA` },
+      { key: "sequence", label: "Variant sequence coverage", value: formatPercent(receipt.sequence_coverage_percent), meta: `${formatNumber(receipt.with_variant_sequence)} with variant sequence` },
+      { key: "sequence-length", label: "Avg. sequence length", value: receipt.average_variant_sequence_length ?? "—", meta: "Average stored HLS variant sequence length" },
+    ];
+  }
+
+  get hlsVariantRows() {
+    const total = coerceArray(this.deliveryIntegrity?.hls_variants).reduce((sum, row) => sum + numberValue(row?.count), 0);
+    return coerceArray(this.deliveryIntegrity?.hls_variants).map((row) => decorateBreakdown(row, total));
+  }
+
   get topUploaders() {
     return coerceArray(this.contributors?.top_uploaders).map((row) => ({
       key: plainText(row?.user_id, plainText(row?.username, "user")),
@@ -516,6 +581,60 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     }));
   }
 
+  decorateContentItem(item, fallback = "item") {
+    return {
+      key: plainText(item?.public_id, plainText(item?.title, fallback)),
+      title: plainText(item?.title, "Untitled media"),
+      publicId: plainText(item?.public_id, "—"),
+      uploader: plainText(item?.uploader, "—"),
+      typeLabel: titleize(item?.media_type),
+      statusLabel: titleize(item?.status),
+      viewsLabel: formatNumber(item?.views_count),
+      playsLabel: formatNumber(item?.playbacks),
+      likesLabel: formatNumber(item?.likes ?? item?.likes_count),
+      commentsLabel: formatNumber(item?.comments ?? item?.comments_count),
+      scoreLabel: formatNumber(item?.score),
+      createdLabel: formatDateTime(item?.created_at),
+    };
+  }
+
+  get risingContent() {
+    return coerceArray(this.engagementQuality?.rising_content).map((item) => this.decorateContentItem(item, "rising"));
+  }
+
+  get quietReadyMedia() {
+    return coerceArray(this.contentCuration?.quiet_ready_media).map((item) => this.decorateContentItem(item, "quiet"));
+  }
+
+  get staleReadyMedia() {
+    return coerceArray(this.contentCuration?.stale_ready_media).map((item) => this.decorateContentItem(item, "stale"));
+  }
+
+  get missingDeliveryReceipts() {
+    return coerceArray(this.deliveryIntegrity?.missing_delivery_receipts).map((row) => {
+      const missing = [];
+      if (row?.missing_signature) {
+        missing.push("signature");
+      }
+      if (row?.missing_manifest) {
+        missing.push("manifest");
+      }
+      if (row?.missing_sequence) {
+        missing.push("sequence");
+      }
+
+      return {
+        key: plainText(row?.id, plainText(row?.public_id, "receipt")),
+        title: plainText(row?.title, "Unknown media"),
+        publicId: plainText(row?.public_id, "—"),
+        user: plainText(row?.user, "—"),
+        variant: plainText(row?.hls_variant, "—"),
+        playedLabel: formatDateTime(row?.played_at),
+        missingLabel: missing.length ? missing.join(", ") : "—",
+      };
+    });
+  }
+
   get decoratedTopContent() {
     return this.topContent.map((item) => ({
       key: plainText(item?.public_id, plainText(item?.title, "item")),
@@ -555,7 +674,22 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       return "";
     }
 
-    const keys = ["summary", "trends", "breakdowns", "top_content", "moderation", "quality", "period_summary", "contributors", "watchlist", "insights"];
+    const keys = [
+      "summary",
+      "trends",
+      "breakdowns",
+      "top_content",
+      "moderation",
+      "quality",
+      "period_summary",
+      "contributors",
+      "watchlist",
+      "content_profile",
+      "engagement_quality",
+      "delivery_integrity",
+      "content_curation",
+      "insights",
+    ];
     const parts = keys
       .map((key) => {
         const value = Number(this.lastTimingBreakdown?.[key]);
