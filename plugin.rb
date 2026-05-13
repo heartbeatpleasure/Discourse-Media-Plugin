@@ -109,6 +109,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_health_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_logs_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_jobs_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_statistics_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_storage_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_security_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
@@ -144,6 +145,7 @@ after_initialize do
     get "/admin/plugins/media-gallery-user-diagnostics" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-security" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-jobs" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-statistics" => "admin/plugins#index", constraints: AdminConstraint.new
 
     get "/media-library" => "media_gallery/library#index"
 
@@ -184,6 +186,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/storage/health" => "media_gallery/admin_storage#health", defaults: { format: :json }
     get "/admin/plugins/media-gallery/logs" => "media_gallery/admin_logs#index", defaults: { format: :json }
     get "/admin/plugins/media-gallery/jobs" => "media_gallery/admin_jobs#index", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/statistics" => "media_gallery/admin_statistics#index", defaults: { format: :json }
     get "/admin/plugins/media-gallery/user-diagnostics/search" => "media_gallery/admin_user_diagnostics#search", defaults: { format: :json }
     get "/admin/plugins/media-gallery/user-diagnostics/:user_id" => "media_gallery/admin_user_diagnostics#show", defaults: { format: :json }
     post "/admin/plugins/media-gallery/storage/probe" => "media_gallery/admin_storage#probe", defaults: { format: :json }

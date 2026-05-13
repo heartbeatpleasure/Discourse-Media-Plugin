@@ -273,6 +273,23 @@ export default RouteTemplate(
         </a>
 
 
+        <a class="mg-landing__card" href="/admin/plugins/media-gallery-statistics">
+          <div class="mg-landing__card-header">
+            <div class="mg-landing__card-title">
+              <span class="mg-landing__card-badge">
+                {{i18n "admin.media_gallery.category_monitoring"}}
+              </span>
+              <h3>Statistics dashboard</h3>
+            </div>
+          </div>
+          <p class="mg-landing__card-description">
+            Review usage, engagement, moderation, processing quality and content trends by day, week, month or year.
+          </p>
+          <span class="mg-landing__card-action">
+            {{i18n "admin.media_gallery.open_tool"}}
+          </span>
+        </a>
+
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-security">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
