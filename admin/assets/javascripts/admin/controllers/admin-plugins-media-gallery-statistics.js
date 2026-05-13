@@ -106,31 +106,56 @@ function formatSignedNumber(value) {
   return `${number > 0 ? "+" : "−"}${formatNumber(Math.abs(number))}`;
 }
 
-function formatDelta(delta = {}, type = "number") {
+function formatSignedPercent(value) {
+  if (value === null || value === undefined || value === "") {
+    return "—";
+  }
+
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "—";
+  }
+
+  const decimals = Number.isInteger(number) ? 0 : 1;
+  return `${number > 0 ? "+" : number < 0 ? "−" : ""}${Math.abs(number).toFixed(decimals)}%`;
+}
+
+function formatDeltaValue(delta = {}, type = "number") {
   const previous = numberValue(delta?.previous);
   const current = numberValue(delta?.current);
-  const difference = numberValue(delta?.difference);
-  const percentChange = delta?.percent_change;
+  const difference = Number(delta?.difference || 0);
 
   if (previous === 0 && current > 0) {
-    return `new · ${formatSignedNumber(difference)}`;
+    return type === "bytes"
+      ? `new (${difference > 0 ? "+" : ""}${formatBytes(Math.abs(difference))})`
+      : `new (${formatSignedNumber(difference)})`;
   }
 
   if (previous === 0 && current === 0) {
-    return "no change";
+    return "0";
   }
 
   if (type === "bytes") {
     const sign = difference > 0 ? "+" : difference < 0 ? "−" : "";
-    const bytesLabel = difference === 0 ? "0" : `${sign}${formatBytes(Math.abs(difference))}`;
-    return percentChange === null || percentChange === undefined
-      ? bytesLabel
-      : `${bytesLabel} · ${formatSignedNumber(percentChange)}%`;
+    return difference === 0 ? "0" : `${sign}${formatBytes(Math.abs(difference))}`;
   }
 
-  return percentChange === null || percentChange === undefined
-    ? formatSignedNumber(difference)
-    : `${formatSignedNumber(difference)} · ${formatSignedNumber(percentChange)}%`;
+  return formatSignedNumber(difference);
+}
+
+function formatDeltaPercent(delta = {}) {
+  const previous = numberValue(delta?.previous);
+  const current = numberValue(delta?.current);
+
+  if (previous === 0 && current > 0) {
+    return "new";
+  }
+
+  if (previous === 0 && current === 0) {
+    return "0%";
+  }
+
+  return formatSignedPercent(delta?.percent_change);
 }
 
 function formatDateTime(value) {
@@ -307,11 +332,19 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   }
 
   get currentRangeLabel() {
-    return plainText(this.periodSummary?.labels?.current, "Current range");
+    return `Last ${formatNumber(this.limit)} full ${this.periodUnitLabel}`;
   }
 
   get previousRangeLabel() {
-    return plainText(this.periodSummary?.labels?.previous, "Previous range");
+    return `Previous ${formatNumber(this.limit)} full ${this.periodUnitLabel}`;
+  }
+
+  get currentRangeDateLabel() {
+    return plainText(this.periodSummary?.labels?.current, "—");
+  }
+
+  get previousRangeDateLabel() {
+    return plainText(this.periodSummary?.labels?.previous, "—");
   }
 
   get comparisonRows() {
@@ -326,7 +359,8 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
         label: metric.label,
         currentLabel: formatMetric(current?.[metric.key], metric.type),
         previousLabel: formatMetric(previous?.[metric.key], metric.type),
-        changeLabel: formatDelta(rowDelta, metric.type),
+        changeLabel: formatDeltaValue(rowDelta, metric.type),
+        percentLabel: formatDeltaPercent(rowDelta),
         changeClass: `mg-stats__delta is-${plainText(rowDelta?.direction, "flat")}`,
       };
     });
@@ -352,7 +386,7 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     return [
       {
         key: "items",
-        label: "Total media items",
+        label: "Total media",
         value: formatNumber(summary.total_items),
         meta: `${formatNumber(summary.ready_items)} ready · ${formatNumber(summary.failed_items)} failed`,
       },
@@ -497,8 +531,18 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     return coerceArray(this.contentProfile?.processed_size_buckets).map((row) => decorateBreakdown(row, this.summary?.total_items));
   }
 
+  get orientationBuckets() {
+    const rows = coerceArray(this.contentProfile?.resolution_buckets).filter((row) =>
+      ["unknown", "vertical", "square", "landscape"].includes(String(row?.name || ""))
+    );
+    return rows.map((row) => decorateBreakdown(row, this.summary?.total_items));
+  }
+
   get resolutionBuckets() {
-    return coerceArray(this.contentProfile?.resolution_buckets).map((row) => decorateBreakdown(row, this.summary?.total_items));
+    const rows = coerceArray(this.contentProfile?.resolution_buckets).filter((row) =>
+      ["unknown", "hd_or_larger", "full_hd_or_larger"].includes(String(row?.name || ""))
+    );
+    return rows.map((row) => decorateBreakdown(row, this.summary?.total_items));
   }
 
   get tagUsageRows() {
@@ -580,10 +624,10 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     const receipt = safeObject(this.deliveryIntegrity?.receipt_summary);
     return [
       { key: "total", label: "Playback sessions", value: formatNumber(receipt.total_playbacks), meta: "Selected range" },
-      { key: "signature", label: "Signature coverage", value: formatPercent(receipt.signature_coverage_percent), meta: `${formatNumber(receipt.with_delivery_signature)} with delivery signature` },
-      { key: "manifest", label: "Manifest SHA coverage", value: formatPercent(receipt.manifest_coverage_percent), meta: `${formatNumber(receipt.with_manifest_sha)} with manifest SHA` },
-      { key: "sequence", label: "Variant sequence coverage", value: formatPercent(receipt.sequence_coverage_percent), meta: `${formatNumber(receipt.with_variant_sequence)} with variant sequence` },
-      { key: "sequence-length", label: "Avg. sequence length", value: receipt.average_variant_sequence_length ?? "—", meta: "Average stored HLS variant sequence length" },
+      { key: "signature", label: "Signatures", value: formatPercent(receipt.signature_coverage_percent), meta: `${formatNumber(receipt.with_delivery_signature)} with delivery signature` },
+      { key: "manifest", label: "Manifest SHA", value: formatPercent(receipt.manifest_coverage_percent), meta: `${formatNumber(receipt.with_manifest_sha)} with manifest SHA` },
+      { key: "sequence", label: "Variants", value: formatPercent(receipt.sequence_coverage_percent), meta: `${formatNumber(receipt.with_variant_sequence)} with stored variant data` },
+      { key: "sequence-length", label: "Avg. HLS length", value: receipt.average_variant_sequence_length ?? "—", meta: "Average stored variant sequence length" },
     ];
   }
 
@@ -625,6 +669,16 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     }));
   }
 
+  get topLikers() {
+    return coerceArray(this.contributors?.top_likers).map((row) => ({
+      key: plainText(row?.user_id, plainText(row?.username, "user")),
+      username: plainText(row?.username, "—"),
+      likesLabel: formatNumber(row?.likes),
+      uniqueMediaLabel: formatNumber(row?.unique_media),
+      latestLabel: formatDateTime(row?.latest_like_at),
+    }));
+  }
+
   get recentFailures() {
     return coerceArray(this.watchlist?.recent_failures).map((row) => ({
       key: plainText(row?.public_id, plainText(row?.title, "failed")),
@@ -660,6 +714,19 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       totalReportsLabel: formatNumber(row?.total_reports),
       openReportsLabel: formatNumber(row?.open_reports),
       mediaReportsLabel: formatNumber(row?.media_reports),
+    }));
+  }
+
+  get mostReportedCommentMedia() {
+    return coerceArray(this.watchlist?.most_reported_comments).map((row) => ({
+      key: plainText(row?.public_id, plainText(row?.title, "comment-reported")),
+      title: plainText(row?.title, "Untitled media"),
+      publicId: plainText(row?.public_id, "—"),
+      uploader: plainText(row?.uploader, "—"),
+      typeLabel: titleize(row?.media_type),
+      statusLabel: titleize(row?.status),
+      totalReportsLabel: formatNumber(row?.total_reports),
+      openReportsLabel: formatNumber(row?.open_reports),
       commentReportsLabel: formatNumber(row?.comment_reports),
     }));
   }
@@ -785,6 +852,19 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
         return "per year";
       default:
         return "per day";
+    }
+  }
+
+  get periodUnitLabel() {
+    switch (this.period) {
+      case "week":
+        return "weeks";
+      case "month":
+        return "months";
+      case "year":
+        return "years";
+      default:
+        return "days";
     }
   }
 

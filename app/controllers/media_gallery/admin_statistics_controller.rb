@@ -233,6 +233,7 @@ module ::MediaGallery
         top_uploaders: top_uploaders_payload(since),
         top_viewers: top_viewers_payload(since),
         top_commenters: top_commenters_payload(since),
+        top_likers: top_likers_payload(since),
       }
     rescue => e
       Rails.logger.warn("[media_gallery] statistics contributors failed #{e.class}: #{e.message}")
@@ -244,6 +245,7 @@ module ::MediaGallery
         recent_failures: recent_failures_payload,
         processing_queue: processing_queue_payload,
         most_reported_media: most_reported_media_payload,
+        most_reported_comments: most_reported_comments_payload,
       }
     rescue => e
       Rails.logger.warn("[media_gallery] statistics watchlist failed #{e.class}: #{e.message}")
@@ -513,11 +515,11 @@ module ::MediaGallery
     end
 
     def empty_contributors
-      { top_uploaders: [], top_viewers: [], top_commenters: [] }
+      { top_uploaders: [], top_viewers: [], top_commenters: [], top_likers: [] }
     end
 
     def empty_watchlist
-      { recent_failures: [], processing_queue: [], most_reported_media: [] }
+      { recent_failures: [], processing_queue: [], most_reported_media: [], most_reported_comments: [] }
     end
 
     def empty_content_profile
@@ -771,11 +773,11 @@ module ::MediaGallery
       value.to_s
     end
 
-    def period_summary_bounds(period, since, limit)
-      current_from = since || period_since(period, limit)
-      current_to = Time.zone.now
+    def period_summary_bounds(period, _since, limit)
+      current_to = truncate_time(Time.zone.now, period)
+      current_from = shift_period(current_to, period, -limit)
       previous_to = current_from
-      previous_from = shift_period(current_from, period, -limit)
+      previous_from = shift_period(previous_to, period, -limit)
 
       {
         current_from: current_from,
@@ -925,6 +927,28 @@ module ::MediaGallery
       []
     end
 
+    def top_likers_payload(since)
+      scope = time_window_scope(media_like_scope, :created_at, since, nil)
+      counts = top_group_counts(scope, :user_id, 10)
+      ids = counts.keys.compact
+      usernames = usernames_by_id(ids)
+      media_counts = safe_group_distinct_count(scope, :user_id, :media_item_id)
+      latest_likes = safe_group_max(scope, :user_id, :created_at)
+
+      counts.map do |user_id, count|
+        {
+          user_id: user_id,
+          username: usernames[user_id] || "user ##{user_id}",
+          likes: count.to_i,
+          unique_media: media_counts[user_id].to_i,
+          latest_like_at: latest_likes[user_id]&.utc&.iso8601,
+        }
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics top likers failed #{e.class}: #{e.message}")
+      []
+    end
+
     def recent_failures_payload
       media_item_scope
         .includes(:user)
@@ -970,7 +994,7 @@ module ::MediaGallery
     end
 
     def most_reported_media_payload
-      counts = Hash.new { |hash, key| hash[key] = { total: 0, open: 0, media: 0, comments: 0 } }
+      counts = Hash.new { |hash, key| hash[key] = { total: 0, open: 0 } }
 
       each_media_report do |report, item|
         item_id = item&.id
@@ -978,16 +1002,42 @@ module ::MediaGallery
 
         status = normalized_report_status(report["status"])
         counts[item_id][:total] += 1
-        counts[item_id][:media] += 1
         counts[item_id][:open] += 1 if status == :open
       end
+
+      top_ids = counts.sort_by { |_id, row| [-row[:open].to_i, -row[:total].to_i] }.first(10).map(&:first)
+      items_by_id = media_item_scope.includes(:user).where(id: top_ids).index_by(&:id)
+
+      top_ids.map do |item_id|
+        item = items_by_id[item_id]
+        row = counts[item_id]
+        next if item.blank?
+
+        {
+          public_id: item.public_id,
+          title: item.title,
+          uploader: item.user&.username,
+          media_type: item.media_type,
+          status: item.status,
+          total_reports: row[:total].to_i,
+          open_reports: row[:open].to_i,
+          media_reports: row[:total].to_i,
+          created_at: item.created_at&.utc&.iso8601,
+        }
+      end.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics most reported media failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def most_reported_comments_payload
+      counts = Hash.new { |hash, key| hash[key] = { total: 0, open: 0 } }
 
       media_comment_report_scope.group(:media_item_id, :status).count.each do |(item_id, status), count|
         next if item_id.blank?
 
         normalized = normalized_report_status(status)
         counts[item_id][:total] += count.to_i
-        counts[item_id][:comments] += count.to_i
         counts[item_id][:open] += count.to_i if normalized == :open
       end
 
@@ -1007,13 +1057,12 @@ module ::MediaGallery
           status: item.status,
           total_reports: row[:total].to_i,
           open_reports: row[:open].to_i,
-          media_reports: row[:media].to_i,
-          comment_reports: row[:comments].to_i,
+          comment_reports: row[:total].to_i,
           created_at: item.created_at&.utc&.iso8601,
         }
       end.compact
     rescue => e
-      Rails.logger.warn("[media_gallery] statistics most reported media failed #{e.class}: #{e.message}")
+      Rails.logger.warn("[media_gallery] statistics most reported comments failed #{e.class}: #{e.message}")
       []
     end
 

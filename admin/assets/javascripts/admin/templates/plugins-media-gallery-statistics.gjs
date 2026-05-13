@@ -74,6 +74,7 @@ export default RouteTemplate(
       .mg-stats__toolbar {
         align-items: end;
         flex-wrap: wrap;
+        gap: 0.85rem;
         margin-top: 0.9rem;
       }
 
@@ -102,13 +103,18 @@ export default RouteTemplate(
 
       .mg-stats__field select {
         width: 100%;
-        min-width: 160px;
+        min-width: 180px;
         min-height: 42px;
         box-sizing: border-box;
         border: 1px solid var(--mg-stats-border);
         border-radius: 12px;
         background: var(--primary-very-low);
         padding: 0 0.85rem;
+      }
+
+      .mg-stats__toolbar-action {
+        align-self: flex-end;
+        margin-bottom: 7px;
       }
 
       .mg-stats__kpi-grid,
@@ -120,7 +126,7 @@ export default RouteTemplate(
       }
 
       .mg-stats__kpi-grid {
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
       .mg-stats__two-column {
@@ -132,7 +138,7 @@ export default RouteTemplate(
       }
 
       .mg-stats__breakdown-grid {
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
       .mg-stats__card {
@@ -214,6 +220,18 @@ export default RouteTemplate(
         padding: 0.55rem 0.45rem;
         text-align: left;
         vertical-align: top;
+      }
+
+      .mg-stats__comparison-table th:nth-child(2),
+      .mg-stats__comparison-table th:nth-child(3),
+      .mg-stats__comparison-table th:nth-child(4),
+      .mg-stats__comparison-table th:nth-child(5),
+      .mg-stats__comparison-table td:nth-child(2),
+      .mg-stats__comparison-table td:nth-child(3),
+      .mg-stats__comparison-table td:nth-child(4),
+      .mg-stats__comparison-table td:nth-child(5) {
+        min-width: 7.5rem;
+        white-space: nowrap;
       }
 
       .mg-stats__comparison-table th,
@@ -342,6 +360,14 @@ export default RouteTemplate(
         margin: 0;
       }
 
+      @media (max-width: 1200px) {
+        .mg-stats__kpi-grid,
+        .mg-stats__breakdown-grid,
+        .mg-stats__three-column {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
       @media (max-width: 900px) {
         .mg-stats__hero,
         .mg-stats__panel-header {
@@ -349,7 +375,9 @@ export default RouteTemplate(
         }
 
         .mg-stats__two-column,
-        .mg-stats__three-column {
+        .mg-stats__three-column,
+        .mg-stats__kpi-grid,
+        .mg-stats__breakdown-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -388,7 +416,7 @@ export default RouteTemplate(
           <div class="mg-stats__panel-copy">
             <h2>Time range</h2>
             <p class="mg-stats__muted">
-              Select the grouping used for trend charts. Counts are based on existing Media Gallery records.
+              Select how trend charts are grouped and how many periods should be shown.
             </p>
           </div>
         </div>
@@ -405,7 +433,7 @@ export default RouteTemplate(
           </div>
 
           <div class="mg-stats__field">
-            <label for="mg-statistics-limit">Buckets</label>
+            <label for="mg-statistics-limit">Periods</label>
             <select id="mg-statistics-limit" value={{@controller.limit}} {{on "change" @controller.updateLimit}} disabled={{@controller.isLoading}}>
               <option value="5">5</option>
               <option value="7">7</option>
@@ -418,7 +446,7 @@ export default RouteTemplate(
             </select>
           </div>
 
-          <button type="button" class="btn" {{on "click" @controller.refresh}} disabled={{@controller.isLoading}}>
+          <button type="button" class="btn mg-stats__toolbar-action" {{on "click" @controller.refresh}} disabled={{@controller.isLoading}}>
             Apply
           </button>
         </div>
@@ -449,6 +477,9 @@ export default RouteTemplate(
               <p class="mg-stats__muted">
                 {{@controller.currentRangeLabel}} compared with {{@controller.previousRangeLabel}}.
               </p>
+              <p class="mg-stats__meta">
+                {{@controller.currentRangeDateLabel}} vs {{@controller.previousRangeDateLabel}}
+              </p>
             </div>
           </div>
 
@@ -460,6 +491,7 @@ export default RouteTemplate(
                   <th>Current</th>
                   <th>Previous</th>
                   <th>Change</th>
+                  <th>%</th>
                 </tr>
               </thead>
               <tbody>
@@ -469,6 +501,7 @@ export default RouteTemplate(
                     <td>{{row.currentLabel}}</td>
                     <td>{{row.previousLabel}}</td>
                     <td><span class={{row.changeClass}}>{{row.changeLabel}}</span></td>
+                    <td><span class={{row.changeClass}}>{{row.percentLabel}}</span></td>
                   </tr>
                 {{/each}}
               </tbody>
@@ -607,7 +640,7 @@ export default RouteTemplate(
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
               <h2>Media type</h2>
-              <p class="mg-stats__muted">Distribution across video, audio and image items.</p>
+              <p class="mg-stats__muted">Distribution across video, audio and image.</p>
             </div>
           </div>
           <div class="mg-stats__compact-list">
@@ -704,8 +737,32 @@ export default RouteTemplate(
         <article class="mg-stats__panel">
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
-              <h2>Resolution and orientation</h2>
-              <p class="mg-stats__muted">Visual media dimensions grouped into practical review buckets.</p>
+              <h2>Orientation</h2>
+              <p class="mg-stats__muted">Portrait, square and landscape distribution.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.orientationBuckets as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No orientation data available.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Resolution level</h2>
+              <p class="mg-stats__muted">How much of the catalog reaches common HD thresholds.</p>
             </div>
           </div>
           <div class="mg-stats__compact-list">
@@ -1366,7 +1423,7 @@ export default RouteTemplate(
         </article>
       </section>
 
-      <section class="mg-stats__three-column">
+      <section class="mg-stats__two-column">
         <article class="mg-stats__panel">
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
@@ -1470,9 +1527,42 @@ export default RouteTemplate(
             </table>
           </div>
         </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Top likers</h2>
+              <p class="mg-stats__muted">Users giving the most media likes in the selected range.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Likes</th>
+                  <th>Media</th>
+                  <th>Latest</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.topLikers as |user|}}
+                  <tr>
+                    <td><div class="mg-stats__mini-title">{{user.username}}</div></td>
+                    <td>{{user.likesLabel}}</td>
+                    <td>{{user.uniqueMediaLabel}}</td>
+                    <td>{{user.latestLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="4">No liker data available.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
       </section>
 
-      <section class="mg-stats__two-column">
+      <section class="mg-stats__three-column">
         <article class="mg-stats__panel">
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
@@ -1501,7 +1591,7 @@ export default RouteTemplate(
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
               <h2>Most reported media</h2>
-              <p class="mg-stats__muted">Media with report activity across media and comment reports.</p>
+              <p class="mg-stats__muted">Media items with the most direct file reports.</p>
             </div>
           </div>
           <div class="mg-stats__compact-list">
@@ -1513,11 +1603,36 @@ export default RouteTemplate(
                 </div>
                 <div class="mg-stats__mini-code">{{item.publicId}}</div>
                 <div class="mg-stats__meta">
-                  {{item.mediaReportsLabel}} media reports · {{item.commentReportsLabel}} comment reports · {{item.statusLabel}}
+                  {{item.mediaReportsLabel}} media reports · {{item.statusLabel}}
                 </div>
               </div>
             {{else}}
               <div class="mg-stats__empty">No reported media found.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Comment report hotspots</h2>
+              <p class="mg-stats__muted">Media items accumulating the most comment reports.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.mostReportedCommentMedia as |item|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{item.title}}</span>
+                  <span class="mg-stats__row-value">{{item.openReportsLabel}} open / {{item.totalReportsLabel}} total</span>
+                </div>
+                <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                <div class="mg-stats__meta">
+                  {{item.commentReportsLabel}} comment reports · {{item.statusLabel}}
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No comment report hotspots found.</div>
             {{/each}}
           </div>
         </article>
@@ -1612,21 +1727,6 @@ export default RouteTemplate(
         </div>
       </section>
 
-      {{#if @controller.notes}}
-        <section class="mg-stats__panel">
-          <div class="mg-stats__panel-header">
-            <div class="mg-stats__panel-copy">
-              <h2>Notes and next iterations</h2>
-              <p class="mg-stats__muted">Implementation notes for interpreting this first dashboard version.</p>
-            </div>
-          </div>
-          <ul class="mg-stats__note-list">
-            {{#each @controller.notes as |note|}}
-              <li>{{note}}</li>
-            {{/each}}
-          </ul>
-        </section>
-      {{/if}}
     </div>
   </template>
 );
