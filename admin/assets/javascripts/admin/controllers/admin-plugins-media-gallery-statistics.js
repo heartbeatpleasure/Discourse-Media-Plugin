@@ -61,6 +61,30 @@ function formatBytes(value) {
   return `${size.toFixed(decimals)} ${units[unitIndex]}`;
 }
 
+function formatDuration(value) {
+  const seconds = numberValue(value);
+  if (seconds <= 0) {
+    return "—";
+  }
+
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  }
+
+  const minutes = seconds / 60;
+  if (minutes < 60) {
+    return `${minutes.toFixed(minutes >= 10 ? 0 : 1)}m`;
+  }
+
+  const hours = minutes / 60;
+  if (hours < 48) {
+    return `${hours.toFixed(hours >= 10 ? 0 : 1)}h`;
+  }
+
+  const days = hours / 24;
+  return `${days.toFixed(days >= 10 ? 0 : 1)}d`;
+}
+
 function formatMetric(value, type = "number") {
   if (type === "bytes") {
     return formatBytes(value);
@@ -197,6 +221,9 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   @tracked engagementQuality = {};
   @tracked deliveryIntegrity = {};
   @tracked contentCuration = {};
+  @tracked processingPerformance = {};
+  @tracked metadataCompleteness = {};
+  @tracked storageEfficiency = {};
   @tracked insights = [];
   @tracked topContent = [];
   @tracked notes = [];
@@ -225,6 +252,9 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.engagementQuality = {};
     this.deliveryIntegrity = {};
     this.contentCuration = {};
+    this.processingPerformance = {};
+    this.metadataCompleteness = {};
+    this.storageEfficiency = {};
     this.insights = [];
     this.topContent = [];
     this.notes = [];
@@ -262,6 +292,9 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.engagementQuality = safeObject(data?.engagement_quality);
     this.deliveryIntegrity = safeObject(data?.delivery_integrity);
     this.contentCuration = safeObject(data?.content_curation);
+    this.processingPerformance = safeObject(data?.processing_performance);
+    this.metadataCompleteness = safeObject(data?.metadata_completeness);
+    this.storageEfficiency = safeObject(data?.storage_efficiency);
     this.insights = coerceArray(data?.insights);
     this.topContent = coerceArray(data?.top_content);
     this.notes = coerceArray(data?.notes);
@@ -481,6 +514,56 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     return coerceArray(this.contentProfile?.hls_catalog).map((row) => decorateBreakdown(row, this.summary?.total_items));
   }
 
+  get processingPerformanceCards() {
+    const completed = safeObject(this.processingPerformance?.completed_latency);
+    const queue = safeObject(this.processingPerformance?.queue_age);
+    return [
+      { key: "completed-count", label: "Completed items", value: formatNumber(completed.count), meta: "Ready or failed items in selected range" },
+      { key: "completed-median", label: "Median processing", value: formatDuration(completed.median_seconds), meta: `Average ${formatDuration(completed.average_seconds)} · p90 ${formatDuration(completed.p90_seconds)}` },
+      { key: "completed-max", label: "Slowest completed", value: formatDuration(completed.max_seconds), meta: "Approx. created to last update" },
+      { key: "queue-count", label: "Active queue", value: formatNumber(queue.count), meta: `Median age ${formatDuration(queue.median_seconds)} · p90 ${formatDuration(queue.p90_seconds)}` },
+    ];
+  }
+
+  get processingLatencyBuckets() {
+    const total = coerceArray(this.processingPerformance?.latency_buckets).reduce((sum, row) => sum + numberValue(row?.count), 0);
+    return coerceArray(this.processingPerformance?.latency_buckets).map((row) => decorateBreakdown(row, total));
+  }
+
+  get metadataCoverageRows() {
+    return coerceArray(this.metadataCompleteness?.coverage).map((row) => {
+      const percent = row?.percent === null || row?.percent === undefined ? ratio(row?.count, row?.total) : Number(row.percent);
+      const width = Number.isFinite(percent) ? Math.max(2, Math.round(percent)) : 2;
+      return {
+        key: plainText(row?.name, plainText(row?.label, "coverage")),
+        label: plainText(row?.label, titleize(row?.name)),
+        countLabel: `${formatNumber(row?.count)} / ${formatNumber(row?.total)}`,
+        shareLabel: Number.isFinite(percent) ? `${percent.toFixed(percent % 1 === 0 ? 0 : 1)}%` : "—",
+        barStyle: `width: ${width}%;`,
+      };
+    });
+  }
+
+  decorateStorageEfficiency(row, fallback = "storage") {
+    return {
+      key: plainText(row?.name, fallback),
+      label: plainText(row?.label, titleize(row?.name)),
+      countLabel: formatNumber(row?.count),
+      originalLabel: formatBytes(row?.original_bytes),
+      processedLabel: formatBytes(row?.processed_bytes),
+      savedLabel: formatBytes(Math.abs(numberValue(row?.saved_bytes))),
+      reductionLabel: formatPercent(row?.reduction_percent),
+    };
+  }
+
+  get storageEfficiencyByType() {
+    return coerceArray(this.storageEfficiency?.by_type).map((row) => this.decorateStorageEfficiency(row, "type"));
+  }
+
+  get storageEfficiencyByBackend() {
+    return coerceArray(this.storageEfficiency?.by_backend).map((row) => this.decorateStorageEfficiency(row, "backend"));
+  }
+
   get engagementRateCards() {
     const rates = safeObject(this.engagementQuality?.rates);
     return [
@@ -610,6 +693,42 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     return coerceArray(this.contentCuration?.stale_ready_media).map((item) => this.decorateContentItem(item, "stale"));
   }
 
+  get recentSlowProcessing() {
+    return coerceArray(this.processingPerformance?.recent_slow_processing).map((item) => ({
+      ...this.decorateContentItem(item, "slow-processing"),
+      processingLabel: formatDuration(item?.processing_seconds),
+      processedSizeLabel: formatBytes(item?.filesize_processed_bytes),
+      completedLabel: formatDateTime(item?.completed_at),
+    }));
+  }
+
+  get queueAgeWatchlist() {
+    return coerceArray(this.processingPerformance?.queue_age_watchlist).map((item) => ({
+      ...this.decorateContentItem(item, "queue-age"),
+      ageLabel: formatDuration(item?.age_seconds),
+      updatedLabel: formatDateTime(item?.updated_at),
+    }));
+  }
+
+  get incompleteMedia() {
+    return coerceArray(this.metadataCompleteness?.incomplete_media).map((item) => ({
+      ...this.decorateContentItem(item, "incomplete"),
+      statusLabel: titleize(item?.status),
+      issueCountLabel: formatNumber(item?.issue_count),
+      issuesLabel: coerceArray(item?.issues).join(", ") || "—",
+      updatedLabel: formatDateTime(item?.updated_at),
+    }));
+  }
+
+  get largestProcessedMedia() {
+    return coerceArray(this.storageEfficiency?.largest_processed_media).map((item) => ({
+      ...this.decorateContentItem(item, "large-processed"),
+      originalLabel: formatBytes(item?.original_bytes),
+      processedLabel: formatBytes(item?.processed_bytes),
+      reductionLabel: formatPercent(item?.reduction_percent),
+    }));
+  }
+
   get missingDeliveryReceipts() {
     return coerceArray(this.deliveryIntegrity?.missing_delivery_receipts).map((row) => {
       const missing = [];
@@ -688,6 +807,9 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       "engagement_quality",
       "delivery_integrity",
       "content_curation",
+      "processing_performance",
+      "metadata_completeness",
+      "storage_efficiency",
       "insights",
     ];
     const parts = keys

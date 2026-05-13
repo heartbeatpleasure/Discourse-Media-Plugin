@@ -803,6 +803,309 @@ export default RouteTemplate(
       <section class="mg-stats__panel">
         <div class="mg-stats__panel-header">
           <div class="mg-stats__panel-copy">
+            <h2>Processing performance</h2>
+            <p class="mg-stats__muted">
+              Approximate processing duration and active queue age, based on existing media item timestamps.
+            </p>
+          </div>
+        </div>
+        <div class="mg-stats__kpi-grid">
+          {{#each @controller.processingPerformanceCards as |card|}}
+            <article class="mg-stats__card">
+              <div class="mg-stats__kpi-label">{{card.label}}</div>
+              <div class="mg-stats__kpi-value">{{card.value}}</div>
+              <div class="mg-stats__meta">{{card.meta}}</div>
+            </article>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-stats__two-column">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Processing latency buckets</h2>
+              <p class="mg-stats__muted">How recently completed items are distributed by processing duration.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.processingLatencyBuckets as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No processing latency data available.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Slow recent processing</h2>
+              <p class="mg-stats__muted">Recently completed items with the longest approximate processing duration.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>Media</th>
+                  <th>Status</th>
+                  <th>Duration</th>
+                  <th>Size</th>
+                  <th>Completed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.recentSlowProcessing as |item|}}
+                  <tr>
+                    <td>
+                      <div class="mg-stats__mini-title">{{item.title}}</div>
+                      <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                    </td>
+                    <td><span class="mg-stats__badge">{{item.statusLabel}}</span></td>
+                    <td>{{item.processingLabel}}</td>
+                    <td>{{item.processedSizeLabel}}</td>
+                    <td>{{item.completedLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="5">No slow processing records found for this range.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
+            <h2>Active queue age</h2>
+            <p class="mg-stats__muted">Queued or processing items ordered by oldest creation time.</p>
+          </div>
+        </div>
+        <div class="mg-stats__table-wrap">
+          <table class="mg-stats__mini-table">
+            <thead>
+              <tr>
+                <th>Media</th>
+                <th>Uploader</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Age</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{#each @controller.queueAgeWatchlist as |item|}}
+                <tr>
+                  <td>
+                    <div class="mg-stats__mini-title">{{item.title}}</div>
+                    <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                  </td>
+                  <td>{{item.uploader}}</td>
+                  <td><span class="mg-stats__badge">{{item.typeLabel}}</span></td>
+                  <td><span class="mg-stats__badge">{{item.statusLabel}}</span></td>
+                  <td>{{item.ageLabel}}</td>
+                  <td>{{item.updatedLabel}}</td>
+                </tr>
+              {{else}}
+                <tr><td colspan="6">No active queue items found.</td></tr>
+              {{/each}}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="mg-stats__two-column">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Metadata completeness</h2>
+              <p class="mg-stats__muted">Coverage of fields that help discovery, processing diagnostics and playback quality.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.metadataCoverageRows as |row|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{row.label}}</span>
+                  <span class="mg-stats__row-value">{{row.countLabel}} · {{row.shareLabel}}</span>
+                </div>
+                <div class="mg-stats__bar-track" aria-hidden="true">
+                  <span class="mg-stats__bar-fill is-soft" style={{row.barStyle}}></span>
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No metadata coverage data available.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Incomplete metadata candidates</h2>
+              <p class="mg-stats__muted">Items missing practical metadata used for discovery or processing review.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>Media</th>
+                  <th>Status</th>
+                  <th>Issues</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.incompleteMedia as |item|}}
+                  <tr>
+                    <td>
+                      <div class="mg-stats__mini-title">{{item.title}}</div>
+                      <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                    </td>
+                    <td><span class="mg-stats__badge">{{item.statusLabel}}</span></td>
+                    <td>
+                      <div class="mg-stats__mini-title">{{item.issueCountLabel}} issue(s)</div>
+                      <div class="mg-stats__meta">{{item.issuesLabel}}</div>
+                    </td>
+                    <td>{{item.updatedLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="4">No incomplete metadata candidates found.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__two-column">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Storage efficiency by type</h2>
+              <p class="mg-stats__muted">Original versus processed storage totals grouped by media type.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Items</th>
+                  <th>Original</th>
+                  <th>Processed</th>
+                  <th>Reduction</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.storageEfficiencyByType as |row|}}
+                  <tr>
+                    <td>{{row.label}}</td>
+                    <td>{{row.countLabel}}</td>
+                    <td>{{row.originalLabel}}</td>
+                    <td>{{row.processedLabel}}</td>
+                    <td>{{row.reductionLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="5">No storage efficiency data by type available.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Storage efficiency by backend</h2>
+              <p class="mg-stats__muted">Original versus processed storage totals grouped by managed backend.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>Backend</th>
+                  <th>Items</th>
+                  <th>Original</th>
+                  <th>Processed</th>
+                  <th>Reduction</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.storageEfficiencyByBackend as |row|}}
+                  <tr>
+                    <td>{{row.label}}</td>
+                    <td>{{row.countLabel}}</td>
+                    <td>{{row.originalLabel}}</td>
+                    <td>{{row.processedLabel}}</td>
+                    <td>{{row.reductionLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="5">No storage efficiency data by backend available.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
+            <h2>Largest processed media</h2>
+            <p class="mg-stats__muted">Largest processed files, useful for storage review and processing profile decisions.</p>
+          </div>
+        </div>
+        <div class="mg-stats__table-wrap">
+          <table class="mg-stats__mini-table">
+            <thead>
+              <tr>
+                <th>Media</th>
+                <th>Uploader</th>
+                <th>Type</th>
+                <th>Original</th>
+                <th>Processed</th>
+                <th>Reduction</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{#each @controller.largestProcessedMedia as |item|}}
+                <tr>
+                  <td>
+                    <div class="mg-stats__mini-title">{{item.title}}</div>
+                    <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                  </td>
+                  <td>{{item.uploader}}</td>
+                  <td><span class="mg-stats__badge">{{item.typeLabel}}</span></td>
+                  <td>{{item.originalLabel}}</td>
+                  <td>{{item.processedLabel}}</td>
+                  <td>{{item.reductionLabel}}</td>
+                  <td>{{item.createdLabel}}</td>
+                </tr>
+              {{else}}
+                <tr><td colspan="7">No large processed media data available.</td></tr>
+              {{/each}}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
             <h2>Engagement quality</h2>
             <p class="mg-stats__muted">Rates that help distinguish high-volume usage from high-quality interaction.</p>
           </div>

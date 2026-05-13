@@ -33,7 +33,23 @@ module ::MediaGallery
       engagement_quality = timed_phase!(timing, :engagement_quality) { engagement_quality_payload(since, summary) }
       delivery_integrity = timed_phase!(timing, :delivery_integrity) { delivery_integrity_payload(since) }
       content_curation = timed_phase!(timing, :content_curation) { content_curation_payload(since) }
-      insights = timed_phase!(timing, :insights) { insights_payload(summary, moderation, quality, watchlist, engagement_quality, delivery_integrity, content_curation) }
+      processing_performance = timed_phase!(timing, :processing_performance) { processing_performance_payload(since) }
+      metadata_completeness = timed_phase!(timing, :metadata_completeness) { metadata_completeness_payload }
+      storage_efficiency = timed_phase!(timing, :storage_efficiency) { storage_efficiency_payload }
+      insights = timed_phase!(timing, :insights) do
+        insights_payload(
+          summary,
+          moderation,
+          quality,
+          watchlist,
+          engagement_quality,
+          delivery_integrity,
+          content_curation,
+          processing_performance,
+          metadata_completeness,
+          storage_efficiency
+        )
+      end
 
       payload = {
         filters: {
@@ -54,6 +70,9 @@ module ::MediaGallery
         engagement_quality: engagement_quality,
         delivery_integrity: delivery_integrity,
         content_curation: content_curation,
+        processing_performance: processing_performance,
+        metadata_completeness: metadata_completeness,
+        storage_efficiency: storage_efficiency,
         insights: insights,
         generated_at: Time.zone.now.utc.iso8601,
         notes: analytics_notes,
@@ -82,6 +101,9 @@ module ::MediaGallery
         engagement_quality: empty_engagement_quality,
         delivery_integrity: empty_delivery_integrity,
         content_curation: empty_content_curation,
+        processing_performance: empty_processing_performance,
+        metadata_completeness: empty_metadata_completeness,
+        storage_efficiency: empty_storage_efficiency,
         insights: [],
         generated_at: Time.zone.now.utc.iso8601,
         notes: analytics_notes,
@@ -228,7 +250,7 @@ module ::MediaGallery
       empty_watchlist
     end
 
-    def insights_payload(summary, moderation, quality, watchlist, engagement_quality = nil, delivery_integrity = nil, content_curation = nil)
+    def insights_payload(summary, moderation, quality, watchlist, engagement_quality = nil, delivery_integrity = nil, content_curation = nil, processing_performance = nil, metadata_completeness = nil, storage_efficiency = nil)
       rows = []
       open_reports = summary[:open_reports].to_i
       failed_items = summary[:failed_items].to_i
@@ -309,6 +331,46 @@ module ::MediaGallery
           "High report pressure",
           "Reports per 1,000 views is currently #{report_pressure.round(1)}.",
           "Review reported media and comment report patterns to distinguish real content issues from false-report behavior."
+        )
+      end
+
+      slow_processing = processing_performance&.dig(:recent_slow_processing).to_a.length
+      if slow_processing.positive?
+        rows << insight_row(
+          "info",
+          "Slow processing samples available",
+          "#{slow_processing} recently completed item#{'s' if slow_processing != 1} with the longest processing duration are listed.",
+          "Use this to spot large formats, storage delays or FFmpeg patterns that slow down processing."
+        )
+      end
+
+      aging_queue = processing_performance&.dig(:queue_age_watchlist).to_a.length
+      if aging_queue.positive?
+        rows << insight_row(
+          "warning",
+          "Aging processing queue items detected",
+          "#{aging_queue} queued or processing item#{'s' if aging_queue != 1} are listed by age.",
+          "Check Sidekiq/background jobs and retry or inspect items that remain active for too long."
+        )
+      end
+
+      incomplete_items = metadata_completeness&.dig(:incomplete_media).to_a.length
+      if incomplete_items.positive?
+        rows << insight_row(
+          "info",
+          "Metadata cleanup candidates found",
+          "#{incomplete_items} media item#{'s' if incomplete_items != 1} are missing useful metadata such as tags, dimensions, thumbnails or processed file data.",
+          "Improve discoverability by retagging or reprocessing content where metadata is missing."
+        )
+      end
+
+      inefficient_items = storage_efficiency&.dig(:largest_processed_media).to_a.length
+      if inefficient_items.positive?
+        rows << insight_row(
+          "info",
+          "Large processed files listed",
+          "#{inefficient_items} largest processed media files are listed for storage review.",
+          "Review whether very large items need different profiles, retention, or storage settings."
         )
       end
 
@@ -481,12 +543,36 @@ module ::MediaGallery
       { quiet_ready_media: [], stale_ready_media: [] }
     end
 
+    def empty_processing_performance
+      {
+        completed_latency: empty_latency_stats,
+        queue_age: empty_latency_stats,
+        latency_buckets: [],
+        recent_slow_processing: [],
+        queue_age_watchlist: [],
+      }
+    end
+
+    def empty_latency_stats
+      { count: 0, average_seconds: nil, median_seconds: nil, p90_seconds: nil, max_seconds: nil }
+    end
+
+    def empty_metadata_completeness
+      { coverage: [], incomplete_media: [] }
+    end
+
+    def empty_storage_efficiency
+      { by_type: [], by_backend: [], largest_processed_media: [] }
+    end
+
     def analytics_notes
       [
         "This statistics dashboard is read-only and uses existing Media Gallery tables and metadata.",
         "Upload, like, comment, playback and log trends are grouped by the selected time unit.",
         "Iteration 2 adds period comparison, contributor leaderboards, recent failure watchlists and actionable admin insights without adding migrations.",
         "Iterations 3 and 4 add content profile, engagement quality, delivery integrity and curation watchlists using existing records only.",
+        "Iterations 5 and 6 add processing performance, metadata completeness and storage efficiency views without writing records or adding migrations.",
+        "Processing latency is approximated from media item created_at and updated_at because historical processing completion timestamps are not stored separately.",
         "Media report history is stored in item metadata; report timestamps are parsed where available, while comment reports use their own table timestamps.",
       ]
     end
@@ -1008,6 +1094,44 @@ module ::MediaGallery
       empty_content_curation
     end
 
+    def processing_performance_payload(since)
+      completed_scope = media_item_scope.where(status: %w[ready failed])
+      completed_scope = time_window_scope(completed_scope, :updated_at, since, nil) if since.present?
+      active_scope = media_item_scope.where(status: %w[queued processing])
+
+      {
+        completed_latency: processing_duration_stats(completed_scope, "updated_at"),
+        queue_age: queue_age_stats(active_scope),
+        latency_buckets: processing_latency_bucket_rows(completed_scope),
+        recent_slow_processing: recent_slow_processing_payload(completed_scope),
+        queue_age_watchlist: queue_age_watchlist_payload(active_scope),
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics processing performance failed #{e.class}: #{e.message}")
+      empty_processing_performance
+    end
+
+    def metadata_completeness_payload
+      {
+        coverage: metadata_coverage_rows,
+        incomplete_media: incomplete_media_payload,
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics metadata completeness failed #{e.class}: #{e.message}")
+      empty_metadata_completeness
+    end
+
+    def storage_efficiency_payload
+      {
+        by_type: storage_efficiency_group_rows(:media_type),
+        by_backend: storage_efficiency_group_rows(:managed_storage_backend),
+        largest_processed_media: largest_processed_media_payload,
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics storage efficiency failed #{e.class}: #{e.message}")
+      empty_storage_efficiency
+    end
+
     def duration_bucket_rows
       buckets = [
         ["unknown", "Unknown", nil, nil],
@@ -1236,6 +1360,295 @@ module ::MediaGallery
       []
     end
 
+    def processing_duration_stats(scope, completion_column)
+      table = scope.klass.table_name
+      return empty_latency_stats unless column_available?(table, :created_at) && column_available?(table, completion_column)
+
+      ids_sql = scope.select(:id).to_sql
+      sql = <<~SQL
+        SELECT
+          COUNT(*) AS count,
+          AVG(duration_seconds) AS average_seconds,
+          percentile_disc(0.5) WITHIN GROUP (ORDER BY duration_seconds) AS median_seconds,
+          percentile_disc(0.9) WITHIN GROUP (ORDER BY duration_seconds) AS p90_seconds,
+          MAX(duration_seconds) AS max_seconds
+        FROM (
+          SELECT EXTRACT(EPOCH FROM (#{table}.#{completion_column} - #{table}.created_at)) AS duration_seconds
+          FROM #{table}
+          WHERE #{table}.id IN (#{ids_sql})
+            AND #{table}.created_at IS NOT NULL
+            AND #{table}.#{completion_column} IS NOT NULL
+            AND #{table}.#{completion_column} >= #{table}.created_at
+        ) durations
+      SQL
+
+      row = ::ActiveRecord::Base.connection.exec_query(sql).first || {}
+      {
+        count: row["count"].to_i,
+        average_seconds: rounded_seconds(row["average_seconds"]),
+        median_seconds: rounded_seconds(row["median_seconds"]),
+        p90_seconds: rounded_seconds(row["p90_seconds"]),
+        max_seconds: rounded_seconds(row["max_seconds"]),
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics processing duration stats failed #{e.class}: #{e.message}")
+      empty_latency_stats
+    end
+
+    def queue_age_stats(scope)
+      table = scope.klass.table_name
+      return empty_latency_stats unless column_available?(table, :created_at)
+
+      now = Time.zone.now
+      ages = scope.where.not(created_at: nil).limit(10_000).pluck(:created_at).map { |created_at| [now - created_at, 0].max }
+      return empty_latency_stats if ages.blank?
+
+      sorted = ages.sort
+      {
+        count: sorted.length,
+        average_seconds: rounded_seconds(sorted.sum / sorted.length.to_f),
+        median_seconds: rounded_seconds(percentile_from_sorted(sorted, 0.5)),
+        p90_seconds: rounded_seconds(percentile_from_sorted(sorted, 0.9)),
+        max_seconds: rounded_seconds(sorted.last),
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics queue age stats failed #{e.class}: #{e.message}")
+      empty_latency_stats
+    end
+
+    def processing_latency_bucket_rows(scope)
+      table = scope.klass.table_name
+      return [] unless column_available?(table, :created_at) && column_available?(table, :updated_at)
+
+      buckets = [
+        ["under_1_min", "Under 1 min", 0, 60],
+        ["1_to_5_min", "1–5 min", 60, 300],
+        ["5_to_30_min", "5–30 min", 300, 1800],
+        ["30_min_to_2h", "30 min–2 h", 1800, 7200],
+        ["2_to_12h", "2–12 h", 7200, 43_200],
+        ["over_12h", "Over 12 h", 43_200, nil],
+      ]
+
+      ids_sql = scope.select(:id).to_sql
+      buckets.map do |key, label, min, max|
+        conditions = ["#{table}.id IN (#{ids_sql})", "#{table}.updated_at >= #{table}.created_at"]
+        duration_sql = "EXTRACT(EPOCH FROM (#{table}.updated_at - #{table}.created_at))"
+        conditions << "#{duration_sql} >= #{min.to_i}" if min.present?
+        conditions << "#{duration_sql} < #{max.to_i}" if max.present?
+        count = media_item_scope.where(conditions.join(" AND ")).count
+        { name: key, label: label, count: count.to_i }
+      end.select { |row| row[:count].positive? }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics latency buckets failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def recent_slow_processing_payload(scope)
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, :created_at) && column_available?(table, :updated_at)
+
+      scope
+        .includes(:user)
+        .where("#{table}.updated_at IS NOT NULL AND #{table}.updated_at >= #{table}.created_at")
+        .order(Arel.sql("EXTRACT(EPOCH FROM (#{table}.updated_at - #{table}.created_at)) DESC"))
+        .limit(10)
+        .map do |item|
+          processing_seconds = item.updated_at && item.created_at ? [item.updated_at - item.created_at, 0].max : nil
+          {
+            public_id: item.public_id,
+            title: item.title,
+            uploader: item.user&.username,
+            media_type: item.media_type,
+            status: item.status,
+            processing_seconds: rounded_seconds(processing_seconds),
+            filesize_processed_bytes: item.respond_to?(:filesize_processed_bytes) ? item.filesize_processed_bytes.to_i : 0,
+            created_at: item.created_at&.utc&.iso8601,
+            completed_at: item.updated_at&.utc&.iso8601,
+          }
+        end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics recent slow processing failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def queue_age_watchlist_payload(scope)
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, :created_at)
+
+      now = Time.zone.now
+      scope
+        .includes(:user)
+        .order(created_at: :asc)
+        .limit(10)
+        .map do |item|
+          {
+            public_id: item.public_id,
+            title: item.title,
+            uploader: item.user&.username,
+            media_type: item.media_type,
+            status: item.status,
+            age_seconds: rounded_seconds(item.created_at ? [now - item.created_at, 0].max : nil),
+            created_at: item.created_at&.utc&.iso8601,
+            updated_at: item.updated_at&.utc&.iso8601,
+          }
+        end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics queue age watchlist failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def metadata_coverage_rows
+      total = safe_count(media_item_scope)
+      return [] if total.zero?
+
+      rows = []
+      rows << coverage_row("description", "Description present", safe_count(media_item_scope.where.not(description: [nil, ""])), total) if column_available?(::MediaGallery::MediaItem.table_name, :description)
+      rows << coverage_row("tags", "At least one tag", safe_count(media_item_scope.where("array_length(tags, 1) > 0")), total) if column_available?(::MediaGallery::MediaItem.table_name, :tags)
+      rows << coverage_row("thumbnail", "Thumbnail upload", safe_count(media_item_scope.where.not(thumbnail_upload_id: nil)), total) if column_available?(::MediaGallery::MediaItem.table_name, :thumbnail_upload_id)
+      rows << coverage_row("processed_upload", "Processed upload", safe_count(media_item_scope.where.not(processed_upload_id: nil)), total) if column_available?(::MediaGallery::MediaItem.table_name, :processed_upload_id)
+      rows << coverage_row("duration", "Duration", safe_count(media_item_scope.where.not(duration_seconds: nil)), total) if column_available?(::MediaGallery::MediaItem.table_name, :duration_seconds)
+      rows << coverage_row("dimensions", "Dimensions", safe_count(media_item_scope.where.not(width: nil).where.not(height: nil)), total) if column_available?(::MediaGallery::MediaItem.table_name, :width) && column_available?(::MediaGallery::MediaItem.table_name, :height)
+      rows << coverage_row("original_size", "Original filesize", safe_count(media_item_scope.where.not(filesize_original_bytes: nil)), total) if column_available?(::MediaGallery::MediaItem.table_name, :filesize_original_bytes)
+      rows << coverage_row("processed_size", "Processed filesize", safe_count(media_item_scope.where.not(filesize_processed_bytes: nil)), total) if column_available?(::MediaGallery::MediaItem.table_name, :filesize_processed_bytes)
+      rows << coverage_row("storage_manifest", "Storage manifest", safe_count(media_item_scope.where("#{::MediaGallery::MediaItem.table_name}.storage_manifest IS NOT NULL AND #{::MediaGallery::MediaItem.table_name}.storage_manifest <> '{}'::jsonb")), total) if column_available?(::MediaGallery::MediaItem.table_name, :storage_manifest)
+      rows << coverage_row("hls_role", "HLS role", hls_role_count, total) if column_available?(::MediaGallery::MediaItem.table_name, :storage_manifest)
+      rows.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics metadata coverage failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def coverage_row(name, label, count, total)
+      {
+        name: name,
+        label: label,
+        count: count.to_i,
+        total: total.to_i,
+        percent: total.to_i.positive? ? ((count.to_f / total.to_f) * 100).round(1) : nil,
+      }
+    end
+
+    def hls_role_count
+      table = ::MediaGallery::MediaItem.table_name
+      safe_count(media_item_scope.where("#{table}.storage_manifest -> 'roles' -> 'hls' IS NOT NULL"))
+    rescue
+      0
+    end
+
+    def incomplete_media_payload
+      table = ::MediaGallery::MediaItem.table_name
+      conditions = []
+      conditions << "#{table}.description IS NULL OR #{table}.description = ''" if column_available?(table, :description)
+      conditions << "array_length(#{table}.tags, 1) IS NULL" if column_available?(table, :tags)
+      conditions << "#{table}.thumbnail_upload_id IS NULL" if column_available?(table, :thumbnail_upload_id)
+      conditions << "#{table}.processed_upload_id IS NULL" if column_available?(table, :processed_upload_id)
+      conditions << "#{table}.duration_seconds IS NULL" if column_available?(table, :duration_seconds)
+      conditions << "#{table}.width IS NULL OR #{table}.height IS NULL" if column_available?(table, :width) && column_available?(table, :height)
+      conditions << "#{table}.filesize_processed_bytes IS NULL" if column_available?(table, :filesize_processed_bytes)
+      return [] if conditions.blank?
+
+      media_item_scope
+        .includes(:user)
+        .where(conditions.map { |condition| "(#{condition})" }.join(" OR "))
+        .order(updated_at: :desc)
+        .limit(25)
+        .map do |item|
+          issues = metadata_issue_labels(item)
+          next if issues.blank?
+
+          {
+            public_id: item.public_id,
+            title: item.title,
+            uploader: item.user&.username,
+            media_type: item.media_type,
+            status: item.status,
+            issue_count: issues.length,
+            issues: issues,
+            created_at: item.created_at&.utc&.iso8601,
+            updated_at: item.updated_at&.utc&.iso8601,
+          }
+        end.compact.first(10)
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics incomplete media failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def metadata_issue_labels(item)
+      issues = []
+      issues << "description" if item.respond_to?(:description) && item.description.blank?
+      issues << "tags" if item.respond_to?(:tags) && Array(item.tags).blank?
+      issues << "thumbnail" if item.respond_to?(:thumbnail_upload_id) && item.thumbnail_upload_id.blank?
+      issues << "processed upload" if item.respond_to?(:processed_upload_id) && item.processed_upload_id.blank?
+      issues << "duration" if item.respond_to?(:duration_seconds) && item.duration_seconds.blank?
+      issues << "dimensions" if item.respond_to?(:width) && item.respond_to?(:height) && (item.width.blank? || item.height.blank?)
+      issues << "processed size" if item.respond_to?(:filesize_processed_bytes) && item.filesize_processed_bytes.blank?
+      issues
+    rescue
+      []
+    end
+
+    def storage_efficiency_group_rows(group_column)
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, group_column)
+      return [] unless column_available?(table, :filesize_original_bytes) && column_available?(table, :filesize_processed_bytes)
+
+      media_item_scope
+        .group(group_column)
+        .pluck(
+          group_column,
+          Arel.sql("COUNT(*)"),
+          Arel.sql("COALESCE(SUM(#{table}.filesize_original_bytes), 0)"),
+          Arel.sql("COALESCE(SUM(#{table}.filesize_processed_bytes), 0)")
+        )
+        .map do |name, count, original_bytes, processed_bytes|
+          original = original_bytes.to_i
+          processed = processed_bytes.to_i
+          {
+            name: name.to_s.presence || "unknown",
+            label: humanize_token(name),
+            count: count.to_i,
+            original_bytes: original,
+            processed_bytes: processed,
+            saved_bytes: original - processed,
+            reduction_percent: original.positive? ? (((original - processed).to_f / original) * 100).round(1) : nil,
+          }
+        end
+        .sort_by { |row| [-row[:processed_bytes].to_i, row[:label].to_s] }
+        .first(12)
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics storage efficiency group failed column=#{group_column} #{e.class}: #{e.message}")
+      []
+    end
+
+    def largest_processed_media_payload
+      table = ::MediaGallery::MediaItem.table_name
+      return [] unless column_available?(table, :filesize_processed_bytes)
+
+      media_item_scope
+        .includes(:user)
+        .where.not(filesize_processed_bytes: nil)
+        .order(filesize_processed_bytes: :desc)
+        .limit(10)
+        .map do |item|
+          original = item.respond_to?(:filesize_original_bytes) ? item.filesize_original_bytes.to_i : 0
+          processed = item.filesize_processed_bytes.to_i
+          {
+            public_id: item.public_id,
+            title: item.title,
+            uploader: item.user&.username,
+            media_type: item.media_type,
+            status: item.status,
+            original_bytes: original,
+            processed_bytes: processed,
+            reduction_percent: original.positive? ? (((original - processed).to_f / original) * 100).round(1) : nil,
+            created_at: item.created_at&.utc&.iso8601,
+          }
+        end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics largest processed media failed #{e.class}: #{e.message}")
+      []
+    end
+
     def curation_item_row(item)
       {
         public_id: item.public_id,
@@ -1254,6 +1667,23 @@ module ::MediaGallery
     def playback_time_for(session)
       value = session.respond_to?(:played_at) ? session.played_at : nil
       value.presence || session.created_at
+    rescue
+      nil
+    end
+
+    def rounded_seconds(value)
+      return nil if value.blank?
+
+      value.to_f.round
+    rescue
+      nil
+    end
+
+    def percentile_from_sorted(sorted, percentile)
+      return nil if sorted.blank?
+
+      index = ((sorted.length - 1) * percentile.to_f).round
+      sorted[[[index, 0].max, sorted.length - 1].min]
     rescue
       nil
     end
