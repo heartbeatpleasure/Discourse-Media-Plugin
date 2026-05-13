@@ -20,18 +20,33 @@ module ::MediaGallery
       limit = normalized_limit(period)
       since = period_since(period, limit)
 
+      summary = timed_phase!(timing, :summary) { summary_payload }
+      trends = timed_phase!(timing, :trends) { trends_payload(period, since, limit) }
+      breakdowns = timed_phase!(timing, :breakdowns) { breakdowns_payload }
+      top_content = timed_phase!(timing, :top_content) { top_content_payload }
+      moderation = timed_phase!(timing, :moderation) { moderation_payload(period, since, limit) }
+      quality = timed_phase!(timing, :quality) { quality_payload(period, since, limit) }
+      period_summary = timed_phase!(timing, :period_summary) { period_summary_payload(period, since, limit) }
+      contributors = timed_phase!(timing, :contributors) { contributors_payload(since) }
+      watchlist = timed_phase!(timing, :watchlist) { watchlist_payload }
+      insights = timed_phase!(timing, :insights) { insights_payload(summary, moderation, quality, watchlist) }
+
       payload = {
         filters: {
           period: period,
           limit: limit,
           since: since&.utc&.iso8601,
         },
-        summary: timed_phase!(timing, :summary) { summary_payload },
-        trends: timed_phase!(timing, :trends) { trends_payload(period, since, limit) },
-        breakdowns: timed_phase!(timing, :breakdowns) { breakdowns_payload },
-        top_content: timed_phase!(timing, :top_content) { top_content_payload },
-        moderation: timed_phase!(timing, :moderation) { moderation_payload(period, since, limit) },
-        quality: timed_phase!(timing, :quality) { quality_payload(period, since, limit) },
+        summary: summary,
+        trends: trends,
+        breakdowns: breakdowns,
+        top_content: top_content,
+        moderation: moderation,
+        quality: quality,
+        period_summary: period_summary,
+        contributors: contributors,
+        watchlist: watchlist,
+        insights: insights,
         generated_at: Time.zone.now.utc.iso8601,
         notes: analytics_notes,
       }
@@ -52,6 +67,10 @@ module ::MediaGallery
         top_content: [],
         moderation: empty_moderation,
         quality: empty_quality,
+        period_summary: empty_period_summary,
+        contributors: empty_contributors,
+        watchlist: empty_watchlist,
+        insights: [],
         generated_at: Time.zone.now.utc.iso8601,
         notes: analytics_notes,
         error: "Unable to load statistics. #{e.class}: #{e.message}"
@@ -156,6 +175,114 @@ module ::MediaGallery
       parts.join(", ")
     end
 
+    def period_summary_payload(period, since, limit)
+      bounds = period_summary_bounds(period, since, limit)
+      current = window_metrics(bounds[:current_from], bounds[:current_to])
+      previous = window_metrics(bounds[:previous_from], bounds[:previous_to])
+
+      {
+        current: current,
+        previous: previous,
+        delta: window_delta(current, previous),
+        labels: {
+          current: window_label(bounds[:current_from], bounds[:current_to]),
+          previous: window_label(bounds[:previous_from], bounds[:previous_to]),
+        },
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics period summary failed #{e.class}: #{e.message}")
+      empty_period_summary
+    end
+
+    def contributors_payload(since)
+      {
+        top_uploaders: top_uploaders_payload(since),
+        top_viewers: top_viewers_payload(since),
+        top_commenters: top_commenters_payload(since),
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics contributors failed #{e.class}: #{e.message}")
+      empty_contributors
+    end
+
+    def watchlist_payload
+      {
+        recent_failures: recent_failures_payload,
+        processing_queue: processing_queue_payload,
+        most_reported_media: most_reported_media_payload,
+      }
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics watchlist failed #{e.class}: #{e.message}")
+      empty_watchlist
+    end
+
+    def insights_payload(summary, moderation, quality, watchlist)
+      rows = []
+      open_reports = summary[:open_reports].to_i
+      failed_items = summary[:failed_items].to_i
+      queued_or_processing = summary[:queued_or_processing_items].to_i
+      recent_failures = Array(watchlist[:recent_failures]).length
+      reported_items = Array(watchlist[:most_reported_media]).length
+      success_rate = quality[:processing_success_rate_percent]
+
+      if open_reports.positive?
+        rows << insight_row(
+          "warning",
+          "Open reports need review",
+          "#{open_reports} open report#{'s' if open_reports != 1} across media and comments.",
+          "Open the reports page and review the oldest/highest-risk reports first."
+        )
+      end
+
+      if failed_items.positive?
+        rows << insight_row(
+          "warning",
+          "Failed processing items present",
+          "#{failed_items} failed item#{'s' if failed_items != 1} detected; #{recent_failures} shown in the recent failure watchlist.",
+          "Check the error message and retry or remove failed items where appropriate."
+        )
+      end
+
+      if queued_or_processing.positive?
+        rows << insight_row(
+          "info",
+          "Processing queue is active",
+          "#{queued_or_processing} item#{'s' if queued_or_processing != 1} currently queued or processing.",
+          "If this number stays high, verify background jobs and storage/FFmpeg health."
+        )
+      end
+
+      if success_rate.present? && success_rate.to_f < 95.0
+        rows << insight_row(
+          "info",
+          "Processing success rate below target",
+          "Current all-time processing success is #{success_rate}%.",
+          "Use the recent failures and health pages to look for recurring formats or storage errors."
+        )
+      end
+
+      if reported_items.positive?
+        rows << insight_row(
+          "info",
+          "Reported content watchlist available",
+          "#{reported_items} item#{'s' if reported_items != 1} with report activity are listed below.",
+          "Prioritize content with open reports or repeated reports from different users."
+        )
+      end
+
+      rows.presence || [
+        insight_row(
+          "success",
+          "No immediate analytics attention required",
+          "No open reports, failed items or active queue pressure detected in the current snapshot.",
+          "Keep monitoring trends after busy upload periods."
+        ),
+      ]
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics insights failed #{e.class}: #{e.message}")
+      []
+    end
+
     def moderation_payload(period, since, limit)
       media_reports = media_report_stats
       comment_reports = comment_report_stats
@@ -255,11 +382,46 @@ module ::MediaGallery
       }
     end
 
+    def empty_period_summary
+      {
+        current: empty_window_metrics,
+        previous: empty_window_metrics,
+        delta: {},
+        labels: { current: nil, previous: nil },
+      }
+    end
+
+    def empty_window_metrics
+      {
+        uploads: 0,
+        ready_uploads: 0,
+        failed_uploads: 0,
+        playbacks: 0,
+        unique_viewers: 0,
+        media_likes: 0,
+        comments: 0,
+        comment_likes: 0,
+        reports: 0,
+        log_events: 0,
+        processed_storage_added_bytes: 0,
+        engagement_total: 0,
+      }
+    end
+
+    def empty_contributors
+      { top_uploaders: [], top_viewers: [], top_commenters: [] }
+    end
+
+    def empty_watchlist
+      { recent_failures: [], processing_queue: [], most_reported_media: [] }
+    end
+
     def analytics_notes
       [
-        "This first statistics iteration is read-only and uses existing Media Gallery tables and metadata.",
+        "This statistics dashboard is read-only and uses existing Media Gallery tables and metadata.",
         "Upload, like, comment, playback and log trends are grouped by the selected time unit.",
-        "Media report history is currently stored in item metadata; a later iteration can add explicit analytics event rows for more granular report charts.",
+        "Iteration 2 adds period comparison, contributor leaderboards, recent failure watchlists and actionable admin insights without adding migrations.",
+        "Media report history is stored in item metadata; report timestamps are parsed where available, while comment reports use their own table timestamps.",
       ]
     end
 
@@ -457,6 +619,333 @@ module ::MediaGallery
       value.to_s
     end
 
+    def period_summary_bounds(period, since, limit)
+      current_from = since || period_since(period, limit)
+      current_to = Time.zone.now
+      previous_to = current_from
+      previous_from = shift_period(current_from, period, -limit)
+
+      {
+        current_from: current_from,
+        current_to: current_to,
+        previous_from: previous_from,
+        previous_to: previous_to,
+      }
+    end
+
+    def window_metrics(from_time, to_time)
+      report_stats = report_stats_for_window(from_time, to_time)
+      likes = time_window_count(media_like_scope, :created_at, from_time, to_time)
+      comments = time_window_count(media_comment_scope, :created_at, from_time, to_time)
+      comment_likes = time_window_count(media_comment_like_scope, :created_at, from_time, to_time)
+
+      {
+        uploads: time_window_count(media_item_scope, :created_at, from_time, to_time),
+        ready_uploads: time_window_count(media_item_scope.where(status: "ready"), :created_at, from_time, to_time),
+        failed_uploads: time_window_count(media_item_scope.where(status: "failed"), :created_at, from_time, to_time),
+        playbacks: time_window_count(playback_session_scope, playback_timestamp_column, from_time, to_time),
+        unique_viewers: time_window_distinct_count(playback_session_scope, :user_id, playback_timestamp_column, from_time, to_time),
+        media_likes: likes,
+        comments: comments,
+        comment_likes: comment_likes,
+        reports: report_stats[:total].to_i,
+        log_events: time_window_count(media_log_event_scope, :created_at, from_time, to_time),
+        processed_storage_added_bytes: time_window_sum(media_item_scope, :filesize_processed_bytes, :created_at, from_time, to_time),
+        engagement_total: likes + comments + comment_likes,
+      }
+    end
+
+    def window_delta(current, previous)
+      keys = (current.keys + previous.keys).uniq
+      keys.each_with_object({}) do |key, memo|
+        current_value = current[key].to_i
+        previous_value = previous[key].to_i
+        difference = current_value - previous_value
+        memo[key] = {
+          current: current_value,
+          previous: previous_value,
+          difference: difference,
+          percent_change: percent_change(current_value, previous_value),
+          direction: difference.positive? ? "up" : (difference.negative? ? "down" : "flat"),
+        }
+      end
+    rescue
+      {}
+    end
+
+    def percent_change(current_value, previous_value)
+      return nil if previous_value.to_i.zero?
+
+      (((current_value.to_f - previous_value.to_f) / previous_value.to_f) * 100).round(1)
+    end
+
+    def report_stats_for_window(from_time, to_time)
+      stats = { total: 0, media: 0, comments: 0 }
+
+      each_media_report do |report|
+        created_at = parse_report_time(report["created_at"])
+        next if created_at.blank? || created_at < from_time || created_at >= to_time
+
+        stats[:total] += 1
+        stats[:media] += 1
+      end
+
+      comment_scope = time_window_scope(media_comment_report_scope, :created_at, from_time, to_time)
+      comment_count = safe_count(comment_scope)
+      stats[:total] += comment_count
+      stats[:comments] += comment_count
+      stats
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics report window failed #{e.class}: #{e.message}")
+      { total: 0, media: 0, comments: 0 }
+    end
+
+    def top_uploaders_payload(since)
+      scope = time_window_scope(media_item_scope, :created_at, since, nil)
+      counts = top_group_counts(scope, :user_id, 10)
+      ids = counts.keys.compact
+      usernames = usernames_by_id(ids)
+      ready_counts = safe_group_count(scope.where(status: "ready"), :user_id)
+      failed_counts = safe_group_count(scope.where(status: "failed"), :user_id)
+      view_sums = safe_group_sum(scope, :user_id, :views_count)
+      storage_sums = safe_group_sum(scope, :user_id, :filesize_processed_bytes)
+      latest_uploads = safe_group_max(scope, :user_id, :created_at)
+
+      counts.map do |user_id, count|
+        {
+          user_id: user_id,
+          username: usernames[user_id] || "user ##{user_id}",
+          uploads: count.to_i,
+          ready: ready_counts[user_id].to_i,
+          failed: failed_counts[user_id].to_i,
+          views: view_sums[user_id].to_i,
+          processed_storage_bytes: storage_sums[user_id].to_i,
+          latest_upload_at: latest_uploads[user_id]&.utc&.iso8601,
+        }
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics top uploaders failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def top_viewers_payload(since)
+      timestamp_column = playback_timestamp_column
+      scope = time_window_scope(playback_session_scope, timestamp_column, since, nil)
+      counts = top_group_counts(scope, :user_id, 10)
+      ids = counts.keys.compact
+      usernames = usernames_by_id(ids)
+      media_counts = safe_group_distinct_count(scope, :user_id, :media_item_id)
+      latest_playbacks = safe_group_max(scope, :user_id, timestamp_column)
+
+      counts.map do |user_id, count|
+        {
+          user_id: user_id,
+          username: usernames[user_id] || "user ##{user_id}",
+          playbacks: count.to_i,
+          unique_media: media_counts[user_id].to_i,
+          latest_playback_at: latest_playbacks[user_id]&.utc&.iso8601,
+        }
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics top viewers failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def top_commenters_payload(since)
+      scope = time_window_scope(media_comment_scope, :created_at, since, nil)
+      counts = top_group_counts(scope, :user_id, 10)
+      ids = counts.keys.compact
+      usernames = usernames_by_id(ids)
+      media_counts = safe_group_distinct_count(scope, :user_id, :media_item_id)
+      latest_comments = safe_group_max(scope, :user_id, :created_at)
+
+      counts.map do |user_id, count|
+        {
+          user_id: user_id,
+          username: usernames[user_id] || "user ##{user_id}",
+          comments: count.to_i,
+          unique_media: media_counts[user_id].to_i,
+          latest_comment_at: latest_comments[user_id]&.utc&.iso8601,
+        }
+      end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics top commenters failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def recent_failures_payload
+      media_item_scope
+        .includes(:user)
+        .where(status: "failed")
+        .order(updated_at: :desc)
+        .limit(10)
+        .map do |item|
+          {
+            public_id: item.public_id,
+            title: item.title,
+            uploader: item.user&.username,
+            media_type: item.media_type,
+            error_message: item.error_message.to_s.truncate(220),
+            updated_at: item.updated_at&.utc&.iso8601,
+            created_at: item.created_at&.utc&.iso8601,
+          }
+        end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics recent failures failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def processing_queue_payload
+      media_item_scope
+        .includes(:user)
+        .where(status: %w[queued processing])
+        .order(updated_at: :asc)
+        .limit(10)
+        .map do |item|
+          {
+            public_id: item.public_id,
+            title: item.title,
+            uploader: item.user&.username,
+            media_type: item.media_type,
+            status: item.status,
+            updated_at: item.updated_at&.utc&.iso8601,
+            created_at: item.created_at&.utc&.iso8601,
+          }
+        end
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics processing queue failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def most_reported_media_payload
+      counts = Hash.new { |hash, key| hash[key] = { total: 0, open: 0, media: 0, comments: 0 } }
+
+      each_media_report do |report, item|
+        item_id = item&.id
+        next if item_id.blank?
+
+        status = normalized_report_status(report["status"])
+        counts[item_id][:total] += 1
+        counts[item_id][:media] += 1
+        counts[item_id][:open] += 1 if status == :open
+      end
+
+      media_comment_report_scope.group(:media_item_id, :status).count.each do |(item_id, status), count|
+        next if item_id.blank?
+
+        normalized = normalized_report_status(status)
+        counts[item_id][:total] += count.to_i
+        counts[item_id][:comments] += count.to_i
+        counts[item_id][:open] += count.to_i if normalized == :open
+      end
+
+      top_ids = counts.sort_by { |_id, row| [-row[:open].to_i, -row[:total].to_i] }.first(10).map(&:first)
+      items_by_id = media_item_scope.includes(:user).where(id: top_ids).index_by(&:id)
+
+      top_ids.map do |item_id|
+        item = items_by_id[item_id]
+        row = counts[item_id]
+        next if item.blank?
+
+        {
+          public_id: item.public_id,
+          title: item.title,
+          uploader: item.user&.username,
+          media_type: item.media_type,
+          status: item.status,
+          total_reports: row[:total].to_i,
+          open_reports: row[:open].to_i,
+          media_reports: row[:media].to_i,
+          comment_reports: row[:comments].to_i,
+          created_at: item.created_at&.utc&.iso8601,
+        }
+      end.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] statistics most reported media failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def insight_row(severity, title, message, action)
+      { severity: severity, title: title, message: message, action: action }
+    end
+
+    def window_label(from_time, to_time)
+      return nil if from_time.blank? || to_time.blank?
+
+      "#{from_time.to_date.iso8601} – #{(to_time - 1.second).to_date.iso8601}"
+    rescue
+      nil
+    end
+
+    def time_window_scope(scope, timestamp_column, from_time, to_time)
+      return scope if scope.nil?
+      return scope unless column_available?(scope.klass.table_name, timestamp_column)
+
+      scoped = scope.where.not(timestamp_column => nil)
+      scoped = scoped.where("#{scope.klass.table_name}.#{timestamp_column} >= ?", from_time) if from_time.present?
+      scoped = scoped.where("#{scope.klass.table_name}.#{timestamp_column} < ?", to_time) if to_time.present?
+      scoped
+    rescue
+      scope
+    end
+
+    def time_window_count(scope, timestamp_column, from_time, to_time)
+      safe_count(time_window_scope(scope, timestamp_column, from_time, to_time))
+    end
+
+    def time_window_sum(scope, sum_column, timestamp_column, from_time, to_time)
+      safe_sum(time_window_scope(scope, timestamp_column, from_time, to_time), sum_column)
+    end
+
+    def time_window_distinct_count(scope, distinct_column, timestamp_column, from_time, to_time)
+      safe_distinct_count(time_window_scope(scope, timestamp_column, from_time, to_time), distinct_column)
+    end
+
+    def parse_report_time(value)
+      return nil if value.blank?
+
+      Time.zone.parse(value.to_s)
+    rescue
+      nil
+    end
+
+    def usernames_by_id(ids)
+      clean_ids = Array(ids).compact.map(&:to_i).uniq
+      return {} if clean_ids.blank?
+
+      ::User.where(id: clean_ids).pluck(:id, :username).to_h
+    rescue
+      {}
+    end
+
+    def safe_group_sum(scope, group_column, sum_column)
+      return {} unless column_available?(scope.klass.table_name, group_column)
+      return {} unless column_available?(scope.klass.table_name, sum_column)
+
+      scope.group(group_column).sum(sum_column)
+    rescue
+      {}
+    end
+
+    def safe_group_max(scope, group_column, max_column)
+      return {} unless column_available?(scope.klass.table_name, group_column)
+      return {} unless column_available?(scope.klass.table_name, max_column)
+
+      scope.group(group_column).maximum(max_column)
+    rescue
+      {}
+    end
+
+    def safe_group_distinct_count(scope, group_column, distinct_column)
+      return {} unless column_available?(scope.klass.table_name, group_column)
+      return {} unless column_available?(scope.klass.table_name, distinct_column)
+
+      table = scope.klass.table_name
+      scope.group(group_column).pluck(group_column, Arel.sql("COUNT(DISTINCT #{table}.#{distinct_column})")).to_h
+    rescue
+      {}
+    end
+
     def comment_report_trend(period, since)
       grouped_count(media_comment_report_scope, :created_at, period, since)
     end
@@ -513,7 +1002,7 @@ module ::MediaGallery
       return unless column_available?(::MediaGallery::MediaItem.table_name, :extra_metadata)
 
       media_item_scope.where("extra_metadata ? ?", MEDIA_REPORTS_KEY).find_each(batch_size: 100) do |item|
-        media_reports_for_item(item).each { |report| yield report }
+        media_reports_for_item(item).each { |report| yield report, item }
       end
     rescue => e
       Rails.logger.warn("[media_gallery] statistics each media report failed #{e.class}: #{e.message}")

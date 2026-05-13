@@ -10,6 +10,17 @@ const PERIOD_DEFAULT_LIMITS = {
   year: "5",
 };
 
+const COMPARISON_METRICS = [
+  { key: "uploads", label: "Uploads" },
+  { key: "playbacks", label: "Playback sessions" },
+  { key: "unique_viewers", label: "Unique viewers" },
+  { key: "engagement_total", label: "Engagement" },
+  { key: "comments", label: "Comments" },
+  { key: "reports", label: "Reports" },
+  { key: "failed_uploads", label: "Failed uploads" },
+  { key: "processed_storage_added_bytes", label: "Processed storage added", type: "bytes" },
+];
+
 function coerceArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -48,6 +59,54 @@ function formatBytes(value) {
 
   const decimals = unitIndex === 0 || size >= 10 ? 0 : 1;
   return `${size.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
+function formatMetric(value, type = "number") {
+  if (type === "bytes") {
+    return formatBytes(value);
+  }
+
+  if (type === "percent") {
+    return formatPercent(value);
+  }
+
+  return formatNumber(value);
+}
+
+function formatSignedNumber(value) {
+  const number = numberValue(value);
+  if (number === 0) {
+    return "0";
+  }
+
+  return `${number > 0 ? "+" : "−"}${formatNumber(Math.abs(number))}`;
+}
+
+function formatDelta(delta = {}, type = "number") {
+  const previous = numberValue(delta?.previous);
+  const current = numberValue(delta?.current);
+  const difference = numberValue(delta?.difference);
+  const percentChange = delta?.percent_change;
+
+  if (previous === 0 && current > 0) {
+    return `new · ${formatSignedNumber(difference)}`;
+  }
+
+  if (previous === 0 && current === 0) {
+    return "no change";
+  }
+
+  if (type === "bytes") {
+    const sign = difference > 0 ? "+" : difference < 0 ? "−" : "";
+    const bytesLabel = difference === 0 ? "0" : `${sign}${formatBytes(Math.abs(difference))}`;
+    return percentChange === null || percentChange === undefined
+      ? bytesLabel
+      : `${bytesLabel} · ${formatSignedNumber(percentChange)}%`;
+  }
+
+  return percentChange === null || percentChange === undefined
+    ? formatSignedNumber(difference)
+    : `${formatSignedNumber(difference)} · ${formatSignedNumber(percentChange)}%`;
 }
 
 function formatDateTime(value) {
@@ -131,6 +190,10 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   @tracked breakdowns = {};
   @tracked moderation = {};
   @tracked quality = {};
+  @tracked periodSummary = {};
+  @tracked contributors = {};
+  @tracked watchlist = {};
+  @tracked insights = [];
   @tracked topContent = [];
   @tracked notes = [];
   @tracked generatedAt = null;
@@ -151,6 +214,10 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.breakdowns = {};
     this.moderation = {};
     this.quality = {};
+    this.periodSummary = {};
+    this.contributors = {};
+    this.watchlist = {};
+    this.insights = [];
     this.topContent = [];
     this.notes = [];
     this.generatedAt = null;
@@ -180,6 +247,10 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.breakdowns = safeObject(data?.breakdowns);
     this.moderation = safeObject(data?.moderation);
     this.quality = safeObject(data?.quality);
+    this.periodSummary = safeObject(data?.period_summary);
+    this.contributors = safeObject(data?.contributors);
+    this.watchlist = safeObject(data?.watchlist);
+    this.insights = coerceArray(data?.insights);
     this.topContent = coerceArray(data?.top_content);
     this.notes = coerceArray(data?.notes);
     this.generatedAt = data?.generated_at || new Date().toISOString();
@@ -188,6 +259,46 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.lastTimingMs = numberValue(data?.timing_ms) || null;
     this.lastTimingBreakdown = data?.timing_breakdown_ms || null;
     this.hasLoadedOnce = true;
+  }
+
+  get currentRangeLabel() {
+    return plainText(this.periodSummary?.labels?.current, "Current range");
+  }
+
+  get previousRangeLabel() {
+    return plainText(this.periodSummary?.labels?.previous, "Previous range");
+  }
+
+  get comparisonRows() {
+    const current = safeObject(this.periodSummary?.current);
+    const previous = safeObject(this.periodSummary?.previous);
+    const delta = safeObject(this.periodSummary?.delta);
+
+    return COMPARISON_METRICS.map((metric) => {
+      const rowDelta = safeObject(delta?.[metric.key]);
+      return {
+        key: metric.key,
+        label: metric.label,
+        currentLabel: formatMetric(current?.[metric.key], metric.type),
+        previousLabel: formatMetric(previous?.[metric.key], metric.type),
+        changeLabel: formatDelta(rowDelta, metric.type),
+        changeClass: `mg-stats__delta is-${plainText(rowDelta?.direction, "flat")}`,
+      };
+    });
+  }
+
+  get decoratedInsights() {
+    return this.insights.map((insight, index) => {
+      const severity = plainText(insight?.severity, "info").toLowerCase();
+      return {
+        key: `${severity}-${index}`,
+        severity,
+        title: plainText(insight?.title, "Insight"),
+        message: plainText(insight?.message, "—"),
+        action: plainText(insight?.action, "—"),
+        className: `mg-stats__insight is-${severity}`,
+      };
+    });
   }
 
   get summaryCards() {
@@ -333,6 +444,78 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     ];
   }
 
+  get topUploaders() {
+    return coerceArray(this.contributors?.top_uploaders).map((row) => ({
+      key: plainText(row?.user_id, plainText(row?.username, "user")),
+      username: plainText(row?.username, "—"),
+      uploadsLabel: formatNumber(row?.uploads),
+      readyLabel: formatNumber(row?.ready),
+      failedLabel: formatNumber(row?.failed),
+      viewsLabel: formatNumber(row?.views),
+      storageLabel: formatBytes(row?.processed_storage_bytes),
+      latestLabel: formatDateTime(row?.latest_upload_at),
+    }));
+  }
+
+  get topViewers() {
+    return coerceArray(this.contributors?.top_viewers).map((row) => ({
+      key: plainText(row?.user_id, plainText(row?.username, "user")),
+      username: plainText(row?.username, "—"),
+      playbacksLabel: formatNumber(row?.playbacks),
+      uniqueMediaLabel: formatNumber(row?.unique_media),
+      latestLabel: formatDateTime(row?.latest_playback_at),
+    }));
+  }
+
+  get topCommenters() {
+    return coerceArray(this.contributors?.top_commenters).map((row) => ({
+      key: plainText(row?.user_id, plainText(row?.username, "user")),
+      username: plainText(row?.username, "—"),
+      commentsLabel: formatNumber(row?.comments),
+      uniqueMediaLabel: formatNumber(row?.unique_media),
+      latestLabel: formatDateTime(row?.latest_comment_at),
+    }));
+  }
+
+  get recentFailures() {
+    return coerceArray(this.watchlist?.recent_failures).map((row) => ({
+      key: plainText(row?.public_id, plainText(row?.title, "failed")),
+      title: plainText(row?.title, "Untitled media"),
+      publicId: plainText(row?.public_id, "—"),
+      uploader: plainText(row?.uploader, "—"),
+      typeLabel: titleize(row?.media_type),
+      errorMessage: plainText(row?.error_message, "No error message stored."),
+      updatedLabel: formatDateTime(row?.updated_at),
+    }));
+  }
+
+  get processingQueue() {
+    return coerceArray(this.watchlist?.processing_queue).map((row) => ({
+      key: plainText(row?.public_id, plainText(row?.title, "processing")),
+      title: plainText(row?.title, "Untitled media"),
+      publicId: plainText(row?.public_id, "—"),
+      uploader: plainText(row?.uploader, "—"),
+      typeLabel: titleize(row?.media_type),
+      statusLabel: titleize(row?.status),
+      updatedLabel: formatDateTime(row?.updated_at),
+    }));
+  }
+
+  get mostReportedMedia() {
+    return coerceArray(this.watchlist?.most_reported_media).map((row) => ({
+      key: plainText(row?.public_id, plainText(row?.title, "reported")),
+      title: plainText(row?.title, "Untitled media"),
+      publicId: plainText(row?.public_id, "—"),
+      uploader: plainText(row?.uploader, "—"),
+      typeLabel: titleize(row?.media_type),
+      statusLabel: titleize(row?.status),
+      totalReportsLabel: formatNumber(row?.total_reports),
+      openReportsLabel: formatNumber(row?.open_reports),
+      mediaReportsLabel: formatNumber(row?.media_reports),
+      commentReportsLabel: formatNumber(row?.comment_reports),
+    }));
+  }
+
   get decoratedTopContent() {
     return this.topContent.map((item) => ({
       key: plainText(item?.public_id, plainText(item?.title, "item")),
@@ -372,7 +555,7 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       return "";
     }
 
-    const keys = ["summary", "trends", "breakdowns", "top_content", "moderation", "quality"];
+    const keys = ["summary", "trends", "breakdowns", "top_content", "moderation", "quality", "period_summary", "contributors", "watchlist", "insights"];
     const parts = keys
       .map((key) => {
         const value = Number(this.lastTimingBreakdown?.[key]);

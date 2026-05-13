@@ -200,6 +200,79 @@ export default RouteTemplate(
         background: var(--tertiary-low);
       }
 
+      .mg-stats__comparison-table,
+      .mg-stats__mini-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .mg-stats__comparison-table th,
+      .mg-stats__comparison-table td,
+      .mg-stats__mini-table th,
+      .mg-stats__mini-table td {
+        border-bottom: 1px solid var(--mg-stats-border);
+        padding: 0.55rem 0.45rem;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .mg-stats__comparison-table th,
+      .mg-stats__mini-table th {
+        color: var(--mg-stats-muted);
+        font-size: var(--font-down-1);
+        font-weight: 700;
+      }
+
+      .mg-stats__delta {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        background: var(--primary-very-low);
+        border: 1px solid var(--primary-low);
+        color: var(--primary-high);
+        font-size: var(--font-down-1);
+        font-weight: 700;
+        line-height: 1;
+        padding: 0.3rem 0.5rem;
+        white-space: nowrap;
+      }
+
+      .mg-stats__insight-list {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .mg-stats__insight {
+        display: grid;
+        gap: 0.35rem;
+        border: 1px solid var(--mg-stats-border);
+        border-radius: 14px;
+        background: var(--primary-very-low);
+        padding: 0.85rem 0.95rem;
+      }
+
+      .mg-stats__insight.is-warning {
+        border-color: var(--danger-low);
+        background: var(--danger-low);
+      }
+
+      .mg-stats__insight.is-success {
+        border-color: var(--success-low);
+        background: var(--success-low);
+      }
+
+      .mg-stats__insight-title,
+      .mg-stats__mini-title {
+        font-weight: 800;
+      }
+
+      .mg-stats__mini-code {
+        color: var(--mg-stats-muted);
+        font-family: var(--font-family-monospace);
+        font-size: var(--font-down-1);
+        overflow-wrap: anywhere;
+      }
+
       .mg-stats__table-wrap {
         width: 100%;
         overflow-x: auto;
@@ -366,6 +439,63 @@ export default RouteTemplate(
             <div class="mg-stats__meta">{{card.meta}}</div>
           </article>
         {{/each}}
+      </section>
+
+      <section class="mg-stats__two-column">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Current range vs previous range</h2>
+              <p class="mg-stats__muted">
+                {{@controller.currentRangeLabel}} compared with {{@controller.previousRangeLabel}}.
+              </p>
+            </div>
+          </div>
+
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__comparison-table">
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Current</th>
+                  <th>Previous</th>
+                  <th>Change</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.comparisonRows as |row|}}
+                  <tr>
+                    <td>{{row.label}}</td>
+                    <td>{{row.currentLabel}}</td>
+                    <td>{{row.previousLabel}}</td>
+                    <td><span class={{row.changeClass}}>{{row.changeLabel}}</span></td>
+                  </tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Actionable insights</h2>
+              <p class="mg-stats__muted">Operational signals that need admin attention.</p>
+            </div>
+          </div>
+
+          <div class="mg-stats__insight-list">
+            {{#each @controller.decoratedInsights as |insight|}}
+              <div class={{insight.className}}>
+                <div class="mg-stats__insight-title">{{insight.title}}</div>
+                <p>{{insight.message}}</p>
+                <p class="mg-stats__muted">{{insight.action}}</p>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No insights available.</div>
+            {{/each}}
+          </div>
+        </article>
       </section>
 
       <section class="mg-stats__two-column">
@@ -565,6 +695,201 @@ export default RouteTemplate(
             {{/each}}
           </div>
         </article>
+      </section>
+
+      <section class="mg-stats__three-column">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Top uploaders</h2>
+              <p class="mg-stats__muted">Users creating the most media in the selected range.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Uploads</th>
+                  <th>Ready</th>
+                  <th>Failed</th>
+                  <th>Storage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.topUploaders as |user|}}
+                  <tr>
+                    <td>
+                      <div class="mg-stats__mini-title">{{user.username}}</div>
+                      <div class="mg-stats__meta">Latest: {{user.latestLabel}}</div>
+                    </td>
+                    <td>{{user.uploadsLabel}}</td>
+                    <td>{{user.readyLabel}}</td>
+                    <td>{{user.failedLabel}}</td>
+                    <td>{{user.storageLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="5">No uploader data available.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Top viewers</h2>
+              <p class="mg-stats__muted">Users with the most playback sessions in the selected range.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Plays</th>
+                  <th>Media</th>
+                  <th>Latest</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.topViewers as |user|}}
+                  <tr>
+                    <td><div class="mg-stats__mini-title">{{user.username}}</div></td>
+                    <td>{{user.playbacksLabel}}</td>
+                    <td>{{user.uniqueMediaLabel}}</td>
+                    <td>{{user.latestLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="4">No viewer data available.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Top commenters</h2>
+              <p class="mg-stats__muted">Users adding the most comments in the selected range.</p>
+            </div>
+          </div>
+          <div class="mg-stats__table-wrap">
+            <table class="mg-stats__mini-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Comments</th>
+                  <th>Media</th>
+                  <th>Latest</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{#each @controller.topCommenters as |user|}}
+                  <tr>
+                    <td><div class="mg-stats__mini-title">{{user.username}}</div></td>
+                    <td>{{user.commentsLabel}}</td>
+                    <td>{{user.uniqueMediaLabel}}</td>
+                    <td>{{user.latestLabel}}</td>
+                  </tr>
+                {{else}}
+                  <tr><td colspan="4">No commenter data available.</td></tr>
+                {{/each}}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__two-column">
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Recent processing failures</h2>
+              <p class="mg-stats__muted">Newest failed items and their stored processing error.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.recentFailures as |item|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{item.title}}</span>
+                  <span class="mg-stats__badge">{{item.typeLabel}}</span>
+                </div>
+                <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                <div class="mg-stats__meta">Uploader: {{item.uploader}} · Updated: {{item.updatedLabel}}</div>
+                <div>{{item.errorMessage}}</div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No failed items found.</div>
+            {{/each}}
+          </div>
+        </article>
+
+        <article class="mg-stats__panel">
+          <div class="mg-stats__panel-header">
+            <div class="mg-stats__panel-copy">
+              <h2>Most reported media</h2>
+              <p class="mg-stats__muted">Media with report activity across media and comment reports.</p>
+            </div>
+          </div>
+          <div class="mg-stats__compact-list">
+            {{#each @controller.mostReportedMedia as |item|}}
+              <div class="mg-stats__breakdown-row">
+                <div class="mg-stats__row-header">
+                  <span class="mg-stats__row-label">{{item.title}}</span>
+                  <span class="mg-stats__row-value">{{item.openReportsLabel}} open / {{item.totalReportsLabel}} total</span>
+                </div>
+                <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                <div class="mg-stats__meta">
+                  {{item.mediaReportsLabel}} media reports · {{item.commentReportsLabel}} comment reports · {{item.statusLabel}}
+                </div>
+              </div>
+            {{else}}
+              <div class="mg-stats__empty">No reported media found.</div>
+            {{/each}}
+          </div>
+        </article>
+      </section>
+
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
+            <h2>Processing queue watchlist</h2>
+            <p class="mg-stats__muted">Oldest queued or processing items, useful when jobs appear stuck.</p>
+          </div>
+        </div>
+        <div class="mg-stats__table-wrap">
+          <table class="mg-stats__mini-table">
+            <thead>
+              <tr>
+                <th>Media</th>
+                <th>Uploader</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{#each @controller.processingQueue as |item|}}
+                <tr>
+                  <td>
+                    <div class="mg-stats__mini-title">{{item.title}}</div>
+                    <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                  </td>
+                  <td>{{item.uploader}}</td>
+                  <td>{{item.typeLabel}}</td>
+                  <td><span class="mg-stats__badge">{{item.statusLabel}}</span></td>
+                  <td>{{item.updatedLabel}}</td>
+                </tr>
+              {{else}}
+                <tr><td colspan="5">No queued or processing items found.</td></tr>
+              {{/each}}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="mg-stats__panel">
