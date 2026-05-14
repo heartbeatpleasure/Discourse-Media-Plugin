@@ -61,6 +61,39 @@ function formatBytes(value) {
   return `${size.toFixed(decimals)} ${units[unitIndex]}`;
 }
 
+function formatSignedBytes(value) {
+  const bytes = numberValue(value);
+  if (bytes === 0) {
+    return "0";
+  }
+
+  return `${bytes > 0 ? "+" : "−"}${formatBytes(Math.abs(bytes))}`;
+}
+
+function formatRatio(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    return "—";
+  }
+
+  const decimals = number >= 10 ? 1 : 2;
+  return `${number.toFixed(decimals)}×`;
+}
+
+function statusClassFor(status) {
+  switch (String(status || "").toLowerCase()) {
+    case "ready":
+      return "mg-stats__badge is-success";
+    case "failed":
+      return "mg-stats__badge is-danger";
+    case "processing":
+    case "queued":
+      return "mg-stats__badge is-warning";
+    default:
+      return "mg-stats__badge";
+  }
+}
+
 function formatDuration(value) {
   const seconds = numberValue(value);
   if (seconds <= 0) {
@@ -383,6 +416,7 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   get summaryCards() {
     const summary = this.summary || {};
     const quality = this.quality || {};
+    const reportTotals = safeObject(this.moderation?.totals?.combined);
     return [
       {
         key: "items",
@@ -404,9 +438,9 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       },
       {
         key: "reports",
-        label: "Reports",
-        value: formatNumber(summary.total_reports),
-        meta: `${formatNumber(summary.open_reports)} open`,
+        label: "Open reports",
+        value: formatNumber(summary.open_reports),
+        meta: `${formatNumber(reportTotals.total ?? summary.total_reports)} total · ${formatNumber(reportTotals.rejected)} rejected`,
       },
       {
         key: "success",
@@ -562,9 +596,9 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     const completed = safeObject(this.processingPerformance?.completed_latency);
     const queue = safeObject(this.processingPerformance?.queue_age);
     return [
-      { key: "completed-count", label: "Completed items", value: formatNumber(completed.count), meta: "Ready or failed items in selected range" },
+      { key: "completed-count", label: "Completed items", value: formatNumber(completed.count), meta: "With stored processing run timing in selected range" },
       { key: "completed-median", label: "Median processing", value: formatDuration(completed.median_seconds), meta: `Average ${formatDuration(completed.average_seconds)} · p90 ${formatDuration(completed.p90_seconds)}` },
-      { key: "completed-max", label: "Slowest completed", value: formatDuration(completed.max_seconds), meta: "Approx. created to last update" },
+      { key: "completed-max", label: "Slowest completed", value: formatDuration(completed.max_seconds), meta: "Stored processing run duration" },
       { key: "queue-count", label: "Active queue", value: formatNumber(queue.count), meta: `Median age ${formatDuration(queue.median_seconds)} · p90 ${formatDuration(queue.p90_seconds)}` },
     ];
   }
@@ -595,8 +629,8 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       countLabel: formatNumber(row?.count),
       originalLabel: formatBytes(row?.original_bytes),
       processedLabel: formatBytes(row?.processed_bytes),
-      savedLabel: formatBytes(Math.abs(numberValue(row?.saved_bytes))),
-      reductionLabel: formatPercent(row?.reduction_percent),
+      changeLabel: formatSignedBytes(row?.delta_bytes ?? -numberValue(row?.saved_bytes)),
+      ratioLabel: formatRatio(row?.processed_ratio),
     };
   }
 
@@ -781,6 +815,7 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     return coerceArray(this.metadataCompleteness?.incomplete_media).map((item) => ({
       ...this.decorateContentItem(item, "incomplete"),
       statusLabel: titleize(item?.status),
+      statusClass: statusClassFor(item?.status),
       issueCountLabel: formatNumber(item?.issue_count),
       issuesLabel: coerceArray(item?.issues).join(", ") || "—",
       updatedLabel: formatDateTime(item?.updated_at),
@@ -792,7 +827,9 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       ...this.decorateContentItem(item, "large-processed"),
       originalLabel: formatBytes(item?.original_bytes),
       processedLabel: formatBytes(item?.processed_bytes),
-      reductionLabel: formatPercent(item?.reduction_percent),
+      changeLabel: formatSignedBytes(item?.delta_bytes),
+      ratioLabel: formatRatio(item?.processed_ratio),
+      storageLabel: plainText(item?.storage_label, "—"),
     }));
   }
 

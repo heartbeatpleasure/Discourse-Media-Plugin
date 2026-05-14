@@ -114,7 +114,7 @@ export default RouteTemplate(
 
       .mg-stats__toolbar-action {
         align-self: flex-end;
-        margin-bottom: 7px;
+        margin-bottom: 9px;
       }
 
       .mg-stats__kpi-grid,
@@ -260,6 +260,19 @@ export default RouteTemplate(
         gap: 0.75rem;
       }
 
+      .mg-stats__insight-list.is-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mg-stats__kpi-grid.is-two-by-two {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mg-stats__processing-latency-panel,
+      .mg-stats__slow-processing-panel {
+        grid-column: 1 / -1;
+      }
+
       .mg-stats__insight {
         display: grid;
         gap: 0.35rem;
@@ -342,6 +355,75 @@ export default RouteTemplate(
         white-space: nowrap;
       }
 
+      .mg-stats__badge.is-success {
+        border-color: var(--success-low);
+        background: var(--success-low);
+        color: var(--success);
+      }
+
+      .mg-stats__badge.is-warning {
+        border-color: var(--highlight-low);
+        background: var(--highlight-low);
+        color: var(--primary-high);
+      }
+
+      .mg-stats__badge.is-danger {
+        border-color: var(--danger-low);
+        background: var(--danger-low);
+        color: var(--danger);
+      }
+
+      .mg-stats__media-card-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem;
+      }
+
+      .mg-stats__media-card {
+        display: grid;
+        gap: 0.75rem;
+        border: 1px solid var(--mg-stats-border);
+        border-radius: 14px;
+        background: var(--mg-stats-surface-alt);
+        padding: 0.85rem 0.95rem;
+        min-width: 0;
+      }
+
+      .mg-stats__media-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 0.75rem;
+      }
+
+      .mg-stats__media-card-meta,
+      .mg-stats__stat-label {
+        color: var(--mg-stats-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-stats__stat-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.6rem;
+      }
+
+      .mg-stats__stat {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        border: 1px solid var(--mg-stats-border);
+        border-radius: 12px;
+        background: var(--mg-stats-surface);
+        padding: 0.65rem 0.7rem;
+        min-width: 0;
+      }
+
+      .mg-stats__stat-value {
+        font-weight: 800;
+        overflow-wrap: anywhere;
+      }
+
       .mg-stats__empty,
       .mg-stats__notice {
         border: 1px solid var(--mg-stats-border);
@@ -370,14 +452,19 @@ export default RouteTemplate(
 
       @media (max-width: 900px) {
         .mg-stats__hero,
-        .mg-stats__panel-header {
+        .mg-stats__panel-header,
+        .mg-stats__media-card-header {
           flex-direction: column;
         }
 
         .mg-stats__two-column,
         .mg-stats__three-column,
         .mg-stats__kpi-grid,
-        .mg-stats__breakdown-grid {
+        .mg-stats__kpi-grid.is-two-by-two,
+        .mg-stats__breakdown-grid,
+        .mg-stats__insight-list.is-grid,
+        .mg-stats__media-card-grid,
+        .mg-stats__stat-list {
           grid-template-columns: 1fr;
         }
       }
@@ -469,66 +556,64 @@ export default RouteTemplate(
         {{/each}}
       </section>
 
-      <section class="mg-stats__two-column">
-        <article class="mg-stats__panel">
-          <div class="mg-stats__panel-header">
-            <div class="mg-stats__panel-copy">
-              <h2>Current range vs previous range</h2>
-              <p class="mg-stats__muted">
-                {{@controller.currentRangeLabel}} compared with {{@controller.previousRangeLabel}}.
-              </p>
-              <p class="mg-stats__meta">
-                {{@controller.currentRangeDateLabel}} vs {{@controller.previousRangeDateLabel}}
-              </p>
-            </div>
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
+            <h2>Actionable insights</h2>
+            <p class="mg-stats__muted">Operational signals that need admin attention.</p>
           </div>
+        </div>
 
-          <div class="mg-stats__table-wrap">
-            <table class="mg-stats__comparison-table">
-              <thead>
+        <div class="mg-stats__insight-list is-grid">
+          {{#each @controller.decoratedInsights as |insight|}}
+            <div class={{insight.className}}>
+              <div class="mg-stats__insight-title">{{insight.title}}</div>
+              <p>{{insight.message}}</p>
+              <p class="mg-stats__muted">{{insight.action}}</p>
+            </div>
+          {{else}}
+            <div class="mg-stats__empty">No insights available.</div>
+          {{/each}}
+        </div>
+      </section>
+
+      <section class="mg-stats__panel">
+        <div class="mg-stats__panel-header">
+          <div class="mg-stats__panel-copy">
+            <h2>Current range vs previous range</h2>
+            <p class="mg-stats__muted">
+              {{@controller.currentRangeLabel}} compared with {{@controller.previousRangeLabel}}.
+            </p>
+            <p class="mg-stats__meta">
+              {{@controller.currentRangeDateLabel}} vs {{@controller.previousRangeDateLabel}}
+            </p>
+          </div>
+        </div>
+
+        <div class="mg-stats__table-wrap">
+          <table class="mg-stats__comparison-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Current</th>
+                <th>Previous</th>
+                <th>Change</th>
+                <th>%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{#each @controller.comparisonRows as |row|}}
                 <tr>
-                  <th>Metric</th>
-                  <th>Current</th>
-                  <th>Previous</th>
-                  <th>Change</th>
-                  <th>%</th>
+                  <td>{{row.label}}</td>
+                  <td>{{row.currentLabel}}</td>
+                  <td>{{row.previousLabel}}</td>
+                  <td><span class={{row.changeClass}}>{{row.changeLabel}}</span></td>
+                  <td><span class={{row.changeClass}}>{{row.percentLabel}}</span></td>
                 </tr>
-              </thead>
-              <tbody>
-                {{#each @controller.comparisonRows as |row|}}
-                  <tr>
-                    <td>{{row.label}}</td>
-                    <td>{{row.currentLabel}}</td>
-                    <td>{{row.previousLabel}}</td>
-                    <td><span class={{row.changeClass}}>{{row.changeLabel}}</span></td>
-                    <td><span class={{row.changeClass}}>{{row.percentLabel}}</span></td>
-                  </tr>
-                {{/each}}
-              </tbody>
-            </table>
-          </div>
-        </article>
-
-        <article class="mg-stats__panel">
-          <div class="mg-stats__panel-header">
-            <div class="mg-stats__panel-copy">
-              <h2>Actionable insights</h2>
-              <p class="mg-stats__muted">Operational signals that need admin attention.</p>
-            </div>
-          </div>
-
-          <div class="mg-stats__insight-list">
-            {{#each @controller.decoratedInsights as |insight|}}
-              <div class={{insight.className}}>
-                <div class="mg-stats__insight-title">{{insight.title}}</div>
-                <p>{{insight.message}}</p>
-                <p class="mg-stats__muted">{{insight.action}}</p>
-              </div>
-            {{else}}
-              <div class="mg-stats__empty">No insights available.</div>
-            {{/each}}
-          </div>
-        </article>
+              {{/each}}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="mg-stats__two-column">
@@ -781,9 +866,7 @@ export default RouteTemplate(
             {{/each}}
           </div>
         </article>
-      </section>
 
-      <section class="mg-stats__breakdown-grid">
         <article class="mg-stats__panel">
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
@@ -862,11 +945,11 @@ export default RouteTemplate(
           <div class="mg-stats__panel-copy">
             <h2>Processing performance</h2>
             <p class="mg-stats__muted">
-              Approximate processing duration and active queue age, based on existing media item timestamps.
+              Processing duration from stored job-run timing, plus active queue age from created timestamps.
             </p>
           </div>
         </div>
-        <div class="mg-stats__kpi-grid">
+        <div class="mg-stats__kpi-grid is-two-by-two">
           {{#each @controller.processingPerformanceCards as |card|}}
             <article class="mg-stats__card">
               <div class="mg-stats__kpi-label">{{card.label}}</div>
@@ -878,11 +961,11 @@ export default RouteTemplate(
       </section>
 
       <section class="mg-stats__two-column">
-        <article class="mg-stats__panel">
+        <article class="mg-stats__panel mg-stats__processing-latency-panel">
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
               <h2>Processing latency buckets</h2>
-              <p class="mg-stats__muted">How recently completed items are distributed by processing duration.</p>
+              <p class="mg-stats__muted">Recently completed items distributed by stored processing run duration.</p>
             </div>
           </div>
           <div class="mg-stats__compact-list">
@@ -902,11 +985,11 @@ export default RouteTemplate(
           </div>
         </article>
 
-        <article class="mg-stats__panel">
+        <article class="mg-stats__panel mg-stats__slow-processing-panel">
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
               <h2>Slow recent processing</h2>
-              <p class="mg-stats__muted">Recently completed items with the longest approximate processing duration.</p>
+              <p class="mg-stats__muted">Recently completed items with the longest stored processing run duration.</p>
             </div>
           </div>
           <div class="mg-stats__table-wrap">
@@ -1030,7 +1113,7 @@ export default RouteTemplate(
                       <div class="mg-stats__mini-title">{{item.title}}</div>
                       <div class="mg-stats__mini-code">{{item.publicId}}</div>
                     </td>
-                    <td><span class="mg-stats__badge">{{item.statusLabel}}</span></td>
+                    <td><span class={{item.statusClass}}>{{item.statusLabel}}</span></td>
                     <td>
                       <div class="mg-stats__mini-title">{{item.issueCountLabel}} issue(s)</div>
                       <div class="mg-stats__meta">{{item.issuesLabel}}</div>
@@ -1062,7 +1145,7 @@ export default RouteTemplate(
                   <th>Items</th>
                   <th>Original</th>
                   <th>Processed</th>
-                  <th>Reduction</th>
+                  <th>Change</th>
                 </tr>
               </thead>
               <tbody>
@@ -1072,7 +1155,7 @@ export default RouteTemplate(
                     <td>{{row.countLabel}}</td>
                     <td>{{row.originalLabel}}</td>
                     <td>{{row.processedLabel}}</td>
-                    <td>{{row.reductionLabel}}</td>
+                    <td>{{row.changeLabel}}</td>
                   </tr>
                 {{else}}
                   <tr><td colspan="5">No storage efficiency data by type available.</td></tr>
@@ -1085,8 +1168,8 @@ export default RouteTemplate(
         <article class="mg-stats__panel">
           <div class="mg-stats__panel-header">
             <div class="mg-stats__panel-copy">
-              <h2>Storage efficiency by backend</h2>
-              <p class="mg-stats__muted">Original versus processed storage totals grouped by managed backend.</p>
+              <h2>Storage efficiency by storage location</h2>
+              <p class="mg-stats__muted">Original versus processed storage totals grouped by configured storage location.</p>
             </div>
           </div>
           <div class="mg-stats__table-wrap">
@@ -1097,7 +1180,7 @@ export default RouteTemplate(
                   <th>Items</th>
                   <th>Original</th>
                   <th>Processed</th>
-                  <th>Reduction</th>
+                  <th>Change</th>
                 </tr>
               </thead>
               <tbody>
@@ -1107,10 +1190,10 @@ export default RouteTemplate(
                     <td>{{row.countLabel}}</td>
                     <td>{{row.originalLabel}}</td>
                     <td>{{row.processedLabel}}</td>
-                    <td>{{row.reductionLabel}}</td>
+                    <td>{{row.changeLabel}}</td>
                   </tr>
                 {{else}}
-                  <tr><td colspan="5">No storage efficiency data by backend available.</td></tr>
+                  <tr><td colspan="5">No storage efficiency data by storage location available.</td></tr>
                 {{/each}}
               </tbody>
             </table>
@@ -1125,38 +1208,41 @@ export default RouteTemplate(
             <p class="mg-stats__muted">Largest processed files, useful for storage review and processing profile decisions.</p>
           </div>
         </div>
-        <div class="mg-stats__table-wrap">
-          <table class="mg-stats__mini-table">
-            <thead>
-              <tr>
-                <th>Media</th>
-                <th>Uploader</th>
-                <th>Type</th>
-                <th>Original</th>
-                <th>Processed</th>
-                <th>Reduction</th>
-                <th>Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {{#each @controller.largestProcessedMedia as |item|}}
-                <tr>
-                  <td>
-                    <div class="mg-stats__mini-title">{{item.title}}</div>
-                    <div class="mg-stats__mini-code">{{item.publicId}}</div>
-                  </td>
-                  <td>{{item.uploader}}</td>
-                  <td><span class="mg-stats__badge">{{item.typeLabel}}</span></td>
-                  <td>{{item.originalLabel}}</td>
-                  <td>{{item.processedLabel}}</td>
-                  <td>{{item.reductionLabel}}</td>
-                  <td>{{item.createdLabel}}</td>
-                </tr>
-              {{else}}
-                <tr><td colspan="7">No large processed media data available.</td></tr>
-              {{/each}}
-            </tbody>
-          </table>
+        <div class="mg-stats__media-card-grid">
+          {{#each @controller.largestProcessedMedia as |item|}}
+            <article class="mg-stats__media-card">
+              <div class="mg-stats__media-card-header">
+                <div>
+                  <div class="mg-stats__mini-title">{{item.title}}</div>
+                  <div class="mg-stats__mini-code">{{item.publicId}}</div>
+                </div>
+                <span class="mg-stats__badge">{{item.typeLabel}}</span>
+              </div>
+              <div class="mg-stats__media-card-meta">
+                {{item.uploader}} · {{item.storageLabel}} · created {{item.createdLabel}}
+              </div>
+              <div class="mg-stats__stat-list">
+                <div class="mg-stats__stat">
+                  <span class="mg-stats__stat-label">Original</span>
+                  <span class="mg-stats__stat-value">{{item.originalLabel}}</span>
+                </div>
+                <div class="mg-stats__stat">
+                  <span class="mg-stats__stat-label">Processed</span>
+                  <span class="mg-stats__stat-value">{{item.processedLabel}}</span>
+                </div>
+                <div class="mg-stats__stat">
+                  <span class="mg-stats__stat-label">Change</span>
+                  <span class="mg-stats__stat-value">{{item.changeLabel}}</span>
+                </div>
+                <div class="mg-stats__stat">
+                  <span class="mg-stats__stat-label">Processed/original</span>
+                  <span class="mg-stats__stat-value">{{item.ratioLabel}}</span>
+                </div>
+              </div>
+            </article>
+          {{else}}
+            <div class="mg-stats__empty">No large processed media data available.</div>
+          {{/each}}
         </div>
       </section>
 
