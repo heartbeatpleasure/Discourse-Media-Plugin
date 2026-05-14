@@ -1699,7 +1699,7 @@ module ::MediaGallery
       return storage_efficiency_group_rows(:managed_storage_backend) unless column_available?(table, :managed_storage_profile)
       return [] unless column_available?(table, :filesize_original_bytes) && column_available?(table, :filesize_processed_bytes)
 
-      media_item_scope
+      rows = media_item_scope
         .group(:managed_storage_profile, :managed_storage_backend)
         .pluck(
           :managed_storage_profile,
@@ -1710,19 +1710,36 @@ module ::MediaGallery
         )
         .map do |profile, backend, count, original_bytes, processed_bytes|
           profile_key = storage_profile_key_for_row(profile, backend)
+          label = storage_location_label(profile_key, backend)
           storage_efficiency_row(
-            name: profile_key || backend.to_s.presence || "unknown",
-            label: storage_location_label(profile_key, backend),
+            name: label.to_s.parameterize.presence || profile_key || backend.to_s.presence || "unknown",
+            label: label,
             count: count,
             original_bytes: original_bytes,
             processed_bytes: processed_bytes
           )
         end
+
+      merge_storage_efficiency_rows(rows)
         .sort_by { |row| [-row[:processed_bytes].to_i, row[:label].to_s] }
         .first(12)
     rescue => e
       Rails.logger.warn("[media_gallery] statistics storage efficiency profile rows failed #{e.class}: #{e.message}")
       storage_efficiency_group_rows(:managed_storage_backend)
+    end
+
+    def merge_storage_efficiency_rows(rows)
+      rows.group_by { |row| row[:label].to_s.presence || "Unknown" }.map do |label, group|
+        original = group.sum { |row| row[:original_bytes].to_i }
+        processed = group.sum { |row| row[:processed_bytes].to_i }
+        storage_efficiency_row(
+          name: label.parameterize.presence || "unknown",
+          label: label,
+          count: group.sum { |row| row[:count].to_i },
+          original_bytes: original,
+          processed_bytes: processed
+        )
+      end
     end
 
     def storage_efficiency_row(name:, label:, count:, original_bytes:, processed_bytes:)
@@ -1871,27 +1888,25 @@ module ::MediaGallery
 
       if resolved_backend == "s3"
         config = summary[:config].is_a?(Hash) ? summary[:config] : {}
-        provider = storage_provider_label(config[:endpoint])
-        bucket = config[:bucket].to_s.presence
-        prefix = config[:prefix].to_s.presence
-        name = [provider, bucket].compact.join(" · ").presence || summary[:label].to_s.presence || humanize_token(key || backend)
-        prefix.present? ? "#{name} / #{prefix}" : name
-      elsif summary[:label].present?
-        summary[:label]
+        fingerprint = summary[:location_fingerprint].is_a?(Hash) ? summary[:location_fingerprint] : {}
+        provider = storage_provider_label(config[:endpoint].presence || fingerprint[:endpoint].presence || summary[:label])
+        provider.presence || "S3 compatible storage"
+      elsif resolved_backend == "local"
+        "Local storage"
       else
-        humanize_token(key || backend)
+        humanize_token(resolved_backend.presence || key || profile_key || "unknown")
       end
     rescue
-      humanize_token(profile_key || backend)
+      humanize_token(backend.presence || profile_key || "unknown")
     end
 
-    def storage_provider_label(endpoint)
-      value = endpoint.to_s.downcase
-      return nil if value.blank?
-      return "Cloudflare R2" if value.include?("cloudflare") || value.include?("r2.cloudflarestorage.com")
-      return "Backblaze B2" if value.include?("backblaze") || value.include?("backblazeb2.com")
+    def storage_provider_label(value)
+      normalized = value.to_s.downcase
+      return nil if normalized.blank?
+      return "Cloudflare R2" if normalized.include?("cloudflare") || normalized.include?("r2.cloudflarestorage.com") || normalized.include?("r2")
+      return "Backblaze B2" if normalized.include?("backblaze") || normalized.include?("backblazeb2.com") || normalized.include?("b2")
 
-      "S3"
+      nil
     end
 
     def storage_settings_resolver

@@ -290,6 +290,7 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   @tracked showPerformanceTimings = false;
   @tracked lastTimingMs = null;
   @tracked lastTimingBreakdown = null;
+  @tracked tableSorts = {};
 
   _requestSequence = 0;
 
@@ -321,6 +322,7 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.showPerformanceTimings = false;
     this.lastTimingMs = null;
     this.lastTimingBreakdown = null;
+    this.tableSorts = {};
   }
 
   async loadInitial() {
@@ -364,6 +366,70 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     this.hasLoadedOnce = true;
   }
 
+  sortValue(row, field, type = "text") {
+    const value = row?.[field];
+
+    if (["number", "bytes", "duration"].includes(type)) {
+      return numberValue(value);
+    }
+
+    if (type === "date") {
+      const timestamp = value ? new Date(value).getTime() : 0;
+      return Number.isFinite(timestamp) ? timestamp : 0;
+    }
+
+    return String(value ?? "").toLocaleLowerCase();
+  }
+
+  sortedRows(tableKey, rows) {
+    const descriptor = safeObject(this.tableSorts?.[tableKey]);
+    const field = descriptor.field;
+
+    if (!field) {
+      return rows;
+    }
+
+    const direction = descriptor.direction === "desc" ? -1 : 1;
+    const type = descriptor.type || "text";
+
+    return [...rows].sort((left, right) => {
+      const leftValue = this.sortValue(left, field, type);
+      const rightValue = this.sortValue(right, field, type);
+
+      if (leftValue < rightValue) {
+        return -1 * direction;
+      }
+
+      if (leftValue > rightValue) {
+        return 1 * direction;
+      }
+
+      const leftTitle = this.sortValue(left, "title", "text") || this.sortValue(left, "label", "text") || this.sortValue(left, "username", "text");
+      const rightTitle = this.sortValue(right, "title", "text") || this.sortValue(right, "label", "text") || this.sortValue(right, "username", "text");
+
+      if (leftTitle < rightTitle) {
+        return -1;
+      }
+
+      if (leftTitle > rightTitle) {
+        return 1;
+      }
+
+      return 0;
+    });
+  }
+
+  @action
+  toggleSort(tableKey, field, type = "text") {
+    const current = safeObject(this.tableSorts?.[tableKey]);
+    const direction = current.field === field && current.direction === "asc" ? "desc" : "asc";
+
+    this.tableSorts = {
+      ...this.tableSorts,
+      [tableKey]: { field, type, direction },
+    };
+  }
+
   get currentRangeLabel() {
     return `Last ${formatNumber(this.limit)} full ${this.periodUnitLabel}`;
   }
@@ -385,11 +451,15 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     const previous = safeObject(this.periodSummary?.previous);
     const delta = safeObject(this.periodSummary?.delta);
 
-    return COMPARISON_METRICS.map((metric) => {
+    const rows = COMPARISON_METRICS.map((metric) => {
       const rowDelta = safeObject(delta?.[metric.key]);
       return {
         key: metric.key,
         label: metric.label,
+        currentValue: numberValue(current?.[metric.key]),
+        previousValue: numberValue(previous?.[metric.key]),
+        changeValue: numberValue(rowDelta?.difference),
+        percentValue: Number(rowDelta?.percent_change || 0),
         currentLabel: formatMetric(current?.[metric.key], metric.type),
         previousLabel: formatMetric(previous?.[metric.key], metric.type),
         changeLabel: formatDeltaValue(rowDelta, metric.type),
@@ -397,6 +467,8 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
         changeClass: `mg-stats__delta is-${plainText(rowDelta?.direction, "flat")}`,
       };
     });
+
+    return this.sortedRows("comparison", rows);
   }
 
   get decoratedInsights() {
@@ -626,6 +698,11 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
     return {
       key: plainText(row?.name, fallback),
       label: plainText(row?.label, titleize(row?.name)),
+      count: numberValue(row?.count),
+      originalBytes: numberValue(row?.original_bytes),
+      processedBytes: numberValue(row?.processed_bytes),
+      changeBytes: numberValue(row?.delta_bytes ?? -numberValue(row?.saved_bytes)),
+      ratioValue: Number(row?.processed_ratio || 0),
       countLabel: formatNumber(row?.count),
       originalLabel: formatBytes(row?.original_bytes),
       processedLabel: formatBytes(row?.processed_bytes),
@@ -635,11 +712,13 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   }
 
   get storageEfficiencyByType() {
-    return coerceArray(this.storageEfficiency?.by_type).map((row) => this.decorateStorageEfficiency(row, "type"));
+    const rows = coerceArray(this.storageEfficiency?.by_type).map((row) => this.decorateStorageEfficiency(row, "type"));
+    return this.sortedRows("storageByType", rows);
   }
 
   get storageEfficiencyByBackend() {
-    return coerceArray(this.storageEfficiency?.by_backend).map((row) => this.decorateStorageEfficiency(row, "backend"));
+    const rows = coerceArray(this.storageEfficiency?.by_backend).map((row) => this.decorateStorageEfficiency(row, "backend"));
+    return this.sortedRows("storageByBackend", rows);
   }
 
   get engagementRateCards() {
@@ -671,9 +750,15 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   }
 
   get topUploaders() {
-    return coerceArray(this.contributors?.top_uploaders).map((row) => ({
+    const rows = coerceArray(this.contributors?.top_uploaders).map((row) => ({
       key: plainText(row?.user_id, plainText(row?.username, "user")),
       username: plainText(row?.username, "—"),
+      uploads: numberValue(row?.uploads),
+      ready: numberValue(row?.ready),
+      failed: numberValue(row?.failed),
+      views: numberValue(row?.views),
+      storageBytes: numberValue(row?.processed_storage_bytes),
+      latestAt: row?.latest_upload_at,
       uploadsLabel: formatNumber(row?.uploads),
       readyLabel: formatNumber(row?.ready),
       failedLabel: formatNumber(row?.failed),
@@ -681,36 +766,53 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       storageLabel: formatBytes(row?.processed_storage_bytes),
       latestLabel: formatDateTime(row?.latest_upload_at),
     }));
+
+    return this.sortedRows("topUploaders", rows);
   }
 
   get topViewers() {
-    return coerceArray(this.contributors?.top_viewers).map((row) => ({
+    const rows = coerceArray(this.contributors?.top_viewers).map((row) => ({
       key: plainText(row?.user_id, plainText(row?.username, "user")),
       username: plainText(row?.username, "—"),
+      playbacks: numberValue(row?.playbacks),
+      uniqueMedia: numberValue(row?.unique_media),
+      latestAt: row?.latest_playback_at,
       playbacksLabel: formatNumber(row?.playbacks),
       uniqueMediaLabel: formatNumber(row?.unique_media),
       latestLabel: formatDateTime(row?.latest_playback_at),
     }));
+
+    return this.sortedRows("topViewers", rows);
   }
 
   get topCommenters() {
-    return coerceArray(this.contributors?.top_commenters).map((row) => ({
+    const rows = coerceArray(this.contributors?.top_commenters).map((row) => ({
       key: plainText(row?.user_id, plainText(row?.username, "user")),
       username: plainText(row?.username, "—"),
+      comments: numberValue(row?.comments),
+      uniqueMedia: numberValue(row?.unique_media),
+      latestAt: row?.latest_comment_at,
       commentsLabel: formatNumber(row?.comments),
       uniqueMediaLabel: formatNumber(row?.unique_media),
       latestLabel: formatDateTime(row?.latest_comment_at),
     }));
+
+    return this.sortedRows("topCommenters", rows);
   }
 
   get topLikers() {
-    return coerceArray(this.contributors?.top_likers).map((row) => ({
+    const rows = coerceArray(this.contributors?.top_likers).map((row) => ({
       key: plainText(row?.user_id, plainText(row?.username, "user")),
       username: plainText(row?.username, "—"),
+      likes: numberValue(row?.likes),
+      uniqueMedia: numberValue(row?.unique_media),
+      latestAt: row?.latest_like_at,
       likesLabel: formatNumber(row?.likes),
       uniqueMediaLabel: formatNumber(row?.unique_media),
       latestLabel: formatDateTime(row?.latest_like_at),
     }));
+
+    return this.sortedRows("topLikers", rows);
   }
 
   get recentFailures() {
@@ -726,15 +828,18 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   }
 
   get processingQueue() {
-    return coerceArray(this.watchlist?.processing_queue).map((row) => ({
+    const rows = coerceArray(this.watchlist?.processing_queue).map((row) => ({
       key: plainText(row?.public_id, plainText(row?.title, "processing")),
       title: plainText(row?.title, "Untitled media"),
       publicId: plainText(row?.public_id, "—"),
       uploader: plainText(row?.uploader, "—"),
       typeLabel: titleize(row?.media_type),
       statusLabel: titleize(row?.status),
+      updatedAt: row?.updated_at,
       updatedLabel: formatDateTime(row?.updated_at),
     }));
+
+    return this.sortedRows("processingQueue", rows);
   }
 
   get mostReportedMedia() {
@@ -773,8 +878,15 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
       uploader: plainText(item?.uploader, "—"),
       typeLabel: titleize(item?.media_type),
       statusLabel: titleize(item?.status),
+      views: numberValue(item?.views_count),
+      playbacks: numberValue(item?.playbacks ?? item?.playback_sessions),
+      likes: numberValue(item?.likes ?? item?.likes_count),
+      comments: numberValue(item?.comments ?? item?.comments_count),
+      reports: numberValue(item?.reports_count),
+      score: numberValue(item?.score),
+      createdAt: item?.created_at,
       viewsLabel: formatNumber(item?.views_count),
-      playsLabel: formatNumber(item?.playbacks),
+      playsLabel: formatNumber(item?.playbacks ?? item?.playback_sessions),
       likesLabel: formatNumber(item?.likes ?? item?.likes_count),
       commentsLabel: formatNumber(item?.comments ?? item?.comments_count),
       scoreLabel: formatNumber(item?.score),
@@ -783,58 +895,80 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
   }
 
   get risingContent() {
-    return coerceArray(this.engagementQuality?.rising_content).map((item) => this.decorateContentItem(item, "rising"));
+    const rows = coerceArray(this.engagementQuality?.rising_content).map((item) => this.decorateContentItem(item, "rising"));
+    return this.sortedRows("risingContent", rows);
   }
 
   get quietReadyMedia() {
-    return coerceArray(this.contentCuration?.quiet_ready_media).map((item) => this.decorateContentItem(item, "quiet"));
+    const rows = coerceArray(this.contentCuration?.quiet_ready_media).map((item) => this.decorateContentItem(item, "quiet"));
+    return this.sortedRows("quietReadyMedia", rows);
   }
 
   get staleReadyMedia() {
-    return coerceArray(this.contentCuration?.stale_ready_media).map((item) => this.decorateContentItem(item, "stale"));
+    const rows = coerceArray(this.contentCuration?.stale_ready_media).map((item) => this.decorateContentItem(item, "stale"));
+    return this.sortedRows("staleReadyMedia", rows);
   }
 
   get recentSlowProcessing() {
-    return coerceArray(this.processingPerformance?.recent_slow_processing).map((item) => ({
+    const rows = coerceArray(this.processingPerformance?.recent_slow_processing).map((item) => ({
       ...this.decorateContentItem(item, "slow-processing"),
+      processingSeconds: numberValue(item?.processing_seconds),
+      processedBytes: numberValue(item?.filesize_processed_bytes),
+      completedAt: item?.completed_at,
       processingLabel: formatDuration(item?.processing_seconds),
       processedSizeLabel: formatBytes(item?.filesize_processed_bytes),
       completedLabel: formatDateTime(item?.completed_at),
     }));
+
+    return this.sortedRows("recentSlowProcessing", rows);
   }
 
   get queueAgeWatchlist() {
-    return coerceArray(this.processingPerformance?.queue_age_watchlist).map((item) => ({
+    const rows = coerceArray(this.processingPerformance?.queue_age_watchlist).map((item) => ({
       ...this.decorateContentItem(item, "queue-age"),
+      ageSeconds: numberValue(item?.age_seconds),
+      updatedAt: item?.updated_at,
       ageLabel: formatDuration(item?.age_seconds),
       updatedLabel: formatDateTime(item?.updated_at),
     }));
+
+    return this.sortedRows("queueAgeWatchlist", rows);
   }
 
   get incompleteMedia() {
-    return coerceArray(this.metadataCompleteness?.incomplete_media).map((item) => ({
+    const rows = coerceArray(this.metadataCompleteness?.incomplete_media).map((item) => ({
       ...this.decorateContentItem(item, "incomplete"),
+      issueCount: numberValue(item?.issue_count),
+      updatedAt: item?.updated_at,
       statusLabel: titleize(item?.status),
       statusClass: statusClassFor(item?.status),
       issueCountLabel: formatNumber(item?.issue_count),
       issuesLabel: coerceArray(item?.issues).join(", ") || "—",
       updatedLabel: formatDateTime(item?.updated_at),
     }));
+
+    return this.sortedRows("incompleteMedia", rows);
   }
 
   get largestProcessedMedia() {
-    return coerceArray(this.storageEfficiency?.largest_processed_media).map((item) => ({
+    const rows = coerceArray(this.storageEfficiency?.largest_processed_media).map((item) => ({
       ...this.decorateContentItem(item, "large-processed"),
+      originalBytes: numberValue(item?.original_bytes),
+      processedBytes: numberValue(item?.processed_bytes),
+      changeBytes: numberValue(item?.delta_bytes),
+      ratioValue: Number(item?.processed_ratio || 0),
+      storageLabel: plainText(item?.storage_label, "—"),
       originalLabel: formatBytes(item?.original_bytes),
       processedLabel: formatBytes(item?.processed_bytes),
       changeLabel: formatSignedBytes(item?.delta_bytes),
       ratioLabel: formatRatio(item?.processed_ratio),
-      storageLabel: plainText(item?.storage_label, "—"),
     }));
+
+    return this.sortedRows("largestProcessedMedia", rows);
   }
 
   get missingDeliveryReceipts() {
-    return coerceArray(this.deliveryIntegrity?.missing_delivery_receipts).map((row) => {
+    const rows = coerceArray(this.deliveryIntegrity?.missing_delivery_receipts).map((row) => {
       const missing = [];
       if (row?.missing_signature) {
         missing.push("signature");
@@ -852,27 +986,30 @@ export default class AdminPluginsMediaGalleryStatisticsController extends Contro
         publicId: plainText(row?.public_id, "—"),
         user: plainText(row?.user, "—"),
         variant: plainText(row?.hls_variant, "—"),
+        playedAt: row?.played_at,
+        missingCount: missing.length,
         playedLabel: formatDateTime(row?.played_at),
         missingLabel: missing.length ? missing.join(", ") : "—",
       };
     });
+
+    return this.sortedRows("missingDeliveryReceipts", rows);
   }
 
   get decoratedTopContent() {
-    return this.topContent.map((item) => ({
-      key: plainText(item?.public_id, plainText(item?.title, "item")),
-      title: plainText(item?.title, "Untitled media"),
-      publicId: plainText(item?.public_id, "—"),
-      uploader: plainText(item?.uploader, "—"),
-      typeLabel: titleize(item?.media_type),
-      statusLabel: titleize(item?.status),
-      viewsLabel: formatNumber(item?.views_count),
+    const rows = this.topContent.map((item) => ({
+      ...this.decorateContentItem(item, "item"),
+      playbacks: numberValue(item?.playback_sessions),
       playsLabel: formatNumber(item?.playback_sessions),
+      likes: numberValue(item?.likes_count),
+      comments: numberValue(item?.comments_count),
+      reports: numberValue(item?.reports_count),
       likesLabel: formatNumber(item?.likes_count),
       commentsLabel: formatNumber(item?.comments_count),
       reportsLabel: formatNumber(item?.reports_count),
-      createdLabel: formatDateTime(item?.created_at),
     }));
+
+    return this.sortedRows("topContent", rows);
   }
 
   get generatedAtLabel() {

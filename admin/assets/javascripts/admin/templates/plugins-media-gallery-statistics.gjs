@@ -114,7 +114,7 @@ export default RouteTemplate(
 
       .mg-stats__toolbar-action {
         align-self: flex-end;
-        margin-bottom: 9px;
+        margin-bottom: 10px;
       }
 
       .mg-stats__kpi-grid,
@@ -292,6 +292,28 @@ export default RouteTemplate(
         background: var(--success-low);
       }
 
+      .mg-stats__moderation-card-list {
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .mg-stats__moderation-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        border: 1px solid var(--mg-stats-border);
+        border-radius: 14px;
+        background: var(--primary-very-low);
+        padding: 0.8rem 0.9rem;
+      }
+
+      .mg-stats__moderation-card-value {
+        font-size: 1.15rem;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
       .mg-stats__insight-title,
       .mg-stats__mini-title {
         font-weight: 800;
@@ -327,6 +349,26 @@ export default RouteTemplate(
         color: var(--mg-stats-muted);
         font-size: var(--font-down-1);
         font-weight: 700;
+      }
+
+      .mg-stats__sort-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+        padding: 0;
+        text-align: left;
+      }
+
+      .mg-stats__sort-button::after {
+        content: "↕";
+        font-size: 0.75em;
+        opacity: 0.55;
       }
 
       .mg-stats__table-title {
@@ -594,11 +636,11 @@ export default RouteTemplate(
           <table class="mg-stats__comparison-table">
             <thead>
               <tr>
-                <th>Metric</th>
-                <th>Current</th>
-                <th>Previous</th>
-                <th>Change</th>
-                <th>%</th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "comparison" "label" "text")}}>Metric</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "comparison" "currentValue" "number")}}>Current</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "comparison" "previousValue" "number")}}>Previous</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "comparison" "changeValue" "number")}}>Change</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "comparison" "percentValue" "number")}}>%</button></th>
               </tr>
             </thead>
             <tbody>
@@ -996,11 +1038,11 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>Media</th>
-                  <th>Status</th>
-                  <th>Duration</th>
-                  <th>Size</th>
-                  <th>Completed</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "recentSlowProcessing" "title" "text")}}>Media</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "recentSlowProcessing" "statusLabel" "text")}}>Status</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "recentSlowProcessing" "processingSeconds" "duration")}}>Duration</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "recentSlowProcessing" "processedBytes" "bytes")}}>Size</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "recentSlowProcessing" "completedAt" "date")}}>Completed</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1035,12 +1077,12 @@ export default RouteTemplate(
           <table class="mg-stats__mini-table">
             <thead>
               <tr>
-                <th>Media</th>
-                <th>Uploader</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Age</th>
-                <th>Updated</th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "queueAgeWatchlist" "title" "text")}}>Media</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "queueAgeWatchlist" "uploader" "text")}}>Uploader</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "queueAgeWatchlist" "typeLabel" "text")}}>Type</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "queueAgeWatchlist" "statusLabel" "text")}}>Status</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "queueAgeWatchlist" "ageSeconds" "duration")}}>Age</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "queueAgeWatchlist" "updatedAt" "date")}}>Updated</button></th>
               </tr>
             </thead>
             <tbody>
@@ -1100,10 +1142,10 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>Media</th>
-                  <th>Status</th>
-                  <th>Issues</th>
-                  <th>Updated</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "incompleteMedia" "title" "text")}}>Media</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "incompleteMedia" "statusLabel" "text")}}>Status</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "incompleteMedia" "issueCount" "number")}}>Issues</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "incompleteMedia" "updatedAt" "date")}}>Updated</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1141,11 +1183,11 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>Type</th>
-                  <th>Items</th>
-                  <th>Original</th>
-                  <th>Processed</th>
-                  <th>Change</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByType" "label" "text")}}>Type</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByType" "count" "number")}}>Items</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByType" "originalBytes" "bytes")}}>Original</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByType" "processedBytes" "bytes")}}>Processed</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByType" "changeBytes" "bytes")}}>Change</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1176,11 +1218,11 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>Backend</th>
-                  <th>Items</th>
-                  <th>Original</th>
-                  <th>Processed</th>
-                  <th>Change</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByBackend" "label" "text")}}>Location</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByBackend" "count" "number")}}>Items</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByBackend" "originalBytes" "bytes")}}>Original</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByBackend" "processedBytes" "bytes")}}>Processed</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "storageByBackend" "changeBytes" "bytes")}}>Change</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1208,41 +1250,42 @@ export default RouteTemplate(
             <p class="mg-stats__muted">Largest processed files, useful for storage review and processing profile decisions.</p>
           </div>
         </div>
-        <div class="mg-stats__media-card-grid">
-          {{#each @controller.largestProcessedMedia as |item|}}
-            <article class="mg-stats__media-card">
-              <div class="mg-stats__media-card-header">
-                <div>
-                  <div class="mg-stats__mini-title">{{item.title}}</div>
-                  <div class="mg-stats__mini-code">{{item.publicId}}</div>
-                </div>
-                <span class="mg-stats__badge">{{item.typeLabel}}</span>
-              </div>
-              <div class="mg-stats__media-card-meta">
-                {{item.uploader}} · {{item.storageLabel}} · created {{item.createdLabel}}
-              </div>
-              <div class="mg-stats__stat-list">
-                <div class="mg-stats__stat">
-                  <span class="mg-stats__stat-label">Original</span>
-                  <span class="mg-stats__stat-value">{{item.originalLabel}}</span>
-                </div>
-                <div class="mg-stats__stat">
-                  <span class="mg-stats__stat-label">Processed</span>
-                  <span class="mg-stats__stat-value">{{item.processedLabel}}</span>
-                </div>
-                <div class="mg-stats__stat">
-                  <span class="mg-stats__stat-label">Change</span>
-                  <span class="mg-stats__stat-value">{{item.changeLabel}}</span>
-                </div>
-                <div class="mg-stats__stat">
-                  <span class="mg-stats__stat-label">Processed/original</span>
-                  <span class="mg-stats__stat-value">{{item.ratioLabel}}</span>
-                </div>
-              </div>
-            </article>
-          {{else}}
-            <div class="mg-stats__empty">No large processed media data available.</div>
-          {{/each}}
+        <div class="mg-stats__table-wrap">
+          <table class="mg-stats__table">
+            <thead>
+              <tr>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "title" "text")}}>Media</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "uploader" "text")}}>Uploader</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "typeLabel" "text")}}>Type</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "storageLabel" "text")}}>Storage</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "originalBytes" "bytes")}}>Original</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "processedBytes" "bytes")}}>Processed</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "changeBytes" "bytes")}}>Change</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "ratioValue" "number")}}>Ratio</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "largestProcessedMedia" "createdAt" "date")}}>Created</button></th>
+              </tr>
+            </thead>
+            <tbody>
+              {{#each @controller.largestProcessedMedia as |item|}}
+                <tr>
+                  <td>
+                    <div class="mg-stats__table-title">{{item.title}}</div>
+                    <div class="mg-stats__table-code">{{item.publicId}}</div>
+                  </td>
+                  <td>{{item.uploader}}</td>
+                  <td><span class="mg-stats__badge">{{item.typeLabel}}</span></td>
+                  <td>{{item.storageLabel}}</td>
+                  <td>{{item.originalLabel}}</td>
+                  <td>{{item.processedLabel}}</td>
+                  <td>{{item.changeLabel}}</td>
+                  <td>{{item.ratioLabel}}</td>
+                  <td class="mg-stats__table-meta">{{item.createdLabel}}</td>
+                </tr>
+              {{else}}
+                <tr><td colspan="9">No large processed media data available.</td></tr>
+              {{/each}}
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -1276,11 +1319,11 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>Media</th>
-                  <th>Plays</th>
-                  <th>Likes</th>
-                  <th>Comments</th>
-                  <th>Score</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "risingContent" "title" "text")}}>Media</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "risingContent" "playbacks" "number")}}>Plays</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "risingContent" "likes" "number")}}>Likes</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "risingContent" "comments" "number")}}>Comments</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "risingContent" "score" "number")}}>Score</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1314,10 +1357,10 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>Media</th>
-                  <th>Uploader</th>
-                  <th>Type</th>
-                  <th>Created</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "quietReadyMedia" "title" "text")}}>Media</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "quietReadyMedia" "uploader" "text")}}>Uploader</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "quietReadyMedia" "typeLabel" "text")}}>Type</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "quietReadyMedia" "createdAt" "date")}}>Created</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1394,11 +1437,11 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>Media</th>
-                  <th>User</th>
-                  <th>Variant</th>
-                  <th>Missing</th>
-                  <th>Played</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "missingDeliveryReceipts" "title" "text")}}>Media</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "missingDeliveryReceipts" "user" "text")}}>User</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "missingDeliveryReceipts" "variant" "text")}}>Variant</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "missingDeliveryReceipts" "missingCount" "number")}}>Missing</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "missingDeliveryReceipts" "playedAt" "date")}}>Played</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1433,13 +1476,13 @@ export default RouteTemplate(
           <table class="mg-stats__mini-table">
             <thead>
               <tr>
-                <th>Media</th>
-                <th>Uploader</th>
-                <th>Type</th>
-                <th>Views</th>
-                <th>Likes</th>
-                <th>Comments</th>
-                <th>Created</th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "staleReadyMedia" "title" "text")}}>Media</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "staleReadyMedia" "uploader" "text")}}>Uploader</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "staleReadyMedia" "typeLabel" "text")}}>Type</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "staleReadyMedia" "views" "number")}}>Views</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "staleReadyMedia" "likes" "number")}}>Likes</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "staleReadyMedia" "comments" "number")}}>Comments</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "staleReadyMedia" "createdAt" "date")}}>Created</button></th>
               </tr>
             </thead>
             <tbody>
@@ -1472,13 +1515,11 @@ export default RouteTemplate(
               <p class="mg-stats__muted">Combined media and comment report status.</p>
             </div>
           </div>
-          <div class="mg-stats__compact-list">
+          <div class="mg-stats__moderation-card-list">
             {{#each @controller.moderationRows as |row|}}
-              <div class="mg-stats__moderation-row">
-                <div class="mg-stats__row-header">
-                  <span class="mg-stats__row-label">{{row.label}}</span>
-                  <span class="mg-stats__row-value">{{row.value}}</span>
-                </div>
+              <div class="mg-stats__moderation-card">
+                <span class="mg-stats__row-label">{{row.label}}</span>
+                <span class="mg-stats__moderation-card-value">{{row.value}}</span>
               </div>
             {{/each}}
           </div>
@@ -1521,11 +1562,11 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Uploads</th>
-                  <th>Ready</th>
-                  <th>Failed</th>
-                  <th>Storage</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topUploaders" "username" "text")}}>User</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topUploaders" "uploads" "number")}}>Uploads</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topUploaders" "ready" "number")}}>Ready</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topUploaders" "failed" "number")}}>Failed</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topUploaders" "storageBytes" "bytes")}}>Storage</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1559,10 +1600,10 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Plays</th>
-                  <th>Media</th>
-                  <th>Latest</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topViewers" "username" "text")}}>User</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topViewers" "playbacks" "number")}}>Plays</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topViewers" "uniqueMedia" "number")}}>Media</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topViewers" "latestAt" "date")}}>Latest</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1592,10 +1633,10 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Comments</th>
-                  <th>Media</th>
-                  <th>Latest</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topCommenters" "username" "text")}}>User</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topCommenters" "comments" "number")}}>Comments</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topCommenters" "uniqueMedia" "number")}}>Media</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topCommenters" "latestAt" "date")}}>Latest</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1625,10 +1666,10 @@ export default RouteTemplate(
             <table class="mg-stats__mini-table">
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Likes</th>
-                  <th>Media</th>
-                  <th>Latest</th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topLikers" "username" "text")}}>User</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topLikers" "likes" "number")}}>Likes</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topLikers" "uniqueMedia" "number")}}>Media</button></th>
+                  <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topLikers" "latestAt" "date")}}>Latest</button></th>
                 </tr>
               </thead>
               <tbody>
@@ -1735,11 +1776,11 @@ export default RouteTemplate(
           <table class="mg-stats__mini-table">
             <thead>
               <tr>
-                <th>Media</th>
-                <th>Uploader</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Updated</th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "processingQueue" "title" "text")}}>Media</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "processingQueue" "uploader" "text")}}>Uploader</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "processingQueue" "typeLabel" "text")}}>Type</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "processingQueue" "statusLabel" "text")}}>Status</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "processingQueue" "updatedAt" "date")}}>Updated</button></th>
               </tr>
             </thead>
             <tbody>
@@ -1774,16 +1815,16 @@ export default RouteTemplate(
           <table class="mg-stats__table">
             <thead>
               <tr>
-                <th>Media</th>
-                <th>Uploader</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Views</th>
-                <th>Plays</th>
-                <th>Likes</th>
-                <th>Comments</th>
-                <th>Reports</th>
-                <th>Created</th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "title" "text")}}>Media</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "uploader" "text")}}>Uploader</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "typeLabel" "text")}}>Type</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "statusLabel" "text")}}>Status</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "views" "number")}}>Views</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "playbacks" "number")}}>Plays</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "likes" "number")}}>Likes</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "comments" "number")}}>Comments</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "reports" "number")}}>Reports</button></th>
+                <th><button type="button" class="mg-stats__sort-button" {{on "click" (fn @controller.toggleSort "topContent" "createdAt" "date")}}>Created</button></th>
               </tr>
             </thead>
             <tbody>
