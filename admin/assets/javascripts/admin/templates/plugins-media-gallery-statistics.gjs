@@ -1,4 +1,5 @@
 import RouteTemplate from "ember-route-template";
+import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 
 export default RouteTemplate(
