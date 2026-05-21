@@ -78,7 +78,9 @@ function compactRow(row) {
         ? row?.forensics_url
         : group === "test_download"
           ? row?.test_downloads_url
-          : row?.management_url;
+          : group === "maintenance"
+            ? row?.health_url
+            : row?.management_url;
   const primaryLabel =
     group === "migration"
       ? "Open migration"
@@ -86,7 +88,9 @@ function compactRow(row) {
         ? "Open identify search"
         : group === "test_download"
           ? "Open test downloads"
-          : "Open management";
+          : group === "maintenance"
+            ? "Open health"
+            : "Open management";
   const secondaryUrl =
     primaryUrl !== row?.management_url && row?.management_url ? row.management_url : null;
 
@@ -260,6 +264,7 @@ export default class AdminPluginsMediaGalleryJobsController extends Controller {
       { value: "aes", label: "AES / HLS", count: countFrom(this.summary?.by_type, "type", "aes") },
       { value: "forensics", label: "Forensics", count: countFrom(this.summary?.by_type, "type", "forensics") },
       { value: "test_download", label: "Test downloads", count: countFrom(this.summary?.by_type, "type", "test_download") },
+      { value: "maintenance", label: "Maintenance", count: countFrom(this.summary?.by_type, "type", "maintenance") },
     ];
 
     return options.map((option) => ({

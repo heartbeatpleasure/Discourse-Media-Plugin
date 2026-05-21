@@ -256,7 +256,7 @@ module ::MediaGallery
       unless defined?(::MediaGallery::ChunkedUploads)
         return section(
           id: "chunked_uploads",
-          title: "Chunked upload health",
+          title: "Chunked uploads",
           description: "Monitor large-file chunked upload workspace status.",
           help: "Chunked upload support is not loaded. This section is read-only.",
           items: [
@@ -300,7 +300,14 @@ module ::MediaGallery
         severity: enabled ? "ok" : "info",
         count: enabled ? 0 : 1,
         message: enabled ? "Chunked uploads are enabled for large files." : "Chunked uploads are disabled.",
-        detail: enabled ? "Threshold: #{summary[:threshold_mb]} MB; chunk size: #{summary[:chunk_size_mb]} MB; session TTL: #{summary[:session_ttl_minutes]} minutes." : "Large uploads will fall back to the regular Discourse /uploads.json flow and may still hit proxy/CDN request-size limits."
+        detail: enabled ? "Threshold: #{summary[:threshold_mb]} MB; chunk size: #{summary[:chunk_size_mb]} MB; session TTL: #{summary[:session_ttl_minutes]} minutes." : "Large uploads will fall back to the regular Discourse /uploads.json flow and may still hit proxy/CDN request-size limits.",
+        metadata: {
+          enabled: enabled,
+          operational_value: enabled ? "On" : "Off",
+          threshold_mb: summary[:threshold_mb],
+          chunk_size_mb: summary[:chunk_size_mb],
+          session_ttl_minutes: summary[:session_ttl_minutes]
+        }
       )
 
       workspace_severity = enabled && !root_writable ? "critical" : "ok"
@@ -320,7 +327,13 @@ module ::MediaGallery
         else
           "Chunked upload workspace is not present because chunked uploads are disabled or unused."
         end,
-        detail: "Path: #{summary[:root_path].presence || 'unknown'}"
+        detail: "Path: #{summary[:root_path].presence || 'unknown'}",
+        metadata: {
+          operational_value: root_writable ? "Writable" : "Check",
+          root_path: summary[:root_path].presence,
+          root_exists: root_exists,
+          root_writable: root_writable
+        }
       )
 
       active_limit_reached = enabled && max_global.positive? && active_sessions >= max_global
@@ -331,7 +344,15 @@ module ::MediaGallery
         count: active_sessions,
         message: active_sessions.positive? ? "#{active_sessions} chunked upload session#{'s' if active_sessions != 1} currently active." : "No active chunked upload sessions.",
         detail: "Global active-session limit: #{max_global.positive? ? max_global : 'disabled'}; per-user limit: #{max_user}. Total session folders: #{total_sessions}.",
-        examples: session_examples.select { |row| row[:status].to_s == "active" }.first(5)
+        examples: session_examples.select { |row| row[:status].to_s == "active" }.first(5),
+        metadata: {
+          operational_value: "#{active_sessions} active",
+          active_sessions: active_sessions,
+          total_sessions: total_sessions,
+          max_active_sessions_global: max_global,
+          max_active_sessions_per_user: max_user,
+          oldest_active_session_age_seconds: summary[:oldest_active_session_age_seconds]
+        }
       )
 
       expired_severity = expired_sessions.positive? ? "warning" : "ok"
@@ -342,7 +363,12 @@ module ::MediaGallery
         count: expired_sessions,
         message: expired_sessions.positive? ? "#{expired_sessions} expired/completed chunked upload session folder#{'s' if expired_sessions != 1} can be cleaned." : "No expired chunked upload session folders found.",
         detail: "Completed folders: #{completed_sessions}. The scheduled cleanup job runs hourly; start of a new chunked upload also attempts safe expired-session cleanup.",
-        examples: session_examples.select { |row| row[:status].to_s != "active" }.first(5)
+        examples: session_examples.select { |row| row[:status].to_s != "active" }.first(5),
+        metadata: {
+          operational_value: "#{expired_sessions} expired",
+          expired_sessions: expired_sessions,
+          completed_sessions: completed_sessions
+        }
       )
 
       temp_severity = chunked_temp_usage_severity(usage_percent, enabled)
@@ -354,7 +380,18 @@ module ::MediaGallery
         count: projected_bytes,
         message: "Chunked upload workspace currently uses #{human_bytes(actual_bytes)} actual / #{human_bytes(projected_bytes)} reserved#{max_temp_bytes.positive? ? " of #{human_bytes(max_temp_bytes)}" : ''}.",
         detail: "Usage: #{usage_text}. Reserved size is intentionally conservative because chunks and the assembled file can briefly coexist during complete.",
-        examples: session_examples.first(5)
+        examples: session_examples.first(5),
+        metadata: {
+          operational_value: human_bytes(actual_bytes),
+          actual_bytes: actual_bytes,
+          actual_label: human_bytes(actual_bytes),
+          projected_bytes: projected_bytes,
+          projected_label: human_bytes(projected_bytes),
+          max_temp_storage_bytes: max_temp_bytes,
+          max_temp_storage_label: max_temp_bytes.positive? ? human_bytes(max_temp_bytes) : "Unlimited",
+          usage_percent: usage_percent,
+          usage_label: usage_text
+        }
       )
 
       cleanup_ran_at = last_cleanup["ran_at_label"].presence || last_cleanup["ran_at"].presence || last_cleanup[:ran_at_label].presence || last_cleanup[:ran_at].presence
@@ -366,7 +403,17 @@ module ::MediaGallery
         count: cleanup_skipped.positive? ? cleanup_skipped : nil,
         message: cleanup_ran_at.present? ? "Last cleanup ran at #{cleanup_ran_at}." : "Chunked upload cleanup has not recorded a run yet.",
         detail: chunked_cleanup_detail(last_cleanup),
-        examples: chunked_scan_error_examples(cleanup_errors)
+        examples: chunked_scan_error_examples(cleanup_errors),
+        metadata: {
+          operational_value: cleanup_ran_at.present? ? cleanup_ran_at : "Not recorded",
+          ran_at: last_cleanup["ran_at"].presence || last_cleanup[:ran_at].presence,
+          ran_at_label: cleanup_ran_at,
+          source: last_cleanup["source"].presence || last_cleanup[:source].presence,
+          scanned: (last_cleanup["scanned"] || last_cleanup[:scanned]).to_i,
+          removed: (last_cleanup["removed"] || last_cleanup[:removed]).to_i,
+          skipped: cleanup_skipped,
+          bytes_removed: (last_cleanup["bytes_removed"] || last_cleanup[:bytes_removed]).to_i
+        }
       )
 
       if scan_errors.present?
@@ -383,7 +430,7 @@ module ::MediaGallery
 
       section(
         id: "chunked_uploads",
-        title: "Chunked upload health",
+        title: "Chunked uploads",
         description: "Monitor large-file upload sessions, temporary workspace usage, and cleanup status.",
         help: "This section is read-only. It does not delete files. Expired session cleanup is handled by the scheduled cleanup job and by the start of new chunked uploads.",
         items: items
@@ -391,7 +438,7 @@ module ::MediaGallery
     rescue => e
       section(
         id: "chunked_uploads",
-        title: "Chunked upload health",
+        title: "Chunked uploads",
         description: "Monitor large-file upload sessions, temporary workspace usage, and cleanup status.",
         help: "Check Rails logs for the full exception before retrying.",
         items: [
@@ -1385,11 +1432,7 @@ module ::MediaGallery
           value: storage&.dig(:severity).to_s.titleize,
           severity: storage&.dig(:severity) || "ok",
         },
-        {
-          label: "Chunked uploads",
-          value: chunked&.dig(:severity).to_s.titleize,
-          severity: chunked&.dig(:severity) || "ok",
-        },
+        chunked_summary_card(chunked),
         {
           label: "Reconciliation",
           value: reconciliation&.dig(:severity).to_s.titleize,
@@ -1401,6 +1444,27 @@ module ::MediaGallery
           severity: reports&.dig(:severity) || "ok",
         },
       ]
+    end
+
+    def chunked_summary_card(chunked_section)
+      severity = chunked_section&.dig(:severity).presence || "ok"
+      items = Array(chunked_section && chunked_section[:items])
+      setting = items.find { |item| item[:id].to_s == "chunked_uploads_setting" }
+      enabled = setting&.dig(:metadata, :enabled)
+
+      value = if enabled == false
+        "Off"
+      elsif severity == "ok"
+        "OK"
+      else
+        severity.to_s.titleize
+      end
+
+      {
+        label: "Chunked",
+        value: value,
+        severity: severity,
+      }
     end
 
     def example_items(scope, now: Time.zone.now)

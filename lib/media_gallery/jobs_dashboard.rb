@@ -24,7 +24,7 @@ module ::MediaGallery
     ].freeze
     FAILED_STATUSES = %w[failed error danger stale stale_queued stale_working].freeze
     COMPLETED_STATUSES = %w[
-      ready copied verified switched cleaned finalized rolled_back skipped cancelled cleared completed complete success logged
+      ready copied verified switched cleaned finalized rolled_back skipped cancelled cleared completed complete success logged idle scheduled
     ].freeze
 
     TYPE_GROUPS = {
@@ -33,6 +33,7 @@ module ::MediaGallery
       "aes" => "AES / HLS",
       "forensics" => "Forensics",
       "test_download" => "Test downloads",
+      "maintenance" => "Maintenance",
     }.freeze
 
     def index(filters = {})
@@ -86,6 +87,7 @@ module ::MediaGallery
       rows = media_item_operation_rows
       rows.concat(forensics_task_rows)
       rows.concat(test_download_task_rows)
+      rows.concat(maintenance_task_rows)
       rows.concat(recent_activity_rows)
       rows
     end
@@ -403,6 +405,74 @@ module ::MediaGallery
       time.present? && time >= TEST_DOWNLOAD_TASK_RECENT_WINDOW.ago
     end
 
+    def maintenance_task_rows
+      rows = []
+      rows << chunked_upload_cleanup_row if defined?(::MediaGallery::ChunkedUploads)
+      rows.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] jobs dashboard maintenance rows failed #{e.class}: #{e.message}")
+      []
+    end
+
+    def chunked_upload_cleanup_row
+      cleanup = ::MediaGallery::ChunkedUploads.last_cleanup_summary
+      summary = (::MediaGallery::ChunkedUploads.workspace_summary rescue {})
+      cleanup = cleanup.is_a?(Hash) ? cleanup.with_indifferent_access : {}
+      summary = summary.is_a?(Hash) ? summary.with_indifferent_access : {}
+
+      skipped = cleanup[:skipped].to_i
+      skipped_errors = Array(cleanup[:skipped_errors])
+      removed = cleanup[:removed].to_i
+      scanned = cleanup[:scanned].to_i
+      bytes_removed = cleanup[:bytes_removed].to_i
+      ran_at = cleanup[:ran_at].presence
+      enabled = ActiveModel::Type::Boolean.new.cast(summary[:enabled])
+      expired = summary[:expired_sessions].to_i
+      active = summary[:active_sessions].to_i
+      temp_bytes = summary[:actual_temp_storage_bytes].to_i
+
+      status = if skipped.positive? || skipped_errors.present?
+        "failed"
+      elsif ran_at.present?
+        "completed"
+      else
+        "idle"
+      end
+
+      detail_parts = []
+      detail_parts << (enabled ? "Chunked uploads enabled" : "Chunked uploads disabled")
+      detail_parts << "active sessions: #{active}"
+      detail_parts << "expired folders: #{expired}"
+      detail_parts << "temp usage: #{bytes_label(temp_bytes)}"
+      if ran_at.present?
+        detail_parts << "last cleanup scanned #{scanned}, removed #{removed}, skipped #{skipped}, freed #{bytes_label(bytes_removed)}"
+      else
+        detail_parts << "no cleanup run has been recorded yet"
+      end
+
+      {
+        id: "maintenance-chunked-upload-cleanup",
+        state_key: "chunked_upload_cleanup",
+        group: "maintenance",
+        group_label: TYPE_GROUPS["maintenance"],
+        label: "Chunked upload cleanup",
+        operation: "media_gallery_cleanup_chunked_uploads",
+        status: status,
+        status_group: status_group(status),
+        status_label: status_label(status),
+        title: "Chunked upload cleanup",
+        updated_at: ran_at,
+        updated_at_label: time_label(ran_at),
+        detail: detail_parts.join(" • "),
+        error: skipped_errors.first && skipped_errors.first["error"].to_s.presence,
+        health_url: "/admin/plugins/media-gallery-health",
+        logs_url: "/admin/plugins/media-gallery-logs?event_type=media_gallery_chunked_upload_cleanup&hours=168",
+      }.compact
+    rescue => e
+      Rails.logger.warn("[media_gallery] jobs dashboard chunked cleanup row failed #{e.class}: #{e.message}")
+      nil
+    end
+
     def recent_activity_rows
       return [] unless defined?(::MediaGallery::MediaLogEvent) && ::MediaGallery::LogEvents.table_present?
 
@@ -504,6 +574,24 @@ module ::MediaGallery
       [minutes.minutes + 30.minutes, 2.hours].max
     rescue
       2.hours
+    end
+
+    def bytes_label(value)
+      bytes = value.to_i
+      return "0 B" if bytes <= 0
+
+      units = %w[B KB MB GB TB]
+      amount = bytes.to_f
+      unit = units.shift
+      while amount >= 1024.0 && units.present?
+        amount /= 1024.0
+        unit = units.shift
+      end
+
+      precision = amount >= 10 || unit == "B" ? 0 : 1
+      "#{amount.round(precision)} #{unit}"
+    rescue
+      "0 B"
     end
 
     def distance_label(duration)

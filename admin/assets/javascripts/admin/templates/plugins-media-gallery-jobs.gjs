@@ -280,7 +280,7 @@ export default RouteTemplate(
         <div class="mg-jobs__copy">
           <h1>Background jobs</h1>
           <p class="mg-jobs__muted">
-            Central read-only overview of Media Gallery processing, migration, AES/HLS, identify, and test-download activity.
+            Central read-only overview of Media Gallery processing, migration, AES/HLS, identify, test-download, and maintenance activity.
           </p>
           {{#if @controller.generatedAtDisplay}}
             <p class="mg-jobs__meta">Last refreshed: {{@controller.generatedAtDisplay}}</p>
@@ -351,7 +351,7 @@ export default RouteTemplate(
           <div class="mg-jobs__panel-copy">
             <h2>Jobs and recent activity</h2>
             <p class="mg-jobs__muted">
-              This page is read-only. Use Management, Migration manager, Identify, or Test downloads for the actual action controls.
+              This page is read-only. Use Management, Migration manager, Identify, Test downloads, or Health for the actual action controls.
             </p>
             <p class="mg-jobs__meta">{{@controller.showingSummaryLabel}}</p>
           </div>

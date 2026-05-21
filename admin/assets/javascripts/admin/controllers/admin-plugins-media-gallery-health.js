@@ -512,25 +512,52 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   get operationalSafetyCards() {
     const storageSection = this.sections.find((section) => section?.id === "storage") || {};
     const processingSection = this.sections.find((section) => section?.id === "processing") || {};
+    const chunkedSection = this.sections.find((section) => section?.id === "chunked_uploads") || {};
     const storageSafetyIssues = (storageSection.issues || []).filter((issue) =>
       String(issue?.id || "").startsWith("storage_profile_safety_")
     );
     const staleTempIssue = (processingSection.issues || []).find((issue) => issue?.id === "stale_temp_workspaces");
+    const chunkedIssue = (id) => (chunkedSection.issues || []).find((issue) => issue?.id === id);
+    const chunkedSetting = chunkedIssue("chunked_uploads_setting");
+    const chunkedActive = chunkedIssue("chunked_upload_active_sessions");
+    const chunkedWorkspace = chunkedIssue("chunked_upload_workspace");
+    const chunkedTemp = chunkedIssue("chunked_upload_temp_storage");
+    const chunkedCleanup = chunkedIssue("chunked_upload_cleanup_job");
+    const chunkedExpired = chunkedIssue("chunked_upload_expired_sessions");
 
     const storageSeverity = storageSafetyIssues.length
       ? storageSafetyIssues.reduce((highest, issue) => severityRank(issue.severity) > severityRank(highest) ? issue.severity : highest, "ok")
       : "ok";
 
     const storageMessages = storageSafetyIssues.map((issue) => issue.message || issue.label).filter(Boolean);
+    const chunkedEnabled = chunkedSetting?.metadata?.enabled !== false;
+    const chunkedMainSeverity = [chunkedSetting, chunkedActive, chunkedExpired]
+      .filter(Boolean)
+      .reduce((highest, issue) => severityRank(issue.severity) > severityRank(highest) ? issue.severity : highest, chunkedSetting?.severity || "ok");
+    const activeCount = Number(chunkedActive?.metadata?.active_sessions || chunkedActive?.count || 0);
+    const globalLimit = Number(chunkedActive?.metadata?.max_active_sessions_global || 0);
+    const activeValue = chunkedEnabled
+      ? `${formatNumber(activeCount)} active${globalLimit > 0 ? ` / ${formatNumber(globalLimit)}` : ""}`
+      : "Off";
+    const chunkedDetailParts = [];
+    if (chunkedSetting?.detail) {
+      chunkedDetailParts.push(chunkedSetting.detail);
+    }
+    if (chunkedActive?.detail && chunkedEnabled) {
+      chunkedDetailParts.push(chunkedActive.detail);
+    }
+    if (chunkedExpired?.severity && severityRank(chunkedExpired.severity) > 0) {
+      chunkedDetailParts.push(chunkedExpired.message);
+    }
 
-    return [
+    const cards = [
       {
         label: "Storage profile safety",
         value: storageSafetyIssues.length ? `${storageSafetyIssues.length} warning${storageSafetyIssues.length === 1 ? "" : "s"}` : "OK",
         detail: storageMessages.length ? storageMessages.join(" • ") : "No storage profile safety warnings found.",
         severity: storageSeverity,
         badgeClass: badgeClass(storageSeverity),
-        severityLabel: severityLabel(storageSeverity),
+        badgeLabel: severityLabel(storageSeverity),
       },
       {
         label: "Temp/workspace cleanup",
@@ -538,9 +565,48 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         detail: staleTempIssue?.detail || staleTempIssue?.message || "No stale Media Gallery temp workspaces found.",
         severity: staleTempIssue?.severity || "ok",
         badgeClass: badgeClass(staleTempIssue?.severity || "ok"),
-        severityLabel: severityLabel(staleTempIssue?.severity || "ok"),
+        badgeLabel: severityLabel(staleTempIssue?.severity || "ok"),
       },
     ];
+
+    if (chunkedSection?.id) {
+      cards.push(
+        {
+          label: "Chunked uploads",
+          value: activeValue,
+          detail: chunkedDetailParts.filter(Boolean).join(" • ") || "Large-file chunked uploads are configured.",
+          severity: chunkedMainSeverity,
+          badgeClass: badgeClass(chunkedMainSeverity),
+          badgeLabel: chunkedEnabled && chunkedMainSeverity === "ok" ? "OK" : (chunkedEnabled ? severityLabel(chunkedMainSeverity) : "Off"),
+        },
+        {
+          label: "Chunked workspace",
+          value: chunkedWorkspace?.metadata?.operational_value || (chunkedWorkspace?.severity === "ok" ? "Writable" : "Check"),
+          detail: chunkedWorkspace?.detail || chunkedWorkspace?.message || "Temporary chunked upload workspace path and permissions.",
+          severity: chunkedWorkspace?.severity || "ok",
+          badgeClass: badgeClass(chunkedWorkspace?.severity || "ok"),
+          badgeLabel: severityLabel(chunkedWorkspace?.severity || "ok"),
+        },
+        {
+          label: "Chunked temp storage",
+          value: chunkedTemp?.metadata?.usage_label || chunkedTemp?.metadata?.operational_value || "OK",
+          detail: chunkedTemp?.detail || chunkedTemp?.message || "Current chunked upload workspace usage.",
+          severity: chunkedTemp?.severity || "ok",
+          badgeClass: badgeClass(chunkedTemp?.severity || "ok"),
+          badgeLabel: severityLabel(chunkedTemp?.severity || "ok"),
+        },
+        {
+          label: "Chunked cleanup",
+          value: chunkedCleanup?.metadata?.operational_value || "Not recorded",
+          detail: chunkedCleanup?.detail || chunkedCleanup?.message || "Cleanup status for expired chunked upload sessions.",
+          severity: chunkedCleanup?.severity || "ok",
+          badgeClass: badgeClass(chunkedCleanup?.severity || "ok"),
+          badgeLabel: severityLabel(chunkedCleanup?.severity || "ok"),
+        }
+      );
+    }
+
+    return cards;
   }
 
   get hasOperationalSafetyCards() {
