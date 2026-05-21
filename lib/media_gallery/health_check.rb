@@ -300,7 +300,7 @@ module ::MediaGallery
         severity: enabled ? "ok" : "info",
         count: enabled ? 0 : 1,
         message: enabled ? "Chunked uploads are enabled for large files." : "Chunked uploads are disabled.",
-        detail: enabled ? "Threshold: #{summary[:threshold_mb]} MB; chunk size: #{summary[:chunk_size_mb]} MB; session TTL: #{summary[:session_ttl_minutes]} minutes." : "Large uploads will fall back to the regular Discourse /uploads.json flow and may still hit proxy/CDN request-size limits.",
+        detail: enabled ? "Threshold #{summary[:threshold_mb]} MB · chunk size #{summary[:chunk_size_mb]} MB · session TTL #{summary[:session_ttl_minutes]} minutes." : "Large uploads will use the regular Discourse upload flow and may still hit proxy/CDN request-size limits.",
         metadata: {
           enabled: enabled,
           operational_value: enabled ? "On" : "Off",
@@ -327,7 +327,13 @@ module ::MediaGallery
         else
           "Chunked upload workspace is not present because chunked uploads are disabled or unused."
         end,
-        detail: "Path: #{summary[:root_path].presence || 'unknown'}",
+        detail: if root_writable
+          "Temporary upload workspace is available."
+        elsif enabled
+          "Check media_gallery_processing_root_path and server filesystem permissions."
+        else
+          "Workspace will be created when chunked uploads are enabled and used."
+        end,
         metadata: {
           operational_value: root_writable ? "Writable" : "Check",
           root_path: summary[:root_path].presence,
@@ -343,7 +349,7 @@ module ::MediaGallery
         severity: active_limit_reached ? "warning" : "ok",
         count: active_sessions,
         message: active_sessions.positive? ? "#{active_sessions} chunked upload session#{'s' if active_sessions != 1} currently active." : "No active chunked upload sessions.",
-        detail: "Global active-session limit: #{max_global.positive? ? max_global : 'disabled'}; per-user limit: #{max_user}. Total session folders: #{total_sessions}.",
+        detail: "Global limit #{max_global.positive? ? max_global : 'disabled'} · per-user limit #{max_user} · total session folders #{total_sessions}.",
         examples: session_examples.select { |row| row[:status].to_s == "active" }.first(5),
         metadata: {
           operational_value: "#{active_sessions} active",
@@ -362,7 +368,7 @@ module ::MediaGallery
         severity: expired_severity,
         count: expired_sessions,
         message: expired_sessions.positive? ? "#{expired_sessions} expired/completed chunked upload session folder#{'s' if expired_sessions != 1} can be cleaned." : "No expired chunked upload session folders found.",
-        detail: "Completed folders: #{completed_sessions}. The scheduled cleanup job runs hourly; start of a new chunked upload also attempts safe expired-session cleanup.",
+        detail: "Completed folders #{completed_sessions}. Cleanup runs hourly and also before new chunked uploads.",
         examples: session_examples.select { |row| row[:status].to_s != "active" }.first(5),
         metadata: {
           operational_value: "#{expired_sessions} expired",
@@ -378,8 +384,14 @@ module ::MediaGallery
         label: "Chunked upload temporary storage",
         severity: temp_severity,
         count: projected_bytes,
-        message: "Chunked upload workspace currently uses #{human_bytes(actual_bytes)} actual / #{human_bytes(projected_bytes)} reserved#{max_temp_bytes.positive? ? " of #{human_bytes(max_temp_bytes)}" : ''}.",
-        detail: "Usage: #{usage_text}. Reserved size is intentionally conservative because chunks and the assembled file can briefly coexist during complete.",
+        message: if temp_severity == "critical"
+          "Chunked upload temporary storage is at or above the configured limit."
+        elsif temp_severity == "warning"
+          "Chunked upload temporary storage is close to the configured limit."
+        else
+          "Chunked upload temporary storage is within the configured limit."
+        end,
+        detail: "#{human_bytes(actual_bytes)} used · #{human_bytes(projected_bytes)} reserved#{max_temp_bytes.positive? ? " · #{human_bytes(max_temp_bytes)} limit" : ' · unlimited limit'}.",
         examples: session_examples.first(5),
         metadata: {
           operational_value: human_bytes(actual_bytes),
@@ -1761,7 +1773,15 @@ module ::MediaGallery
       skipped = (hash["skipped"] || hash[:skipped]).to_i
       bytes_removed = (hash["bytes_removed"] || hash[:bytes_removed]).to_i
 
-      "Source: #{source}; scanned: #{scanned}; removed: #{removed}; skipped: #{skipped}; bytes removed: #{human_bytes(bytes_removed)}."
+      if skipped.positive?
+        "Cleanup skipped #{skipped} folder#{'s' if skipped != 1}; check logs."
+      elsif removed.positive?
+        "Removed #{removed} expired session folder#{'s' if removed != 1} · freed #{human_bytes(bytes_removed)}."
+      elsif scanned.positive?
+        "No expired chunked upload sessions found."
+      else
+        "No chunked upload cleanup was needed."
+      end
     end
 
     def chunked_session_examples(summary)

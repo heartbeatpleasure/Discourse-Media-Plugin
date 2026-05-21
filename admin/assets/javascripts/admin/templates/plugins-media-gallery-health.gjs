@@ -119,19 +119,27 @@ export default RouteTemplate(
       }
 
       .mg-health__operational-card {
-        position: relative;
-        padding-right: 5.2rem;
+        min-width: 0;
       }
 
-      .mg-health__operational-card > .mg-health__badge {
-        position: absolute;
-        top: 0.85rem;
-        right: 0.85rem;
-        margin: 0;
+      .mg-health__operational-card-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+
+      .mg-health__operational-card-header .mg-health__badge {
+        flex: 0 0 auto;
       }
 
       .mg-health__operational-card .mg-health__alert-value {
-        margin-top: 0.2rem;
+        margin-top: 0.35rem;
+      }
+
+      .mg-health__operational-card-detail {
+        margin-top: 0.65rem;
+        line-height: 1.35;
       }
 
       .mg-health__profile-list {
@@ -898,13 +906,15 @@ export default RouteTemplate(
             <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">These checks do not change files or settings. They summarize operational risks so admins can review storage configuration, temporary workspaces, chunked upload limits, and cleanup status.</span></span>
           </div>
 
-          <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 1rem;">
+          <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 1rem;">
             {{#each @controller.operationalSafetyCards as |card|}}
               <article class="mg-health__alert-card mg-health__operational-card">
-                <span class="mg-health__badge {{card.badgeClass}}">{{card.badgeLabel}}</span>
-                <div class="mg-health__alert-label">{{card.label}}</div>
+                <div class="mg-health__operational-card-header">
+                  <div class="mg-health__alert-label">{{card.label}}</div>
+                  <span class="mg-health__badge {{card.badgeClass}}">{{card.badgeLabel}}</span>
+                </div>
                 <div class="mg-health__alert-value">{{card.value}}</div>
-                <p class="mg-health__muted" style="margin-top: 0.65rem;">{{card.detail}}</p>
+                <p class="mg-health__muted mg-health__operational-card-detail">{{card.detail}}</p>
               </article>
             {{/each}}
           </div>

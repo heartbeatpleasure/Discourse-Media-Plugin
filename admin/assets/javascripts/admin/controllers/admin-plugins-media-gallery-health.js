@@ -68,6 +68,23 @@ function formatNumber(value) {
   return new Intl.NumberFormat().format(number);
 }
 
+function formatBytes(value) {
+  let bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let unitIndex = 0;
+  while (bytes >= 1024 && unitIndex < units.length - 1) {
+    bytes = bytes / 1024;
+    unitIndex += 1;
+  }
+
+  const precision = bytes >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${bytes.toFixed(precision)} ${units[unitIndex]}`;
+}
+
 function formatDateTime(value, options = {}) {
   if (!value) {
     return "—";
@@ -536,18 +553,65 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       .reduce((highest, issue) => severityRank(issue.severity) > severityRank(highest) ? issue.severity : highest, chunkedSetting?.severity || "ok");
     const activeCount = Number(chunkedActive?.metadata?.active_sessions || chunkedActive?.count || 0);
     const globalLimit = Number(chunkedActive?.metadata?.max_active_sessions_global || 0);
+    const perUserLimit = Number(chunkedActive?.metadata?.max_active_sessions_per_user || 0);
+    const thresholdMb = chunkedSetting?.metadata?.threshold_mb;
+    const chunkSizeMb = chunkedSetting?.metadata?.chunk_size_mb;
     const activeValue = chunkedEnabled
-      ? `${formatNumber(activeCount)} active${globalLimit > 0 ? ` / ${formatNumber(globalLimit)}` : ""}`
+      ? `${formatNumber(activeCount)}${globalLimit > 0 ? ` / ${formatNumber(globalLimit)}` : ""} active`
       : "Off";
     const chunkedDetailParts = [];
-    if (chunkedSetting?.detail) {
-      chunkedDetailParts.push(chunkedSetting.detail);
-    }
-    if (chunkedActive?.detail && chunkedEnabled) {
-      chunkedDetailParts.push(chunkedActive.detail);
+    if (chunkedEnabled) {
+      const configParts = [];
+      if (thresholdMb !== null && thresholdMb !== undefined) {
+        configParts.push(`threshold ${thresholdMb} MB`);
+      }
+      if (chunkSizeMb !== null && chunkSizeMb !== undefined) {
+        configParts.push(`chunk size ${chunkSizeMb} MB`);
+      }
+      if (perUserLimit > 0) {
+        configParts.push(`per-user limit ${formatNumber(perUserLimit)}`);
+      }
+      if (configParts.length) {
+        chunkedDetailParts.push(configParts.join(" · "));
+      }
+      if (activeCount > 0) {
+        chunkedDetailParts.push(`${formatNumber(activeCount)} upload${activeCount === 1 ? "" : "s"} currently active`);
+      }
+    } else {
+      chunkedDetailParts.push("Large files use the regular Discourse upload flow.");
     }
     if (chunkedExpired?.severity && severityRank(chunkedExpired.severity) > 0) {
       chunkedDetailParts.push(chunkedExpired.message);
+    }
+
+    const workspaceDetail = !chunkedEnabled
+      ? "Workspace will be used only when chunked uploads are enabled."
+      : (chunkedWorkspace?.severity === "ok"
+        ? "Temporary upload workspace is available."
+        : (chunkedWorkspace?.message || "Check the processing root path and filesystem permissions."));
+    const tempDetailParts = [];
+    if (chunkedTemp?.metadata?.actual_label) {
+      tempDetailParts.push(`${chunkedTemp.metadata.actual_label} used`);
+    }
+    if (chunkedTemp?.metadata?.projected_label) {
+      tempDetailParts.push(`${chunkedTemp.metadata.projected_label} reserved`);
+    }
+    if (chunkedTemp?.metadata?.max_temp_storage_label) {
+      tempDetailParts.push(`${chunkedTemp.metadata.max_temp_storage_label} limit`);
+    }
+    const cleanupSkipped = Number(chunkedCleanup?.metadata?.skipped || 0);
+    const cleanupRemoved = Number(chunkedCleanup?.metadata?.removed || 0);
+    const cleanupBytes = Number(chunkedCleanup?.metadata?.bytes_removed || 0);
+    const cleanupRanAt = chunkedCleanup?.metadata?.ran_at_label || null;
+    let cleanupValue = "Healthy";
+    let cleanupDetail = "No cleanup run recorded yet.";
+    if (cleanupSkipped > 0) {
+      cleanupValue = "Check logs";
+      cleanupDetail = `${formatNumber(cleanupSkipped)} skipped folder${cleanupSkipped === 1 ? "" : "s"}; check logs.`;
+    } else if (cleanupRanAt) {
+      cleanupDetail = cleanupRemoved > 0
+        ? `Last run removed ${formatNumber(cleanupRemoved)} expired session${cleanupRemoved === 1 ? "" : "s"} and freed ${formatBytes(cleanupBytes)}.`
+        : `Last run: ${cleanupRanAt} · no expired sessions found.`;
     }
 
     const cards = [
@@ -582,7 +646,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         {
           label: "Chunked workspace",
           value: chunkedWorkspace?.metadata?.operational_value || (chunkedWorkspace?.severity === "ok" ? "Writable" : "Check"),
-          detail: chunkedWorkspace?.detail || chunkedWorkspace?.message || "Temporary chunked upload workspace path and permissions.",
+          detail: workspaceDetail,
           severity: chunkedWorkspace?.severity || "ok",
           badgeClass: badgeClass(chunkedWorkspace?.severity || "ok"),
           badgeLabel: severityLabel(chunkedWorkspace?.severity || "ok"),
@@ -590,15 +654,15 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         {
           label: "Chunked temp storage",
           value: chunkedTemp?.metadata?.usage_label || chunkedTemp?.metadata?.operational_value || "OK",
-          detail: chunkedTemp?.detail || chunkedTemp?.message || "Current chunked upload workspace usage.",
+          detail: tempDetailParts.join(" · ") || "No temporary chunked upload storage in use.",
           severity: chunkedTemp?.severity || "ok",
           badgeClass: badgeClass(chunkedTemp?.severity || "ok"),
           badgeLabel: severityLabel(chunkedTemp?.severity || "ok"),
         },
         {
           label: "Chunked cleanup",
-          value: chunkedCleanup?.metadata?.operational_value || "Not recorded",
-          detail: chunkedCleanup?.detail || chunkedCleanup?.message || "Cleanup status for expired chunked upload sessions.",
+          value: cleanupValue,
+          detail: cleanupDetail,
           severity: chunkedCleanup?.severity || "ok",
           badgeClass: badgeClass(chunkedCleanup?.severity || "ok"),
           badgeLabel: severityLabel(chunkedCleanup?.severity || "ok"),

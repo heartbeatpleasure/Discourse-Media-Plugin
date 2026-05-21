@@ -439,16 +439,17 @@ module ::MediaGallery
         "idle"
       end
 
-      detail_parts = []
-      detail_parts << (enabled ? "Chunked uploads enabled" : "Chunked uploads disabled")
-      detail_parts << "active sessions: #{active}"
-      detail_parts << "expired folders: #{expired}"
-      detail_parts << "temp usage: #{bytes_label(temp_bytes)}"
-      if ran_at.present?
-        detail_parts << "last cleanup scanned #{scanned}, removed #{removed}, skipped #{skipped}, freed #{bytes_label(bytes_removed)}"
-      else
-        detail_parts << "no cleanup run has been recorded yet"
-      end
+      detail = chunked_upload_cleanup_detail(
+        enabled: enabled,
+        active: active,
+        expired: expired,
+        temp_bytes: temp_bytes,
+        ran_at: ran_at,
+        scanned: scanned,
+        removed: removed,
+        skipped: skipped,
+        bytes_removed: bytes_removed
+      )
 
       {
         id: "maintenance-chunked-upload-cleanup",
@@ -463,7 +464,7 @@ module ::MediaGallery
         title: "Chunked upload cleanup",
         updated_at: ran_at,
         updated_at_label: time_label(ran_at),
-        detail: detail_parts.join(" • "),
+        detail: detail,
         error: skipped_errors.first && skipped_errors.first["error"].to_s.presence,
         health_url: "/admin/plugins/media-gallery-health",
         logs_url: "/admin/plugins/media-gallery-logs?event_type=media_gallery_chunked_upload_cleanup&hours=168",
@@ -574,6 +575,34 @@ module ::MediaGallery
       [minutes.minutes + 30.minutes, 2.hours].max
     rescue
       2.hours
+    end
+
+
+    def chunked_upload_cleanup_detail(enabled:, active:, expired:, temp_bytes:, ran_at:, scanned:, removed:, skipped:, bytes_removed:)
+      parts = []
+
+      if ran_at.blank?
+        parts << "No cleanup run has been recorded yet."
+      elsif skipped.to_i.positive?
+        parts << "Cleanup completed with #{skipped} skipped folder#{'s' if skipped.to_i != 1}. Check logs."
+      elsif removed.to_i.positive?
+        parts << "Removed #{removed} expired session#{'s' if removed.to_i != 1} and freed #{bytes_label(bytes_removed)}."
+      elsif scanned.to_i.positive?
+        parts << "No expired chunked upload sessions found."
+      else
+        parts << "No chunked upload cleanup was needed."
+      end
+
+      context = []
+      context << "chunked uploads disabled" unless enabled
+      context << "#{active} active upload#{'s' if active.to_i != 1}" if active.to_i.positive?
+      context << "#{expired} expired folder#{'s' if expired.to_i != 1} waiting" if expired.to_i.positive?
+      context << "temp usage #{bytes_label(temp_bytes)}" if temp_bytes.to_i.positive?
+      parts << context.join(" · ") if context.present?
+
+      parts.join(" ")
+    rescue
+      "Cleanup status is unavailable."
     end
 
     def bytes_label(value)
