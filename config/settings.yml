@@ -143,6 +143,44 @@ plugins:
     default: 20
     client: false
 
+  # Application-level chunked uploads for large media files. This lets the
+  # theme component avoid reverse-proxy request body limits such as Cloudflare Free's 100 MB cap.
+  media_gallery_chunked_uploads_enabled:
+    default: true
+    client: false
+
+  # Files at or above this size (MB) use the chunked upload endpoint instead of /uploads.json.
+  media_gallery_chunked_upload_threshold_mb:
+    default: 80
+    type: integer
+    min: 1
+    max: 10240
+    client: false
+
+  # Per-request chunk size (MB). Keep below any reverse-proxy request limit; 25 MB leaves safe overhead.
+  media_gallery_chunk_size_mb:
+    default: 25
+    type: integer
+    min: 1
+    max: 95
+    client: false
+
+  # How long an unfinished chunked upload session may remain active.
+  media_gallery_chunked_upload_session_ttl_minutes:
+    default: 120
+    type: integer
+    min: 10
+    max: 1440
+    client: false
+
+  # Limits temporary disk usage from abandoned browser sessions.
+  media_gallery_chunked_upload_max_active_sessions_per_user:
+    default: 3
+    type: integer
+    min: 1
+    max: 20
+    client: false
+
   media_gallery_max_tags_per_item:
     default: 10
     client: false

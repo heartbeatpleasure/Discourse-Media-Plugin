@@ -74,6 +74,7 @@ after_initialize do
   require_relative "lib/media_gallery/fingerprinting"
   require_relative "lib/media_gallery/type_detector"
   require_relative "lib/media_gallery/upload_path"
+  require_relative "lib/media_gallery/chunked_uploads"
   require_relative "lib/media_gallery/permissions"
   require_relative "lib/media_gallery/private_storage"
   require_relative "lib/media_gallery/test_downloads"
@@ -115,6 +116,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_test_downloads_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_user_diagnostics_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/chunked_uploads_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/media_comments_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/stream_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/hls_controller.rb", __dir__)
@@ -130,6 +132,7 @@ after_initialize do
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_health_watchdog.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_temp_workspace_cleanup.rb", __dir__)
+  require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_chunked_uploads.rb", __dir__)
 
   Discourse::Application.routes.append do
     # Admin UI page (served by the admin Ember app)
@@ -255,6 +258,13 @@ after_initialize do
     # config endpoint (must be before /media/:public_id)
     # NOTE: do not name controller action `config` (conflicts with ActionController::Base#config)
     get "/media/config" => "media_gallery/media#plugin_config", defaults: { format: :json }
+
+    # Application-level chunked uploads for large files behind proxies with request size limits.
+    post "/media/chunked/start" => "media_gallery/chunked_uploads#start", defaults: { format: :json }
+    post "/media/chunked/part" => "media_gallery/chunked_uploads#part", defaults: { format: :json }
+    post "/media/chunked/complete" => "media_gallery/chunked_uploads#complete", defaults: { format: :json }
+    post "/media/chunked/abort" => "media_gallery/chunked_uploads#abort", defaults: { format: :json }
+    get "/media/chunked/status" => "media_gallery/chunked_uploads#status", defaults: { format: :json }
 
     get "/media" => "media_gallery/media#index", defaults: { format: :json }
     post "/media" => "media_gallery/media#create", defaults: { format: :json }

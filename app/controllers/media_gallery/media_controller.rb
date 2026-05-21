@@ -2607,7 +2607,10 @@ end
           "image" => allowed_extension_list_for_type("image"),
           "audio" => allowed_extension_list_for_type("audio"),
           "video" => allowed_extension_list_for_type("video")
-        }
+        },
+        chunked_uploads: (
+          defined?(::MediaGallery::ChunkedUploads) ? ::MediaGallery::ChunkedUploads.policy_payload : { enabled: false }
+        )
       }
     end
 
