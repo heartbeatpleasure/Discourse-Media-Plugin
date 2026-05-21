@@ -180,7 +180,11 @@ module ::MediaGallery
       meta["upload_id"] = upload.id
       write_meta!(sid, meta)
 
-      cleanup_session!(sid)
+      begin
+        cleanup_session!(sid)
+      rescue => cleanup_error
+        Rails.logger.warn("[media_gallery] chunked upload completed but cleanup failed session_id=#{sid} user_id=#{user&.id} error=#{cleanup_error.class}: #{cleanup_error.message}")
+      end
 
       upload
     rescue Error
@@ -675,7 +679,7 @@ module ::MediaGallery
       dir = session_path(sid)
       return false unless Dir.exist?(dir)
 
-      ::MediaGallery::PathSecurity.remove_tree_under!(dir, root: root_path)
+      ::MediaGallery::PathSecurity.remove_tree_under!(dir, root_path)
       true
     end
 
