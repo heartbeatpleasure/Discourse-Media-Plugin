@@ -35,6 +35,8 @@ module ::MediaGallery
     MAX_ACTIVE_SESSIONS_FALLBACK = 3
     MAX_ACTIVE_SESSIONS_GLOBAL_FALLBACK = 20
     MAX_TEMP_STORAGE_MB_FALLBACK = 4096
+    STORE_NAMESPACE = "media_gallery_chunked_uploads"
+    LAST_CLEANUP_KEY = "last_cleanup"
 
     def enabled?
       SiteSetting.respond_to?(:media_gallery_chunked_uploads_enabled) &&
@@ -74,7 +76,7 @@ module ::MediaGallery
       FileUtils.mkdir_p(root)
 
       with_global_lock do
-        cleanup_expired!
+        cleanup_expired!(source: "start_guard")
         enforce_global_active_session_limit!
         enforce_active_session_limit!(user)
         enforce_temp_storage_limit!(
@@ -105,6 +107,20 @@ module ::MediaGallery
 
         write_meta!(session_id, meta)
         Rails.logger.info("[media_gallery] chunked upload started session_id=#{session_id} user_id=#{user.id} bytes=#{size} parts=#{meta["total_parts"]}")
+        record_log_event(
+          event_type: "media_gallery_chunked_upload_started",
+          severity: "info",
+          user: user,
+          message: "Chunked upload session started.",
+          details: {
+            session_id: session_id,
+            bytes: size,
+            parts: meta["total_parts"],
+            media_type: inferred_type,
+            chunk_size_mb: chunk_size_mb,
+            threshold_mb: threshold_mb
+          }
+        )
         meta.merge("uploaded_parts" => [], "uploaded_parts_count" => 0)
       end
     rescue Error
@@ -213,11 +229,31 @@ module ::MediaGallery
 
         elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000.0).round
         Rails.logger.info("[media_gallery] chunked upload completed session_id=#{sid} user_id=#{user.id} upload_id=#{upload.id} bytes=#{actual_size} parts=#{total_parts} elapsed_ms=#{elapsed_ms}")
+        record_log_event(
+          event_type: "media_gallery_chunked_upload_completed",
+          severity: "success",
+          user: user,
+          message: "Chunked upload completed and was stored as a Discourse upload.",
+          details: {
+            session_id: sid,
+            upload_id: upload.id,
+            bytes: actual_size,
+            parts: total_parts,
+            elapsed_ms: elapsed_ms
+          }
+        )
 
         begin
           cleanup_session!(sid)
         rescue => cleanup_error
           Rails.logger.warn("[media_gallery] chunked upload completed but cleanup failed session_id=#{sid} user_id=#{user&.id} error=#{cleanup_error.class}: #{cleanup_error.message}")
+          record_log_event(
+            event_type: "media_gallery_chunked_upload_cleanup_failed",
+            severity: "warning",
+            user: user,
+            message: "Chunked upload completed but temporary cleanup failed.",
+            details: { session_id: sid, upload_id: upload.id, error: "#{cleanup_error.class}: #{cleanup_error.message}".truncate(300) }
+          )
         end
 
         upload
@@ -226,6 +262,13 @@ module ::MediaGallery
       raise
     rescue => e
       Rails.logger.warn("[media_gallery] chunked upload complete failed session_id=#{session_id} user_id=#{user&.id} error=#{e.class}: #{e.message}\n#{e.backtrace&.first(20)&.join("\n")}")
+      record_log_event(
+        event_type: "media_gallery_chunked_upload_complete_failed",
+        severity: "danger",
+        user: user,
+        message: "Chunked upload finalization failed.",
+        details: { session_id: session_id.to_s, error: "#{e.class}: #{e.message}".truncate(300) }
+      )
       raise_error("chunked_upload_complete_failed", "Upload could not be completed. Please try again.", status: 500)
     end
 
@@ -248,23 +291,45 @@ module ::MediaGallery
       meta = read_meta!(sid)
       ensure_owned!(meta, user)
       result = cleanup_session!(sid)
-      Rails.logger.info("[media_gallery] chunked upload aborted session_id=#{sid} user_id=#{user.id} bytes_removed=#{result[:bytes].to_i}") if result.is_a?(Hash)
+      if result.is_a?(Hash)
+        Rails.logger.info("[media_gallery] chunked upload aborted session_id=#{sid} user_id=#{user.id} bytes_removed=#{result[:bytes].to_i}")
+        record_log_event(
+          event_type: "media_gallery_chunked_upload_aborted",
+          severity: "info",
+          user: user,
+          message: "Chunked upload session was aborted.",
+          details: { session_id: sid, bytes_removed: result[:bytes].to_i }
+        )
+      end
       true
     rescue Error
       raise
     rescue => e
       Rails.logger.warn("[media_gallery] chunked upload abort failed session_id=#{session_id} user_id=#{user&.id} error=#{e.class}: #{e.message}")
+      record_log_event(
+        event_type: "media_gallery_chunked_upload_abort_failed",
+        severity: "warning",
+        user: user,
+        message: "Chunked upload abort failed.",
+        details: { session_id: session_id.to_s, error: "#{e.class}: #{e.message}".truncate(300) }
+      )
       false
     end
 
-    def cleanup_expired!
+    def cleanup_expired!(source: "manual")
       root = root_path
-      return { scanned: 0, removed: 0, bytes_removed: 0 } unless Dir.exist?(root)
+      unless Dir.exist?(root)
+        result = cleanup_result_payload(scanned: 0, removed: 0, bytes_removed: 0, source: source)
+        store_last_cleanup!(result)
+        return result
+      end
 
       now = Time.now.utc
       scanned = 0
       removed = 0
       bytes_removed = 0
+      skipped = 0
+      skipped_errors = []
 
       Dir.children(root).each do |name|
         next unless name.match?(SESSION_ID_RE)
@@ -273,18 +338,7 @@ module ::MediaGallery
         sid = name.to_s
         meta = read_meta(sid)
         session_dir = session_path(sid)
-        expired = true
-
-        if meta.present?
-          expires_at = parse_time(meta["expires_at"])
-          expired = expires_at.blank? || expires_at <= now || meta["completed"] == true
-        else
-          begin
-            expired = File.mtime(session_dir) < (now - session_ttl_seconds)
-          rescue
-            expired = true
-          end
-        end
+        expired = session_expired_for_cleanup?(meta, session_dir, now)
 
         next unless expired
 
@@ -292,10 +346,224 @@ module ::MediaGallery
         removed += 1
         bytes_removed += cleanup_result[:bytes].to_i if cleanup_result.is_a?(Hash)
       rescue => e
+        skipped += 1
+        skipped_errors << { session_id: name.to_s, error: "#{e.class}: #{e.message}".truncate(300) } if skipped_errors.length < 10
         Rails.logger.warn("[media_gallery] chunked upload cleanup skipped #{name}: #{e.class}: #{e.message}")
       end
 
-      { scanned: scanned, removed: removed, bytes_removed: bytes_removed }
+      result = cleanup_result_payload(
+        scanned: scanned,
+        removed: removed,
+        bytes_removed: bytes_removed,
+        skipped: skipped,
+        skipped_errors: skipped_errors,
+        source: source
+      )
+      store_last_cleanup!(result)
+      record_log_event(
+        event_type: "media_gallery_chunked_upload_cleanup",
+        severity: skipped.positive? ? "warning" : "info",
+        message: removed.positive? ? "Expired chunked upload sessions cleaned up." : "Chunked upload cleanup completed.",
+        details: result
+      ) if removed.positive? || skipped.positive?
+      result
+    rescue => e
+      result = cleanup_result_payload(scanned: 0, removed: 0, bytes_removed: 0, skipped: 1, skipped_errors: [{ error: "#{e.class}: #{e.message}".truncate(300) }], source: source)
+      store_last_cleanup!(result)
+      raise
+    end
+
+    def workspace_summary
+      root = root_path
+      exists = Dir.exist?(root)
+      sessions = []
+      scan_errors = []
+      now = Time.now.utc
+
+      if exists
+        Dir.children(root).each do |name|
+          next unless name.match?(SESSION_ID_RE)
+
+          sessions << session_summary_row(name.to_s, now)
+        rescue => e
+          scan_errors << { session_id: name.to_s, error: "#{e.class}: #{e.message}".truncate(300) } if scan_errors.length < 10
+        end
+      end
+
+      active = sessions.select { |row| row[:active] }
+      expired = sessions.select { |row| row[:expired] }
+      completed = sessions.select { |row| row[:completed] }
+      actual_bytes = sessions.sum { |row| row[:bytes].to_i }
+      projected_bytes = projected_temp_storage_bytes
+      max_bytes = max_temp_storage_bytes
+      usage_percent = max_bytes.positive? ? ((projected_bytes.to_f / max_bytes.to_f) * 100.0).round(1) : nil
+      oldest_active = active.filter_map { |row| row[:created_at] }.min
+
+      {
+        enabled: enabled?,
+        root_path: root,
+        root_exists: exists,
+        root_writable: workspace_root_writable?(root),
+        total_sessions: sessions.length,
+        active_sessions: active.length,
+        expired_sessions: expired.length,
+        completed_sessions: completed.length,
+        actual_temp_storage_bytes: actual_bytes,
+        projected_temp_storage_bytes: projected_bytes,
+        max_temp_storage_mb: max_temp_storage_mb,
+        max_temp_storage_bytes: max_bytes,
+        temp_storage_usage_percent: usage_percent,
+        chunk_size_mb: chunk_size_mb,
+        threshold_mb: threshold_mb,
+        session_ttl_minutes: session_ttl_minutes,
+        max_active_sessions_per_user: max_active_sessions_per_user,
+        max_active_sessions_global: max_active_sessions_global,
+        oldest_active_session_created_at: oldest_active&.iso8601,
+        oldest_active_session_age_seconds: oldest_active.present? ? [now - oldest_active, 0].max.to_i : nil,
+        examples: sessions.sort_by { |row| [row[:active] ? 0 : 1, row[:expired] ? 0 : 1, row[:updated_at] || Time.at(0)] }.first(10),
+        scan_errors: scan_errors,
+        last_cleanup: last_cleanup_summary
+      }
+    rescue => e
+      {
+        enabled: enabled?,
+        root_path: (root rescue nil),
+        root_exists: false,
+        root_writable: false,
+        total_sessions: 0,
+        active_sessions: 0,
+        expired_sessions: 0,
+        completed_sessions: 0,
+        actual_temp_storage_bytes: 0,
+        projected_temp_storage_bytes: 0,
+        max_temp_storage_mb: max_temp_storage_mb,
+        max_temp_storage_bytes: max_temp_storage_bytes,
+        temp_storage_usage_percent: nil,
+        chunk_size_mb: chunk_size_mb,
+        threshold_mb: threshold_mb,
+        session_ttl_minutes: session_ttl_minutes,
+        max_active_sessions_per_user: max_active_sessions_per_user,
+        max_active_sessions_global: max_active_sessions_global,
+        examples: [],
+        scan_errors: [{ error: "#{e.class}: #{e.message}".truncate(300) }],
+        last_cleanup: last_cleanup_summary
+      }
+    end
+
+    def last_cleanup_summary
+      value = ::PluginStore.get(STORE_NAMESPACE, LAST_CLEANUP_KEY)
+      value.is_a?(Hash) ? value.deep_stringify_keys : {}
+    rescue
+      {}
+    end
+
+    def cleanup_result_payload(scanned:, removed:, bytes_removed:, source:, skipped: 0, skipped_errors: [])
+      now = Time.now.utc
+      {
+        source: source.to_s.presence || "manual",
+        scanned: scanned.to_i,
+        removed: removed.to_i,
+        skipped: skipped.to_i,
+        bytes_removed: bytes_removed.to_i,
+        skipped_errors: Array(skipped_errors).first(10),
+        ran_at: now.iso8601,
+        ran_at_label: now.strftime("%Y-%m-%d %H:%M:%S")
+      }
+    end
+
+    def store_last_cleanup!(result)
+      ::PluginStore.set(STORE_NAMESPACE, LAST_CLEANUP_KEY, result.deep_stringify_keys)
+      true
+    rescue => e
+      Rails.logger.warn("[media_gallery] chunked upload cleanup state store failed: #{e.class}: #{e.message}")
+      false
+    end
+
+    def session_expired_for_cleanup?(meta, session_dir, now)
+      if meta.present?
+        expires_at = parse_time(meta["expires_at"])
+        expires_at.blank? || expires_at <= now || meta["completed"] == true
+      else
+        begin
+          File.mtime(session_dir) < (now - session_ttl_seconds)
+        rescue
+          true
+        end
+      end
+    end
+
+    def session_summary_row(session_id, now = Time.now.utc)
+      sid = normalize_session_id!(session_id)
+      session_dir = session_path(sid)
+      meta = read_meta(sid)
+      total_parts = meta.present? ? meta["total_parts"].to_i : 0
+      uploaded_parts = total_parts.positive? ? uploaded_part_numbers(sid, total_parts) : []
+      created_at = parse_time(meta && meta["created_at"]) || safe_mtime(session_dir)
+      updated_at = parse_time(meta && meta["updated_at"]) || safe_mtime(session_dir)
+      expires_at = parse_time(meta && meta["expires_at"])
+      active = active_session_meta?(meta, now)
+      expired = session_expired_for_cleanup?(meta, session_dir, now)
+      bytes = directory_size(session_dir)
+      filename = meta && meta["filename"].to_s.presence
+
+      {
+        session_id: sid,
+        label: filename || sid,
+        status: active ? "active" : (expired ? "expired" : "inactive"),
+        user_id: meta && meta["user_id"].to_i,
+        filename: filename,
+        media_type: meta && meta["media_type"].to_s.presence,
+        filesize: meta && meta["filesize"].to_i,
+        total_parts: total_parts,
+        uploaded_parts_count: uploaded_parts.length,
+        bytes: bytes,
+        active: active,
+        expired: expired,
+        completed: meta && meta["completed"] == true,
+        created_at: created_at,
+        updated_at: updated_at,
+        expires_at: expires_at,
+        age_seconds: created_at.present? ? [now - created_at, 0].max.to_i : nil,
+        detail: chunked_session_detail(sid, meta, uploaded_parts.length, total_parts, bytes, expires_at)
+      }.compact
+    end
+
+    def chunked_session_detail(session_id, meta, uploaded_count, total_parts, bytes, expires_at)
+      parts = total_parts.to_i.positive? ? "#{uploaded_count}/#{total_parts} parts" : "metadata missing"
+      user = meta.present? ? "user_id=#{meta["user_id"].to_i}" : "metadata missing"
+      expiry = expires_at.present? ? "expires_at=#{expires_at.iso8601}" : "expires_at missing"
+      "session_id=#{session_id}; #{user}; #{parts}; bytes=#{bytes.to_i}; #{expiry}"
+    rescue
+      "session_id=#{session_id}"
+    end
+
+    def safe_mtime(path)
+      return nil unless path.present? && File.exist?(path)
+
+      File.mtime(path).utc
+    rescue
+      nil
+    end
+
+    def workspace_root_writable?(path)
+      target = path.to_s
+      dir = Dir.exist?(target) ? target : nearest_existing_parent(target)
+      dir.present? && File.directory?(dir) && File.writable?(dir)
+    rescue
+      false
+    end
+
+    def nearest_existing_parent(path)
+      current = path.to_s
+      loop do
+        parent = File.dirname(current)
+        return current if Dir.exist?(current)
+        return nil if parent.blank? || parent == current
+
+        current = parent
+      end
+    rescue
+      nil
     end
 
     def threshold_mb
@@ -888,6 +1156,22 @@ module ::MediaGallery
       total
     rescue
       0
+    end
+
+    def record_log_event(event_type:, severity: "info", user: nil, message: nil, details: nil)
+      return unless defined?(::MediaGallery::LogEvents)
+
+      ::MediaGallery::LogEvents.record(
+        event_type: event_type,
+        severity: severity,
+        category: "chunked_uploads",
+        user: user,
+        message: message,
+        details: details || {}
+      )
+    rescue => e
+      Rails.logger.warn("[media_gallery] chunked upload log event failed type=#{event_type} error=#{e.class}: #{e.message}")
+      nil
     end
 
     def raise_error(code, message = nil, status: 422, details: nil)

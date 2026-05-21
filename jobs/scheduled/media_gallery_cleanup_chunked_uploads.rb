@@ -8,7 +8,7 @@ module ::Jobs
       return unless SiteSetting.media_gallery_enabled
       return unless defined?(::MediaGallery::ChunkedUploads)
 
-      result = ::MediaGallery::ChunkedUploads.cleanup_expired!
+      result = ::MediaGallery::ChunkedUploads.cleanup_expired!(source: "scheduled")
       Rails.logger.info(
         "[media_gallery] chunked upload cleanup scanned=#{result[:scanned]} removed=#{result[:removed]} bytes_removed=#{result[:bytes_removed].to_i}"
       ) if result[:removed].to_i.positive?

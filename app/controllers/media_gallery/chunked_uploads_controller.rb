@@ -120,12 +120,49 @@ module ::MediaGallery
     end
 
     def render_chunked_upload_error(error)
+      record_chunked_upload_error(error)
       render_json_error(
         error.code,
         status: error.status,
         message: error.message,
         extra: error.details.present? ? { details: error.details } : nil
       )
+    end
+
+    def record_chunked_upload_error(error)
+      return unless defined?(::MediaGallery::LogEvents)
+
+      status = error.status.to_i
+      severity =
+        if status >= 500 || status == 507
+          "danger"
+        elsif status == 429 || status == 410 || status == 409
+          "warning"
+        else
+          "info"
+        end
+
+      details = {
+        action: action_name.to_s,
+        error_code: error.code.to_s,
+        status: status,
+        session_id: params[:session_id].to_s.presence,
+        part_number: params[:part_number].to_s.presence,
+        filesize: params[:filesize].to_i.positive? ? params[:filesize].to_i : nil,
+      }.compact
+
+      ::MediaGallery::LogEvents.record(
+        event_type: "media_gallery_chunked_upload_#{action_name}_failed",
+        severity: severity,
+        category: "chunked_uploads",
+        request: request,
+        user: current_user,
+        message: error.message,
+        details: details.merge(error.details.is_a?(Hash) ? error.details : {})
+      )
+    rescue => e
+      Rails.logger.warn("[media_gallery] chunked upload error log failed request_id=#{request&.request_id} error=#{e.class}: #{e.message}")
+      nil
     end
 
     def render_json_error(error_code, status: 422, message: nil, extra: nil)
