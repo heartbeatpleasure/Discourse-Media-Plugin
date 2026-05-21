@@ -3,6 +3,7 @@
 require "digest/sha1"
 require "fileutils"
 require "json"
+require "find"
 require "securerandom"
 require "set"
 require "time"
@@ -23,6 +24,8 @@ module ::MediaGallery
     end
 
     META_FILENAME = "metadata.json"
+    LOCK_FILENAME = "complete.lock"
+    GLOBAL_LOCK_FILENAME = ".global.lock"
     PARTS_DIRNAME = "parts"
     FINAL_DIRNAME = "final"
     SESSION_ID_RE = /\A[a-f0-9]{32}\z/.freeze
@@ -30,6 +33,8 @@ module ::MediaGallery
     MAX_CHUNK_SIZE_MB = 95
     MIN_THRESHOLD_MB = 1
     MAX_ACTIVE_SESSIONS_FALLBACK = 3
+    MAX_ACTIVE_SESSIONS_GLOBAL_FALLBACK = 20
+    MAX_TEMP_STORAGE_MB_FALLBACK = 4096
 
     def enabled?
       SiteSetting.respond_to?(:media_gallery_chunked_uploads_enabled) &&
@@ -46,7 +51,10 @@ module ::MediaGallery
         chunk_size_mb: chunk_size_mb,
         chunk_size_bytes: chunk_size_bytes,
         session_ttl_minutes: session_ttl_minutes,
-        max_active_sessions_per_user: max_active_sessions_per_user
+        max_active_sessions_per_user: max_active_sessions_per_user,
+        max_active_sessions_global: max_active_sessions_global,
+        max_temp_storage_mb: max_temp_storage_mb,
+        max_temp_storage_bytes: max_temp_storage_bytes
       }
     end
 
@@ -61,34 +69,44 @@ module ::MediaGallery
       inferred_type = infer_media_type(filename: safe_filename, content_type: content_type)
       validate_extension!(safe_filename, inferred_type)
       validate_size!(filesize: size, media_type: inferred_type)
-      enforce_active_session_limit!(user)
 
       root = root_path
       FileUtils.mkdir_p(root)
 
-      session_id = SecureRandom.hex(16)
-      session_dir = session_path(session_id)
-      FileUtils.mkdir_p(parts_path(session_id))
-      FileUtils.mkdir_p(final_path(session_id))
+      with_global_lock do
+        cleanup_expired!
+        enforce_global_active_session_limit!
+        enforce_active_session_limit!(user)
+        enforce_temp_storage_limit!(
+          additional_bytes: reserved_bytes_for_filesize(size),
+          code: "chunked_upload_temp_storage_limit_reached",
+          message: "The server is temporarily low on upload workspace. Please try again later."
+        )
 
-      now = Time.now.utc
-      meta = {
-        "session_id" => session_id,
-        "user_id" => user.id.to_i,
-        "filename" => safe_filename,
-        "filesize" => size,
-        "content_type" => content_type.to_s.presence,
-        "media_type" => inferred_type,
-        "chunk_size_bytes" => chunk_size_bytes,
-        "total_parts" => [(size.to_f / chunk_size_bytes.to_f).ceil, 1].max,
-        "created_at" => now.iso8601,
-        "updated_at" => now.iso8601,
-        "expires_at" => (now + session_ttl_seconds).iso8601,
-        "completed" => false
-      }
+        session_id = SecureRandom.hex(16)
+        FileUtils.mkdir_p(parts_path(session_id))
+        FileUtils.mkdir_p(final_path(session_id))
 
-      write_meta!(session_id, meta)
-      meta.merge("uploaded_parts" => [], "uploaded_parts_count" => 0)
+        now = Time.now.utc
+        meta = {
+          "session_id" => session_id,
+          "user_id" => user.id.to_i,
+          "filename" => safe_filename,
+          "filesize" => size,
+          "content_type" => content_type.to_s.presence,
+          "media_type" => inferred_type,
+          "chunk_size_bytes" => chunk_size_bytes,
+          "total_parts" => [(size.to_f / chunk_size_bytes.to_f).ceil, 1].max,
+          "created_at" => now.iso8601,
+          "updated_at" => now.iso8601,
+          "expires_at" => (now + session_ttl_seconds).iso8601,
+          "completed" => false
+        }
+
+        write_meta!(session_id, meta)
+        Rails.logger.info("[media_gallery] chunked upload started session_id=#{session_id} user_id=#{user.id} bytes=#{size} parts=#{meta["total_parts"]}")
+        meta.merge("uploaded_parts" => [], "uploaded_parts_count" => 0)
+      end
     rescue Error
       raise
     rescue => e
@@ -119,6 +137,11 @@ module ::MediaGallery
       if part_no == total_parts && expected_last_size.positive? && size > expected_last_size
         raise_error("chunk_too_large", "Upload chunk is larger than expected.", details: { expected_bytes: expected_last_size })
       end
+
+      enforce_temp_storage_limit!(
+        code: "chunked_upload_temp_storage_limit_reached",
+        message: "The server is temporarily low on upload workspace. Please try again later."
+      )
 
       part_path = part_file_path(sid, part_no)
       tmp_path = "#{part_path}.tmp-#{Process.pid}-#{SecureRandom.hex(4)}"
@@ -157,36 +180,48 @@ module ::MediaGallery
       raise_error("chunked_uploads_disabled", "Chunked uploads are not enabled.", status: 404) unless enabled?
 
       sid = normalize_session_id!(session_id)
-      meta = read_meta!(sid)
-      ensure_owned_and_open!(meta, user)
 
-      total_parts = meta["total_parts"].to_i
-      missing = missing_part_numbers(sid, total_parts)
-      if missing.any?
-        raise_error("missing_upload_chunks", "Upload is incomplete. Please try again.", details: { missing_parts: missing.first(20), missing_count: missing.length })
+      with_session_lock(sid) do
+        meta = read_meta!(sid)
+        ensure_owned_and_open!(meta, user)
+
+        total_parts = meta["total_parts"].to_i
+        missing = missing_part_numbers(sid, total_parts)
+        if missing.any?
+          raise_error("missing_upload_chunks", "Upload is incomplete. Please try again.", details: { missing_parts: missing.first(20), missing_count: missing.length })
+        end
+
+        enforce_temp_storage_limit!(
+          code: "chunked_upload_temp_storage_limit_reached",
+          message: "The server is temporarily low on upload workspace. Please try again later."
+        )
+
+        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        final_file = assemble_final_file!(sid, meta)
+        actual_size = File.size?(final_file).to_i
+        expected_size = meta["filesize"].to_i
+        if actual_size != expected_size
+          raise_error("assembled_file_size_mismatch", "The uploaded file was incomplete. Please try again.", details: { expected_bytes: expected_size, actual_bytes: actual_size })
+        end
+
+        upload = create_discourse_upload!(user_id: user.id, path: final_file, filename: meta["filename"].to_s)
+
+        meta["completed"] = true
+        meta["completed_at"] = Time.now.utc.iso8601
+        meta["upload_id"] = upload.id
+        write_meta!(sid, meta)
+
+        elapsed_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000.0).round
+        Rails.logger.info("[media_gallery] chunked upload completed session_id=#{sid} user_id=#{user.id} upload_id=#{upload.id} bytes=#{actual_size} parts=#{total_parts} elapsed_ms=#{elapsed_ms}")
+
+        begin
+          cleanup_session!(sid)
+        rescue => cleanup_error
+          Rails.logger.warn("[media_gallery] chunked upload completed but cleanup failed session_id=#{sid} user_id=#{user&.id} error=#{cleanup_error.class}: #{cleanup_error.message}")
+        end
+
+        upload
       end
-
-      final_file = assemble_final_file!(sid, meta)
-      actual_size = File.size?(final_file).to_i
-      expected_size = meta["filesize"].to_i
-      if actual_size != expected_size
-        raise_error("assembled_file_size_mismatch", "The uploaded file was incomplete. Please try again.", details: { expected_bytes: expected_size, actual_bytes: actual_size })
-      end
-
-      upload = create_discourse_upload!(user_id: user.id, path: final_file, filename: meta["filename"].to_s)
-
-      meta["completed"] = true
-      meta["completed_at"] = Time.now.utc.iso8601
-      meta["upload_id"] = upload.id
-      write_meta!(sid, meta)
-
-      begin
-        cleanup_session!(sid)
-      rescue => cleanup_error
-        Rails.logger.warn("[media_gallery] chunked upload completed but cleanup failed session_id=#{sid} user_id=#{user&.id} error=#{cleanup_error.class}: #{cleanup_error.message}")
-      end
-
-      upload
     rescue Error
       raise
     rescue => e
@@ -212,7 +247,8 @@ module ::MediaGallery
       sid = normalize_session_id!(session_id)
       meta = read_meta!(sid)
       ensure_owned!(meta, user)
-      cleanup_session!(sid)
+      result = cleanup_session!(sid)
+      Rails.logger.info("[media_gallery] chunked upload aborted session_id=#{sid} user_id=#{user.id} bytes_removed=#{result[:bytes].to_i}") if result.is_a?(Hash)
       true
     rescue Error
       raise
@@ -223,11 +259,12 @@ module ::MediaGallery
 
     def cleanup_expired!
       root = root_path
-      return { scanned: 0, removed: 0 } unless Dir.exist?(root)
+      return { scanned: 0, removed: 0, bytes_removed: 0 } unless Dir.exist?(root)
 
       now = Time.now.utc
       scanned = 0
       removed = 0
+      bytes_removed = 0
 
       Dir.children(root).each do |name|
         next unless name.match?(SESSION_ID_RE)
@@ -251,13 +288,14 @@ module ::MediaGallery
 
         next unless expired
 
-        cleanup_session!(sid)
+        cleanup_result = cleanup_session!(sid)
         removed += 1
+        bytes_removed += cleanup_result[:bytes].to_i if cleanup_result.is_a?(Hash)
       rescue => e
         Rails.logger.warn("[media_gallery] chunked upload cleanup skipped #{name}: #{e.class}: #{e.message}")
       end
 
-      { scanned: scanned, removed: removed }
+      { scanned: scanned, removed: removed, bytes_removed: bytes_removed }
     end
 
     def threshold_mb
@@ -316,6 +354,35 @@ module ::MediaGallery
       MAX_ACTIVE_SESSIONS_FALLBACK
     end
 
+    def max_active_sessions_global
+      value = if SiteSetting.respond_to?(:media_gallery_chunked_upload_max_active_sessions_global)
+        SiteSetting.media_gallery_chunked_upload_max_active_sessions_global.to_i
+      else
+        MAX_ACTIVE_SESSIONS_GLOBAL_FALLBACK
+      end
+      [[value, 0].max, 200].min
+    rescue
+      MAX_ACTIVE_SESSIONS_GLOBAL_FALLBACK
+    end
+
+    def max_temp_storage_mb
+      value = if SiteSetting.respond_to?(:media_gallery_chunked_upload_max_temp_storage_mb)
+        SiteSetting.media_gallery_chunked_upload_max_temp_storage_mb.to_i
+      else
+        MAX_TEMP_STORAGE_MB_FALLBACK
+      end
+      [[value, 0].max, 102_400].min
+    rescue
+      MAX_TEMP_STORAGE_MB_FALLBACK
+    end
+
+    def max_temp_storage_bytes
+      mb = max_temp_storage_mb
+      return 0 unless mb.positive?
+
+      mb * 1024 * 1024
+    end
+
     def root_path
       base = if SiteSetting.respond_to?(:media_gallery_processing_root_path)
         SiteSetting.media_gallery_processing_root_path.to_s.presence
@@ -339,6 +406,14 @@ module ::MediaGallery
 
     def meta_path(session_id)
       ::MediaGallery::PathSecurity.safe_join!(session_path(session_id), META_FILENAME)
+    end
+
+    def lock_path(session_id)
+      ::MediaGallery::PathSecurity.safe_join!(session_path(session_id), LOCK_FILENAME)
+    end
+
+    def global_lock_path
+      ::MediaGallery::PathSecurity.safe_join!(root_path, GLOBAL_LOCK_FILENAME)
     end
 
     def part_file_path(session_id, part_number)
@@ -413,23 +488,7 @@ module ::MediaGallery
       max = max_active_sessions_per_user
       return if max <= 0
 
-      active = 0
-      root = root_path
-      if Dir.exist?(root)
-        Dir.children(root).each do |name|
-          next unless name.match?(SESSION_ID_RE)
-          meta = read_meta(name)
-          next unless meta.present?
-          next unless meta["user_id"].to_i == user.id.to_i
-          next if meta["completed"] == true
-          expires_at = parse_time(meta["expires_at"])
-          next if expires_at.blank? || expires_at <= Time.now.utc
-          active += 1
-        rescue
-          next
-        end
-      end
-
+      active = active_session_metas.count { |(_, meta)| meta["user_id"].to_i == user.id.to_i }
       return if active < max
 
       raise_error(
@@ -438,6 +497,110 @@ module ::MediaGallery
         status: 429,
         details: { max_active_sessions_per_user: max }
       )
+    end
+
+    def enforce_global_active_session_limit!
+      max = max_active_sessions_global
+      return if max <= 0
+
+      active = active_session_metas.length
+      return if active < max
+
+      raise_error(
+        "too_many_global_upload_sessions",
+        "Too many large uploads are already active. Please wait and try again.",
+        status: 429,
+        details: { max_active_sessions_global: max, active_sessions: active }
+      )
+    end
+
+    def enforce_temp_storage_limit!(additional_bytes: 0, exclude_session_id: nil, code: "chunked_upload_temp_storage_limit_reached", message: nil)
+      max_bytes = max_temp_storage_bytes
+      return if max_bytes <= 0
+
+      projected = projected_temp_storage_bytes(exclude_session_id: exclude_session_id) + additional_bytes.to_i
+      return if projected <= max_bytes
+
+      raise_error(
+        code,
+        message.presence || "The server is temporarily low on upload workspace. Please try again later.",
+        status: 507,
+        details: {
+          max_temp_storage_mb: max_temp_storage_mb,
+          max_temp_storage_bytes: max_bytes,
+          projected_temp_storage_bytes: projected,
+          additional_bytes: additional_bytes.to_i
+        }
+      )
+    end
+
+    def active_session_metas
+      now = Time.now.utc
+      metas = []
+      each_session_meta do |sid, meta|
+        next unless active_session_meta?(meta, now)
+
+        metas << [sid, meta]
+      end
+      metas
+    end
+
+    def active_session_meta?(meta, now = Time.now.utc)
+      return false unless meta.present?
+      return false if meta["completed"] == true
+
+      expires_at = parse_time(meta["expires_at"])
+      expires_at.present? && expires_at > now
+    end
+
+    def each_session_meta
+      return enum_for(:each_session_meta) unless block_given?
+
+      root = root_path
+      return unless Dir.exist?(root)
+
+      Dir.children(root).each do |name|
+        next unless name.match?(SESSION_ID_RE)
+
+        meta = read_meta(name)
+        yield name.to_s, meta if meta.present?
+      rescue
+        next
+      end
+    end
+
+    def projected_temp_storage_bytes(exclude_session_id: nil)
+      excluded = exclude_session_id.present? ? normalize_session_id!(exclude_session_id) : nil
+      now = Time.now.utc
+      total = 0
+      root = root_path
+      return 0 unless Dir.exist?(root)
+
+      Dir.children(root).each do |name|
+        next unless name.match?(SESSION_ID_RE)
+        sid = name.to_s
+        next if excluded.present? && sid == excluded
+
+        dir = session_path(sid)
+        actual = directory_size(dir)
+        meta = read_meta(sid)
+
+        if active_session_meta?(meta, now)
+          reserved = reserved_bytes_for_filesize(meta["filesize"].to_i)
+          total += [actual, reserved].max
+        else
+          total += actual
+        end
+      rescue
+        next
+      end
+
+      total
+    end
+
+    def reserved_bytes_for_filesize(filesize)
+      # During finalization the chunk files and assembled final file can briefly coexist.
+      [filesize.to_i * 2, 0].max
     end
 
     def uploaded_part_numbers(session_id, total_parts)
@@ -677,10 +840,54 @@ module ::MediaGallery
     def cleanup_session!(session_id)
       sid = normalize_session_id!(session_id)
       dir = session_path(sid)
-      return false unless Dir.exist?(dir)
+      return { removed: false, bytes: 0 } unless Dir.exist?(dir)
 
+      bytes = directory_size(dir)
       ::MediaGallery::PathSecurity.remove_tree_under!(dir, root_path)
-      true
+      { removed: true, bytes: bytes }
+    end
+
+    def with_global_lock
+      FileUtils.mkdir_p(root_path)
+
+      File.open(global_lock_path, File::RDWR | File::CREAT, 0o600) do |lock|
+        lock.flock(File::LOCK_EX)
+        yield
+      ensure
+        lock&.flock(File::LOCK_UN) rescue nil
+      end
+    end
+
+    def with_session_lock(session_id)
+      sid = normalize_session_id!(session_id)
+      FileUtils.mkdir_p(session_path(sid))
+
+      File.open(lock_path(sid), File::RDWR | File::CREAT, 0o600) do |lock|
+        unless lock.flock(File::LOCK_EX | File::LOCK_NB)
+          raise_error("upload_session_busy", "This upload is already being finalized. Please wait.", status: 409)
+        end
+
+        yield
+      ensure
+        lock&.flock(File::LOCK_UN) rescue nil
+      end
+    end
+
+    def directory_size(path)
+      return 0 unless path.present? && Dir.exist?(path)
+
+      total = 0
+      Find.find(path) do |entry|
+        next unless File.file?(entry)
+        next if File.symlink?(entry)
+
+        total += File.size(entry)
+      rescue
+        next
+      end
+      total
+    rescue
+      0
     end
 
     def raise_error(code, message = nil, status: 422, details: nil)

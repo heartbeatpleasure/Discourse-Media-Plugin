@@ -10,7 +10,7 @@ module ::Jobs
 
       result = ::MediaGallery::ChunkedUploads.cleanup_expired!
       Rails.logger.info(
-        "[media_gallery] chunked upload cleanup scanned=#{result[:scanned]} removed=#{result[:removed]}"
+        "[media_gallery] chunked upload cleanup scanned=#{result[:scanned]} removed=#{result[:removed]} bytes_removed=#{result[:bytes_removed].to_i}"
       ) if result[:removed].to_i.positive?
     rescue => e
       Rails.logger.warn("[media_gallery] chunked upload cleanup failed: #{e.class}: #{e.message}")

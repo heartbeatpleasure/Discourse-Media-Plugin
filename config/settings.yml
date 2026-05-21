@@ -181,6 +181,23 @@ plugins:
     max: 20
     client: false
 
+  # Maximum unfinished chunked upload sessions across all users. Set to 0 to disable the global session cap.
+  media_gallery_chunked_upload_max_active_sessions_global:
+    default: 20
+    type: integer
+    min: 0
+    max: 200
+    client: false
+
+  # Maximum reserved temporary workspace for chunked uploads (MB). Set to 0 to disable this guard.
+  # Reservation is conservative because chunks and the assembled final file can briefly coexist.
+  media_gallery_chunked_upload_max_temp_storage_mb:
+    default: 4096
+    type: integer
+    min: 0
+    max: 102400
+    client: false
+
   media_gallery_max_tags_per_item:
     default: 10
     client: false
