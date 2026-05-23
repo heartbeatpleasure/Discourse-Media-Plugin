@@ -76,6 +76,7 @@ after_initialize do
   require_relative "lib/media_gallery/upload_path"
   require_relative "lib/media_gallery/chunked_uploads"
   require_relative "lib/media_gallery/permissions"
+  require_relative "lib/media_gallery/admin_access"
   require_relative "lib/media_gallery/private_storage"
   require_relative "lib/media_gallery/test_downloads"
   require_relative "lib/media_gallery/forensics_identify_tasks"
@@ -136,19 +137,19 @@ after_initialize do
 
   Discourse::Application.routes.append do
     # Admin UI page (served by the admin Ember app)
-    get "/admin/plugins/media-gallery" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery" => "admin/plugins#index", constraints: ::MediaGallery::AnyStaffAdminPageConstraint.new
     get "/admin/plugins/media-gallery-forensics-exports" => "admin/plugins#index", constraints: AdminConstraint.new
-    get "/admin/plugins/media-gallery-forensics-identify" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-forensics-identify" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:forensics_identify)
     get "/admin/plugins/media-gallery-test-downloads" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-migrations" => "admin/plugins#index", constraints: AdminConstraint.new
-    get "/admin/plugins/media-gallery-management" => "admin/plugins#index", constraints: AdminConstraint.new
-    get "/admin/plugins/media-gallery-reports" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-management" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:management)
+    get "/admin/plugins/media-gallery-reports" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:reports)
     get "/admin/plugins/media-gallery-health" => "admin/plugins#index", constraints: AdminConstraint.new
-    get "/admin/plugins/media-gallery-logs" => "admin/plugins#index", constraints: AdminConstraint.new
-    get "/admin/plugins/media-gallery-user-diagnostics" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-logs" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:logs)
+    get "/admin/plugins/media-gallery-user-diagnostics" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:user_diagnostics)
     get "/admin/plugins/media-gallery-security" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-jobs" => "admin/plugins#index", constraints: AdminConstraint.new
-    get "/admin/plugins/media-gallery-statistics" => "admin/plugins#index", constraints: AdminConstraint.new
+    get "/admin/plugins/media-gallery-statistics" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:statistics)
 
     get "/media-library" => "media_gallery/library#index"
 

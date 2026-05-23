@@ -1908,6 +1908,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     params.set("limit", String(this.limit || "20"));
     params.set("page", String(this.page || 1));
     params.set("sort", String(this.sortBy || "newest"));
+    params.set("media_gallery_admin_page", "management");
     return params;
   }
 

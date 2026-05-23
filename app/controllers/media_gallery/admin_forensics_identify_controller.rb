@@ -15,6 +15,9 @@ module ::MediaGallery
   class AdminForensicsIdentifyController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
+    MEDIA_GALLERY_ADMIN_PAGE_KEY = :forensics_identify
+    include ::MediaGallery::AdminAccess::ControllerMethods
+
     # Keep file-mode requests below common request timeout thresholds.
     # Many installs run into the Discourse production web timeout (~30s) before a reverse proxy does.
     DEFAULT_FILEMODE_SOFT_TIME_BUDGET_SECONDS = 24

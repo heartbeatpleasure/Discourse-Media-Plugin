@@ -809,6 +809,32 @@ plugins:
     default: false
     client: false
 
+  # Staff access to selected Media Gallery admin pages. Admins always keep access.
+  # Keep disabled by default; enable only the pages non-admin staff should be allowed to open and operate.
+  media_gallery_staff_access_management_enabled:
+    default: false
+    client: false
+
+  media_gallery_staff_access_reports_enabled:
+    default: false
+    client: false
+
+  media_gallery_staff_access_statistics_enabled:
+    default: false
+    client: false
+
+  media_gallery_staff_access_user_diagnostics_enabled:
+    default: false
+    client: false
+
+  media_gallery_staff_access_logs_enabled:
+    default: false
+    client: false
+
+  media_gallery_staff_access_forensics_identify_enabled:
+    default: false
+    client: false
+
   # Log slow Media Gallery management searches with phase timing. 0 disables slow-search logging.
   media_gallery_management_search_slow_log_ms:
     default: 2000

@@ -1189,6 +1189,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       params.set("limit", String(this.searchLimit || 20));
       params.set("page", String(this.searchPage || 1));
       params.set("sort", this.searchSort || "newest");
+      params.set("media_gallery_admin_page", "forensics_identify");
 
       if (this.searchTypeFilter !== "all") {
         params.set("media_type", this.searchTypeFilter);

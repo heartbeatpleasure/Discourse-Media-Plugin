@@ -4,6 +4,9 @@ module ::MediaGallery
   class AdminLogsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
+    MEDIA_GALLERY_ADMIN_PAGE_KEY = :logs
+    include ::MediaGallery::AdminAccess::ControllerMethods
+
     def index
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       timing = {}

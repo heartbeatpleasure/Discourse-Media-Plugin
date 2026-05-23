@@ -4,6 +4,9 @@ module ::MediaGallery
   class AdminStatisticsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
+    MEDIA_GALLERY_ADMIN_PAGE_KEY = :statistics
+    include ::MediaGallery::AdminAccess::ControllerMethods
+
     PERIODS = {
       "day" => { sql: "day", label: "%Y-%m-%d", default_limit: 30, max_limit: 120 },
       "week" => { sql: "week", label: "%G-W%V", default_limit: 12, max_limit: 104 },

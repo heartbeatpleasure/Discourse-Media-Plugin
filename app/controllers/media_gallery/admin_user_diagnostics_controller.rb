@@ -4,6 +4,9 @@ module ::MediaGallery
   class AdminUserDiagnosticsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
+    MEDIA_GALLERY_ADMIN_PAGE_KEY = :user_diagnostics
+    include ::MediaGallery::AdminAccess::ControllerMethods
+
     SEARCH_LIMIT = 20
     RECENT_LIMIT = 8
     UPLOADED_MEDIA_DEFAULT_PER_PAGE = 10

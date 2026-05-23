@@ -6,6 +6,9 @@ module ::MediaGallery
   class AdminReportsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
+    MEDIA_GALLERY_ADMIN_PAGE_KEY = :reports
+    include ::MediaGallery::AdminAccess::ControllerMethods
+
     REPORTS_KEY = "media_reports"
     VISIBILITY_KEY = "admin_visibility"
     MANAGEMENT_LOG_KEY = "admin_management_log"

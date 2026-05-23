@@ -9,6 +9,35 @@ module ::MediaGallery
   class AdminMediaItemsController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
 
+    MEDIA_GALLERY_ADMIN_ACTION_PAGES = {
+      management: %i[
+        management
+        admin_update
+        visibility
+        admin_destroy
+        diagnostics
+        diagnostics_bundle
+        reset_processing
+        verify_hls_integrity
+        aes_backfill
+        restart_aes_backfill
+        clear_aes_backfill
+        rotate_aes_key
+        aes_maintenance_cleanup
+        hls_clear_rollback
+        restart_hls_clear_rollback
+        clear_hls_clear_rollback
+        bulk_aes_backfill
+        retry_processing
+        block_owner
+        unblock_owner
+        block_owner_upload
+        unblock_owner_upload
+      ],
+    }.freeze
+
+    include ::MediaGallery::AdminAccess::ActionScopedControllerMethods
+
     MANAGEMENT_LOG_KEY = "admin_management_log"
     VISIBILITY_KEY = "admin_visibility"
     MAX_MANAGEMENT_LOG_ENTRIES = 50
@@ -708,6 +737,19 @@ module ::MediaGallery
     end
 
     private
+
+    def media_gallery_admin_page_key_for_action
+      return media_gallery_search_admin_page_key if action_name.to_s == "search"
+
+      super
+    end
+
+    def media_gallery_search_admin_page_key
+      requested_page = ::MediaGallery::AdminAccess.normalize_page_key(params[:media_gallery_admin_page])
+      return requested_page if %i[management forensics_identify].include?(requested_page)
+
+      :management
+    end
 
     def timed_phase!(timing, key)
       phase_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
