@@ -1,5 +1,8 @@
+import { ajax } from "discourse/lib/ajax";
 import DiscourseRoute from "discourse/routes/discourse";
 
 export default class AdminPluginsMediaGalleryRoute extends DiscourseRoute {
-  // Simple landing page for the Media Gallery plugin (admin-only).
+  model() {
+    return ajax("/admin/plugins/media-gallery/access.json");
+  }
 }

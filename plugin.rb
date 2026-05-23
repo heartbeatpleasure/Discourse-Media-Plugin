@@ -103,6 +103,7 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/media_log_event.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_comment_serializer.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_access_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_fingerprints_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
@@ -138,6 +139,7 @@ after_initialize do
   Discourse::Application.routes.append do
     # Admin UI page (served by the admin Ember app)
     get "/admin/plugins/media-gallery" => "admin/plugins#index", constraints: ::MediaGallery::AnyStaffAdminPageConstraint.new
+    get "/admin/plugins/media-gallery-settings-guide" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-forensics-exports" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-forensics-identify" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:forensics_identify)
     get "/admin/plugins/media-gallery-test-downloads" => "admin/plugins#index", constraints: AdminConstraint.new
@@ -150,6 +152,8 @@ after_initialize do
     get "/admin/plugins/media-gallery-security" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-jobs" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-statistics" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:statistics)
+
+    get "/admin/plugins/media-gallery/access" => "media_gallery/admin_access#index", defaults: { format: :json }
 
     get "/media-library" => "media_gallery/library#index"
 

@@ -71,6 +71,18 @@ export default RouteTemplate(
         gap: 1rem;
       }
 
+      .mg-landing__empty {
+        background: var(--mg-surface);
+        border: 1px solid var(--mg-border);
+        border-radius: var(--mg-radius);
+        padding: 1rem 1.1rem;
+      }
+
+      .mg-landing__empty p {
+        color: var(--mg-muted);
+        margin-top: 0.35rem;
+      }
+
       .mg-landing__card {
         display: flex;
         flex-direction: column;
@@ -166,12 +178,14 @@ export default RouteTemplate(
           <p>{{i18n "admin.media_gallery.description"}}</p>
         </div>
 
-        <a
-          class="btn btn-primary"
-          href="/admin/site_settings/category/all_results?filter=media_gallery"
-        >
-          {{i18n "admin.media_gallery.open_settings"}}
-        </a>
+        {{#if @model.can.openSettings}}
+          <a
+            class="btn btn-primary"
+            href="/admin/site_settings/category/all_results?filter=media_gallery"
+          >
+            {{i18n "admin.media_gallery.open_settings"}}
+          </a>
+        {{/if}}
       </section>
 
       <div class="mg-landing__section-header">
@@ -183,7 +197,9 @@ export default RouteTemplate(
         </div>
       </div>
 
-      <section class="mg-landing__grid" aria-label={{i18n "admin.media_gallery.overview_title"}}>
+      {{#if @model.hasVisibleCards}}
+        <section class="mg-landing__grid" aria-label={{i18n "admin.media_gallery.overview_title"}}>
+        {{#if @model.can.openSettings}}
         <a
           class="mg-landing__card is-primary"
           href="/admin/site_settings/category/all_results?filter=media_gallery"
@@ -203,7 +219,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_settings"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.settingsGuide}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-settings-guide">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -220,7 +238,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.management}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-management">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -237,7 +257,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.reports}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-reports">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -254,7 +276,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.health}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-health">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -271,8 +295,10 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
 
+        {{#if @model.can.statistics}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-statistics">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -289,7 +315,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.security}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-security">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -306,6 +334,8 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
+        {{#if @model.can.userDiagnostics}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-user-diagnostics">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -322,7 +352,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.logs}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-logs">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -339,7 +371,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.forensicsIdentify}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-forensics-identify">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -356,7 +390,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.forensicsExports}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-forensics-exports">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -373,7 +409,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.testDownloads}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-test-downloads">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -390,7 +428,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.jobs}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-jobs">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -407,7 +447,9 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
+        {{/if}}
 
+        {{#if @model.can.migrations}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-migrations">
           <div class="mg-landing__card-header">
             <div class="mg-landing__card-title">
@@ -424,7 +466,14 @@ export default RouteTemplate(
             {{i18n "admin.media_gallery.open_tool"}}
           </span>
         </a>
-      </section>
+        {{/if}}
+        </section>
+      {{else}}
+        <section class="mg-landing__empty" role="status">
+          <h3>{{i18n "admin.media_gallery.no_tools_title"}}</h3>
+          <p>{{i18n "admin.media_gallery.no_tools_description"}}</p>
+        </section>
+      {{/if}}
     </div>
   </template>
 );

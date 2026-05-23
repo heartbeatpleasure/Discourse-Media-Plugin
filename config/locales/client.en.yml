@@ -184,6 +184,8 @@ en:
         overview_title: "Admin tools"
         overview_description: "Choose a media gallery admin area. Each tool opens the same page as before, but with a short description to make navigation easier."
         settings_description: "Configure plugin settings, access groups, notices, reports, storage, processing, and security options."
+        no_tools_title: "No Media Gallery staff tools enabled"
+        no_tools_description: "Ask an admin to enable at least one Media Gallery staff access setting before using this page."
         open_tool: "Open tool"
         category_configuration: "Configuration"
         category_content: "Content"

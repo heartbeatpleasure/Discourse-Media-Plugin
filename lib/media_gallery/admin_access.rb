@@ -73,6 +73,53 @@ module ::MediaGallery
       false
     end
 
+    def can_access_landing?(user)
+      return false if user.blank?
+      return true if user.admin?
+      return false unless enabled?
+      return false unless user.staff?
+
+      any_staff_access_enabled?
+    rescue
+      false
+    end
+
+    def landing_permissions_for(user)
+      is_admin = user.present? && user.admin?
+
+      {
+        openSettings: is_admin,
+        settingsGuide: is_admin,
+        management: can_access?(:management, user: user),
+        reports: can_access?(:reports, user: user),
+        health: is_admin,
+        statistics: can_access?(:statistics, user: user),
+        security: is_admin,
+        userDiagnostics: can_access?(:user_diagnostics, user: user),
+        logs: can_access?(:logs, user: user),
+        forensicsIdentify: can_access?(:forensics_identify, user: user),
+        forensicsExports: is_admin,
+        testDownloads: is_admin,
+        jobs: is_admin,
+        migrations: is_admin,
+      }
+    end
+
+    def landing_access_payload(user)
+      can = landing_permissions_for(user)
+
+      {
+        isAdmin: user.present? && user.admin?,
+        isStaff: user.present? && user.staff?,
+        can: can,
+        hasVisibleCards: can.values.any?,
+      }
+    end
+
+    def ensure_landing_access!(user)
+      raise Discourse::InvalidAccess.new unless can_access_landing?(user)
+    end
+
     def ensure_page_access!(page_key, guardian)
       raise Discourse::InvalidAccess.new unless can_access?(page_key, guardian: guardian)
     end
@@ -146,10 +193,7 @@ module ::MediaGallery
   class AnyStaffAdminPageConstraint
     def matches?(request)
       user = ::MediaGallery::AdminAccess.user_from_request(request)
-      return false if user.blank?
-      return true if user.admin?
-
-      user.staff? && ::MediaGallery::AdminAccess.any_staff_access_enabled?
+      ::MediaGallery::AdminAccess.can_access_landing?(user)
     end
   end
 end
