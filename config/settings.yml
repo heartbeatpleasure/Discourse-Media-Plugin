@@ -207,6 +207,12 @@ plugins:
     type: list
     client: true
 
+  # Optional thumbnail privacy/comfort rules. These are visual-only: matching image/video
+  # thumbnails are blurred in the frontend list; audio placeholders are not affected.
+  media_gallery_blurred_thumbnail_tags:
+    default: ""
+    type: list
+    client: true
 
   # Allowed extensions (no dots). These are additional restrictions on top of Discourse core upload rules.
   media_gallery_allowed_image_extensions:
