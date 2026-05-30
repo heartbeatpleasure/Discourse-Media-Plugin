@@ -61,7 +61,7 @@ en:
       total: "total"
       views: "views"
       likes: "likes"
-      blurred_thumbnail: "Sensitive thumbnail"
+      blurred_thumbnail: "Potentially sensitive content"
       report_media: "Report media"
       report_item_title: "Report media"
       report_reason_label: "Reason"
