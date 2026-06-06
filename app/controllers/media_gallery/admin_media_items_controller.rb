@@ -141,12 +141,20 @@ module ::MediaGallery
       description = ::MediaGallery::TextSanitizer.plain_text(params[:description], max_length: 4000, allow_newlines: true)
       tags = normalize_tags_param(params[:tags])
       note = ::MediaGallery::TextSanitizer.plain_text(params[:admin_note], max_length: 2000, allow_newlines: true).presence
+      force_blur_param_provided = params.key?(:force_blur_thumbnail) || params.key?("force_blur_thumbnail")
+      current_force_blur = force_blur_thumbnail_enabled_for(item)
+      requested_force_blur = if force_blur_param_provided
+        thumbnail_blur_supported_for?(item) && boolean_param(:force_blur_thumbnail)
+      else
+        current_force_blur
+      end
 
       changes = {}
       changes["title"] = [item.title, title] if item.title.to_s != title
       changes["description"] = [item.description.to_s, description] if item.description.to_s != description
       changes["gender"] = [item.gender.to_s, subject] if item.gender.to_s != subject
       changes["tags"] = [Array(item.tags).map(&:to_s), tags] if Array(item.tags).map(&:to_s) != tags
+      changes["force_blur_thumbnail"] = [current_force_blur, requested_force_blur] if force_blur_param_provided && current_force_blur != requested_force_blur
 
       if changes.blank? && note.blank?
         return render_json_dump(ok: true, item: management_item_payload(item), message: "No changes to save.")
@@ -161,13 +169,16 @@ module ::MediaGallery
         changes: changes.presence
       )
 
-      item.update!(
+      update_attrs = {
         title: title,
         description: description.presence,
         gender: subject,
         tags: tags,
         extra_metadata: meta,
-      )
+      }
+      update_attrs[:force_blur_thumbnail] = requested_force_blur if force_blur_param_provided
+
+      item.update!(update_attrs)
 
       item.reload
       ::MediaGallery::OperationLogger.info("admin_management_update", item: item, operation: "save", data: { changed_fields: changes.keys, note_present: note.present? })
@@ -270,6 +281,8 @@ module ::MediaGallery
         media_type: item.media_type,
         gender: item.gender,
         thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
+        force_blur_thumbnail: thumbnail_blur_supported_for?(item) && force_blur_thumbnail_enabled_for(item),
+        thumbnail_blur_supported: thumbnail_blur_supported_for?(item),
         error_message: item.error_message,
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: managed_storage_profile_key_for(item),
@@ -1131,6 +1144,23 @@ module ::MediaGallery
       ActiveModel::Type::Boolean.new.cast(params[name])
     end
 
+    def thumbnail_blur_supported_for?(item)
+      return item.thumbnail_blur_supported? if item.respond_to?(:thumbnail_blur_supported?)
+
+      %w[image video].include?(item&.media_type.to_s)
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      false
+    end
+
+    def force_blur_thumbnail_enabled_for(item)
+      return false unless thumbnail_blur_supported_for?(item)
+      return item.force_blur_thumbnail_enabled? if item.respond_to?(:force_blur_thumbnail_enabled?)
+
+      ActiveModel::Type::Boolean.new.cast(item&.force_blur_thumbnail)
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      false
+    end
+
     def normalize_tags_param(value)
       raw = value
       raw = raw.split(",") if raw.is_a?(String)
@@ -1160,6 +1190,8 @@ module ::MediaGallery
         filesize_processed_bytes: item.filesize_processed_bytes,
         error_message: item.error_message,
         thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
+        force_blur_thumbnail: thumbnail_blur_supported_for?(item) && force_blur_thumbnail_enabled_for(item),
+        thumbnail_blur_supported: thumbnail_blur_supported_for?(item),
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: profile_info[:key],
         managed_storage_profile_label: profile_info[:label],
@@ -1190,6 +1222,8 @@ module ::MediaGallery
         user_id: item.user_id,
         username: item.user&.username,
         thumbnail_url: "/media/#{item.public_id}/thumbnail?admin_preview=1",
+        force_blur_thumbnail: thumbnail_blur_supported_for?(item) && force_blur_thumbnail_enabled_for(item),
+        thumbnail_blur_supported: thumbnail_blur_supported_for?(item),
         error_message: item.error_message,
         managed_storage_backend: item.managed_storage_backend,
         managed_storage_profile: managed_storage_profile_key_for(item),

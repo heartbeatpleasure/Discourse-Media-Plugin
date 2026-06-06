@@ -2091,6 +2091,7 @@ end
         created_at: media_item_time_payload(safe_media_item_attr(item, :created_at)),
         uploader_username: media_item_uploader_username(item),
         thumbnail_url: "/media/#{safe_media_item_attr(item, :public_id)}/thumbnail",
+        force_blur_thumbnail: media_item_force_blur_thumbnail_payload(item),
         playable: media_item_playable_payload(item),
         liked: media_item_liked_by_current_user?(item)
       }
@@ -2121,9 +2122,20 @@ end
         created_at: media_item_time_payload(safe_media_item_attr(item, :created_at)),
         uploader_username: media_item_uploader_username(item),
         thumbnail_url: "/media/#{safe_media_item_attr(item, :public_id)}/thumbnail",
+        force_blur_thumbnail: false,
         playable: false,
         liked: false
       }
+    end
+
+    def media_item_force_blur_thumbnail_payload(item)
+      media_type = safe_media_item_attr(item, :media_type).to_s
+      return false unless %w[image video].include?(media_type)
+      return item.force_blur_thumbnail_enabled? if item.respond_to?(:force_blur_thumbnail_enabled?)
+
+      ActiveModel::Type::Boolean.new.cast(safe_media_item_attr(item, :force_blur_thumbnail))
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      false
     end
 
     def safe_media_item_attr(item, attr_name, default = nil)

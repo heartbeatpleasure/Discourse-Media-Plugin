@@ -90,6 +90,10 @@ function stringifyValue(value, key = "") {
     return value ? "Hidden" : "Visible";
   }
 
+  if (key === "force_blur_thumbnail") {
+    return value ? "Forced blur" : "Normal/tag-based";
+  }
+
   if (key === "owner_media_blocked" || key === "owner_media_view_blocked" || key === "owner_media_upload_blocked") {
     return value ? "Blocked" : "Allowed";
   }
@@ -526,6 +530,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
   @tracked editGender = "";
   @tracked editTags = [];
   @tracked editTagsText = "";
+  @tracked editForceBlurThumbnail = false;
   @tracked adminNote = "";
 
   @tracked isSaving = false;
@@ -587,6 +592,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.editGender = "";
     this.editTags = [];
     this.editTagsText = "";
+    this.editForceBlurThumbnail = false;
     this.adminNote = "";
 
     this.isSaving = false;
@@ -757,7 +763,8 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       String(this.selectedItem.title || "") !== String(this.editTitle || "").trim() ||
       String(this.selectedItem.description || "") !== String(this.editDescription || "").trim() ||
       String(this.selectedItem.gender || "") !== String(this.editGender || "") ||
-      !arrayEqual(originalTags, this.currentTagValues)
+      !arrayEqual(originalTags, this.currentTagValues) ||
+      !!this.selectedItem.force_blur_thumbnail !== !!this.editForceBlurThumbnail
     );
   }
 
@@ -1165,8 +1172,37 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       visibilityBadgeClass: item?.hidden ? "is-danger" : "is-success",
       displayDuplicate: item?.possible_duplicate ? "Possible duplicate" : "",
       duplicateBadgeClass: item?.possible_duplicate ? "is-warning" : "",
+      displayForceBlur: item?.force_blur_thumbnail ? "Forced blur" : "",
+      forceBlurBadgeClass: item?.force_blur_thumbnail ? "is-warning" : "",
       aesBadge: hlsAes128Badge(item?.hls_aes128),
     }));
+  }
+
+  get selectedThumbnailBlurSupported() {
+    if (this.selectedItem?.thumbnail_blur_supported != null) {
+      return !!this.selectedItem.thumbnail_blur_supported;
+    }
+
+    const mediaType = String(this.selectedItem?.media_type || "").toLowerCase();
+    return mediaType === "image" || mediaType === "video";
+  }
+
+  get selectedThumbnailBlurCheckboxDisabled() {
+    return !this.selectedThumbnailBlurSupported;
+  }
+
+  get selectedThumbnailBlurControlClass() {
+    return this.selectedThumbnailBlurSupported
+      ? "mg-management__force-blur-option"
+      : "mg-management__force-blur-option is-disabled";
+  }
+
+  get selectedThumbnailBlurLabel() {
+    if (!this.selectedThumbnailBlurSupported) {
+      return "Not applicable";
+    }
+
+    return this.selectedItem?.force_blur_thumbnail ? "Forced blur" : "Normal/tag-based";
   }
 
   get selectedStatusBadgeClass() {
@@ -1238,6 +1274,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     return [
       { label: "Status", value: titleize(item.status) || "—" },
       { label: "Media type", value: titleize(item.media_type) || "—" },
+      { label: "Thumbnail blur", value: this.selectedThumbnailBlurLabel },
       { label: "The file contains", value: genderLabel(item.gender) },
       { label: "Uploader", value: item.username ? `${item.username} (#${item.user_id})` : String(item.user_id || "—") },
       { label: "Uploader access", value: this.ownerMediaAccessLabel },
@@ -1463,6 +1500,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
       ? item.tags.map((tag) => String(tag || "").trim().toLowerCase()).filter(Boolean)
       : [];
     this.editTagsText = this.editTags.join(", ");
+    this.editForceBlurThumbnail = !!item?.force_blur_thumbnail;
     this.adminNote = "";
   }
 
@@ -1831,6 +1869,10 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
     this.editTagsText = event?.target?.value || "";
   }
 
+  @action onEditForceBlurThumbnail(event) {
+    this.editForceBlurThumbnail = !!event?.target?.checked && this.selectedThumbnailBlurSupported;
+  }
+
   @action toggleTag(tag) {
     const normalized = String(tag || "").trim().toLowerCase();
     if (!normalized) {
@@ -2106,6 +2148,7 @@ export default class AdminPluginsMediaGalleryManagementController extends Contro
           description: String(this.editDescription || "").trim(),
           gender: this.editGender,
           tags: this.currentTagValues,
+          force_blur_thumbnail: !!this.editForceBlurThumbnail && this.selectedThumbnailBlurSupported,
           admin_note: this.adminNote,
         }),
       });

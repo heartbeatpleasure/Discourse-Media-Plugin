@@ -105,5 +105,15 @@ module ::MediaGallery
       value = extra_metadata_hash["admin_management_log"]
       value.is_a?(Array) ? value.deep_dup : []
     end
+
+    def thumbnail_blur_supported?
+      %w[image video].include?(media_type.to_s)
+    end
+
+    def force_blur_thumbnail_enabled?
+      ActiveModel::Type::Boolean.new.cast(self[:force_blur_thumbnail])
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      false
+    end
   end
 end

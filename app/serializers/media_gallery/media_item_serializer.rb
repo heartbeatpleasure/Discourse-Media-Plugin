@@ -20,6 +20,7 @@ module ::MediaGallery
       :created_at,
       :uploader_username,
       :thumbnail_url,
+      :force_blur_thumbnail,
       :playable,
       :liked
     )
@@ -53,6 +54,15 @@ module ::MediaGallery
       # Stable URL that serves the thumbnail directly (with Cache-Control + ETag/Last-Modified).
       # This keeps raw Upload URLs out of HTML/JS AND allows browser caching across gallery pages.
       "/media/#{object.public_id}/thumbnail"
+    end
+
+    def force_blur_thumbnail
+      return false unless object.respond_to?(:thumbnail_blur_supported?) && object.thumbnail_blur_supported?
+      return object.force_blur_thumbnail_enabled? if object.respond_to?(:force_blur_thumbnail_enabled?)
+
+      ActiveModel::Type::Boolean.new.cast(object.force_blur_thumbnail)
+    rescue ActiveModel::MissingAttributeError, NoMethodError
+      false
     end
 
     def playable

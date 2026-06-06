@@ -387,6 +387,35 @@ export default RouteTemplate(
         border-color: var(--success-low-mid);
       }
 
+      .mg-management__force-blur-option {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        margin-top: 1rem;
+        padding: 0.85rem 0.95rem;
+        border: 1px solid var(--mg-border);
+        border-radius: 14px;
+        background: var(--mg-surface-alt);
+      }
+
+      .mg-management__force-blur-option.is-disabled {
+        opacity: 0.7;
+      }
+
+      .mg-management__checkbox-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.6rem;
+        font-weight: 700;
+      }
+
+      .mg-management__checkbox-label input[type="checkbox"] {
+        flex: 0 0 auto;
+        width: auto;
+        min-height: 0;
+        margin: 0;
+      }
+
       .mg-management__badge.is-warning {
         background: var(--highlight-low, #fff7cc);
         color: var(--primary-high);
@@ -965,6 +994,9 @@ export default RouteTemplate(
                       {{#if item.displayDuplicate}}
                         <span class="mg-management__badge {{item.duplicateBadgeClass}}">{{item.displayDuplicate}}</span>
                       {{/if}}
+                      {{#if item.displayForceBlur}}
+                        <span class="mg-management__badge {{item.forceBlurBadgeClass}}">{{item.displayForceBlur}}</span>
+                      {{/if}}
                     </div>
                   </article>
                 {{/each}}
@@ -1025,6 +1057,9 @@ export default RouteTemplate(
                 <span class="mg-management__badge {{@controller.selectedVisibilityBadgeClass}}">{{if @controller.selectedItem.hidden "Hidden" "Visible"}}</span>
                 {{#if @controller.selectedHasPossibleDuplicate}}
                   <span class="mg-management__badge {{@controller.selectedDuplicateBadgeClass}}">Possible duplicate</span>
+                {{/if}}
+                {{#if @controller.selectedItem.force_blur_thumbnail}}
+                  <span class="mg-management__badge is-warning">Forced blur</span>
                 {{/if}}
               </div>
             </div>
@@ -1108,6 +1143,21 @@ export default RouteTemplate(
                     {{else}}
                       <input type="text" value={{@controller.editTagsText}} placeholder="comma,separated,tags" {{on "input" @controller.onEditTagsText}} />
                     {{/if}}
+                  </div>
+                </div>
+
+                <div class={{@controller.selectedThumbnailBlurControlClass}}>
+                  <label class="mg-management__checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={{@controller.editForceBlurThumbnail}}
+                      disabled={{@controller.selectedThumbnailBlurCheckboxDisabled}}
+                      {{on "change" @controller.onEditForceBlurThumbnail}}
+                    />
+                    <span>Force blurred thumbnail</span>
+                  </label>
+                  <div class="mg-management__muted">
+                    Blur this specific image/video thumbnail in the public media library, even when no configured blur tag matches. Audio items keep their standard thumbnail.
                   </div>
                 </div>
 
