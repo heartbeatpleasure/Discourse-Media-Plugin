@@ -16,7 +16,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                   only: [:index, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :report, :retry_processing, :destroy, :update]
+                   only: [:index, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :likes, :report, :retry_processing, :destroy, :update]
 
     before_action :ensure_can_upload, only: [:create]
     before_action :ensure_secure_write_request!, only: [:create, :update, :destroy, :retry_processing, :like, :unlike, :report, :heartbeat, :revoke]
@@ -56,7 +56,8 @@ module ::MediaGallery
         permissions: media_gallery_permissions_payload,
         upload_policy: can_upload ? upload_policy_payload : nil,
         reports: can_view ? media_reports_config_payload : { enabled: false },
-        comments: can_view ? media_comments_config_payload : { enabled: false }
+        comments: can_view ? media_comments_config_payload : { enabled: false },
+        likes: can_view ? media_likes_config_payload : { enabled: false, visibility: media_like_viewers_mode }
       )
     end
     
@@ -1120,7 +1121,13 @@ module ::MediaGallery
         MediaGallery::MediaItem.where(id: item.id).update_all("likes_count = likes_count + 1")
       end
 
-      render_json_dump(success: true)
+      item.reload
+      render_json_dump(
+        success: true,
+        liked: true,
+        likes_count: item.likes_count.to_i,
+        can_view_likes: media_like_viewers_visible_to_current_user?(item)
+      )
     end
 
     def unlike
@@ -1134,7 +1141,40 @@ module ::MediaGallery
       like.destroy!
       MediaGallery::MediaItem.where(id: item.id).update_all("likes_count = GREATEST(likes_count - 1, 0)")
 
-      render_json_dump(success: true)
+      item.reload
+      render_json_dump(
+        success: true,
+        liked: false,
+        likes_count: item.likes_count.to_i,
+        can_view_likes: media_like_viewers_visible_to_current_user?(item)
+      )
+    end
+
+    def likes
+      item = find_item_by_public_id!(params[:public_id])
+      ensure_item_visible_to_current_user!(item)
+      raise Discourse::NotFound unless item.ready?
+
+      unless media_like_viewers_visible_to_current_user?(item)
+        return render_json_error(
+          "media_likes_forbidden",
+          status: 403,
+          message: "Like details are not available for this media item."
+        )
+      end
+
+      limit = bounded_per_page_param(params[:limit] || params[:per_page], default: 50, max: 100)
+      scope = MediaGallery::MediaLike.where(media_item_id: item.id).includes(:user).order(created_at: :desc, id: :desc)
+      total = scope.count
+      users = scope.limit(limit).map { |media_like| media_like_user_payload(media_like) }.compact
+
+      render_json_dump(
+        success: true,
+        can_view: true,
+        visibility: media_like_viewers_mode,
+        total: total,
+        users: users
+      )
     end
 
     private
@@ -1552,6 +1592,52 @@ end
 
     REPORTS_METADATA_KEY = "media_reports"
     REPORT_AUTO_HIDE_GROUP_SETTING_SEPARATOR = /[\|,\n]/
+
+    MEDIA_LIKE_VIEWER_MODES = %w[owner everyone].freeze
+
+    def media_likes_config_payload
+      {
+        enabled: true,
+        visibility: media_like_viewers_mode
+      }
+    end
+
+    def media_like_viewers_mode
+      raw = if SiteSetting.respond_to?(:media_gallery_like_viewers)
+        SiteSetting.media_gallery_like_viewers.to_s
+      else
+        "owner"
+      end
+
+      MEDIA_LIKE_VIEWER_MODES.include?(raw) ? raw : "owner"
+    end
+
+    def media_like_viewers_visible_to_current_user?(item)
+      return false if current_user.blank? || item.blank?
+      return true if media_like_viewers_mode == "everyone"
+      return true if item.user_id.to_i == current_user.id
+
+      # Staff/admin access is useful for moderation and troubleshooting, even when
+      # the user-facing setting is limited to the uploader.
+      current_user.staff? || current_user.admin?
+    end
+
+    def media_like_user_payload(media_like)
+      user = media_like&.user
+      return nil if user.blank?
+
+      username = user.username.to_s
+      clean_username = username.start_with?("@") ? username[1..] : username
+
+      {
+        id: user.id,
+        username: clean_username,
+        name: user.name.to_s.presence,
+        avatar_template: user.avatar_template,
+        profile_url: "/u/#{clean_username}",
+        liked_at: media_item_time_payload(media_like.created_at)
+      }.compact
+    end
 
     def media_comments_config_payload
       comment_likes_enabled = SiteSetting.respond_to?(:media_gallery_comment_likes_enabled) && SiteSetting.media_gallery_comment_likes_enabled && comment_like_table_available?
@@ -2093,7 +2179,8 @@ end
         thumbnail_url: "/media/#{safe_media_item_attr(item, :public_id)}/thumbnail",
         force_blur_thumbnail: media_item_force_blur_thumbnail_payload(item),
         playable: media_item_playable_payload(item),
-        liked: media_item_liked_by_current_user?(item)
+        liked: media_item_liked_by_current_user?(item),
+        can_view_likes: media_like_viewers_visible_to_current_user?(item)
       }
 
       if media_item_status_visible?(item)
@@ -2124,7 +2211,8 @@ end
         thumbnail_url: "/media/#{safe_media_item_attr(item, :public_id)}/thumbnail",
         force_blur_thumbnail: false,
         playable: false,
-        liked: false
+        liked: false,
+        can_view_likes: false
       }
     end
 

@@ -257,6 +257,8 @@ en:
     media_gallery_comment_likes_enabled: "Allow users to like individual media comments. This is separate from liking the media item itself."
     media_gallery_comment_likes_min_trust_level_title: "Media gallery comment likes minimum trust level"
     media_gallery_comment_likes_min_trust_level: "Minimum trust level required to like media comments. Users below this trust level can still see comment like counts."
+    media_gallery_like_viewers_title: "Media gallery like details visibility"
+    media_gallery_like_viewers: "Controls who can open the list of users who liked a media item. Owner means the uploader can see the list; staff and admins can also see it for moderation. Everyone means every user who can view the media item can see the list."
     media_gallery_comment_reports_enabled_title: "Media gallery comment reports enabled"
     media_gallery_comment_reports_enabled: "Allow users to report individual media comments. This is separate from reporting the media item itself."
     media_gallery_comment_reports_min_trust_level_title: "Media gallery comment reports minimum trust level"

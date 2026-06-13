@@ -22,7 +22,8 @@ module ::MediaGallery
       :thumbnail_url,
       :force_blur_thumbnail,
       :playable,
-      :liked
+      :liked,
+      :can_view_likes
     )
 
     attribute :status, if: :can_see_status?
@@ -73,6 +74,22 @@ module ::MediaGallery
       u = scope&.user
       return false if u.nil?
       MediaGallery::MediaLike.exists?(user_id: u.id, media_item_id: object.id)
+    end
+
+    def can_view_likes
+      u = scope&.user
+      return false if u.nil?
+
+      mode = if SiteSetting.respond_to?(:media_gallery_like_viewers)
+        SiteSetting.media_gallery_like_viewers.to_s
+      else
+        "owner"
+      end
+
+      return true if mode == "everyone"
+      return true if u.id == object.user_id
+
+      u.staff? || u.admin?
     end
 
     def can_see_status?
