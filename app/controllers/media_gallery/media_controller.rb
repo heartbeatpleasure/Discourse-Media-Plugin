@@ -16,7 +16,7 @@ module ::MediaGallery
     before_action :ensure_logged_in
 
     before_action :ensure_can_view,
-                   only: [:index, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :like, :unlike, :likes, :report, :retry_processing, :destroy, :update]
+                   only: [:index, :show, :status, :thumbnail, :play, :heartbeat, :revoke, :my, :users, :like, :unlike, :likes, :report, :retry_processing, :destroy, :update]
 
     before_action :ensure_can_upload, only: [:create]
     before_action :ensure_secure_write_request!, only: [:create, :update, :destroy, :retry_processing, :like, :unlike, :report, :heartbeat, :revoke]
@@ -97,6 +97,44 @@ module ::MediaGallery
 #{e.backtrace&.first(30)&.join("
 ")}")
       render_json_error("media_index_failed", status: 500, message: "Media could not be loaded.")
+    end
+
+
+    def users
+      limit = bounded_per_page_param(params[:limit], default: 8, max: 20)
+      term = ::MediaGallery::TextSanitizer.plain_text(
+        params[:q].presence || params[:username].presence || params[:uploader],
+        max_length: 60,
+        allow_newlines: false
+      ).to_s.strip.downcase
+      term = term.sub(/\A@+/, "")
+
+      scope = apply_admin_visibility_filter(MediaGallery::MediaItem.where(status: "ready"))
+        .joins(:user)
+        .where.not(user_id: nil)
+
+      if term.present?
+        pattern = "%#{ActiveRecord::Base.sanitize_sql_like(term)}%"
+        scope = scope.where("LOWER(users.username) LIKE ?", pattern)
+      end
+
+      users = scope
+        .select("users.id AS id, users.username AS username, MAX(media_gallery_media_items.created_at) AS last_uploaded_at")
+        .group("users.id, users.username")
+        .order(Arel.sql("MAX(media_gallery_media_items.created_at) DESC"))
+        .limit(limit)
+
+      render_json_dump(
+        users: users.map do |user|
+          {
+            id: user.id,
+            username: user.username.to_s
+          }
+        end
+      )
+    rescue => e
+      Rails.logger.error("[media_gallery] media users autocomplete failed request_id=#{request.request_id} error=#{e.class}: #{e.message}")
+      render_json_error("media_users_failed", status: 500, message: "Media users could not be loaded.")
     end
 
     def create
@@ -2095,7 +2133,29 @@ end
 
       scope = apply_tag_filter(scope)
       scope = apply_search_filter(scope)
+      scope = apply_user_filter(scope)
       scope
+    end
+
+    def apply_user_filter(scope)
+      username = user_filter_param
+      return scope if username.blank?
+
+      user = ::User.find_by(username_lower: username.downcase)
+      return scope.none if user.blank?
+
+      scope.where(user_id: user.id)
+    end
+
+    def user_filter_param
+      raw = params[:uploader].presence || params[:username].presence || params[:user]
+      username = ::MediaGallery::TextSanitizer.plain_text(
+        raw,
+        max_length: 60,
+        allow_newlines: false
+      ).to_s.strip
+
+      username.sub(/\A@+/, "")
     end
 
     def apply_tag_filter(scope)

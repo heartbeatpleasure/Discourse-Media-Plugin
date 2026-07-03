@@ -260,9 +260,10 @@ after_initialize do
     get "/media/my" => "media_gallery/media#my", defaults: { format: :json }
     get "/user/media" => "media_gallery/media#my", defaults: { format: :json }
 
-    # config endpoint (must be before /media/:public_id)
+    # config/users endpoints (must be before /media/:public_id)
     # NOTE: do not name controller action `config` (conflicts with ActionController::Base#config)
     get "/media/config" => "media_gallery/media#plugin_config", defaults: { format: :json }
+    get "/media/users" => "media_gallery/media#users", defaults: { format: :json }
 
     # Application-level chunked uploads for large files behind proxies with request size limits.
     post "/media/chunked/start" => "media_gallery/chunked_uploads#start", defaults: { format: :json }
