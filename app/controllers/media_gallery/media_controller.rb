@@ -109,6 +109,10 @@ module ::MediaGallery
       ).to_s.strip.downcase
       term = term.sub(/\A@+/, "")
 
+      if term.length < 2
+        return render_json_dump(users: [])
+      end
+
       scope = apply_admin_visibility_filter(MediaGallery::MediaItem.where(status: "ready"))
         .joins(:user)
         .where.not(user_id: nil)
