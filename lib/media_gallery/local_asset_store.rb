@@ -150,6 +150,28 @@ module ::MediaGallery
       false
     end
 
+    # Reconciliation normally removes a complete prefix through +delete_prefix+.
+    # This extra local-only guard handles the harmless but untidy case where an
+    # empty directory is left behind or recreated while the files are removed.
+    # It never removes a non-empty directory and can never remove the store root.
+    def prune_empty_prefix_directory(prefix)
+      dir = absolute_path_for(prefix)
+      return true unless Dir.exist?(dir)
+      return false unless Dir.empty?(dir)
+
+      Dir.rmdir(dir)
+      cleanup_empty_parents(File.dirname(dir))
+      !Dir.exist?(dir)
+    rescue
+      false
+    end
+
+    def prefix_directory_exists?(prefix)
+      Dir.exist?(absolute_path_for(prefix))
+    rescue
+      false
+    end
+
     def list_prefix(prefix, limit: nil)
       list_prefix_entries(prefix, limit: limit).map { |entry| entry[:key] }
     end

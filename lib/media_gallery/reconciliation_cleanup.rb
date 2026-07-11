@@ -73,10 +73,12 @@ module ::MediaGallery
       existed = sample_before.present?
       delete_result = delete_prefix_until_clear(store, prefix)
       remaining = Array(delete_result[:remaining]).map(&:to_s)
+      local_directory_cleanup = prune_empty_local_prefix_directory(store, prefix, remaining: remaining)
       status = delete_result[:ok] ? "complete" : "partial"
       warnings = []
       warnings << "prefix_still_has_objects_after_cleanup" if remaining.present?
       warnings << "delete_prefix_returned_false" unless delete_result[:delete_succeeded]
+      warnings << "empty_local_prefix_directory_remains" if local_directory_cleanup["remaining"]
 
       {
         "schema_version" => 1,
@@ -95,6 +97,7 @@ module ::MediaGallery
         "delete_attempt_details" => delete_result[:attempts],
         "sample_keys_before" => sample_before.first(10),
         "remaining_sample_keys" => remaining.first(10),
+        "local_prefix_directory_cleanup" => local_directory_cleanup,
         "warnings" => warnings,
         "finished_at" => Time.now.utc.iso8601,
       }.compact
@@ -127,6 +130,32 @@ module ::MediaGallery
       end
 
       { ok: delete_succeeded && remaining.blank?, delete_succeeded: delete_succeeded, remaining: remaining, attempts: attempts }
+    end
+
+
+    def prune_empty_local_prefix_directory(store, prefix, remaining:)
+      return { "applicable" => false } unless store.respond_to?(:backend) && store.backend.to_s == "local"
+      return { "applicable" => true, "attempted" => false, "remaining" => false } if remaining.present?
+      return { "applicable" => true, "attempted" => false, "remaining" => false } unless store.respond_to?(:prune_empty_prefix_directory)
+
+      existed_before = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(prefix)
+      removed = store.prune_empty_prefix_directory(prefix)
+      remains = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(prefix)
+
+      {
+        "applicable" => true,
+        "attempted" => existed_before,
+        "removed" => existed_before && removed && !remains,
+        "remaining" => remains,
+      }
+    rescue => e
+      {
+        "applicable" => true,
+        "attempted" => true,
+        "removed" => false,
+        "remaining" => true,
+        "error" => "#{e.class}: #{e.message}",
+      }
     end
 
     def delete_retry_delay_for(store)
