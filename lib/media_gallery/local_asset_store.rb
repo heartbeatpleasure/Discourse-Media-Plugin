@@ -144,32 +144,57 @@ module ::MediaGallery
 
     def delete_prefix(prefix)
       dir = absolute_path_for(prefix)
-      ::MediaGallery::PathSecurity.remove_tree_under!(dir, safe_root_path) if dir.present? && Dir.exist?(dir)
-      true
-    rescue
+      return true unless File.exist?(dir) || File.symlink?(dir)
+
+      removed = ::MediaGallery::PathSecurity.remove_tree_under!(dir, safe_root_path)
+      removed && !File.exist?(dir) && !File.symlink?(dir)
+    rescue => e
+      Rails.logger.warn(
+        "[media_gallery] local prefix delete failed prefix=#{prefix.to_s.sub(%r{\A/+}, "")} error=#{e.class}: #{e.message}"
+      ) if defined?(Rails)
       false
     end
 
-    # Reconciliation normally removes a complete prefix through +delete_prefix+.
-    # This extra local-only guard handles the harmless but untidy case where an
-    # empty directory is left behind or recreated while the files are removed.
-    # It never removes a non-empty directory and can never remove the store root.
-    def prune_empty_prefix_directory(prefix)
-      dir = absolute_path_for(prefix)
-      return true unless Dir.exist?(dir)
-      return false unless Dir.empty?(dir)
+    # Remove only empty directories left after a verified prefix cleanup. The
+    # target may already have been removed by +delete_prefix+; in that case we
+    # also prune empty parents, but never above the UUID-scoped boundary.
+    #
+    # This deliberately uses Dir.rmdir rather than rm_rf. A directory that gains
+    # a file during cleanup therefore becomes non-empty and is left untouched.
+    def prune_empty_prefix_directory(prefix, boundary_prefix: nil)
+      target_dir = absolute_path_for(prefix)
+      boundary_key = boundary_prefix.to_s.presence || normalize_top_level_prefix(prefix)
+      boundary_dir = absolute_path_for(boundary_key)
+      root = safe_root_path.chomp("/")
 
-      Dir.rmdir(dir)
-      cleanup_empty_parents(File.dirname(dir))
-      !Dir.exist?(dir)
-    rescue
-      false
+      boundary_prefix_path = "#{boundary_dir.chomp('/')}#{File::SEPARATOR}"
+      unless target_dir == boundary_dir || target_dir.start_with?(boundary_prefix_path)
+        raise ArgumentError, "prefix_outside_cleanup_boundary"
+      end
+
+      current = if File.exist?(target_dir) || File.symlink?(target_dir)
+        target_dir
+      else
+        File.dirname(target_dir)
+      end
+
+      while current != root && (current == boundary_dir || current.start_with?(boundary_prefix_path))
+        raise ArgumentError, "symlink_in_empty_prefix_cleanup" if File.symlink?(current)
+        break unless Dir.exist?(current)
+
+        remove_empty_directory_tree!(current)
+        break if Dir.exist?(current)
+        break if current == boundary_dir
+
+        current = File.dirname(current)
+      end
+
+      !File.exist?(target_dir) && !File.symlink?(target_dir)
     end
 
     def prefix_directory_exists?(prefix)
-      Dir.exist?(absolute_path_for(prefix))
-    rescue
-      false
+      path = absolute_path_for(prefix)
+      File.exist?(path) || File.symlink?(path)
     end
 
     def list_prefix(prefix, limit: nil)
@@ -283,6 +308,29 @@ module ::MediaGallery
 
     def relative_key_for(path)
       path.to_s.sub(%r{\A#{Regexp.escape(safe_root_path.chomp('/'))}/?}, "")
+    end
+
+    def normalize_top_level_prefix(prefix)
+      normalized = ::MediaGallery::PathSecurity.normalize_relative_key!(prefix)
+      normalized.split("/").first.to_s
+    end
+
+    def remove_empty_directory_tree!(dir)
+      return unless Dir.exist?(dir)
+
+      entries = Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).reject do |path|
+        [".", ".."].include?(File.basename(path))
+      end
+
+      raise ArgumentError, "symlink_in_empty_prefix_cleanup" if entries.any? { |path| File.symlink?(path) }
+      return if entries.any? { |path| !File.directory?(path) }
+
+      entries
+        .select { |path| File.directory?(path) }
+        .sort_by { |path| -path.length }
+        .each { |path| Dir.rmdir(path) if Dir.exist?(path) && Dir.empty?(path) }
+
+      Dir.rmdir(dir) if Dir.exist?(dir) && Dir.empty?(dir)
     end
 
     def cleanup_empty_parents(path)

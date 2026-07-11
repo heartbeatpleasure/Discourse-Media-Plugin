@@ -73,12 +73,22 @@ module ::MediaGallery
       existed = sample_before.present?
       delete_result = delete_prefix_until_clear(store, prefix)
       remaining = Array(delete_result[:remaining]).map(&:to_s)
-      local_directory_cleanup = prune_empty_local_prefix_directory(store, prefix, remaining: remaining)
-      status = delete_result[:ok] ? "complete" : "partial"
+      local_directory_cleanup = prune_empty_local_prefix_directory(
+        store,
+        prefix,
+        public_id: public_id,
+        remaining: remaining
+      )
+      local_directory_remaining = truthy?(local_directory_cleanup["remaining"])
+      cleanup_complete = remaining.blank? && !local_directory_remaining && (
+        delete_result[:delete_succeeded] || truthy?(local_directory_cleanup["removed"])
+      )
+      status = cleanup_complete ? "complete" : "partial"
       warnings = []
       warnings << "prefix_still_has_objects_after_cleanup" if remaining.present?
       warnings << "delete_prefix_returned_false" unless delete_result[:delete_succeeded]
-      warnings << "empty_local_prefix_directory_remains" if local_directory_cleanup["remaining"]
+      warnings << "empty_local_prefix_directory_remains" if local_directory_remaining
+      warnings << "empty_local_prefix_directory_cleanup_failed" if local_directory_cleanup["error"].present?
 
       {
         "schema_version" => 1,
@@ -91,8 +101,8 @@ module ::MediaGallery
         "backend" => backend,
         "group_prefix" => prefix,
         "existed" => existed,
-        "deleted" => delete_result[:delete_succeeded],
-        "remaining" => remaining.present?,
+        "deleted" => cleanup_complete,
+        "remaining" => remaining.present? || local_directory_remaining,
         "delete_attempts" => delete_result[:attempts].length,
         "delete_attempt_details" => delete_result[:attempts],
         "sample_keys_before" => sample_before.first(10),
@@ -133,20 +143,22 @@ module ::MediaGallery
     end
 
 
-    def prune_empty_local_prefix_directory(store, prefix, remaining:)
+    def prune_empty_local_prefix_directory(store, prefix, public_id:, remaining:)
       return { "applicable" => false } unless store.respond_to?(:backend) && store.backend.to_s == "local"
-      return { "applicable" => true, "attempted" => false, "remaining" => false } if remaining.present?
-      return { "applicable" => true, "attempted" => false, "remaining" => false } unless store.respond_to?(:prune_empty_prefix_directory)
+      return { "applicable" => true, "attempted" => false, "remaining" => true, "reason" => "objects_remain" } if remaining.present?
+      return { "applicable" => true, "attempted" => false, "remaining" => true, "reason" => "store_method_unavailable" } unless store.respond_to?(:prune_empty_prefix_directory)
 
       existed_before = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(prefix)
-      removed = store.prune_empty_prefix_directory(prefix)
+      removed = store.prune_empty_prefix_directory(prefix, boundary_prefix: public_id)
       remains = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(prefix)
 
       {
         "applicable" => true,
         "attempted" => existed_before,
-        "removed" => existed_before && removed && !remains,
+        "removed" => removed && !remains,
         "remaining" => remains,
+        "checked_prefix" => prefix,
+        "boundary_prefix" => public_id,
       }
     rescue => e
       {
@@ -154,6 +166,8 @@ module ::MediaGallery
         "attempted" => true,
         "removed" => false,
         "remaining" => true,
+        "checked_prefix" => prefix,
+        "boundary_prefix" => public_id,
         "error" => "#{e.class}: #{e.message}",
       }
     end
