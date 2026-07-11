@@ -1,10 +1,8 @@
-import RouteTemplate from "ember-route-template";
 import { fn } from "@ember/helper";
 import { on } from "@ember/modifier";
 import { i18n } from "discourse-i18n";
 
-export default RouteTemplate(
-  <template>
+export default <template>
     <style>
       .media-gallery-health {
         --mg-health-surface: var(--secondary);
@@ -1269,5 +1267,4 @@ export default RouteTemplate(
         {{/each}}
       </div>
     </div>
-  </template>
-);
+</template>;
