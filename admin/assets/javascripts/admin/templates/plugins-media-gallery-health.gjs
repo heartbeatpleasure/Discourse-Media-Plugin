@@ -1126,7 +1126,7 @@ export default RouteTemplate(
                 <div class="mg-health__cleanup-warning-title">Confirm cleanup</div>
                 <div>Risk: {{@controller.cleanupTargetRiskLabel}}</div>
                 <div>{{@controller.cleanupTargetHint}}</div>
-                <div>This action deletes only this scoped finding and then reruns reconciliation. It cannot be undone.</div>
+                <div>This action deletes only this scoped finding and verifies that the selected prefix is empty. It cannot be undone.</div>
               </div>
 
               <div class="mg-health__actions">

@@ -1177,6 +1177,13 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           confirm: "cleanup_selected_reconciliation_finding",
         },
       });
+      // Close the confirmation UI before replacing the reconciliation arrays.
+      // The selected finding can disappear from the response after a successful
+      // cleanup; tearing down the modal first prevents Glimmer from reconciling
+      // DOM bounds that belong to both the old finding and the open dialog.
+      this.cleanupModalOpen = false;
+      this.cleanupIssue = null;
+      this.cleanupExample = null;
       this.applyResponse(data);
       const status = data?.cleanup_result?.status || "complete";
       const stillActive = Boolean(
@@ -1188,9 +1195,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         : (status === "complete"
           ? "Scoped cleanup completed. The verified finding was removed from the cached report; run reconciliation when you want to rescan all storage."
           : "Scoped cleanup completed with warnings. Run reconciliation again and check Logs for details.");
-      this.cleanupModalOpen = false;
-      this.cleanupIssue = null;
-      this.cleanupExample = null;
     } catch (error) {
       this.error = this.errorMessage(error);
     } finally {
