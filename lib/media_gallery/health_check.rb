@@ -671,6 +671,55 @@ module ::MediaGallery
       report
     end
 
+    # Remove one finding from the cached reconciliation report only after the
+    # scoped cleanup has independently verified that the selected prefix is empty.
+    # A full storage scan remains authoritative and can be run manually afterwards.
+    def resolve_reconciliation_finding_after_cleanup!(finding_key:, cleanup_result:)
+      key = finding_key.to_s
+      return false if key.blank?
+      return false unless cleanup_result.is_a?(Hash)
+      return false unless cleanup_result["status"].to_s == "complete"
+      return false if ActiveModel::Type::Boolean.new.cast(cleanup_result["remaining"])
+
+      cached = last_reconciliation
+      return false if cached.blank?
+
+      removed = false
+      categories = Array(cached["categories"]).map do |category|
+        category = category.deep_dup
+        findings = Array(category["findings"])
+        kept = findings.reject do |finding|
+          matches = finding["key"].to_s == key
+          removed ||= matches
+          matches
+        end
+        category["findings"] = kept
+        category["count"] = kept.length
+        category["severity"] = highest_severity(kept.map { |finding| finding["severity"] })
+        category
+      end
+
+      return false unless removed
+
+      cached["categories"] = categories
+      cached["severity"] = highest_severity(categories.map { |category| category["severity"] })
+      cached["ok"] = cached["severity"].to_s == "ok"
+      cached["cache_updated_at"] = Time.zone.now.iso8601
+      cached["last_scoped_cleanup"] = {
+        "finding_key" => key,
+        "classification" => cleanup_result["classification"],
+        "profile_key" => cleanup_result["profile_key"],
+        "group_prefix" => cleanup_result["group_prefix"],
+        "finished_at" => cleanup_result["finished_at"],
+      }.compact
+
+      ::PluginStore.set(STORE_NAMESPACE, LAST_RECONCILIATION_KEY, cached.deep_stringify_keys)
+      true
+    rescue => e
+      Rails.logger.warn("[media_gallery] updating reconciliation cache after scoped cleanup failed: #{e.class}: #{e.message}")
+      false
+    end
+
     def store_reconciliation!(report)
       previous = last_reconciliation
       stored = report.deep_stringify_keys

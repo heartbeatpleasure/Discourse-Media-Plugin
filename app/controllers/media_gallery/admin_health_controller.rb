@@ -82,10 +82,26 @@ module ::MediaGallery
         actor: current_user,
         request: request
       )
-      ::MediaGallery::HealthCheck.run_reconciliation!
-      if result.respond_to?(:[]=)
-        result["finding_still_active_after_reconciliation"] = ::MediaGallery::ReconciliationCleanup.finding_active?(params[:key])
+      finding_resolved =
+        result["status"].to_s == "complete" &&
+        !ActiveModel::Type::Boolean.new.cast(result["remaining"])
+
+      if finding_resolved
+        ::MediaGallery::HealthCheck.resolve_reconciliation_finding_after_cleanup!(
+          finding_key: params[:key],
+          cleanup_result: result
+        )
       end
+
+      if result.respond_to?(:[]=)
+        still_active = ::MediaGallery::ReconciliationCleanup.finding_active?(params[:key])
+        result["finding_still_active_after_cleanup"] = still_active
+        # Backwards-compatible field for older frontend builds. No full reconciliation
+        # is run here because it can exceed the admin request timeout on large stores.
+        result["finding_still_active_after_reconciliation"] = still_active
+        result["reconciliation_refresh_deferred"] = true
+      end
+
       payload = ::MediaGallery::HealthCheck.summary(full_storage: false)
       payload[:cleanup_result] = result
       render_json_dump(payload)

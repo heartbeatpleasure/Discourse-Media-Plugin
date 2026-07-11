@@ -1179,12 +1179,15 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       });
       this.applyResponse(data);
       const status = data?.cleanup_result?.status || "complete";
-      const stillActive = Boolean(data?.cleanup_result?.finding_still_active_after_reconciliation);
+      const stillActive = Boolean(
+        data?.cleanup_result?.finding_still_active_after_cleanup ??
+          data?.cleanup_result?.finding_still_active_after_reconciliation
+      );
       this.notice = stillActive
-        ? "Scoped cleanup ran, but storage still reports this finding after automatic retry. Wait a moment, run reconciliation again, and check Logs if it remains."
+        ? "Scoped cleanup ran, but the selected prefix could not be verified as empty. Run reconciliation again and check Logs for details."
         : (status === "complete"
-          ? "Scoped cleanup completed and reconciliation was refreshed."
-          : "Scoped cleanup completed with warnings. Reconciliation was refreshed; check Logs for details.");
+          ? "Scoped cleanup completed. The verified finding was removed from the cached report; run reconciliation when you want to rescan all storage."
+          : "Scoped cleanup completed with warnings. Run reconciliation again and check Logs for details.");
       this.cleanupModalOpen = false;
       this.cleanupIssue = null;
       this.cleanupExample = null;
