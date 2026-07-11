@@ -1,6 +1,6 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
-import { next } from "@ember/runloop";
+import { service } from "@ember/service";
 import { tracked } from "@glimmer/tracking";
 import { ajax } from "discourse/lib/ajax";
 
@@ -69,9 +69,6 @@ function formatNumber(value) {
   return new Intl.NumberFormat().format(number);
 }
 
-function waitForNextRunLoop() {
-  return new Promise((resolve) => next(resolve));
-}
 
 function formatBytes(value) {
   let bytes = Number(value || 0);
@@ -469,22 +466,9 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked lastTimingMs = null;
   @tracked lastTimingBreakdown = null;
 
-  _healthRequestSequence = 0;
-
-  invalidatePendingHealthLoads() {
-    this._healthRequestSequence += 1;
-  }
-
-  isCurrentHealthRequest(sequence) {
-    return (
-      sequence === this._healthRequestSequence &&
-      !this.isDestroying &&
-      !this.isDestroyed
-    );
-  }
+  @service router;
 
   resetState() {
-    this.invalidatePendingHealthLoads();
     this.isLoading = false;
     this.isFullStorage = false;
     this.error = "";
@@ -970,7 +954,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       return;
     }
 
-    const requestSequence = ++this._healthRequestSequence;
     this.isLoading = true;
     this.error = "";
     this.notice = "";
@@ -978,9 +961,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     try {
       const query = fullStorage ? "?full_storage=1" : "";
       const data = await ajax(`/admin/plugins/media-gallery/health.json${query}`);
-
-      await waitForNextRunLoop();
-      if (!this.isCurrentHealthRequest(requestSequence)) {
+      if (this.isDestroying || this.isDestroyed) {
         return;
       }
 
@@ -990,14 +971,11 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         ? "Full storage check completed. The result will remain visible until the next full check."
         : "Health summary refreshed.";
     } catch (error) {
-      await waitForNextRunLoop();
-      if (!this.isCurrentHealthRequest(requestSequence)) {
-        return;
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.error = this.errorMessage(error);
       }
-
-      this.error = this.errorMessage(error);
     } finally {
-      if (this.isCurrentHealthRequest(requestSequence)) {
+      if (!this.isDestroying && !this.isDestroyed) {
         this.isLoading = false;
       }
     }
@@ -1052,7 +1030,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         data: { scan_mode: scanMode },
       });
       this.reconciliationConfirmOpen = false;
-      await waitForNextRunLoop();
       if (this.isDestroying || this.isDestroyed) {
         return;
       }
@@ -1207,6 +1184,8 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       return;
     }
 
+    let refreshAfterCleanup = false;
+
     this.isLoading = true;
     this.cleanupKeyInProgress = example.key;
     this.error = "";
@@ -1220,29 +1199,32 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           confirm: "cleanup_selected_reconciliation_finding",
         },
       });
-      // Close the confirmation UI before replacing the reconciliation arrays.
-      // The selected finding can disappear from the response after a successful
-      // cleanup; tearing down the modal first prevents Glimmer from reconciling
-      // DOM bounds that belong to both the old finding and the open dialog.
-      this.cleanupModalOpen = false;
-      this.cleanupIssue = null;
-      this.cleanupExample = null;
-      await waitForNextRunLoop();
+
       if (this.isDestroying || this.isDestroyed) {
         return;
       }
 
-      this.applyResponse(data);
       const status = data?.cleanup_result?.status || "complete";
       const stillActive = Boolean(
         data?.cleanup_result?.finding_still_active_after_cleanup ??
           data?.cleanup_result?.finding_still_active_after_reconciliation
       );
-      this.notice = stillActive
-        ? "Scoped cleanup ran, but the selected prefix could not be verified as empty. Run reconciliation again and check Logs for details."
-        : (status === "complete"
-          ? "Scoped cleanup completed. The verified finding was removed from the cached report; run reconciliation when you want to rescan all storage."
-          : "Scoped cleanup completed with warnings. Run reconciliation again and check Logs for details.");
+
+      this.cleanupModalOpen = false;
+      this.cleanupIssue = null;
+      this.cleanupExample = null;
+
+      if (status === "complete" && !stillActive) {
+        // Do not replace the large, duplicated reconciliation trees from inside
+        // the destructive action that removed one of their active rows. Refresh
+        // the current route only after the action state has fully settled so
+        // Glimmer builds a clean render tree from the updated server report.
+        refreshAfterCleanup = true;
+      } else {
+        this.notice = stillActive
+          ? "Scoped cleanup ran, but the selected prefix could not be verified as empty. The finding remains visible; run reconciliation again and check Logs for details."
+          : "Scoped cleanup completed with warnings. The finding remains visible; run reconciliation again and check Logs for details.";
+      }
     } catch (error) {
       if (!this.isDestroying && !this.isDestroyed) {
         this.error = this.errorMessage(error);
@@ -1252,6 +1234,10 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         this.cleanupKeyInProgress = "";
         this.isLoading = false;
       }
+    }
+
+    if (refreshAfterCleanup && !this.isDestroying && !this.isDestroyed) {
+      this.router.refresh();
     }
   }
 
@@ -1321,7 +1307,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       this.ignoreExample = null;
       this.ignoreReason = "";
       this.ignoreExpiresInDays = "0";
-      await waitForNextRunLoop();
       if (this.isDestroying || this.isDestroyed) {
         return;
       }
@@ -1358,7 +1343,6 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           issue_type: finding.issueType,
         },
       });
-      await waitForNextRunLoop();
       if (this.isDestroying || this.isDestroyed) {
         return;
       }
