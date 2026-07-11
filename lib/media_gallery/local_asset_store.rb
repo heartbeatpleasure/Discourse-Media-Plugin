@@ -197,6 +197,17 @@ module ::MediaGallery
       File.exist?(path) || File.symlink?(path)
     end
 
+    # True only when the prefix is a real directory whose complete tree contains
+    # directories but no files, sockets, devices, or symlinks. This is used only
+    # to verify whether an otherwise harmless UUID folder can be removed safely.
+    def prefix_directory_empty?(prefix)
+      path = absolute_path_for(prefix)
+      return false if File.symlink?(path)
+      return false unless Dir.exist?(path)
+
+      empty_directory_tree?(path)
+    end
+
     def list_prefix(prefix, limit: nil)
       list_prefix_entries(prefix, limit: limit).map { |entry| entry[:key] }
     end
@@ -315,17 +326,21 @@ module ::MediaGallery
       normalized.split("/").first.to_s
     end
 
-    def remove_empty_directory_tree!(dir)
-      return unless Dir.exist?(dir)
-
+    def empty_directory_tree?(dir)
       entries = Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).reject do |path|
         [".", ".."].include?(File.basename(path))
       end
 
       raise ArgumentError, "symlink_in_empty_prefix_cleanup" if entries.any? { |path| File.symlink?(path) }
-      return if entries.any? { |path| !File.directory?(path) }
+      entries.none? { |path| !File.directory?(path) }
+    end
 
-      entries
+    def remove_empty_directory_tree!(dir)
+      return unless Dir.exist?(dir)
+      return unless empty_directory_tree?(dir)
+
+      Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH)
+        .reject { |path| [".", ".."].include?(File.basename(path)) }
         .select { |path| File.directory?(path) }
         .sort_by { |path| -path.length }
         .each { |path| Dir.rmdir(path) if Dir.exist?(path) && Dir.empty?(path) }

@@ -1,37 +1,53 @@
-import { ajax } from "discourse/lib/ajax";
+import { next } from "@ember/runloop";
 import DiscourseRoute from "discourse/routes/discourse";
 
 export default class AdminPluginsMediaGalleryHealthRoute extends DiscourseRoute {
-  async model() {
-    try {
-      return {
-        healthData: await ajax("/admin/plugins/media-gallery/health.json"),
-        loadError: null,
-      };
-    } catch (error) {
-      return { healthData: null, loadError: error };
+  setupController(controller) {
+    super.setupController(...arguments);
+
+    const loadToken = (this._mediaGalleryHealthLoadToken || 0) + 1;
+    this._mediaGalleryHealthLoadToken = loadToken;
+    this._mediaGalleryHealthController = controller;
+
+    if (typeof controller?.invalidatePendingHealthLoads === "function") {
+      controller.invalidatePendingHealthLoads();
     }
+
+    // Do not block the admin route model on the Health request and do not mutate
+    // tracked controller state while the route/outlet is still being installed.
+    // Starting in the next run loop mirrors other Media Gallery admin routes and
+    // avoids leaving Glimmer with stale render subscriptions on a hard refresh.
+    next(() => {
+      if (
+        this._mediaGalleryHealthLoadToken !== loadToken ||
+        controller?.isDestroying ||
+        controller?.isDestroyed
+      ) {
+        return;
+      }
+
+      if (typeof controller?.resetState === "function") {
+        controller.resetState();
+      }
+
+      if (typeof controller?.loadHealth === "function") {
+        controller.loadHealth({ fullStorage: false });
+      }
+    });
   }
 
-  setupController(controller, model) {
-    super.setupController(...arguments);
-    if (typeof controller?.resetState !== "function") {
-      return;
+  deactivate() {
+    this._mediaGalleryHealthLoadToken =
+      (this._mediaGalleryHealthLoadToken || 0) + 1;
+
+    if (
+      typeof this._mediaGalleryHealthController?.invalidatePendingHealthLoads ===
+      "function"
+    ) {
+      this._mediaGalleryHealthController.invalidatePendingHealthLoads();
     }
 
-    controller.resetState();
-
-    if (model?.loadError) {
-      controller.error = typeof controller?.errorMessage === "function"
-        ? controller.errorMessage(model.loadError)
-        : "Unable to load Media Gallery health.";
-      return;
-    }
-
-    if (typeof controller?.applyResponse === "function") {
-      const data = model?.healthData || {};
-      controller.isFullStorage = Boolean(data?.full_storage);
-      controller.applyResponse(data);
-    }
+    this._mediaGalleryHealthController = null;
+    super.deactivate?.(...arguments);
   }
 }

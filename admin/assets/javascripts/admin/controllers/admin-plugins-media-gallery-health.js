@@ -1,5 +1,6 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
+import { next } from "@ember/runloop";
 import { tracked } from "@glimmer/tracking";
 import { ajax } from "discourse/lib/ajax";
 
@@ -66,6 +67,10 @@ function formatNumber(value) {
     return "0";
   }
   return new Intl.NumberFormat().format(number);
+}
+
+function waitForNextRunLoop() {
+  return new Promise((resolve) => next(resolve));
 }
 
 function formatBytes(value) {
@@ -464,7 +469,22 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked lastTimingMs = null;
   @tracked lastTimingBreakdown = null;
 
+  _healthRequestSequence = 0;
+
+  invalidatePendingHealthLoads() {
+    this._healthRequestSequence += 1;
+  }
+
+  isCurrentHealthRequest(sequence) {
+    return (
+      sequence === this._healthRequestSequence &&
+      !this.isDestroying &&
+      !this.isDestroyed
+    );
+  }
+
   resetState() {
+    this.invalidatePendingHealthLoads();
     this.isLoading = false;
     this.isFullStorage = false;
     this.error = "";
@@ -950,6 +970,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       return;
     }
 
+    const requestSequence = ++this._healthRequestSequence;
     this.isLoading = true;
     this.error = "";
     this.notice = "";
@@ -957,15 +978,28 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     try {
       const query = fullStorage ? "?full_storage=1" : "";
       const data = await ajax(`/admin/plugins/media-gallery/health.json${query}`);
+
+      await waitForNextRunLoop();
+      if (!this.isCurrentHealthRequest(requestSequence)) {
+        return;
+      }
+
       this.isFullStorage = Boolean(data?.full_storage);
       this.applyResponse(data);
       this.notice = fullStorage
         ? "Full storage check completed. The result will remain visible until the next full check."
         : "Health summary refreshed.";
     } catch (error) {
+      await waitForNextRunLoop();
+      if (!this.isCurrentHealthRequest(requestSequence)) {
+        return;
+      }
+
       this.error = this.errorMessage(error);
     } finally {
-      this.isLoading = false;
+      if (this.isCurrentHealthRequest(requestSequence)) {
+        this.isLoading = false;
+      }
     }
   }
 
@@ -1017,17 +1051,26 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         type: "POST",
         data: { scan_mode: scanMode },
       });
+      this.reconciliationConfirmOpen = false;
+      await waitForNextRunLoop();
+      if (this.isDestroying || this.isDestroyed) {
+        return;
+      }
+
       this.isFullStorage = false;
       this.applyResponse(data);
       this.notice = expanded
         ? "Deeper reconciliation completed with a temporary high object limit. No files were changed; eligible findings can be cleaned one at a time after review."
         : "Reconciliation completed. No files were changed; eligible findings can be cleaned one at a time after review.";
-      this.reconciliationConfirmOpen = false;
     } catch (error) {
-      this.error = this.errorMessage(error);
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.error = this.errorMessage(error);
+      }
     } finally {
-      this.reconciliationRunMode = "";
-      this.isLoading = false;
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.reconciliationRunMode = "";
+        this.isLoading = false;
+      }
     }
   }
 
@@ -1184,6 +1227,11 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       this.cleanupModalOpen = false;
       this.cleanupIssue = null;
       this.cleanupExample = null;
+      await waitForNextRunLoop();
+      if (this.isDestroying || this.isDestroyed) {
+        return;
+      }
+
       this.applyResponse(data);
       const status = data?.cleanup_result?.status || "complete";
       const stillActive = Boolean(
@@ -1196,10 +1244,14 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           ? "Scoped cleanup completed. The verified finding was removed from the cached report; run reconciliation when you want to rescan all storage."
           : "Scoped cleanup completed with warnings. Run reconciliation again and check Logs for details.");
     } catch (error) {
-      this.error = this.errorMessage(error);
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.error = this.errorMessage(error);
+      }
     } finally {
-      this.cleanupKeyInProgress = "";
-      this.isLoading = false;
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.cleanupKeyInProgress = "";
+        this.isLoading = false;
+      }
     }
   }
 
@@ -1264,17 +1316,26 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           expires_in_days: this.ignoreExpiresInDays,
         },
       });
-      this.applyResponse(data);
-      this.notice = "Health finding ignored.";
       this.ignoreModalOpen = false;
       this.ignoreIssue = null;
       this.ignoreExample = null;
       this.ignoreReason = "";
       this.ignoreExpiresInDays = "0";
+      await waitForNextRunLoop();
+      if (this.isDestroying || this.isDestroyed) {
+        return;
+      }
+
+      this.applyResponse(data);
+      this.notice = "Health finding ignored.";
     } catch (error) {
-      this.error = this.errorMessage(error);
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.error = this.errorMessage(error);
+      }
     } finally {
-      this.isLoading = false;
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.isLoading = false;
+      }
     }
   }
 
@@ -1297,12 +1358,21 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           issue_type: finding.issueType,
         },
       });
+      await waitForNextRunLoop();
+      if (this.isDestroying || this.isDestroyed) {
+        return;
+      }
+
       this.applyResponse(data);
       this.notice = "Health finding restored.";
     } catch (error) {
-      this.error = this.errorMessage(error);
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.error = this.errorMessage(error);
+      }
     } finally {
-      this.isLoading = false;
+      if (!this.isDestroying && !this.isDestroyed) {
+        this.isLoading = false;
+      }
     }
   }
 }

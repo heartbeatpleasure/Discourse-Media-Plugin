@@ -148,15 +148,29 @@ module ::MediaGallery
       return { "applicable" => true, "attempted" => false, "remaining" => true, "reason" => "objects_remain" } if remaining.present?
       return { "applicable" => true, "attempted" => false, "remaining" => true, "reason" => "store_method_unavailable" } unless store.respond_to?(:prune_empty_prefix_directory)
 
-      existed_before = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(prefix)
-      removed = store.prune_empty_prefix_directory(prefix, boundary_prefix: public_id)
-      remains = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(prefix)
+      target_existed_before = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(prefix)
+      boundary_existed_before = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(public_id)
+
+      target_removed = store.prune_empty_prefix_directory(prefix, boundary_prefix: public_id)
+      boundary_removed = if prefix.to_s == public_id.to_s
+        target_removed
+      else
+        store.prune_empty_prefix_directory(public_id, boundary_prefix: public_id)
+      end
+
+      target_remains = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(prefix)
+      boundary_remains = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(public_id)
+      boundary_empty = boundary_remains && store.respond_to?(:prefix_directory_empty?) && store.prefix_directory_empty?(public_id)
+      empty_boundary_remains = boundary_remains && boundary_empty
 
       {
         "applicable" => true,
-        "attempted" => existed_before,
-        "removed" => removed && !remains,
-        "remaining" => remains,
+        "attempted" => target_existed_before || boundary_existed_before,
+        "removed" => !target_remains && !empty_boundary_remains && (target_removed || boundary_removed),
+        "remaining" => target_remains || empty_boundary_remains,
+        "target_directory_remaining" => target_remains,
+        "boundary_directory_remaining" => boundary_remains,
+        "boundary_directory_empty" => boundary_empty,
         "checked_prefix" => prefix,
         "boundary_prefix" => public_id,
       }
@@ -166,6 +180,8 @@ module ::MediaGallery
         "attempted" => true,
         "removed" => false,
         "remaining" => true,
+        "target_directory_remaining" => true,
+        "boundary_directory_remaining" => true,
         "checked_prefix" => prefix,
         "boundary_prefix" => public_id,
         "error" => "#{e.class}: #{e.message}",
