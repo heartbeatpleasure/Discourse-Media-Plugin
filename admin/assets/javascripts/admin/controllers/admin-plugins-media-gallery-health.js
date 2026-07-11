@@ -1,6 +1,6 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
-import { service } from "@ember/service";
+import { scheduleOnce } from "@ember/runloop";
 import { tracked } from "@glimmer/tracking";
 import { ajax } from "discourse/lib/ajax";
 
@@ -438,18 +438,27 @@ function decorateHistoryEntry(entry) {
   };
 }
 
+function emptyHealthSnapshot() {
+  return {
+    data: null,
+    summaryCards: [],
+    sections: [],
+    attentionIssues: [],
+    ignoredFindings: [],
+    reconciliation: null,
+    reconciliationHistory: [],
+    showPerformanceTimings: false,
+    lastTimingMs: null,
+    lastTimingBreakdown: null,
+  };
+}
+
 export default class AdminPluginsMediaGalleryHealthController extends Controller {
   @tracked isLoading = false;
   @tracked isFullStorage = false;
   @tracked error = "";
   @tracked notice = "";
-  @tracked data = null;
-  @tracked summaryCards = [];
-  @tracked sections = [];
-  @tracked attentionIssues = [];
-  @tracked ignoredFindings = [];
-  @tracked reconciliation = null;
-  @tracked reconciliationHistory = [];
+  @tracked healthSnapshot = emptyHealthSnapshot();
   @tracked exportCategory = "all";
   @tracked ignoreModalOpen = false;
   @tracked ignoreIssue = null;
@@ -462,24 +471,53 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked cleanupKeyInProgress = "";
   @tracked reconciliationConfirmOpen = false;
   @tracked reconciliationRunMode = "";
-  @tracked showPerformanceTimings = false;
-  @tracked lastTimingMs = null;
-  @tracked lastTimingBreakdown = null;
 
-  @service router;
+  get data() {
+    return this.healthSnapshot.data;
+  }
+
+  get summaryCards() {
+    return this.healthSnapshot.summaryCards;
+  }
+
+  get sections() {
+    return this.healthSnapshot.sections;
+  }
+
+  get attentionIssues() {
+    return this.healthSnapshot.attentionIssues;
+  }
+
+  get ignoredFindings() {
+    return this.healthSnapshot.ignoredFindings;
+  }
+
+  get reconciliation() {
+    return this.healthSnapshot.reconciliation;
+  }
+
+  get reconciliationHistory() {
+    return this.healthSnapshot.reconciliationHistory;
+  }
+
+  get showPerformanceTimings() {
+    return this.healthSnapshot.showPerformanceTimings;
+  }
+
+  get lastTimingMs() {
+    return this.healthSnapshot.lastTimingMs;
+  }
+
+  get lastTimingBreakdown() {
+    return this.healthSnapshot.lastTimingBreakdown;
+  }
 
   resetState() {
     this.isLoading = false;
     this.isFullStorage = false;
     this.error = "";
     this.notice = "";
-    this.data = null;
-    this.summaryCards = [];
-    this.sections = [];
-    this.attentionIssues = [];
-    this.ignoredFindings = [];
-    this.reconciliation = null;
-    this.reconciliationHistory = [];
+    this.healthSnapshot = emptyHealthSnapshot();
     this.exportCategory = "all";
     this.ignoreModalOpen = false;
     this.ignoreIssue = null;
@@ -491,9 +529,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.cleanupExample = null;
     this.cleanupKeyInProgress = "";
     this.reconciliationConfirmOpen = false;
-    this.showPerformanceTimings = false;
-    this.lastTimingMs = null;
-    this.lastTimingBreakdown = null;
+    this.reconciliationRunMode = "";
   }
 
   get overallSeverity() {
@@ -910,28 +946,43 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   applyResponse(data) {
-    this.data = data || {};
-    this.summaryCards = Array.isArray(data?.summary_cards)
-      ? data.summary_cards.map(decorateCard)
-      : [];
-    this.sections = Array.isArray(data?.sections)
-      ? data.sections.map(decorateSection)
-      : [];
-    this.attentionIssues = this.flattenAttentionIssues(data);
-    this.ignoredFindings = Array.isArray(data?.ignored_findings)
-      ? data.ignored_findings.map(decorateIgnoredFinding)
-      : [];
-    this.reconciliation = data?.reconciliation || null;
-    this.showPerformanceTimings = !!data?.show_performance_timings;
-    this.lastTimingMs = Number(data?.timing_ms || 0) || null;
-    this.lastTimingBreakdown = data?.timing_breakdown_ms || null;
-    this.reconciliationHistory = Array.isArray(data?.reconciliation_history)
-      ? data.reconciliation_history.map(decorateHistoryEntry)
-      : [];
-    const allowedCategories = new Set(this.reconciliationExportCategories.map((category) => category.id));
-    if (!allowedCategories.has(this.exportCategory)) {
+    const normalizedData = data || {};
+    const reconciliation = normalizedData?.reconciliation || null;
+    const categoryIds = new Set([
+      "all",
+      ...(Array.isArray(reconciliation?.categories)
+        ? reconciliation.categories.map((category) => category?.id).filter(Boolean)
+        : []),
+    ]);
+
+    if (!categoryIds.has(this.exportCategory)) {
       this.exportCategory = "all";
     }
+
+    // Build the complete view model before publishing it. The Health page has
+    // several large conditional trees that depend on these values together.
+    // Publishing one tracked snapshot prevents Glimmer from observing transient
+    // combinations while an asynchronous request is being applied.
+    this.healthSnapshot = {
+      data: normalizedData,
+      summaryCards: Array.isArray(normalizedData?.summary_cards)
+        ? normalizedData.summary_cards.map(decorateCard)
+        : [],
+      sections: Array.isArray(normalizedData?.sections)
+        ? normalizedData.sections.map(decorateSection)
+        : [],
+      attentionIssues: this.flattenAttentionIssues(normalizedData),
+      ignoredFindings: Array.isArray(normalizedData?.ignored_findings)
+        ? normalizedData.ignored_findings.map(decorateIgnoredFinding)
+        : [],
+      reconciliation,
+      reconciliationHistory: Array.isArray(normalizedData?.reconciliation_history)
+        ? normalizedData.reconciliation_history.map(decorateHistoryEntry)
+        : [],
+      showPerformanceTimings: !!normalizedData?.show_performance_timings,
+      lastTimingMs: Number(normalizedData?.timing_ms || 0) || null,
+      lastTimingBreakdown: normalizedData?.timing_breakdown_ms || null,
+    };
   }
 
   errorMessage(error) {
@@ -1176,6 +1227,17 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.cleanupExample = null;
   }
 
+  finishCleanupRender(data, notice) {
+    if (this.isDestroying || this.isDestroyed) {
+      return;
+    }
+
+    this.cleanupIssue = null;
+    this.cleanupExample = null;
+    this.applyResponse(data);
+    this.notice = notice;
+  }
+
   @action
   async submitCleanupReconciliationFinding(event) {
     event?.preventDefault?.();
@@ -1184,7 +1246,8 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       return;
     }
 
-    let refreshAfterCleanup = false;
+    let completedResponse = null;
+    let completedNotice = "";
 
     this.isLoading = true;
     this.cleanupKeyInProgress = example.key;
@@ -1210,17 +1273,17 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
           data?.cleanup_result?.finding_still_active_after_reconciliation
       );
 
+      // Close the confirmation UI first. The updated Health snapshot is applied
+      // after this render has committed, so the row that opened the modal is not
+      // removed while Glimmer is still tearing down that modal/action tree.
       this.cleanupModalOpen = false;
-      this.cleanupIssue = null;
-      this.cleanupExample = null;
 
       if (status === "complete" && !stillActive) {
-        // Do not replace the large, duplicated reconciliation trees from inside
-        // the destructive action that removed one of their active rows. Refresh
-        // the current route only after the action state has fully settled so
-        // Glimmer builds a clean render tree from the updated server report.
-        refreshAfterCleanup = true;
+        completedResponse = data;
+        completedNotice = "Scoped cleanup completed. The selected prefix was verified as empty and the Health result was refreshed.";
       } else {
+        this.cleanupIssue = null;
+        this.cleanupExample = null;
         this.notice = stillActive
           ? "Scoped cleanup ran, but the selected prefix could not be verified as empty. The finding remains visible; run reconciliation again and check Logs for details."
           : "Scoped cleanup completed with warnings. The finding remains visible; run reconciliation again and check Logs for details.";
@@ -1236,8 +1299,14 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       }
     }
 
-    if (refreshAfterCleanup && !this.isDestroying && !this.isDestroyed) {
-      this.router.refresh();
+    if (completedResponse && !this.isDestroying && !this.isDestroyed) {
+      scheduleOnce(
+        "afterRender",
+        this,
+        this.finishCleanupRender,
+        completedResponse,
+        completedNotice
+      );
     }
   }
 
