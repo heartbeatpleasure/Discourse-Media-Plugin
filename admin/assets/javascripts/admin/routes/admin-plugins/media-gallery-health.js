@@ -1,1 +1,13 @@
-export { default } from "../admin-plugins-media-gallery-health";
+import DiscourseRoute from "discourse/routes/discourse";
+
+export default class AdminPluginsMediaGalleryHealthRoute extends DiscourseRoute {
+  setupController(controller) {
+    super.setupController(...arguments);
+    if (typeof controller?.resetState === "function") {
+      controller.resetState();
+      if (typeof controller?.loadHealth === "function") {
+        controller.loadHealth();
+      }
+    }
+  }
+}

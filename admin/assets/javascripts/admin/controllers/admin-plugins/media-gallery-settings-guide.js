@@ -1,1 +1,3 @@
-export { default } from "../admin-plugins-media-gallery-settings-guide";
+import Controller from "@ember/controller";
+
+export default class AdminPluginsMediaGallerySettingsGuideController extends Controller {}

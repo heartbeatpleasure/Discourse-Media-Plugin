@@ -1,1 +1,3 @@
-export { default } from "../admin-plugins-media-gallery-settings-guide";
+import DiscourseRoute from "discourse/routes/discourse";
+
+export default class AdminPluginsMediaGallerySettingsGuideRoute extends DiscourseRoute {}
