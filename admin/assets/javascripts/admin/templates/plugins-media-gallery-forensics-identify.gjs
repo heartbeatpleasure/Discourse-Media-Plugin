@@ -103,7 +103,7 @@ export default RouteTemplate(
 
       .mg-fi__form-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        align-items: end;
+        align-items: start;
       }
 
       .mg-fi__grid {
@@ -1117,6 +1117,7 @@ export default RouteTemplate(
                   value={{@controller.maxSamples}}
                   {{on "input" @controller.onMaxSamplesInput}}
                 />
+                <div class="mg-fi__helper">Sets the initial frame-sampling budget. Background file analysis may safely use more samples when the clip is longer and the analysis budget allows it, which improves reliability.</div>
               </div>
 
               <div class="mg-fi__field">
