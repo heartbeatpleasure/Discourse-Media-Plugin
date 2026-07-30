@@ -1129,6 +1129,7 @@ export default RouteTemplate(
                   value={{@controller.maxOffsetSegments}}
                   {{on "input" @controller.onMaxOffsetInput}}
                 />
+                <div class="mg-fi__helper">Use 0 for the automatic full plausible offset range (recommended for partial clips with an unknown start). A positive value limits how many original HLS segments are searched.</div>
               </div>
 
               <div class="mg-fi__field is-full">

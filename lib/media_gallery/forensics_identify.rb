@@ -165,7 +165,11 @@ module ::MediaGallery
     # These layouts benefit from reading several in-segment observations and
     # from reference calibration sampled at more than one point per HLS segment.
     GRID_DETECTOR_LAYOUTS = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid v10_reference_spread].freeze
-    REFERENCE_CACHE_VERSION = "v6"
+    # v7 forces a one-time rebuild for all non-v10 layouts after the shared
+    # FFmpeg batch-sampling fix. Keeping v10 on its dedicated cache namespace
+    # preserves existing v10 cache compatibility while legacy references are
+    # regenerated with correctly isolated frames.
+    REFERENCE_CACHE_VERSION = "v7_batch_sampling_fix"
     V10_REFERENCE_CACHE_VERSION = "v10_full_frame_v4"
 
     SYNTHETIC_POPULATION_CONTEXT_KEY = :media_gallery_forensics_synthetic_population_test

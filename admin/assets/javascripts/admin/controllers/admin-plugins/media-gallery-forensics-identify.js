@@ -1769,7 +1769,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     }
 
     form.append("max_samples", String(this.maxSamples || 60));
-    form.append("max_offset_segments", String(this.maxOffsetSegments || 30));
+    const parsedMaxOffsetSegments = Number.parseInt(this.maxOffsetSegments, 10);
+    form.append(
+      "max_offset_segments",
+      String(Number.isFinite(parsedMaxOffsetSegments) ? parsedMaxOffsetSegments : 30)
+    );
     if (this.layout) {
       form.append("layout", this.layout);
     }
