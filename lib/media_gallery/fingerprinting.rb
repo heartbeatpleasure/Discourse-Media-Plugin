@@ -23,6 +23,8 @@ module ::MediaGallery
     CODEBOOK_REPEAT_INTERLEAVE_V1 = "repeat_interleave_v1"
     CODEBOOK_LOCAL_WINDOW_V2 = "local_window_codelets_v2"
     CODEBOOK_REFERENCE_STREAM_V10 = "reference_stream_hmac_v10"
+    CODEBOOK_REFERENCE_STREAM_BALANCED_V10_2 = "reference_stream_balanced_v10_2"
+    REFERENCE_STREAM_BALANCED_BLOCK = 64
 
     ECC_LOGICAL_BITS = 16
     ECC_REPEAT = 4
@@ -106,7 +108,7 @@ module ::MediaGallery
 
       case layout.to_s
       when "v10_reference_spread"
-        CODEBOOK_REFERENCE_STREAM_V10
+        CODEBOOK_REFERENCE_STREAM_BALANCED_V10_2
       when "v6_local_sync", "v7_high_separation", "v8_microgrid", "v9_spread_spectrum", "v8_v9_hybrid"
         CODEBOOK_LOCAL_WINDOW_V2
       else
@@ -120,12 +122,12 @@ module ::MediaGallery
     def ecc_profile(codebook: nil, layout: nil)
       scheme = codebook_scheme_for(codebook: codebook, layout: layout)
 
-      if scheme.to_s == CODEBOOK_REFERENCE_STREAM_V10
+      if [CODEBOOK_REFERENCE_STREAM_V10, CODEBOOK_REFERENCE_STREAM_BALANCED_V10_2].include?(scheme.to_s)
         {
           logical_bits: 64,
           repeat: 1,
           block_span: 64,
-          scheme: CODEBOOK_REFERENCE_STREAM_V10
+          scheme: scheme.to_s
         }
       elsif scheme.to_s == CODEBOOK_LOCAL_WINDOW_V2
         {
@@ -223,6 +225,40 @@ module ::MediaGallery
       "a"
     end
 
+    def balanced_reference_stream_block(fingerprint_id:, media_item_id:, block_index:)
+      cache = current_expected_variant_cache
+      cache_key = [:reference_stream_balanced_v10_2, fingerprint_id.to_s, media_item_id.to_i, block_index.to_i]
+      return cache[cache_key] if cache && cache.key?(cache_key)
+
+      block = block_index.to_i
+      block = 0 if block.negative?
+      ranked = REFERENCE_STREAM_BALANCED_BLOCK.times.map do |slot|
+        msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|block=#{block}|slot=#{slot}|reference_stream=balanced_v10_2"
+        [OpenSSL::HMAC.digest("SHA256", secret, msg), slot]
+      end
+      ranked.sort_by! { |digest, slot| [digest, slot] }
+
+      variants = Array.new(REFERENCE_STREAM_BALANCED_BLOCK, "a")
+      ranked.first(REFERENCE_STREAM_BALANCED_BLOCK / 2).each { |_digest, slot| variants[slot] = "b" }
+      result = variants.freeze
+      cache[cache_key] = result if cache
+      result
+    rescue
+      # Keep the emergency fallback candidate-specific as well. Returning the same
+      # alternating block for every fingerprint would collapse the codebook exactly
+      # when a forensic fallback is most needed.
+      ranked = REFERENCE_STREAM_BALANCED_BLOCK.times.map do |slot|
+        digest = Digest::SHA256.digest(
+          "#{SALT}|fallback|fp=#{fingerprint_id}|m=#{media_item_id}|block=#{block_index}|slot=#{slot}"
+        )
+        [digest, slot]
+      end
+      ranked.sort_by! { |digest, slot| [digest, slot] }
+      variants = Array.new(REFERENCE_STREAM_BALANCED_BLOCK, "a")
+      ranked.first(REFERENCE_STREAM_BALANCED_BLOCK / 2).each { |_digest, slot| variants[slot] = "b" }
+      variants.freeze
+    end
+
     # Returns "a" or "b" for the given segment index (0-based).
     #
     # We intentionally use a small repeated/interleaved code block here instead of
@@ -235,7 +271,17 @@ module ::MediaGallery
       cache_key = [:expected_variant, fingerprint_id.to_s, media_item_id.to_i, segment_index.to_i, scheme.to_s]
       return cache[cache_key] if cache && cache.key?(cache_key)
 
-      if scheme.to_s == CODEBOOK_REFERENCE_STREAM_V10
+      if scheme.to_s == CODEBOOK_REFERENCE_STREAM_BALANCED_V10_2
+        idx = segment_index.to_i
+        idx = 0 if idx.negative?
+        block_index = idx / REFERENCE_STREAM_BALANCED_BLOCK
+        slot = idx % REFERENCE_STREAM_BALANCED_BLOCK
+        result = balanced_reference_stream_block(
+          fingerprint_id: fingerprint_id,
+          media_item_id: media_item_id,
+          block_index: block_index
+        )[slot]
+      elsif scheme.to_s == CODEBOOK_REFERENCE_STREAM_V10
         idx = segment_index.to_i
         idx = 0 if idx.negative?
         msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|segment=#{idx}|reference_stream=v10"

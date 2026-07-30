@@ -1066,6 +1066,11 @@ module ::MediaGallery
     end
 
     def should_auto_extend?(result)
+      if result.dig("meta", "layout").to_s == "v10_reference_spread"
+        apply_v10_decision_policy!(result)
+        return false if result.dig("meta", "conclusive") == true
+      end
+
       # If we already have a conclusive match, do not extend.
       return false if conclusive_match?(result)
 
@@ -1080,11 +1085,125 @@ module ::MediaGallery
     end
 
     def conclusive_match?(result)
+      if result.dig("meta", "layout").to_s == "v10_reference_spread"
+        apply_v10_decision_policy!(result)
+        return result.dig("meta", "conclusive") == true
+      end
+
       classify_decision(result) == "conclusive_match"
+    end
+
+    def apply_v10_decision_policy!(result)
+      return false unless result.is_a?(Hash)
+      meta = result["meta"] ||= {}
+      return false unless meta["layout"].to_s == "v10_reference_spread"
+
+      candidates = Array(result["candidates"])
+      top = candidates[0].is_a?(Hash) ? candidates[0] : {}
+      second = candidates[1].is_a?(Hash) ? candidates[1] : {}
+      value = lambda do |candidate, key|
+        raw = candidate[key.to_s]
+        raw = candidate[key.to_sym] if raw.nil? && candidate.respond_to?(:key?) && candidate.key?(key.to_sym)
+        raw.to_f
+      end
+
+      top_ratio = value.call(top, :match_ratio_weighted)
+      top_ratio = value.call(top, :match_ratio_adaptive_weighted) if top_ratio <= 0.0
+      second_ratio = value.call(second, :match_ratio_weighted)
+      second_ratio = value.call(second, :match_ratio_adaptive_weighted) if second_ratio <= 0.0
+      delta = top_ratio - second_ratio
+      usable = meta["usable_samples"].to_i
+      effective = [meta["adaptive_effective_samples"].to_f, meta["effective_samples"].to_f, usable.to_f].max
+      population = meta["candidate_population_count"].to_i
+      population = candidates.length if population <= 0
+      anchor_trust = meta["reference_anchor_trust"].to_f
+      high_quality_top = value.call(top, :high_quality_match_ratio_weighted)
+      high_quality_top = top_ratio if high_quality_top <= 0.0
+      high_quality_second = value.call(second, :high_quality_match_ratio_weighted)
+      high_quality_delta = high_quality_top - high_quality_second
+
+      large_population = population >= 1000
+      medium_population = population >= 100
+      min_usable = large_population ? 24 : (medium_population ? 20 : 16)
+      min_effective = large_population ? 22.0 : (medium_population ? 18.0 : 14.0)
+      min_top = large_population ? 0.88 : (medium_population ? 0.86 : 0.84)
+      min_delta = large_population ? 0.18 : (medium_population ? 0.16 : 0.14)
+      min_high_quality = large_population ? 0.84 : 0.80
+      min_high_quality_delta = large_population ? 0.16 : 0.12
+      min_anchor_trust = 0.40
+
+      conclusive =
+        top.present? &&
+        usable >= min_usable &&
+        effective >= min_effective &&
+        top_ratio >= min_top &&
+        delta >= min_delta &&
+        high_quality_top >= min_high_quality &&
+        high_quality_delta >= min_high_quality_delta &&
+        anchor_trust >= min_anchor_trust
+
+      likely =
+        top.present? &&
+        usable >= [min_usable - 6, 10].max &&
+        top_ratio >= (min_top - 0.08) &&
+        delta >= (min_delta - 0.06) &&
+        anchor_trust >= 0.25
+
+      decision = conclusive ? "conclusive_match" : (likely ? "likely_match" : (usable < 5 ? "insufficient_samples" : "no_match"))
+      reasons = []
+      reasons << "usable_samples=#{usable} < #{min_usable}" if usable < min_usable
+      reasons << "effective_samples=#{effective.round(2)} < #{min_effective}" if effective < min_effective
+      reasons << "weighted_top=#{top_ratio.round(4)} < #{min_top}" if top_ratio < min_top
+      reasons << "weighted_delta=#{delta.round(4)} < #{min_delta}" if delta < min_delta
+      reasons << "high_quality_top=#{high_quality_top.round(4)} < #{min_high_quality}" if high_quality_top < min_high_quality
+      reasons << "high_quality_delta=#{high_quality_delta.round(4)} < #{min_high_quality_delta}" if high_quality_delta < min_high_quality_delta
+      reasons << "reference_anchor_trust=#{anchor_trust.round(4)} < #{min_anchor_trust}" if anchor_trust < min_anchor_trust
+      reasons = ["v10_soft_reference_thresholds_passed"] if conclusive
+      reasons = ["v10_soft_reference_likely_thresholds_passed"] if likely && !conclusive
+
+      mismatches = value.call(top, :mismatches).to_i
+      compared = value.call(top, :compared).to_i
+      meta["decision"] = decision
+      meta["conclusive"] = conclusive
+      meta["top_match_ratio"] = top_ratio.round(4)
+      meta["second_match_ratio"] = second_ratio.round(4)
+      meta["match_delta"] = delta.round(4)
+      meta["top_mismatches"] = mismatches
+      meta["top_compared"] = compared
+      meta["top_mismatch_rate"] = compared.positive? ? (mismatches.to_f / compared.to_f).round(4) : 1.0
+      meta["decision_reasons"] = reasons
+      meta["decision_policy"] = "v10_soft_reference_v4"
+      meta["v10_decision_basis"] = "reference_weighted_candidate_separation"
+      meta["v10_raw_mismatch_is_diagnostic_only"] = true
+      meta["v10_effective_samples"] = effective.round(2)
+      meta["v10_high_quality_top"] = high_quality_top.round(4)
+      meta["v10_high_quality_delta"] = high_quality_delta.round(4)
+      meta["policy"] = {
+        "scheme" => "v10_soft_reference_v4",
+        "candidate_population_count" => population,
+        "min_usable_conclusive" => min_usable,
+        "min_effective_conclusive" => min_effective,
+        "min_weighted_top_conclusive" => min_top,
+        "min_weighted_delta_conclusive" => min_delta,
+        "min_high_quality_top_conclusive" => min_high_quality,
+        "min_high_quality_delta_conclusive" => min_high_quality_delta,
+        "min_reference_anchor_trust_conclusive" => min_anchor_trust,
+      }
+      meta["recommendation"] = if conclusive
+        "identified_with_v10_reference_evidence"
+      elsif likely
+        "gather_longer_sample_to_confirm"
+      else
+        "check_v10_signal_or_use_less_processed_sample"
+      end
+      true
+    rescue
+      false
     end
 
     def apply_decision_policy!(result)
       result["meta"] ||= {}
+      return if apply_v10_decision_policy!(result)
 
       # If an earlier guardrail already produced a terminal decision (e.g. no-signal/timeout/error),
       # keep it and avoid overwriting with the normal match policy.
@@ -1623,13 +1742,13 @@ module ::MediaGallery
     end
 
     def v8_layout_result?(result)
-      %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid v10_reference_spread].include?(result.dig("meta", "layout").to_s)
+      %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
     rescue
       false
     end
 
     def v9_layout_result?(result)
-      %w[v9_spread_spectrum v8_v9_hybrid v10_reference_spread].include?(result.dig("meta", "layout").to_s)
+      %w[v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
     rescue
       false
     end

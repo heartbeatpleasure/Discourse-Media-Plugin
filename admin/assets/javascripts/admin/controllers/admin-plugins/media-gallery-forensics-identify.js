@@ -423,6 +423,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return this.result?.meta;
   }
 
+  get isV10Result() {
+    return this.meta?.layout === "v10_reference_spread";
+  }
+
   get candidates() {
     return this.result?.candidates || [];
   }
@@ -476,6 +480,19 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       return [];
     }
 
+    if (this.isV10Result) {
+      return [
+        { label: "Winner", value: this.topCandidateUserLabel, help: metricHelp("winner") },
+        { label: "Fingerprint", value: this.topCandidateFingerprintLabel, help: metricHelp("fingerprint"), span2: true, code: true },
+        { label: "Weighted match", value: this.topMatchRatioDisplay, help: "V10 soft reference agreement. This is the primary match metric." },
+        { label: "Δ vs #2", value: this.topDeltaVsSecondDisplay, help: "Separation between the best and second-best weighted V10 candidate." },
+        { label: "Usable segments", value: String(this.usableSamples), help: "Segments with sufficient V10 reference signal." },
+        { label: "Effective samples", value: formatCompactStat(this.meta?.v10_effective_samples ?? this.meta?.adaptive_effective_samples), help: "Confidence-weighted amount of usable V10 evidence." },
+        { label: "Reference trust", value: formatCompactStat(this.meta?.reference_anchor_trust), help: "Quality of the alignment to the packaged A/B references." },
+        { label: "Detector", value: this.meta?.v10_detector_version || "v10_full_frame_reference_v4", help: "Dedicated V10 detector; legacy pairwise metrics are not used for the decision." },
+      ];
+    }
+
     return [
       { label: "Winner", value: this.topCandidateUserLabel, help: metricHelp("winner") },
       { label: "Fingerprint", value: this.topCandidateFingerprintLabel, help: metricHelp("fingerprint"), span2: true, code: true },
@@ -491,6 +508,17 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get topCandidateRationaleMetrics() {
+    if (this.isV10Result) {
+      return [
+        { label: "Weighted match", value: this.topMatchRatioDisplay, help: "Soft reference match of the winning fingerprint." },
+        { label: "Runner-up match", value: formatRatio(this.secondCandidate ? this._candidateRatio(this.secondCandidate) : 0), help: "Soft reference match of candidate #2." },
+        { label: "High-quality match", value: formatRatio(this.meta?.v10_high_quality_top), help: "Match using only the strongest reference observations." },
+        { label: "High-quality Δ", value: formatRatio(this.meta?.v10_high_quality_delta), help: "High-quality separation from candidate #2." },
+        { label: "Reference delta median", value: formatCompactStat(this.meta?.reference_delta_median), help: "Median measurable A/B separation in the packaged references." },
+        { label: "Reference trust", value: formatCompactStat(this.meta?.reference_anchor_trust), help: "Alignment and reference confidence used by the V10 policy." },
+      ];
+    }
+
     const parsed = parseWhyMetrics(this.topCandidateWhy);
     return parsed
       .filter((item) => !["score", "rank", "llr"].includes(item.key))
@@ -502,6 +530,13 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get topCandidateScoringMetrics() {
+    if (this.isV10Result) {
+      return [
+        { label: "Decision policy", value: this.meta?.decision_policy || "v10_soft_reference_v4", help: "V10 uses weighted A/B reference evidence rather than legacy raw mismatch and pairwise scores." },
+        { label: "Candidate population", value: String(this.meta?.candidate_population_count ?? this.candidates.length), help: "Number of fingerprints evaluated for this media item." },
+      ];
+    }
+
     return [
       { label: "Evidence score", value: this.topEvidenceScoreDisplay, help: metricHelp("evidence_score") },
       { label: "Rank score", value: this.topRankScoreDisplay, help: metricHelp("rank_score") },
@@ -511,6 +546,10 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   get topCandidateScoringNote() {
     if (!this.topCandidate) {
       return "";
+    }
+
+    if (this.isV10Result) {
+      return "V10 decisions use full-frame differential A/B reference correlation and confidence-weighted candidate separation. Raw mismatch counts remain diagnostic only.";
     }
 
     if (!this.hasRunnerUp && this.topEvidenceScoreDisplay !== "—" && this.topEvidenceScoreDisplay === this.topRankScoreDisplay) {
@@ -978,24 +1017,37 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     const weightedCompared = candidate?.compared_weighted;
     const parsedWhy = parseWhyMetrics(candidate?.why);
 
-    const rationaleMetrics = parsedWhy
-      .filter((item) => !["score", "rank", "llr"].includes(item.key))
-      .map((item) => ({
-        label: RATIONALE_LABELS[item.key] || titleize(item.key),
-        value: item.rawValue,
-        help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key) || fallbackRationaleMetricHelp(item.key),
-      }));
+    const rationaleMetrics = this.isV10Result
+      ? [
+          { label: "Weighted match", value: formatRatio(matchRatio), help: "V10 soft reference agreement for this candidate." },
+          { label: "High-quality match", value: formatRatio(candidate?.high_quality_match_ratio_weighted), help: "Agreement within the strongest V10 observations." },
+          { label: "Adaptive match", value: formatRatio(candidate?.match_ratio_adaptive_weighted), help: "Content- and confidence-weighted V10 match." },
+        ]
+      : parsedWhy
+          .filter((item) => !["score", "rank", "llr"].includes(item.key))
+          .map((item) => ({
+            label: RATIONALE_LABELS[item.key] || titleize(item.key),
+            value: item.rawValue,
+            help: metricHelp(RATIONALE_HELP_KEYS[item.key] || item.key) || fallbackRationaleMetricHelp(item.key),
+          }));
 
-    const statsMetrics = [
-      { label: "Evidence score", value: candidate?.evidence_score === null || candidate?.evidence_score === undefined ? "—" : formatCompactStat(candidate.evidence_score), help: metricHelp("evidence_score") },
-      { label: "Rank score", value: candidate?.rank_score === null || candidate?.rank_score === undefined ? "—" : formatCompactStat(candidate.rank_score), help: metricHelp("rank_score") },
-      { label: "Weighted mis / comp", value: weightedCompared === null || weightedCompared === undefined || Number(weightedCompared) <= 0 ? "—" : `${formatCompactStat(weightedMismatches)} / ${formatCompactStat(weightedCompared)}`, help: metricHelp("weighted_mis_comp") },
-      { label: "Chunk LLR", value: candidate?.chunk_llr_total === null || candidate?.chunk_llr_total === undefined ? "—" : formatCompactStat(candidate.chunk_llr_total), help: metricHelp("chunk_llr") },
-      { label: "Z-score", value: candidate?.signal_z === null || candidate?.signal_z === undefined ? "—" : formatCompactStat(candidate.signal_z), help: metricHelp("z_score") },
-      { label: "p-value", value: candidate?.p_value === null || candidate?.p_value === undefined ? "—" : formatProbability(candidate.p_value), help: metricHelp("p_value") },
-      { label: "E[FP] pool", value: candidate?.expected_false_positives_pool === null || candidate?.expected_false_positives_pool === undefined ? "—" : formatProbability(candidate.expected_false_positives_pool), help: metricHelp("efp_pool") },
-      { label: "E[FP] 2000", value: candidate?.expected_false_positives_2000 === null || candidate?.expected_false_positives_2000 === undefined ? "—" : formatProbability(candidate.expected_false_positives_2000), help: metricHelp("efp_2000") },
-    ];
+    const statsMetrics = this.isV10Result
+      ? [
+          { label: "Weighted compared", value: weightedCompared === null || weightedCompared === undefined ? "—" : formatCompactStat(weightedCompared), help: "Total confidence-weighted V10 evidence." },
+          { label: "Usable segments", value: String(candidate?.compared ?? 0), help: "Segments that contributed to this candidate." },
+          { label: "Raw mismatch", value: `${mismatches} / ${compared}`, help: "Diagnostic only for V10; it is not a conclusive-policy gate." },
+          { label: "Best offset", value: candidate?.best_offset_segments ?? "—", help: metricHelp("best_offset") },
+        ]
+      : [
+          { label: "Evidence score", value: candidate?.evidence_score === null || candidate?.evidence_score === undefined ? "—" : formatCompactStat(candidate.evidence_score), help: metricHelp("evidence_score") },
+          { label: "Rank score", value: candidate?.rank_score === null || candidate?.rank_score === undefined ? "—" : formatCompactStat(candidate.rank_score), help: metricHelp("rank_score") },
+          { label: "Weighted mis / comp", value: weightedCompared === null || weightedCompared === undefined || Number(weightedCompared) <= 0 ? "—" : `${formatCompactStat(weightedMismatches)} / ${formatCompactStat(weightedCompared)}`, help: metricHelp("weighted_mis_comp") },
+          { label: "Chunk LLR", value: candidate?.chunk_llr_total === null || candidate?.chunk_llr_total === undefined ? "—" : formatCompactStat(candidate.chunk_llr_total), help: metricHelp("chunk_llr") },
+          { label: "Z-score", value: candidate?.signal_z === null || candidate?.signal_z === undefined ? "—" : formatCompactStat(candidate.signal_z), help: metricHelp("z_score") },
+          { label: "p-value", value: candidate?.p_value === null || candidate?.p_value === undefined ? "—" : formatProbability(candidate.p_value), help: metricHelp("p_value") },
+          { label: "E[FP] pool", value: candidate?.expected_false_positives_pool === null || candidate?.expected_false_positives_pool === undefined ? "—" : formatProbability(candidate.expected_false_positives_pool), help: metricHelp("efp_pool") },
+          { label: "E[FP] 2000", value: candidate?.expected_false_positives_2000 === null || candidate?.expected_false_positives_2000 === undefined ? "—" : formatProbability(candidate.expected_false_positives_2000), help: metricHelp("efp_2000") },
+        ];
 
     return {
       ...candidate,

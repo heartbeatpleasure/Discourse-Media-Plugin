@@ -158,6 +158,7 @@ module ::MediaGallery
     # from reference calibration sampled at more than one point per HLS segment.
     GRID_DETECTOR_LAYOUTS = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid v10_reference_spread].freeze
     REFERENCE_CACHE_VERSION = "v6"
+    V10_REFERENCE_CACHE_VERSION = "v10_full_frame_v4"
     REFERENCE_GRID_SAMPLE_RATIO = 0.22
     REFERENCE_GRID_SAMPLE_MIN_SECONDS = 0.30
     REFERENCE_GRID_SAMPLE_MAX_SECONDS = 0.75
@@ -179,6 +180,45 @@ module ::MediaGallery
       false
     end
     private_class_method :grid_detector_layout?
+
+    def v10_reference_layout?(layout)
+      layout.to_s == "v10_reference_spread"
+    rescue
+      false
+    end
+    private_class_method :v10_reference_layout?
+
+    def v10_detector_spec(spec)
+      return spec unless v10_reference_layout?(spec.to_h[:layout])
+
+      out = deep_symbolize(Marshal.load(Marshal.dump(spec)))
+      analysis = out[:analysis].is_a?(Hash) ? out[:analysis] : {}
+      template_w = [analysis[:template_grid_w].to_i, 2].max
+      template_h = [analysis[:template_grid_h].to_i, 2].max
+      out[:analysis] = analysis.merge(
+        mode: "templated_pair_grid_v2",
+        pad_frac: 0.0,
+        sample_grid_w: template_w,
+        sample_grid_h: template_h,
+        score_mode: "exact_reference_projection",
+        detector_version: "v10_full_frame_reference_v4",
+        reference_vector_mode: "full_frame_gray_v1",
+        reference_frame_width: 80,
+        reference_frame_height: 45
+      )
+      out[:detector_profile] = "v10_full_frame_reference_v4"
+      out
+    rescue
+      spec
+    end
+    private_class_method :v10_detector_spec
+
+    def reference_cache_version_for(spec)
+      v10_reference_layout?(spec.to_h[:layout]) ? V10_REFERENCE_CACHE_VERSION : REFERENCE_CACHE_VERSION
+    rescue
+      REFERENCE_CACHE_VERSION
+    end
+    private_class_method :reference_cache_version_for
 
     def v9_reference_layout?(layout)
       %w[v9_spread_spectrum v8_v9_hybrid v10_reference_spread].include?(layout.to_s)
@@ -213,15 +253,25 @@ module ::MediaGallery
 
       if layout_name == "v10_reference_spread"
         return {
-          name: "v10_reference_normalized_v1",
-          min_delta: [delta_med * 0.14, 0.40].max,
-          min_margin: 0.030,
-          ratio_soft_start: 0.82,
-          max_ratio: 3.75,
-          ratio_penalty: 0.34,
-          strength_floor: 0.32,
-          strength_cap: 2.00,
-          max_margin_weight: 1.45,
+          name: "v10_full_frame_reference_v4",
+          vector_mode: "full_frame_correlation",
+          carrier_keep_fraction: 0.15,
+          min_correlation: 0.008,
+          confidence_correlation: 0.06,
+          min_delta: [delta_med * 0.08, 0.0015].max,
+          min_margin: 0.018,
+          ratio_soft_start: 0.92,
+          max_ratio: 4.50,
+          ratio_penalty: 0.22,
+          strength_floor: 0.28,
+          strength_cap: 2.40,
+          max_margin_weight: 1.75,
+          pair_min_delta_factor: 0.06,
+          pair_min_delta_floor: 0.00075,
+          pair_min_margin: 0.008,
+          min_pair_fraction: 0.18,
+          min_pairs_floor: 4,
+          min_vote_margin: 0.025,
         }
       end
 
@@ -309,7 +359,84 @@ module ::MediaGallery
     end
     private_class_method :reference_weight_adjustment_for_match
 
+    def full_frame_reference_vote_for_sample(vector:, thr_vector:, delta_vector:, profile:, leak_scale: 1.0)
+      vec = Array(vector).map(&:to_f)
+      thr = Array(thr_vector).map(&:to_f)
+      carrier = Array(delta_vector).map(&:to_f)
+      width = [vec.length, thr.length, carrier.length].min
+      return nil if width <= 0
+
+      residual = Array.new(width) { |idx| vec[idx] - thr[idx] }
+      carrier = carrier.first(width)
+      magnitudes = carrier.map(&:abs).sort
+      keep_fraction = profile[:carrier_keep_fraction].to_f
+      keep_fraction = 0.15 if keep_fraction <= 0.0 || keep_fraction > 1.0
+      threshold_index = [(magnitudes.length * (1.0 - keep_fraction)).floor, magnitudes.length - 1].min
+      carrier_floor = magnitudes[threshold_index].to_f
+
+      selected = []
+      width.times do |idx|
+        selected << idx if carrier[idx].abs >= carrier_floor && carrier[idx].abs.positive?
+      end
+      return nil if selected.length < 24
+
+      carrier_mean = selected.sum { |idx| carrier[idx] }.to_f / selected.length.to_f
+      residual_mean = selected.sum { |idx| residual[idx] }.to_f / selected.length.to_f
+      numerator = 0.0
+      carrier_energy = 0.0
+      residual_energy = 0.0
+      selected.each do |idx|
+        d = carrier[idx] - carrier_mean
+        r = residual[idx] - residual_mean
+        numerator += d * r
+        carrier_energy += d * d
+        residual_energy += r * r
+      end
+      denom = Math.sqrt(carrier_energy * residual_energy)
+      return nil if denom <= 0.0 || denom.nan? || denom.infinite?
+
+      correlation = numerator / denom
+      return nil unless correlation.finite?
+      abs_correlation = correlation.abs
+      min_correlation = profile[:min_correlation].to_f
+      min_correlation = 0.008 if min_correlation <= 0.0
+      return nil if abs_correlation < min_correlation
+
+      confidence_scale = profile[:confidence_correlation].to_f
+      confidence_scale = 0.06 if confidence_scale <= 0.0
+      confidence = [[abs_correlation / confidence_scale, 0.0].max, 1.0].min
+      confidence *= [[leak_scale.to_f, 0.35].max, 1.0].min
+      carrier_rms = Math.sqrt(carrier_energy / selected.length.to_f)
+      weight = abs_correlation * Math.sqrt(selected.length.to_f) * [[carrier_rms, 0.25].max, 4.0].min * [[leak_scale.to_f, 0.35].max, 1.0].min
+
+      {
+        variant: correlation >= 0.0 ? "a" : "b",
+        weight: weight.to_f,
+        margin: confidence.to_f,
+        ratio: (1.0 - confidence).to_f,
+        confidence: confidence.to_f,
+        pairs_used: selected.length,
+        pair_coverage: selected.length.to_f / width.to_f,
+        median_margin: abs_correlation.to_f,
+        median_ratio: (1.0 - confidence).to_f,
+        median_strength: carrier_rms.to_f,
+        correlation: correlation.to_f,
+      }
+    rescue
+      nil
+    end
+    private_class_method :full_frame_reference_vote_for_sample
+
     def vector_reference_vote_for_sample(vector:, thr_vector:, delta_vector:, delta_median:, profile:, leak_scale: 1.0)
+      if profile.to_h[:vector_mode].to_s == "full_frame_correlation"
+        return full_frame_reference_vote_for_sample(
+          vector: vector,
+          thr_vector: thr_vector,
+          delta_vector: delta_vector,
+          profile: profile,
+          leak_scale: leak_scale
+        )
+      end
       vec = Array(vector).map(&:to_f)
       thr = Array(thr_vector).map(&:to_f)
       del = Array(delta_vector).map(&:to_f)
@@ -318,8 +445,11 @@ module ::MediaGallery
 
       dm = delta_median.to_f
       dm = 1.0 if dm <= 0.0 || dm.nan? || dm.infinite?
-      pair_min_delta = [dm * 0.10, 0.14].max
-      pair_min_margin = 0.015
+      pair_min_delta = [
+        dm * (profile[:pair_min_delta_factor].presence || 0.10).to_f,
+        (profile[:pair_min_delta_floor].presence || 0.14).to_f
+      ].max
+      pair_min_margin = (profile[:pair_min_margin].presence || 0.015).to_f
 
       a_vote = 0.0
       b_vote = 0.0
@@ -372,7 +502,9 @@ module ::MediaGallery
         strengths << da
       end
 
-      min_pairs = [[(width * 0.28).ceil, 6].max, width].min
+      min_pair_fraction = (profile[:min_pair_fraction].presence || 0.28).to_f
+      min_pairs_floor = (profile[:min_pairs_floor].presence || 6).to_i
+      min_pairs = [[(width * min_pair_fraction).ceil, min_pairs_floor].max, width].min
       return nil if used < min_pairs
 
       total = a_vote + b_vote
@@ -382,7 +514,8 @@ module ::MediaGallery
       win_w = [a_vote, b_vote].max
       lose_w = [a_vote, b_vote].min
       margin = (win_w - lose_w) / total
-      return nil if margin < 0.055
+      min_vote_margin = (profile[:min_vote_margin].presence || 0.055).to_f
+      return nil if margin < min_vote_margin
 
       coverage = used.to_f / [width, 1].max.to_f
       confidence = [[margin * (0.55 + coverage) * leak_scale.to_f, 0.0].max, 1.0].min
@@ -432,8 +565,11 @@ module ::MediaGallery
             ::MediaGallery::FingerprintWatermark.spec_for(media_item_id: media_item.id, layout: layout)
           end
 
+        spec = v10_detector_spec(spec) if v10_reference_layout?(spec[:layout].to_s.presence || layout.to_s)
+
         codebook_scheme = ::MediaGallery::Fingerprinting.codebook_scheme_for(
-          layout: spec[:layout].to_s.presence || layout.to_s
+          layout: spec[:layout].to_s.presence || layout.to_s,
+          codebook: packaged.to_h[:codebook_scheme]
         )
         previous_codebook_scheme = ::MediaGallery::Fingerprinting.current_thread_codebook_scheme
         Thread.current[:media_gallery_fingerprint_codebook_scheme] = codebook_scheme
@@ -900,6 +1036,8 @@ module ::MediaGallery
       {
         layout: j["layout"].to_s.presence || spec[:layout].to_s,
         segment_seconds: j["segment_seconds"],
+        codebook_scheme: j["codebook_scheme"].to_s.presence,
+        profile: j["profile"].to_s.presence,
         spec: spec,
       }
     rescue
@@ -1561,6 +1699,8 @@ module ::MediaGallery
       top = cands[0]
       second = cands[1]
       usable = Array(obs[:variants]).count { |v| v.present? }
+      reference_usable = Array(match.to_h.dig(:meta, :reference_observed_variants)).count { |v| v.present? }
+      usable = [usable, reference_usable].max
       return { use: true, reason: "no_time_after_direct_preflight", remaining_seconds: remaining.round(3), usable_samples: usable } if remaining < 45.0 && usable >= 8
 
       top_ratio = top ? top[:match_ratio_weighted].to_f : 0.0
@@ -1615,6 +1755,8 @@ module ::MediaGallery
       meta = match[:meta] || {}
       cands = Array(match[:candidates])
       usable = Array(obs[:variants]).count { |v| v.present? }
+      reference_usable = Array(match.to_h.dig(:meta, :reference_observed_variants)).count { |v| v.present? }
+      usable = [usable, reference_usable].max
       return { run: false, reason: "too_few_usable_samples", usable: usable } if usable < 8
 
       top_ratio = cands[0] ? cands[0][:match_ratio_weighted].to_f : 0.0
@@ -2335,6 +2477,8 @@ module ::MediaGallery
     private_class_method :merge_filemode_observations
 
     def maybe_targeted_fill_filemode_observations(media_item:, file_path:, obs:, match:, segment_seconds:, spec:, sample_times:, started_at:, time_budget_seconds:, max_offset_segments:)
+      return nil if v10_full_frame_reference?(spec)
+
       decision = should_run_targeted_filemode_fill?(obs: obs, match: match, spec: spec, started_at: started_at, budget_seconds: time_budget_seconds)
       return nil unless decision[:run]
 
@@ -2777,6 +2921,8 @@ module ::MediaGallery
     private_class_method :discriminative_reread_flip_corroborated?
 
     def maybe_discriminative_reread_filemode_observations(media_item:, file_path:, obs:, match:, segment_seconds:, spec:, sample_times:, started_at:, time_budget_seconds:, max_offset_segments:)
+      return nil if v10_full_frame_reference?(spec)
+
       total_segments = discriminative_total_segments(obs: obs, segment_seconds: segment_seconds, sample_times: sample_times)
       pair_info = build_discriminative_pair_entries(
         match: match,
@@ -4030,10 +4176,12 @@ module ::MediaGallery
 
       # Pass 2: for weak samples, resample nearby frames and aggregate.
       weak_idxs = []
-      variants.each_with_index do |v, i|
-        c = confidences[i].to_f
-        next if v.present? && c >= RESAMPLE_MIN_CONFIDENCE
-        weak_idxs << i
+      unless v10_full_frame_reference?(spec)
+        variants.each_with_index do |v, i|
+          c = confidences[i].to_f
+          next if v.present? && c >= RESAMPLE_MIN_CONFIDENCE
+          weak_idxs << i
+        end
       end
       weak_idxs = weak_idxs.first(MAX_RESAMPLED_SEGMENTS)
 
@@ -4156,6 +4304,8 @@ module ::MediaGallery
     end
 
     def extract_observed_variants_streaming(file_path:, segment_seconds:, spec:, sample_points:, duration_seconds:, effective_max_samples:, started_at:, time_budget_seconds:)
+      return nil if v10_full_frame_reference?(spec) # precise seek timestamps must match the cached A/B midpoint references
+
       points = Array(sample_points)
       return nil unless points.length >= 24
       return nil unless grid_detector_layout?(spec.is_a?(Hash) ? spec[:layout] : nil)
@@ -4334,6 +4484,7 @@ module ::MediaGallery
 
       layout = spec.is_a?(Hash) ? spec[:layout].to_s : nil
       return [0.0] unless grid_detector_layout?(layout)
+      return [0.0] if v10_full_frame_reference?(spec)
 
       if v9_reference_layout?(layout)
         inner = dur * V9_REFERENCE_GRID_INNER_RATIO.to_f
@@ -4581,7 +4732,8 @@ module ::MediaGallery
       "na"
     end
 
-  cache_path = File.join(root, "forensics_reference_#{REFERENCE_CACHE_VERSION}_#{spec[:layout].to_s.presence || 'layout'}.json")
+  cache_version = reference_cache_version_for(spec)
+  cache_path = File.join(root, "forensics_reference_#{cache_version}_#{spec[:layout].to_s.presence || 'layout'}.json")
   cache = (JSON.parse(File.read(cache_path)) rescue nil) if File.exist?(cache_path)
 
   if cache.is_a?(Hash) && cache["spec_hash"].to_s == spec_hash && cache["thr"].is_a?(Array) && cache["delta"].is_a?(Array)
@@ -4590,7 +4742,7 @@ module ::MediaGallery
     if thr.length >= needed && delta.length >= needed
       med = cache["delta_median"].to_f
       med = 1.0 if med <= 0
-      return { thr: thr, delta: delta, thr_vectors: cache["thr_vectors"], delta_vectors: cache["delta_vectors"], vector_reference: ActiveModel::Type::Boolean.new.cast(cache["vector_reference"]), delta_median: med, samples_per_segment: cache["samples_per_segment"].to_f > 0.0 ? cache["samples_per_segment"].to_f : 1.0, cache_version: cache["cache_version"].to_s.presence || REFERENCE_CACHE_VERSION, source_encrypted: ActiveModel::Type::Boolean.new.cast(cache["source_encrypted"]), sampling_method: cache["sampling_method"].to_s.presence || "cached" }
+      return { thr: thr, delta: delta, thr_vectors: cache["thr_vectors"], delta_vectors: cache["delta_vectors"], vector_reference: ActiveModel::Type::Boolean.new.cast(cache["vector_reference"]), delta_median: med, samples_per_segment: cache["samples_per_segment"].to_f > 0.0 ? cache["samples_per_segment"].to_f : 1.0, cache_version: cache["cache_version"].to_s.presence || cache_version, source_encrypted: ActiveModel::Type::Boolean.new.cast(cache["source_encrypted"]), sampling_method: cache["sampling_method"].to_s.presence || "cached" }
     end
   end
 
@@ -4704,7 +4856,7 @@ module ::MediaGallery
       JSON.pretty_generate({
         "layout" => spec[:layout].to_s,
         "spec_hash" => spec_hash,
-        "cache_version" => REFERENCE_CACHE_VERSION,
+        "cache_version" => cache_version,
         "source_encrypted" => sampling_context.is_a?(Hash) && sampling_context[:encrypted] == true,
         "sampling_method" => sampling_context.is_a?(Hash) ? sampling_context[:method].to_s : nil,
         "thr" => thr,
@@ -4729,7 +4881,7 @@ module ::MediaGallery
     vector_reference: use_vector_reference,
     delta_median: delta_median,
     samples_per_segment: sample_plan.length > 0 ? (sample_plan.length.to_f / needed.to_f).round(2) : 1.0,
-    cache_version: REFERENCE_CACHE_VERSION,
+    cache_version: cache_version,
     source_encrypted: sampling_context.is_a?(Hash) && sampling_context[:encrypted] == true,
     sampling_method: sampling_context.is_a?(Hash) ? sampling_context[:method].to_s : nil
   }
@@ -6643,7 +6795,30 @@ end
           local_std = Math.sqrt(local_var)
           local_std = 1.0 if local_std < 1.0
 
-          if score_mode == "bar_consensus_zscore"
+          if score_mode == "exact_reference_projection"
+            z_for = lambda do |cx, cy|
+              idx = ((oy + cy.to_i) * gw) + ox + cx.to_i
+              (chunk[idx].to_f - local_mean) / local_std
+            end
+
+            cell_sets.each do |cells|
+              pos = Array(cells[:positive]).map { |cx, cy| z_for.call(cx, cy) }
+              neg = Array(cells[:negative]).map { |cx, cy| z_for.call(cx, cy) }
+              next if pos.blank? || neg.blank?
+
+              pos_mean = pos.sum.to_f / pos.length.to_f
+              neg_mean = neg.sum.to_f / neg.length.to_f
+              raw = pos_mean - neg_mean
+              support_hits = pos.count { |value| value >= 0.0 } + neg.count { |value| value <= 0.0 }
+              support = support_hits.to_f / [pos.length + neg.length, 1].max.to_f
+              candidate_scores << {
+                weighted: raw.to_f,
+                raw: raw.to_f,
+                std: local_std.to_f,
+                support: support.to_f,
+              }
+            end
+          elsif score_mode == "bar_consensus_zscore"
             z_for = lambda do |cx, cy|
               idx = ((oy + cy.to_i) * gw) + ox + cx.to_i
               (chunk[idx].to_f - local_mean) / local_std
@@ -6725,7 +6900,9 @@ end
       separation = best_abs > 0.0 ? ((best_abs - alt_abs) / best_abs) : 0.0
       separation = 0.0 if separation.negative?
       reliability = 0.58 + ([separation, 1.0].min * 0.72)
-      if score_mode == "center_biased_zscore"
+      if score_mode == "exact_reference_projection"
+        reliability = 1.0
+      elsif score_mode == "center_biased_zscore"
         reliability *= [[best[:std].to_f / 14.0, 1.0].min, 0.55].max
       elsif score_mode == "bar_consensus_zscore"
         reliability *= [[best[:std].to_f / 13.0, 1.0].min, 0.60].max
@@ -6795,6 +6972,159 @@ end
     end
     private_class_method :decode_pair_frame_bytes
 
+    def v10_full_frame_reference?(spec)
+      v10_reference_layout?(spec.to_h[:layout]) &&
+        spec.to_h.dig(:analysis, :reference_vector_mode).to_s == "full_frame_gray_v1"
+    rescue
+      false
+    end
+    private_class_method :v10_full_frame_reference?
+
+    def v10_reference_frame_dimensions(spec)
+      analysis = spec.to_h[:analysis].is_a?(Hash) ? spec.to_h[:analysis] : {}
+      width = analysis[:reference_frame_width].to_i
+      height = analysis[:reference_frame_height].to_i
+      width = 80 if width <= 0
+      height = 45 if height <= 0
+      [width, height]
+    rescue
+      [80, 45]
+    end
+    private_class_method :v10_reference_frame_dimensions
+
+    def build_v10_reference_frame_filter(in_label:, spec:, label_prefix: "")
+      width, height = v10_reference_frame_dimensions(spec)
+      sync_pairs = Array(spec.to_h[:sync_pairs])
+      prefix = label_prefix.to_s.gsub(/[^a-zA-Z0-9_]/, "")
+      source = in_label.presence || "[0:v]"
+      filters = []
+
+      if sync_pairs.present?
+        filters << "#{source}split=2[#{prefix}frame][#{prefix}syncsrc]"
+        filters << "[#{prefix}frame]scale=#{width}:#{height}:flags=area,format=gray[#{prefix}full]"
+
+        box = spec.to_h[:sync_box_size_frac].to_f
+        box = spec.to_h[:box_size_frac].to_f if box <= 0.0
+        box = 0.048 if box <= 0.0
+        sync_spec = spec.to_h.merge(pairs: [], sync_pairs: sync_pairs)
+        sync_built = build_pair_filter(
+          in_label: "[#{prefix}syncsrc]",
+          pairs: sync_pairs,
+          box: box,
+          spec: sync_spec,
+          label_prefix: "#{prefix}sync_"
+        )
+        filters << sync_built[:filter].gsub("[out]", "[#{prefix}syncraw]")
+        config = pair_analysis_config(spec: sync_spec, box: box)
+        sync_width = sync_pairs.length * [config[:sample_grid_w].to_i, 1].max
+        sync_height = [config[:sample_grid_h].to_i, 1].max
+        output_width = [width, sync_width].max
+        if output_width != width
+          filters << "[#{prefix}full]pad=#{output_width}:#{height}:0:0:black[#{prefix}fullpad]"
+          full_label = "[#{prefix}fullpad]"
+        else
+          full_label = "[#{prefix}full]"
+        end
+        filters << "[#{prefix}syncraw]pad=#{output_width}:#{sync_height}:0:0:black[#{prefix}syncpad]"
+        filters << "#{full_label}[#{prefix}syncpad]vstack=inputs=2[out]"
+
+        {
+          filter: filters.join(";"),
+          expected_bytes: output_width * (height + sync_height),
+          output_width: output_width,
+          full_width: width,
+          full_height: height,
+          sync_width: sync_width,
+          sync_height: sync_height,
+          sync_pairs: sync_pairs,
+          sync_spec: sync_spec,
+          sync_box: box,
+        }
+      else
+        filters << "#{source}scale=#{width}:#{height}:flags=area,format=gray[out]"
+        {
+          filter: filters.join(";"),
+          expected_bytes: width * height,
+          output_width: width,
+          full_width: width,
+          full_height: height,
+          sync_width: 0,
+          sync_height: 0,
+          sync_pairs: [],
+          sync_spec: spec,
+          sync_box: 0.0,
+        }
+      end
+    end
+    private_class_method :build_v10_reference_frame_filter
+
+    def decode_v10_reference_frame_bytes(bytes:, built:)
+      raw = Array(bytes)
+      output_width = built[:output_width].to_i
+      full_width = built[:full_width].to_i
+      full_height = built[:full_height].to_i
+      full = []
+      full_height.times do |row|
+        offset = row * output_width
+        full.concat(Array(raw[offset, full_width]))
+      end
+
+      sync_decoded = nil
+      sync_width = built[:sync_width].to_i
+      sync_height = built[:sync_height].to_i
+      if sync_width.positive? && sync_height.positive?
+        sync = []
+        base = output_width * full_height
+        sync_height.times do |row|
+          sync.concat(Array(raw[base + (row * output_width), sync_width]))
+        end
+        sync_decoded = decode_pair_frame_bytes(
+          bytes: sync,
+          main_pair_count: 0,
+          pairs: Array(built[:sync_pairs]),
+          spec: built[:sync_spec],
+          box: built[:sync_box]
+        )
+      end
+
+      {
+        variant: nil,
+        confidence: 1.0,
+        score: 0.0,
+        payload_score: 0.0,
+        payload_confidence: 1.0,
+        payload_vector: full.map(&:to_f),
+        sync_score: sync_decoded.to_h[:sync_score].to_f,
+        sync_confidence: sync_decoded.to_h[:sync_confidence].to_f,
+        sync_variant: sync_decoded.to_h[:sync_variant],
+        sync_vector: Array(sync_decoded.to_h[:sync_vector]),
+        reference_only_vector: true,
+      }
+    rescue
+      { variant: nil, confidence: 1.0, score: 0.0, payload_vector: [], sync_score: 0.0, sync_confidence: 0.0, sync_variant: nil, reference_only_vector: true }
+    end
+    private_class_method :decode_v10_reference_frame_bytes
+
+    def sample_v10_reference_frames_batch(file_path:, times:, spec:, input_options: nil)
+      times = Array(times).map(&:to_f).select { |time| time >= 0.0 }
+      return [] if times.empty?
+
+      built = build_v10_reference_frame_filter(in_label: nil, spec: spec)
+      raw = ffmpeg_sample_raw_multi(
+        file_path: file_path,
+        times: times,
+        expected_bytes_per_frame: built[:expected_bytes],
+        filter_builder: lambda { |in_label, label_prefix| build_v10_reference_frame_filter(in_label: in_label, spec: spec, label_prefix: label_prefix) },
+        input_options: input_options
+      )
+      parse_batch_bytes(raw: raw, expected_bytes_per_frame: built[:expected_bytes], times: times) do |bytes|
+        decode_v10_reference_frame_bytes(bytes: bytes, built: built)
+      end
+    rescue
+      times.map { { variant: nil, confidence: 1.0, score: 0.0, payload_vector: [], sync_score: 0.0, sync_confidence: 0.0, sync_variant: nil, reference_only_vector: true } }
+    end
+    private_class_method :sample_v10_reference_frames_batch
+
     # --------------------- batch sampling ---------------------------------
 
     # Returns an Array of numeric scores (one per time). Does not apply confidence gating.
@@ -6818,7 +7148,7 @@ end
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec) },
+          filter_builder: lambda { |in_label, label_prefix| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec, label_prefix: label_prefix) },
           input_options: input_options
         )
 
@@ -6839,7 +7169,7 @@ end
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_tile_filter(in_label: in_label, tiles: tiles, box: box) },
+          filter_builder: lambda { |in_label, label_prefix| build_tile_filter(in_label: in_label, tiles: tiles, box: box, label_prefix: label_prefix) },
           input_options: input_options
         )
 
@@ -6868,6 +7198,21 @@ end
 
       interval = interval_seconds.to_f
       interval = 3.0 if interval <= 0.0 || interval.nan? || interval.infinite?
+
+      if v10_full_frame_reference?(spec)
+        built = build_v10_reference_frame_filter(in_label: nil, spec: spec)
+        raw = ffmpeg_sample_raw_stream(
+          file_path: file_path,
+          start_time: start_time,
+          interval_seconds: interval,
+          frame_count: frames,
+          expected_bytes_per_frame: built[:expected_bytes],
+          filter_builder: lambda { |in_label| build_v10_reference_frame_filter(in_label: in_label, spec: spec) }
+        )
+        return parse_batch_bytes(raw: raw, expected_bytes_per_frame: built[:expected_bytes], times: Array.new(frames, 0.0)) do |bytes|
+          decode_v10_reference_frame_bytes(bytes: bytes, built: built)
+        end
+      end
 
       kind = spec[:kind].to_s
       kind = "pairs" if kind.blank? && spec[:pairs].present?
@@ -6941,6 +7286,7 @@ end
     def sample_variants_batch_single(file_path:, times:, spec:, input_options: nil)
       times = Array(times).map { |t| t.to_f }.select { |t| t >= 0.0 }
       return [] if times.empty?
+      return sample_v10_reference_frames_batch(file_path: file_path, times: times, spec: spec, input_options: input_options) if v10_full_frame_reference?(spec)
 
       kind = spec[:kind].to_s
       kind = "pairs" if kind.blank? && spec[:pairs].present?
@@ -6958,7 +7304,7 @@ end
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec) },
+          filter_builder: lambda { |in_label, label_prefix| build_pair_filter(in_label: in_label, pairs: pairs, box: box, spec: spec, label_prefix: label_prefix) },
           input_options: input_options
         )
 
@@ -6986,7 +7332,7 @@ end
           file_path: file_path,
           times: times,
           expected_bytes_per_frame: expected,
-          filter_builder: lambda { |in_label| build_tile_filter(in_label: in_label, tiles: tiles, box: box) },
+          filter_builder: lambda { |in_label, label_prefix| build_tile_filter(in_label: in_label, tiles: tiles, box: box, label_prefix: label_prefix) },
           input_options: input_options
         )
 
@@ -7027,7 +7373,7 @@ end
     end
     private_class_method :parse_batch_bytes
 
-    def build_pair_filter(in_label:, pairs:, box:, spec:)
+    def build_pair_filter(in_label:, pairs:, box:, spec:, label_prefix: "")
       pair_count = pairs.length
       return { filter: "null[out]", expected_bytes: 0 } if pair_count == 0
 
@@ -7042,21 +7388,30 @@ end
       crop_h = (box.to_f + (pad_y * 2.0)).round(6)
       filters = []
       label = in_label.presence || "[0:v]"
+      prefix = label_prefix.to_s.gsub(/[^a-zA-Z0-9_]/, "")
+
+      pair_sources = if pair_count == 1
+        [label]
+      else
+        labels = pair_count.times.map { |idx| "[#{prefix}src#{idx}]" }
+        filters << "#{label}split=#{pair_count}#{labels.join}"
+        labels
+      end
 
       pairs.each_with_index do |p, idx|
         x = p[:x].to_f
         y = p[:y].to_f
         cx = [[x - pad_x, 0.0].max, 1.0 - crop_w].min.round(6)
         cy = [[y - pad_y, 0.0].max, 1.0 - crop_h].min.round(6)
-        filters << "#{label}crop=w=iw*#{crop_w}:h=ih*#{crop_h}:x=iw*#{cx}:y=ih*#{cy},scale=#{sample_w}:#{sample_h}:flags=area[p#{idx}]"
+        filters << "#{pair_sources[idx]}crop=w=iw*#{crop_w}:h=ih*#{crop_h}:x=iw*#{cx}:y=ih*#{cy},scale=#{sample_w}:#{sample_h}:flags=area[#{prefix}p#{idx}]"
       end
-      stack_inputs = (0...pair_count).map { |i| "[p#{i}]" }.join
+      stack_inputs = (0...pair_count).map { |i| "[#{prefix}p#{i}]" }.join
       filters << "#{stack_inputs}hstack=inputs=#{pair_count}[out]"
       { filter: filters.join(";"), expected_bytes: pair_count * sample_w * sample_h }
     end
     private_class_method :build_pair_filter
 
-    def build_tile_filter(in_label:, tiles:, box:)
+    def build_tile_filter(in_label:, tiles:, box:, label_prefix: "")
       tile_count = tiles.length
       return { filter: "null[out]", expected_bytes: 0 } if tile_count == 0
 
@@ -7064,21 +7419,32 @@ end
       pad = ((outer - box.to_f) / 2.0).round(6)
 
       filters = []
+      prefix = label_prefix.to_s.gsub(/[^a-zA-Z0-9_]/, "")
+      source_label = in_label.presence || "[0:v]"
+      source_count = tile_count * 2
+      tile_sources = if source_count == 1
+        [source_label]
+      else
+        labels = source_count.times.map { |idx| "[#{prefix}src#{idx}]" }
+        filters << "#{source_label}split=#{source_count}#{labels.join}"
+        labels
+      end
+
       tiles.each_with_index do |p, idx|
         x = p[:x]
         y = p[:y]
 
-        filters << "#{in_label}crop=w=iw*#{box}:h=ih*#{box}:x=iw*#{x}:y=ih*#{y},scale=1:1:flags=area[i#{idx}]"
+        filters << "#{tile_sources[idx * 2]}crop=w=iw*#{box}:h=ih*#{box}:x=iw*#{x}:y=ih*#{y},scale=1:1:flags=area[#{prefix}i#{idx}]"
 
         ox = [[x - pad, 0.0].max, 1.0 - outer].min.round(6)
         oy = [[y - pad, 0.0].max, 1.0 - outer].min.round(6)
-        filters << "#{in_label}crop=w=iw*#{outer}:h=ih*#{outer}:x=iw*#{ox}:y=ih*#{oy},scale=1:1:flags=area[o#{idx}]"
+        filters << "#{tile_sources[(idx * 2) + 1]}crop=w=iw*#{outer}:h=ih*#{outer}:x=iw*#{ox}:y=ih*#{oy},scale=1:1:flags=area[#{prefix}o#{idx}]"
       end
 
       pack = []
       tiles.each_index do |idx|
-        pack << "[i#{idx}]"
-        pack << "[o#{idx}]"
+        pack << "[#{prefix}i#{idx}]"
+        pack << "[#{prefix}o#{idx}]"
       end
       filters << "#{pack.join}hstack=inputs=#{pack.length}[out]"
       { filter: filters.join(";"), expected_bytes: tile_count * 2 }
@@ -7578,7 +7944,9 @@ end
     layout: v8_layout_name(spec&.dig(:layout) || spec&.[](:layout))
   )
 
-  pairwise_chunk_decoder = if use_chunked
+  pairwise_chunk_decoder = if v10_reference_layout?(layout_name)
+    { used: false, reason: "v10_uses_dedicated_soft_reference_policy" }
+  elsif use_chunked
     { used: false, reason: "skipped_for_chunked_reference" }
   else
     apply_pairwise_chunk_decoder!(
@@ -7597,7 +7965,9 @@ end
     )
   end
 
-  discriminative_shortlist_decoder = if use_chunked
+  discriminative_shortlist_decoder = if v10_reference_layout?(layout_name)
+    { used: false, reason: "v10_uses_dedicated_soft_reference_policy" }
+  elsif use_chunked
     { used: false, reason: "skipped_for_chunked_reference" }
   else
     apply_discriminative_shortlist_decoder!(
@@ -7635,8 +8005,12 @@ end
     reference_delta_median: delta_med.round(4),
     reference_min_delta: min_delta.round(4),
     reference_detection_profile: reference_profile[:name].to_s,
+    v10_detector_version: (v10_reference_layout?(layout_name) ? "v10_full_frame_reference_v4" : nil),
+    v10_soft_reference_policy: v10_reference_layout?(layout_name),
     reference_vector_matching_used: use_vector_reference,
     reference_vector_pair_count: (use_vector_reference ? Array(ref_delta_vecs.compact.find { |v| Array(v).present? }).length : 0),
+    reference_vector_mode: (v10_reference_layout?(layout_name) ? "full_frame_gray_v1" : nil),
+    reference_vector_dimensions: (v10_reference_layout?(layout_name) ? "80x45" : nil),
     reference_min_margin: min_margin.round(4),
     reference_max_ratio: reference_profile[:max_ratio].present? ? reference_profile[:max_ratio].to_f.round(4) : nil,
     reference_ratio_soft_start: reference_profile[:ratio_soft_start].present? ? reference_profile[:ratio_soft_start].to_f.round(4) : nil,
@@ -7760,6 +8134,10 @@ def clamp_time(t, duration_seconds:)
     private_class_method :median
 
     def sample_variant_single(file_path:, t:, spec:)
+      if v10_full_frame_reference?(spec)
+        return sample_v10_reference_frames_batch(file_path: file_path, times: [t], spec: spec).first || { variant: nil, confidence: 1.0, score: 0.0, payload_vector: [] }
+      end
+
       kind = spec[:kind].to_s
       kind = "pairs" if kind.blank? && spec[:pairs].present?
       kind = "tiles" if kind.blank? && spec[:tiles].present?
@@ -7981,8 +8359,13 @@ def clamp_time(t, duration_seconds:)
       out_labels = []
 
       times.each_with_index do |_t, idx|
-        in_label = "[#{idx}:v]"
-        built = filter_builder.call(in_label)
+        # Each seek input continues decoding until EOF. The concat filter therefore
+        # must receive exactly one timestamp-normalized frame per input; otherwise
+        # the first seek supplies the whole output batch and later sample times are
+        # silently ignored. That corrupts both leak observations and A/B references.
+        sampled_label = "[sample#{idx}]"
+        filters << "[#{idx}:v]select='eq(n,0)',setpts=PTS-STARTPTS#{sampled_label}"
+        built = filter_builder.call(sampled_label, "s#{idx}_")
         filters << built[:filter].gsub("[out]", "[o#{idx}]")
         out_labels << "[o#{idx}]"
       end
@@ -7990,7 +8373,10 @@ def clamp_time(t, duration_seconds:)
       if out_labels.length == 1
         filters << "#{out_labels.first}copy[out]"
       else
-        filters << "#{out_labels.join}concat=n=#{out_labels.length}:v=1:a=0[out]"
+        # Stack samples vertically into one raw frame. A concat of one-frame
+        # branches is not reliable because zero-duration frames can be repeated
+        # or dropped; vstack preserves one contiguous byte block per sample.
+        filters << "#{out_labels.join}vstack=inputs=#{out_labels.length}[out]"
       end
 
       cmd += [
@@ -7999,7 +8385,7 @@ def clamp_time(t, duration_seconds:)
         "-map",
         "[out]",
         "-frames:v",
-        times.length.to_s,
+        "1",
         "-f",
         "rawvideo",
         "-pix_fmt",

@@ -113,7 +113,7 @@ module ::MediaGallery
     V10_PAIR_COUNT = 32
     V10_BOX_SIZE_FRAC = 0.048
     V10_SYNC_PAIR_COUNT = 4
-    V10_SYNC_OPACITY = 0.015
+    V10_SYNC_OPACITY = 0.0135
     V10_SYNC_PATTERN = %w[a b a a b b a b].freeze
 
     V2_OPACITY = 0.006 # 0.6% alpha
@@ -124,7 +124,7 @@ module ::MediaGallery
     V7_OPACITY = 0.0135 # 1.35% alpha, still subtle but materially easier to decode
     V8_OPACITY = 0.0185 # denser but still sparse templates; slightly lower alpha reduces visibility
     V9_OPACITY = 0.0155 # lower per-chip alpha; SNR comes from many distributed chips
-    V10_OPACITY = 0.0170 # antipodal reference carrier; stronger consensus, still spatially sparse
+    V10_OPACITY = 0.0200 # 2.0% antipodal carrier; still subtle, materially stronger after ordinary H.264 re-encoding
 
     # Keep away from the borders so mild crops don't remove everything.
     V1_MARGIN = 0.06
@@ -182,20 +182,23 @@ module ::MediaGallery
     ].freeze
 
 
-    V10_TEMPLATE_GRID_W = 12
-    V10_TEMPLATE_GRID_H = 8
-    V10_ANALYSIS_GRID_W = 22
-    V10_ANALYSIS_GRID_H = 15
-    V10_ANALYSIS_PAD_FRAC = 0.22
+    V10_TEMPLATE_GRID_W = 8
+    V10_TEMPLATE_GRID_H = 6
+    V10_ANALYSIS_GRID_W = 8
+    V10_ANALYSIS_GRID_H = 6
+    V10_ANALYSIS_PAD_FRAC = 0.0
+    # V10 v3 deliberately uses larger low/mid-frequency chips than the original
+    # 12x8 carrier. The moderate alpha remains visually subtle, while the larger
+    # codec blocks survive ordinary H.264 re-encoding more consistently.
     V10_TEMPLATE_POSITIVE_CELLS = [
-      [[0,0],[2,0],[5,0],[1,1],[4,1],[0,3],[3,3],[5,4],[2,6],[4,7]],
-      [[1,0],[4,0],[0,1],[3,1],[5,2],[2,3],[0,5],[4,5],[1,7],[5,7]],
-      [[0,0],[3,0],[5,1],[1,2],[4,2],[2,4],[0,6],[3,6],[1,7],[5,7]],
-      [[2,0],[5,0],[0,2],[3,2],[1,3],[4,4],[0,5],[5,5],[2,7],[4,7]],
-      [[1,0],[5,1],[2,2],[4,2],[0,3],[3,4],[1,5],[5,6],[0,7],[3,7]],
-      [[0,1],[3,1],[5,2],[1,3],[4,3],[2,5],[0,6],[4,6],[1,7],[5,7]],
-      [[2,0],[4,0],[1,1],[5,2],[0,4],[3,4],[1,6],[4,6],[0,7],[5,7]],
-      [[0,0],[5,0],[2,1],[4,3],[1,4],[3,4],[0,6],[5,6],[2,7],[4,7]]
+      [[0,0],[2,0],[1,1],[3,1],[0,3],[2,3],[1,4],[3,5]],
+      [[1,0],[3,0],[0,1],[2,1],[1,3],[3,3],[0,4],[2,5]],
+      [[0,0],[3,0],[1,1],[2,2],[0,3],[3,3],[1,5],[2,5]],
+      [[2,0],[0,1],[3,1],[1,2],[2,3],[0,4],[3,4],[1,5]],
+      [[1,0],[2,0],[0,2],[3,2],[1,3],[2,4],[0,5],[3,5]],
+      [[0,1],[2,1],[1,2],[3,2],[0,3],[2,4],[1,5],[3,5]],
+      [[2,0],[3,1],[0,2],[1,2],[2,3],[3,4],[0,5],[1,5]],
+      [[0,0],[3,0],[2,1],[1,2],[0,4],[3,4],[1,5],[2,5]]
     ].freeze
 
     LEGACY_PACKAGING_LAYOUTS = [LAYOUT_V1, LAYOUT_V2, LAYOUT_V3, LAYOUT_V4, LAYOUT_V5].freeze
@@ -295,7 +298,7 @@ module ::MediaGallery
       if mode == LAYOUT_V8
         :hls_compat
       elsif mode == LAYOUT_V10
-        :reference_spread_v10
+        :reference_spread_v10_v3
       elsif mode == LAYOUT_V9 || mode == LAYOUT_V8_V9
         :spread_spectrum_v1
       else
@@ -698,16 +701,21 @@ module ::MediaGallery
         sync_box_size_frac: V10_BOX_SIZE_FRAC,
         analysis: {
           mode: "templated_pair_grid_v2",
-          pad_frac: V10_ANALYSIS_PAD_FRAC,
-          sample_grid_w: V10_ANALYSIS_GRID_W,
-          sample_grid_h: V10_ANALYSIS_GRID_H,
+          pad_frac: 0.0,
+          sample_grid_w: V10_TEMPLATE_GRID_W,
+          sample_grid_h: V10_TEMPLATE_GRID_H,
           template_grid_w: V10_TEMPLATE_GRID_W,
           template_grid_h: V10_TEMPLATE_GRID_H,
           template_variants: V10_TEMPLATE_POSITIVE_CELLS,
           legacy_template_variants: [],
-          score_mode: "bar_consensus_zscore"
+          score_mode: "exact_reference_projection",
+          detector_version: "v10_full_frame_reference_v4",
+          reference_vector_mode: "full_frame_gray_v1",
+          reference_frame_width: 80,
+          reference_frame_height: 45
         },
-        profile: "reference_spread_v10"
+        detector_profile: "v10_full_frame_reference_v4",
+        profile: "reference_spread_v10_v3"
       }
     end
     private_class_method :v10_spec_for
