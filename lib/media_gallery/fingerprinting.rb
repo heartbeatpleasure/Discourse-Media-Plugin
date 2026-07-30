@@ -22,6 +22,7 @@ module ::MediaGallery
 
     CODEBOOK_REPEAT_INTERLEAVE_V1 = "repeat_interleave_v1"
     CODEBOOK_LOCAL_WINDOW_V2 = "local_window_codelets_v2"
+    CODEBOOK_REFERENCE_STREAM_V10 = "reference_stream_hmac_v10"
 
     ECC_LOGICAL_BITS = 16
     ECC_REPEAT = 4
@@ -104,6 +105,8 @@ module ::MediaGallery
       return threaded if threaded.present?
 
       case layout.to_s
+      when "v10_reference_spread"
+        CODEBOOK_REFERENCE_STREAM_V10
       when "v6_local_sync", "v7_high_separation", "v8_microgrid", "v9_spread_spectrum", "v8_v9_hybrid"
         CODEBOOK_LOCAL_WINDOW_V2
       else
@@ -117,7 +120,14 @@ module ::MediaGallery
     def ecc_profile(codebook: nil, layout: nil)
       scheme = codebook_scheme_for(codebook: codebook, layout: layout)
 
-      if scheme.to_s == CODEBOOK_LOCAL_WINDOW_V2
+      if scheme.to_s == CODEBOOK_REFERENCE_STREAM_V10
+        {
+          logical_bits: 64,
+          repeat: 1,
+          block_span: 64,
+          scheme: CODEBOOK_REFERENCE_STREAM_V10
+        }
+      elsif scheme.to_s == CODEBOOK_LOCAL_WINDOW_V2
         {
           logical_bits: LOCAL_V2_LOGICAL_BITS,
           repeat: LOCAL_V2_REPEAT,
@@ -225,15 +235,23 @@ module ::MediaGallery
       cache_key = [:expected_variant, fingerprint_id.to_s, media_item_id.to_i, segment_index.to_i, scheme.to_s]
       return cache[cache_key] if cache && cache.key?(cache_key)
 
-      slot = logical_slot_for_segment(segment_index: segment_index, codebook: scheme, layout: layout)
-      result = expected_logical_variant(
-        fingerprint_id: fingerprint_id,
-        media_item_id: media_item_id,
-        block_index: slot[:block_index],
-        logical_index: slot[:logical_index],
-        codebook: scheme,
-        layout: layout
-      )
+      if scheme.to_s == CODEBOOK_REFERENCE_STREAM_V10
+        idx = segment_index.to_i
+        idx = 0 if idx.negative?
+        msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|segment=#{idx}|reference_stream=v10"
+        byte0 = OpenSSL::HMAC.digest("SHA256", secret, msg).getbyte(0)
+        result = (byte0 & 1) == 1 ? "b" : "a"
+      else
+        slot = logical_slot_for_segment(segment_index: segment_index, codebook: scheme, layout: layout)
+        result = expected_logical_variant(
+          fingerprint_id: fingerprint_id,
+          media_item_id: media_item_id,
+          block_index: slot[:block_index],
+          logical_index: slot[:logical_index],
+          codebook: scheme,
+          layout: layout
+        )
+      end
       cache[cache_key] = result if cache
       result
     rescue

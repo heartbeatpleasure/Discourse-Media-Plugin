@@ -156,7 +156,7 @@ module ::MediaGallery
     # Iteration 2: detector hardening for the CPU-only grid layouts.
     # These layouts benefit from reading several in-segment observations and
     # from reference calibration sampled at more than one point per HLS segment.
-    GRID_DETECTOR_LAYOUTS = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].freeze
+    GRID_DETECTOR_LAYOUTS = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid v10_reference_spread].freeze
     REFERENCE_CACHE_VERSION = "v6"
     REFERENCE_GRID_SAMPLE_RATIO = 0.22
     REFERENCE_GRID_SAMPLE_MIN_SECONDS = 0.30
@@ -181,7 +181,7 @@ module ::MediaGallery
     private_class_method :grid_detector_layout?
 
     def v9_reference_layout?(layout)
-      %w[v9_spread_spectrum v8_v9_hybrid].include?(layout.to_s)
+      %w[v9_spread_spectrum v8_v9_hybrid v10_reference_spread].include?(layout.to_s)
     rescue
       false
     end
@@ -210,6 +210,20 @@ module ::MediaGallery
       delta_med = delta_median.to_f
       delta_med = 1.0 if delta_med <= 0.0 || delta_med.nan? || delta_med.infinite?
       layout_name = layout.to_s
+
+      if layout_name == "v10_reference_spread"
+        return {
+          name: "v10_reference_normalized_v1",
+          min_delta: [delta_med * 0.14, 0.40].max,
+          min_margin: 0.030,
+          ratio_soft_start: 0.82,
+          max_ratio: 3.75,
+          ratio_penalty: 0.34,
+          strength_floor: 0.32,
+          strength_cap: 2.00,
+          max_margin_weight: 1.45,
+        }
+      end
 
       if layout_name == "v9_spread_spectrum"
         return {

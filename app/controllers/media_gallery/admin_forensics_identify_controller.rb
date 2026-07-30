@@ -1623,13 +1623,13 @@ module ::MediaGallery
     end
 
     def v8_layout_result?(result)
-      %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
+      %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid v10_reference_spread].include?(result.dig("meta", "layout").to_s)
     rescue
       false
     end
 
     def v9_layout_result?(result)
-      %w[v9_spread_spectrum v8_v9_hybrid].include?(result.dig("meta", "layout").to_s)
+      %w[v9_spread_spectrum v8_v9_hybrid v10_reference_spread].include?(result.dig("meta", "layout").to_s)
     rescue
       false
     end

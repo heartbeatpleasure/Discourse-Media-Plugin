@@ -1145,6 +1145,7 @@ export default RouteTemplate(
                   <option value="v8_microgrid">{{i18n "admin.media_gallery.forensics_identify.layout_v8_microgrid"}}</option>
                   <option value="v9_spread_spectrum">{{i18n "admin.media_gallery.forensics_identify.layout_v9_spread_spectrum"}}</option>
                   <option value="v8_v9_hybrid">{{i18n "admin.media_gallery.forensics_identify.layout_v8_v9_hybrid"}}</option>
+                  <option value="v10_reference_spread">{{i18n "admin.media_gallery.forensics_identify.layout_v10_reference_spread"}}</option>
                 </select>
               </div>
 

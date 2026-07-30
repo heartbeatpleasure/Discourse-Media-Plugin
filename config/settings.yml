@@ -996,6 +996,7 @@ plugins:
       - v8_microgrid
       - v9_spread_spectrum
       - v8_v9_hybrid
+      - v10_reference_spread
     client: false
 
   # If enabled, keep using configured legacy layouts (v1-v5) for new uploads.
