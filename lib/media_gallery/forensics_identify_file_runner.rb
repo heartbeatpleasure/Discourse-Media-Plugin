@@ -1146,7 +1146,26 @@ module ::MediaGallery
         delta >= (min_delta - 0.06) &&
         anchor_trust >= 0.25
 
-      decision = conclusive ? "conclusive_match" : (likely ? "likely_match" : (usable < 5 ? "insufficient_samples" : "no_match"))
+      short_clip = usable <= 24
+      shortlist_rank_gap = meta["shortlist_rank_gap"].to_f
+      ambiguous_short_clip =
+        !conclusive &&
+        top.present? &&
+        second.present? &&
+        short_clip &&
+        (delta < min_delta || shortlist_rank_gap.abs < 1.0)
+
+      decision = if conclusive
+        "conclusive_match"
+      elsif likely && !ambiguous_short_clip
+        "likely_match"
+      elsif usable < 5
+        "insufficient_samples"
+      elsif ambiguous_short_clip
+        "ambiguous"
+      else
+        "no_match"
+      end
       reasons = []
       reasons << "usable_samples=#{usable} < #{min_usable}" if usable < min_usable
       reasons << "effective_samples=#{effective.round(2)} < #{min_effective}" if effective < min_effective
@@ -1156,7 +1175,8 @@ module ::MediaGallery
       reasons << "high_quality_delta=#{high_quality_delta.round(4)} < #{min_high_quality_delta}" if high_quality_delta < min_high_quality_delta
       reasons << "reference_anchor_trust=#{anchor_trust.round(4)} < #{min_anchor_trust}" if anchor_trust < min_anchor_trust
       reasons = ["v10_soft_reference_thresholds_passed"] if conclusive
-      reasons = ["v10_soft_reference_likely_thresholds_passed"] if likely && !conclusive
+      reasons = ["v10_soft_reference_likely_thresholds_passed"] if likely && !conclusive && !ambiguous_short_clip
+      reasons << "short_clip_candidate_separation_insufficient" if ambiguous_short_clip
 
       mismatches = value.call(top, :mismatches).to_i
       compared = value.call(top, :compared).to_i
@@ -1169,14 +1189,17 @@ module ::MediaGallery
       meta["top_compared"] = compared
       meta["top_mismatch_rate"] = compared.positive? ? (mismatches.to_f / compared.to_f).round(4) : 1.0
       meta["decision_reasons"] = reasons
-      meta["decision_policy"] = "v10_soft_reference_v4"
+      meta["decision_policy"] = "v10_soft_reference_v5"
       meta["v10_decision_basis"] = "reference_weighted_candidate_separation"
       meta["v10_raw_mismatch_is_diagnostic_only"] = true
+      meta["v10_short_clip_hardening_applied"] = short_clip
+      meta["v10_global_polarity_required"] = true
+      meta["v10_short_clip_ambiguous"] = ambiguous_short_clip
       meta["v10_effective_samples"] = effective.round(2)
       meta["v10_high_quality_top"] = high_quality_top.round(4)
       meta["v10_high_quality_delta"] = high_quality_delta.round(4)
       meta["policy"] = {
-        "scheme" => "v10_soft_reference_v4",
+        "scheme" => "v10_soft_reference_v5",
         "candidate_population_count" => population,
         "min_usable_conclusive" => min_usable,
         "min_effective_conclusive" => min_effective,
@@ -1188,7 +1211,7 @@ module ::MediaGallery
       }
       meta["recommendation"] = if conclusive
         "identified_with_v10_reference_evidence"
-      elsif likely
+      elsif likely || ambiguous_short_clip
         "gather_longer_sample_to_confirm"
       else
         "check_v10_signal_or_use_less_processed_sample"

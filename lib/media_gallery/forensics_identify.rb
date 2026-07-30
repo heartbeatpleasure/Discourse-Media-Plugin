@@ -58,6 +58,20 @@ module ::MediaGallery
     POLARITY_SWITCH_MIN_SCORE_GAIN = 0.01
     POLARITY_SWITCH_MAX_DELTA_REGRESSION = 0.015
 
+    # V10 polarity is a global physical property of the captured A/B signal, not a
+    # per-candidate tuning knob. Short clips are especially vulnerable to chance
+    # complements, so require substantially more evidence before accepting an
+    # inverted interpretation. Normal polarity remains the safe default.
+    V10_SHORT_CLIP_MAX_USABLE = 24
+    V10_POLARITY_SWITCH_MIN_USABLE = 24
+    V10_POLARITY_SWITCH_MIN_TOP_RATIO = 0.78
+    V10_POLARITY_SWITCH_MIN_RATIO_GAIN = 0.08
+    V10_POLARITY_SWITCH_MIN_DELTA_GAIN = 0.05
+    V10_POLARITY_SWITCH_MIN_SCORE_GAIN = 0.02
+    V10_POLARITY_SWITCH_MAX_DELTA_REGRESSION = 0.0
+    V10_SHORT_CLIP_DRIFT_RATIOS = [-0.006, -0.003, 0.0, 0.003, 0.006].freeze
+    V10_SHORT_CLIP_DRIFT_MAX_CANDIDATES = 100
+
     # Chunked re-sync: for longer leaked clips, one global offset/phase can drift.
     # We therefore allow local offset re-selection per chunk and aggregate the chunks.
     CHUNKED_RESYNC_WINDOW_SEGMENTS = 8
@@ -1431,6 +1445,18 @@ module ::MediaGallery
     end
     private_class_method :identify_with_phase_search
 
+    def phase_drift_candidates(base_points:, spec:, dense_step_seconds:, candidate_count: 0)
+      return [0.0] unless v10_full_frame_reference?(spec)
+      return [0.0] unless Array(base_points).length <= V10_SHORT_CLIP_MAX_USABLE.to_i
+      return [0.0] unless dense_step_seconds.to_f <= DENSE_SAMPLE_STEP_FINE.to_f
+      return [0.0] if candidate_count.to_i > V10_SHORT_CLIP_DRIFT_MAX_CANDIDATES.to_i
+
+      V10_SHORT_CLIP_DRIFT_RATIOS
+    rescue
+      [0.0]
+    end
+    private_class_method :phase_drift_candidates
+
     def run_phase_search_pass(media_item:, file_path:, segment_seconds:, spec:, base_points:, duration_seconds:, effective_max_samples:, started_at:, time_budget_seconds:, max_offset_segments:, dense_step_seconds:)
       dense = extract_dense_observed_variants(
         file_path: file_path,
@@ -1445,16 +1471,34 @@ module ::MediaGallery
       )
 
       phase_candidates = build_phase_candidates(segment_seconds: segment_seconds, dense_step_seconds: dense_step_seconds)
+      candidate_count = begin
+        real_count = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).count
+        context = synthetic_population_context
+        if context.is_a?(Hash) && context[:enabled] == true
+          [real_count.to_i, context[:requested_total].to_i].max
+        else
+          real_count.to_i
+        end
+      rescue
+        0
+      end
+      drift_candidates = phase_drift_candidates(
+        base_points: base_points,
+        spec: spec,
+        dense_step_seconds: dense_step_seconds,
+        candidate_count: candidate_count
+      )
       phase_results = []
 
-      phase_candidates.each do |phase_seconds|
+      phase_candidates.product(drift_candidates).each do |phase_seconds, drift_ratio|
         obs = build_phase_observation_from_dense(
           dense: dense,
           base_points: base_points,
           duration_seconds: duration_seconds,
           phase_seconds: phase_seconds,
           segment_seconds: segment_seconds,
-          effective_max_samples: effective_max_samples
+          effective_max_samples: effective_max_samples,
+          drift_ratio: drift_ratio
         )
         next if obs.blank?
 
@@ -1477,6 +1521,16 @@ module ::MediaGallery
         meta[:phase_search_used] = true
         meta[:chosen_phase_seconds] = phase_seconds.round(3)
         meta[:phase_candidates_seconds] ||= phase_candidates.map { |v| v.round(3) }
+        drift_span_seconds = begin
+          points = Array(base_points)
+          points.present? ? (points.last.to_h[:time].to_f - points.first.to_h[:time].to_f).abs : 0.0
+        rescue
+          0.0
+        end
+        meta[:phase_drift_candidates] ||= drift_candidates.map { |v| v.round(4) }
+        meta[:phase_drift_candidate_count] = candidate_count
+        meta[:chosen_drift_ratio] = drift_ratio.to_f.round(5)
+        meta[:chosen_drift_seconds_at_end] = (drift_span_seconds * drift_ratio.to_f).round(3)
         meta[:dense_step_seconds] = dense_step_seconds.round(3)
         meta[:dense_samples] = Array(dense[:times]).length
         meta[:phase_search_refined] = (dense_step_seconds.to_f <= DENSE_SAMPLE_STEP_FINE.to_f)
@@ -1607,7 +1661,7 @@ module ::MediaGallery
     end
     private_class_method :build_dense_phase_sample_times
 
-    def build_phase_observation_from_dense(dense:, base_points:, duration_seconds:, phase_seconds:, segment_seconds:, effective_max_samples:)
+    def build_phase_observation_from_dense(dense:, base_points:, duration_seconds:, phase_seconds:, segment_seconds:, effective_max_samples:, drift_ratio: 0.0)
       variants = []
       confidences = []
       scores = []
@@ -1620,8 +1674,11 @@ module ::MediaGallery
       voting_points = 1
       voting_offset_seconds = 0.0
 
+      first_point_time = Array(base_points).first.to_h[:time].to_f
       Array(base_points).each do |point|
-        target_time = clamp_time(point[:time].to_f + phase_seconds.to_f, duration_seconds: duration_seconds)
+        relative_time = point[:time].to_f - first_point_time
+        drift_seconds = relative_time * drift_ratio.to_f
+        target_time = clamp_time(point[:time].to_f + phase_seconds.to_f + drift_seconds, duration_seconds: duration_seconds)
         sample = aggregate_dense_phase_sample(
           dense: dense,
           target_time: target_time,
@@ -1687,6 +1744,7 @@ module ::MediaGallery
         elapsed_seconds: elapsed,
         effective_max_samples: effective_max_samples,
         phase_seconds: phase_seconds.to_f,
+        drift_ratio: drift_ratio.to_f,
         dense_step_seconds: dense[:dense_step_seconds].to_f,
         phase_multiframe_points_per_segment: voting_points,
         phase_multiframe_offset_seconds: voting_offset_seconds.round(3),
@@ -1708,7 +1766,11 @@ module ::MediaGallery
 
       payload = aggregate_temporal_sample_metrics(samples: samples, score_key: :score, confidence_key: :confidence)
       sync = aggregate_temporal_sample_metrics(samples: samples, score_key: :sync_score, confidence_key: :sync_confidence)
-      payload_vector = weighted_average_vector(samples)
+      payload_vector = if v10_reference_layout?(dense[:layout])
+        median_vector(samples.map { |sample| Array(sample[:payload_vector]) }.select(&:present?))
+      else
+        weighted_average_vector(samples)
+      end
 
       {
         score: payload[:score].to_f,
@@ -1874,6 +1936,24 @@ module ::MediaGallery
       return false if match.blank?
       meta = match[:meta] || {}
       cands = Array(match[:candidates])
+
+      if v10_reference_layout?(meta[:layout]) || meta[:v10_soft_reference_policy] == true
+        top = cands[0] || {}
+        second = cands[1] || {}
+        top_ratio = candidate_soft_match_ratio(top)
+        second_ratio = candidate_soft_match_ratio(second)
+        delta = cands.length > 1 ? (top_ratio - second_ratio) : meta[:offset_delta].to_f
+        effective = [meta[:effective_samples].to_f, meta[:adaptive_effective_samples].to_f].max
+        usable = [meta[:ecc_groups_used].to_i, Array(meta[:reference_observed_variants]).count(&:present?), effective.to_i].max
+        high_quality = top[:high_quality_match_ratio_weighted].to_f
+        high_quality_disagreement = high_quality.positive? && (top_ratio - high_quality).abs >= 0.18
+        weak_polarity_flip = meta[:polarity_flip_used] == true && meta[:polarity_score_gain].to_f.abs < V10_POLARITY_SWITCH_MIN_SCORE_GAIN.to_f
+        return true if usable <= V10_SHORT_CLIP_MAX_USABLE.to_i
+        return true if delta < 0.14 || top_ratio < 0.84
+        return true if high_quality_disagreement || weak_polarity_flip
+        return false
+      end
+
       top_ratio = cands[0] ? cands[0][:match_ratio].to_f : 0.0
       delta = meta[:offset_delta].to_f
       effective = meta[:effective_samples].to_f
@@ -1911,7 +1991,8 @@ module ::MediaGallery
       delta = (top_ratio - second_ratio) if delta <= 0.0
       effective = meta[:effective_samples].to_f
       phase_penalty = meta[:chosen_phase_seconds].to_f.abs * 0.001
-      (delta * 1.0) + (top_ratio * 0.05) + (effective * 0.0025) - phase_penalty
+      drift_penalty = meta[:chosen_drift_ratio].to_f.abs * 0.05
+      (delta * 1.0) + (top_ratio * 0.05) + (effective * 0.0025) - phase_penalty - drift_penalty
     rescue
       -Float::INFINITY
     end
@@ -2035,6 +2116,26 @@ module ::MediaGallery
       usable = [usable, reference_usable].max
       return { run: false, reason: "too_few_usable_samples", usable: usable } if usable < 8
 
+      if v10_reference_layout?(meta[:layout]) || meta[:v10_soft_reference_policy] == true
+        top_ratio = cands[0] ? candidate_soft_match_ratio(cands[0]) : 0.0
+        second_ratio = cands[1] ? candidate_soft_match_ratio(cands[1]) : 0.0
+        delta = cands[1] ? (top_ratio - second_ratio) : meta[:offset_delta].to_f
+        high_quality = cands[0] ? cands[0][:high_quality_match_ratio_weighted].to_f : 0.0
+        if usable <= V10_SHORT_CLIP_MAX_USABLE.to_i
+          return { run: true, reason: "v10_short_clip_multiframe_verification", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+        end
+        if meta[:polarity_flip_used] == true
+          return { run: true, reason: "polarity_flip_needs_verification", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+        end
+        if top_ratio >= 0.90 && delta >= 0.25 && (high_quality <= 0.0 || high_quality >= 0.85)
+          return { run: false, reason: "v10_reference_result_already_strong", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+        end
+        if top_ratio < 0.84 || delta < 0.14 || (high_quality.positive? && (top_ratio - high_quality).abs >= 0.18)
+          return { run: true, reason: "v10_reference_result_needs_multiframe_verification", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+        end
+        return { run: false, reason: "current_result_already_stable", usable: usable, top_ratio: top_ratio.round(4), delta: delta.round(4) }
+      end
+
       top_ratio = cands[0] ? cands[0][:match_ratio_weighted].to_f : 0.0
       top_ratio = cands[0][:match_ratio].to_f if top_ratio <= 0.0 && cands[0]
       delta = meta[:offset_delta].to_f
@@ -2124,31 +2225,59 @@ module ::MediaGallery
       variants = Array(obs[:variants]).dup
       confidences = Array(obs[:confidences]).dup
       scores = Array(obs[:scores]).dup
+      payload_vectors = Array(obs[:payload_vectors]).map { |vector| Array(vector).dup }
+      sync_scores = Array(obs[:sync_scores]).dup
+      sync_confidences = Array(obs[:sync_confidences]).dup
+      sync_variants = Array(obs[:sync_variants]).dup
 
+      v10_vectors = v10_full_frame_reference?(spec)
       per_idx_scores = Hash.new { |h, k| h[k] = [] }
       per_idx_confs = Hash.new { |h, k| h[k] = [] }
+      per_idx_vectors = Hash.new { |h, k| h[k] = [] }
+      per_idx_sync_scores = Hash.new { |h, k| h[k] = [] }
+      per_idx_sync_confs = Hash.new { |h, k| h[k] = [] }
       used_map.each_with_index do |(idx, _side), j|
         r = sampled[j] || {}
-        per_idx_scores[idx] << r[:score].to_i
+        per_idx_scores[idx] << (v10_vectors ? r[:score].to_f : r[:score].to_i)
         per_idx_confs[idx] << r[:confidence].to_f
+        vector = r[:payload_vector]
+        per_idx_vectors[idx] << vector if vector.is_a?(Array) && vector.present?
+        per_idx_sync_scores[idx] << r[:sync_score].to_f
+        per_idx_sync_confs[idx] << r[:sync_confidence].to_f
       end
 
       times.each_with_index do |_t, i|
-        all_scores = [scores[i].to_i] + per_idx_scores[i]
+        all_scores = [(v10_vectors ? scores[i].to_f : scores[i].to_i)] + per_idx_scores[i]
         all_confs = [confidences[i].to_f] + per_idx_confs[i]
+        all_sync_scores = [sync_scores[i].to_f] + per_idx_sync_scores[i]
+        all_sync_confs = [sync_confidences[i].to_f] + per_idx_sync_confs[i]
         next if all_scores.empty?
 
-        med_score = median(all_scores)
         med_conf = median(all_confs).to_f.round(4)
-        v = med_score >= 0 ? "a" : "b"
-        v = nil if med_conf < MIN_CONFIDENCE
+        if v10_vectors
+          vectors = ([payload_vectors[i]] + per_idx_vectors[i]).select { |vector| vector.is_a?(Array) && vector.present? }
+          merged_vector = median_vector(vectors)
+          payload_vectors[i] = merged_vector if merged_vector.present?
+          # V10 decisions are derived from the A/B reference projection of the
+          # merged full-frame vector, not from the legacy scalar score sign.
+          confidences[i] = med_conf
+        else
+          med_score = median(all_scores).to_f
+          v = med_score >= 0 ? "a" : "b"
+          v = nil if med_conf < MIN_CONFIDENCE
+          variants[i] = v
+          confidences[i] = med_conf
+          scores[i] = med_score
+        end
 
-        variants[i] = v
-        confidences[i] = med_conf
-        scores[i] = med_score
+        med_sync_score = median(all_sync_scores).to_f
+        med_sync_conf = median(all_sync_confs).to_f.round(4)
+        sync_scores[i] = med_sync_score
+        sync_confidences[i] = med_sync_conf
+        sync_variants[i] = med_sync_conf >= MIN_CONFIDENCE ? (med_sync_score >= 0 ? "a" : "b") : nil
       end
 
-      {
+      result = {
         duration_seconds: obs[:duration_seconds],
         variants: variants,
         confidences: confidences,
@@ -2165,6 +2294,14 @@ module ::MediaGallery
         multisample_refine_points_per_segment: 3,
         sample_points: sample_points,
       }
+      if v10_vectors
+        result[:payload_vectors] = payload_vectors
+        result[:sync_scores] = sync_scores
+        result[:sync_confidences] = sync_confidences
+        result[:sync_variants] = sync_variants
+        result[:quality_hints] = obs[:quality_hints].is_a?(Hash) ? obs[:quality_hints].dup : {}
+      end
+      result
     rescue
       nil
     end
@@ -4064,7 +4201,7 @@ module ::MediaGallery
     end
     private_class_method :candidate_observed_variant
 
-    def select_polarity_result(normal_result:, inverted_result:)
+    def select_polarity_result(normal_result:, inverted_result:, layout: nil, usable_count: nil)
       normal_diag = normal_result.is_a?(Hash) ? (normal_result[:diag] || {}) : {}
       inverted_diag = inverted_result.is_a?(Hash) ? (inverted_result[:diag] || {}) : {}
 
@@ -4074,23 +4211,58 @@ module ::MediaGallery
       inverted_ratio = inverted_diag[:top_ratio_w].to_f
       normal_delta = normal_diag[:delta].to_f
       inverted_delta = inverted_diag[:delta].to_f
+      usable = usable_count.to_i
+      usable = [normal_diag[:usable_count].to_i, inverted_diag[:usable_count].to_i, normal_diag[:ecc_groups].to_i, inverted_diag[:ecc_groups].to_i].max if usable <= 0
 
       ratio_gain = inverted_ratio - normal_ratio
       delta_gain = inverted_delta - normal_delta
       score_gain = inverted_score - normal_score
 
-      gate_passed =
-        inverted_result.present? &&
-          inverted_ratio >= POLARITY_SWITCH_MIN_TOP_RATIO &&
-          delta_gain >= -POLARITY_SWITCH_MAX_DELTA_REGRESSION &&
-          (
-            score_gain >= POLARITY_SWITCH_MIN_SCORE_GAIN ||
-              ratio_gain >= POLARITY_SWITCH_MIN_RATIO_GAIN ||
-              delta_gain >= POLARITY_SWITCH_MIN_DELTA_GAIN
-          )
+      if v10_reference_layout?(layout)
+        enough_samples = usable >= V10_POLARITY_SWITCH_MIN_USABLE.to_i
+        gate_passed =
+          inverted_result.present? &&
+            enough_samples &&
+            inverted_ratio >= V10_POLARITY_SWITCH_MIN_TOP_RATIO.to_f &&
+            score_gain >= V10_POLARITY_SWITCH_MIN_SCORE_GAIN.to_f &&
+            delta_gain >= -V10_POLARITY_SWITCH_MAX_DELTA_REGRESSION.to_f &&
+            (
+              ratio_gain >= V10_POLARITY_SWITCH_MIN_RATIO_GAIN.to_f ||
+                delta_gain >= V10_POLARITY_SWITCH_MIN_DELTA_GAIN.to_f
+            )
+        policy = "v10_global_strict"
+        rejection_reason = if gate_passed
+          nil
+        elsif inverted_result.blank?
+          "no_inverted_result"
+        elsif !enough_samples
+          "v10_short_clip_forces_normal_polarity"
+        elsif score_gain < V10_POLARITY_SWITCH_MIN_SCORE_GAIN.to_f
+          "v10_inverted_score_gain_too_small"
+        elsif inverted_ratio < V10_POLARITY_SWITCH_MIN_TOP_RATIO.to_f
+          "v10_inverted_top_ratio_too_low"
+        elsif ratio_gain < V10_POLARITY_SWITCH_MIN_RATIO_GAIN.to_f && delta_gain < V10_POLARITY_SWITCH_MIN_DELTA_GAIN.to_f
+          "v10_inverted_separation_gain_too_small"
+        else
+          "v10_inverted_polarity_not_clearly_better"
+        end
+      else
+        gate_passed =
+          inverted_result.present? &&
+            inverted_ratio >= POLARITY_SWITCH_MIN_TOP_RATIO &&
+            delta_gain >= -POLARITY_SWITCH_MAX_DELTA_REGRESSION &&
+            (
+              score_gain >= POLARITY_SWITCH_MIN_SCORE_GAIN ||
+                ratio_gain >= POLARITY_SWITCH_MIN_RATIO_GAIN ||
+                delta_gain >= POLARITY_SWITCH_MIN_DELTA_GAIN
+            )
+        policy = "legacy_prefer_normal_unless_inverted_clearly_better"
+        rejection_reason = gate_passed ? nil : "legacy_inverted_polarity_gate_not_met"
+      end
 
       chosen_flip = gate_passed
       chosen = chosen_flip ? inverted_result : normal_result
+      chosen ||= inverted_result
       fallback = chosen_flip ? normal_result : inverted_result
 
       {
@@ -4102,6 +4274,9 @@ module ::MediaGallery
         score_gain: score_gain.round(4),
         chosen_score: chosen&.dig(:score),
         fallback_score: fallback&.dig(:score),
+        policy: policy,
+        rejection_reason: rejection_reason,
+        usable_count: usable,
       }
     end
     private_class_method :select_polarity_result
@@ -5360,27 +5535,54 @@ end
       comp_w = usable_result[:comp_w].to_f
       return nil if usable.empty? || comp_w <= 0.0
 
+      adaptive = annotate_reference_usable_with_adaptive(usable: usable)
+      adaptive_usable = Array(adaptive[:usable])
+      factor_threshold = adaptive[:high_quality_factor_threshold].to_f
+
       mism_w = 0.0
       mism = 0
       comp = 0
+      mism_aw = 0.0
+      comp_aw = 0.0
+      high_q_mismatches = 0
+      high_q_compared = 0
+      high_q_mismatches_w = 0.0
+      high_q_compared_w = 0.0
 
-      usable.each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count)|
+      adaptive_usable.each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count, adaptive_w, adaptive_factor)|
         exp = expected_variant_for_forensics(
           fingerprint_id: candidate[:fingerprint_id],
           media_item_id: media_item_id,
           segment_index: base_seg_idx.to_i + offset.to_i,
           layout: layout
         )
+        aw = adaptive_w.to_f
+        aw = w.to_f if aw <= 0.0
+        high_quality = adaptive_factor.to_f >= factor_threshold
+
         comp += 1
+        comp_aw += aw
+        if high_quality
+          high_q_compared += 1
+          high_q_compared_w += aw
+        end
         if exp != ov
           mism += 1
           mism_w += w.to_f
+          mism_aw += aw
+          if high_quality
+            high_q_mismatches += 1
+            high_q_mismatches_w += aw
+          end
         end
       end
 
       return nil if comp <= 0 || comp_w <= 0.0
 
       ratio_w = 1.0 - (mism_w / comp_w)
+      adaptive_ratio = comp_aw > 0.0 ? (1.0 - (mism_aw / comp_aw)) : ratio_w
+      high_q_ratio = high_q_compared.positive? ? (1.0 - (high_q_mismatches.to_f / high_q_compared.to_f)) : ratio_w
+      high_q_weighted_ratio = high_q_compared_w > 0.0 ? (1.0 - (high_q_mismatches_w / high_q_compared_w)) : high_q_ratio
       llr = comp_w * Math.log(([ratio_w, 1.0e-6].max) / 0.5)
 
       {
@@ -5389,8 +5591,16 @@ end
         compared: comp,
         mismatches_weighted: mism_w,
         compared_weighted: comp_w,
+        mismatches_adaptive_weighted: mism_aw,
+        compared_adaptive_weighted: comp_aw,
         match_ratio: 1.0 - (mism.to_f / comp.to_f),
         match_ratio_weighted: ratio_w,
+        match_ratio_adaptive_weighted: adaptive_ratio,
+        high_quality_matches: [high_q_compared - high_q_mismatches, 0].max,
+        high_quality_compared: high_q_compared,
+        high_quality_match_ratio: high_q_ratio,
+        high_quality_compared_weighted: high_q_compared_w,
+        high_quality_match_ratio_weighted: high_q_weighted_ratio,
         llr: llr,
         usable_count: usable_result[:usable_count].to_i,
         median_margin: usable_result[:median_margin].to_f,
@@ -5481,7 +5691,12 @@ end
     end
     private_class_method :shortlist_offset_search_bounds
 
-    def shortlist_should_review_both_polarities?(anchor_trust:, polarity_score_delta:, polarity_gate_passed:)
+    def shortlist_should_review_both_polarities?(anchor_trust:, polarity_score_delta:, polarity_gate_passed:, layout: nil)
+      # V10 polarity is selected once for the physical leak. Allowing every user
+      # candidate to choose its own polarity doubles the hypothesis space and can
+      # make a short random complement outrank the real user.
+      return false if v10_reference_layout?(layout)
+
       trust = clamp_unit_interval(anchor_trust)
       score_delta = polarity_score_delta.to_f.abs
       return true unless polarity_gate_passed
@@ -5490,7 +5705,7 @@ end
 
       false
     rescue
-      true
+      !v10_reference_layout?(layout)
     end
     private_class_method :shortlist_should_review_both_polarities?
 
@@ -5633,7 +5848,8 @@ end
         flips_to_try = if shortlist_should_review_both_polarities?(
           anchor_trust: anchor_trust,
           polarity_score_delta: polarity_score_delta,
-          polarity_gate_passed: polarity_gate_passed
+          polarity_gate_passed: polarity_gate_passed,
+          layout: layout
         )
           [polarity_flip ? true : false, !(polarity_flip ? true : false)].uniq
         else
@@ -5691,8 +5907,16 @@ end
         candidate[:compared] = best[:compared].to_i
         candidate[:mismatches_weighted] = best[:mismatches_weighted].to_f.round(6)
         candidate[:compared_weighted] = best[:compared_weighted].to_f.round(6)
+        candidate[:mismatches_adaptive_weighted] = best[:mismatches_adaptive_weighted].to_f.round(6)
+        candidate[:compared_adaptive_weighted] = best[:compared_adaptive_weighted].to_f.round(6)
         candidate[:match_ratio] = best[:match_ratio].to_f.round(4)
         candidate[:match_ratio_weighted] = best[:match_ratio_weighted].to_f.round(4)
+        candidate[:match_ratio_adaptive_weighted] = best[:match_ratio_adaptive_weighted].to_f.round(4)
+        candidate[:high_quality_matches] = best[:high_quality_matches].to_i
+        candidate[:high_quality_compared] = best[:high_quality_compared].to_i
+        candidate[:high_quality_match_ratio] = best[:high_quality_match_ratio].to_f.round(4)
+        candidate[:high_quality_compared_weighted] = best[:high_quality_compared_weighted].to_f.round(6)
+        candidate[:high_quality_match_ratio_weighted] = best[:high_quality_match_ratio_weighted].to_f.round(4)
         candidate[:local_best_offset_segments] = best[:offset].to_i
         candidate[:local_match_ratio] = best[:match_ratio_weighted].to_f.round(4)
         candidate[:candidate_offset_llr] = best[:llr].to_f.round(4)
@@ -6632,7 +6856,8 @@ end
 
       polarity_choice = select_polarity_result(
         normal_result: best_by_polarity[false],
-        inverted_result: best_by_polarity[true]
+        inverted_result: best_by_polarity[true],
+        layout: layout_name
       )
       chosen_result = polarity_choice[:chosen] || best_by_polarity[false] || best_by_polarity[true]
 
@@ -6771,6 +6996,9 @@ end
         polarity_ratio_gain: polarity_choice[:ratio_gain],
         polarity_delta_gain: polarity_choice[:delta_gain],
         polarity_score_gain: polarity_choice[:score_gain],
+        polarity_policy: polarity_choice[:policy],
+        polarity_rejection_reason: polarity_choice[:rejection_reason],
+        polarity_usable_samples: polarity_choice[:usable_count],
         ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
         ecc_groups_used: chosen_samples.length,
         candidate_population_count: fps.length,
@@ -8052,7 +8280,8 @@ end
 
   polarity_choice = select_polarity_result(
     normal_result: best_by_polarity[false],
-    inverted_result: best_by_polarity[true]
+    inverted_result: best_by_polarity[true],
+    layout: layout_name
   )
   chosen_result = polarity_choice[:chosen] || best_by_polarity[false] || best_by_polarity[true]
 
@@ -8350,6 +8579,9 @@ end
     polarity_ratio_gain: polarity_choice[:ratio_gain],
     polarity_delta_gain: polarity_choice[:delta_gain],
     polarity_score_gain: polarity_choice[:score_gain],
+    polarity_policy: polarity_choice[:policy],
+    polarity_rejection_reason: polarity_choice[:rejection_reason],
+    polarity_usable_samples: polarity_choice[:usable_count],
     ecc_scheme: (::MediaGallery::Fingerprinting.respond_to?(:ecc_profile) ? ::MediaGallery::Fingerprinting.ecc_profile[:scheme] : "none"),
     ecc_groups_used: u[:usable_count],
     ecc_raw_usable_samples: u[:raw_usable_count],

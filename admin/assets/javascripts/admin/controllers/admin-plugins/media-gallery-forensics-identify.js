@@ -464,7 +464,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get topCandidates() {
     const cands = this.candidates || [];
-    const top = this.topMatchRatio;
+    const top = cands.length ? this._candidateRatio(cands[0]) : 0;
     return cands.slice(0, 5).map((candidate, idx) => this._decorateCandidate(candidate, idx, top));
   }
 
@@ -506,6 +506,18 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return cards;
   }
 
+  get topCandidateRoleLabel() {
+    return this.conclusive ? "Winner" : "Leading candidate";
+  }
+
+  get topCandidateSectionTitle() {
+    return this.conclusive ? "Top candidate" : "Leading candidate (not conclusive)";
+  }
+
+  get topCandidateRationaleTitle() {
+    return this.conclusive ? "Top candidate rationale" : "Leading candidate rationale";
+  }
+
   get topCandidateSummaryCards() {
     if (!this.topCandidate) {
       return [];
@@ -513,7 +525,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
     if (this.isV10Result) {
       return [
-        { label: "Winner", value: this.topCandidateUserLabel, help: metricHelp("winner") },
+        { label: this.topCandidateRoleLabel, value: this.topCandidateUserLabel, help: this.conclusive ? metricHelp("winner") : "Highest-ranked candidate for this run. This is not an identification unless the decision is conclusive." },
         { label: "Fingerprint", value: this.topCandidateFingerprintLabel, help: metricHelp("fingerprint"), span2: true, code: true },
         { label: "Weighted match", value: this.topMatchRatioDisplay, help: "V10 soft reference agreement. This is the primary match metric." },
         { label: "Δ vs #2", value: this.topDeltaVsSecondDisplay, help: "Separation between the best and second-best weighted V10 candidate." },
@@ -525,7 +537,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     }
 
     return [
-      { label: "Winner", value: this.topCandidateUserLabel, help: metricHelp("winner") },
+      { label: this.topCandidateRoleLabel, value: this.topCandidateUserLabel, help: this.conclusive ? metricHelp("winner") : "Highest-ranked candidate for this run. This is not an identification unless the decision is conclusive." },
       { label: "Fingerprint", value: this.topCandidateFingerprintLabel, help: metricHelp("fingerprint"), span2: true, code: true },
       { label: "Top match", value: this.topMatchRatioDisplay, help: metricHelp("top_match") },
       { label: "Δ vs #2", value: this.topDeltaVsSecondDisplay, help: metricHelp("delta_vs_second") },
@@ -547,6 +559,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
         { label: "High-quality Δ", value: formatRatio(this.meta?.v10_high_quality_delta), help: "High-quality separation from candidate #2." },
         { label: "Reference delta median", value: formatCompactStat(this.meta?.reference_delta_median), help: "Median measurable A/B separation in the packaged references." },
         { label: "Reference trust", value: formatCompactStat(this.meta?.reference_anchor_trust), help: "Alignment and reference confidence used by the V10 policy." },
+        { label: "Rank score", value: this.topRankScoreDisplay, help: metricHelp("rank_score") },
+        { label: "Evidence score", value: this.topEvidenceScoreDisplay, help: metricHelp("evidence_score") },
+        { label: "Alignment penalty", value: formatCompactStat(this.topCandidate?.anchor_shift_penalty), help: "Penalty applied when the candidate's preferred offset moves away from the global reference anchor. Lower is better." },
+        { label: "Offset consistency", value: this._candidateOffsetConsistency(this.topCandidate), help: "Stable local offset chunks versus all checked chunks. A consistent offset supports the candidate." },
+        { label: "Polarity", value: this.topCandidate?.variant_polarity || this.meta?.variant_polarity || "normal", help: "A/B polarity used for this candidate. V10 now uses one global physical polarity for all candidates." },
       ];
     }
 
@@ -563,8 +580,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   get topCandidateScoringMetrics() {
     if (this.isV10Result) {
       const metrics = [
-        { label: "Decision policy", value: this.meta?.decision_policy || "v10_soft_reference_v4", help: "V10 uses weighted A/B reference evidence rather than legacy raw mismatch and pairwise scores." },
+        { label: "Decision policy", value: this.meta?.decision_policy || "v10_soft_reference_v5", help: "V10 uses weighted A/B reference evidence rather than legacy raw mismatch and pairwise scores." },
         { label: "Candidate population", value: String(this.meta?.candidate_population_count ?? this.candidates.length), help: "Total number of real and optional in-memory synthetic fingerprints evaluated for this media item." },
+        { label: "Polarity policy", value: this.meta?.polarity_policy || "v10_global_strict", help: "V10 applies one globally verified A/B polarity. Short clips cannot select a separate polarity per user candidate." },
       ];
 
       if (this.isSyntheticPopulationTestResult) {
@@ -703,7 +721,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   get matchDelta() {
-    return Math.max(0, this.topMatchRatio - this.secondMatchRatio);
+    const serverValue = this.meta?.match_delta;
+    const parsed = typeof serverValue === "number" ? serverValue : parseFloat(serverValue);
+    return Number.isFinite(parsed) ? parsed : this.topMatchRatio - this.secondMatchRatio;
   }
 
   get confidence() {
@@ -848,6 +868,26 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     const v = this.meta?.chosen_phase_seconds;
     const f = typeof v === "number" ? v : parseFloat(v);
     return Number.isFinite(f) ? f : null;
+  }
+
+  get chosenDriftRatio() {
+    const v = this.meta?.chosen_drift_ratio;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get chosenDriftPercentDisplay() {
+    return this.chosenDriftRatio === null ? "" : `${(this.chosenDriftRatio * 100).toFixed(3).replace(/\.?0+$/, "")}%`;
+  }
+
+  get chosenDriftEndSeconds() {
+    const v = this.meta?.chosen_drift_seconds_at_end;
+    const f = typeof v === "number" ? v : parseFloat(v);
+    return Number.isFinite(f) ? f : null;
+  }
+
+  get hasPhaseDriftResult() {
+    return this.chosenDriftRatio !== null;
   }
 
   get denseStepSeconds() {
@@ -1054,7 +1094,7 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   _decorateCandidate(candidate, idx, topRatio) {
     const matchRatio = this._candidateRatio(candidate);
-    const deltaFromTop = idx === 0 ? 0 : Math.max(0, topRatio - matchRatio);
+    const deltaFromTop = idx === 0 ? 0 : topRatio - matchRatio;
     const mismatches = candidate?.mismatches ?? 0;
     const compared = candidate?.compared ?? 0;
     const weightedMismatches = candidate?.mismatches_weighted;
@@ -1066,6 +1106,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
           { label: "Weighted match", value: formatRatio(matchRatio), help: "V10 soft reference agreement for this candidate." },
           { label: "High-quality match", value: formatRatio(candidate?.high_quality_match_ratio_weighted), help: "Agreement within the strongest V10 observations." },
           { label: "Adaptive match", value: formatRatio(candidate?.match_ratio_adaptive_weighted), help: "Content- and confidence-weighted V10 match." },
+          { label: "Rank score", value: candidate?.rank_score === null || candidate?.rank_score === undefined ? "—" : formatCompactStat(candidate.rank_score), help: metricHelp("rank_score") },
+          { label: "Evidence score", value: candidate?.evidence_score === null || candidate?.evidence_score === undefined ? "—" : formatCompactStat(candidate.evidence_score), help: metricHelp("evidence_score") },
         ]
       : parsedWhy
           .filter((item) => !["score", "rank", "llr"].includes(item.key))
@@ -1081,6 +1123,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
           { label: "Usable segments", value: String(candidate?.compared ?? 0), help: "Segments that contributed to this candidate." },
           { label: "Raw mismatch", value: `${mismatches} / ${compared}`, help: "Diagnostic only for V10; it is not a conclusive-policy gate." },
           { label: "Best offset", value: candidate?.best_offset_segments ?? "—", help: metricHelp("best_offset") },
+          { label: "Offset consistency", value: this._candidateOffsetConsistency(candidate), help: "Stable local offset chunks versus all checked chunks. Higher consistency is better." },
+          { label: "Alignment penalty", value: candidate?.anchor_shift_penalty === null || candidate?.anchor_shift_penalty === undefined ? "—" : formatCompactStat(candidate.anchor_shift_penalty), help: "Penalty for moving away from the global reference anchor. Lower is better." },
+          { label: "Polarity", value: candidate?.variant_polarity || "normal", help: "Global A/B interpretation used by V10 for this candidate." },
         ]
       : [
           { label: "Evidence score", value: candidate?.evidence_score === null || candidate?.evidence_score === undefined ? "—" : formatCompactStat(candidate.evidence_score), help: metricHelp("evidence_score") },
@@ -1112,6 +1157,15 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       isPrimary: idx === 0,
       delta_from_top: deltaFromTop,
     };
+  }
+
+  _candidateOffsetConsistency(candidate) {
+    const stable = candidate?.evidence_local_offset_stable_chunks;
+    const total = candidate?.evidence_chunks;
+    if (stable === null || stable === undefined || total === null || total === undefined || Number(total) <= 0) {
+      return "—";
+    }
+    return `${stable} / ${total}`;
   }
 
   _candidateRatio(candidate) {

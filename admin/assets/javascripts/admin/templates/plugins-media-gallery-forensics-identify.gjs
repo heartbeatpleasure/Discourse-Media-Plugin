@@ -1291,6 +1291,9 @@ export default RouteTemplate(
               {{/if}}
               {{#if @controller.phaseSearchUsed}}
                 <div><strong>Phase:</strong> {{if @controller.chosenPhaseSeconds @controller.chosenPhaseSeconds "0.0"}}s {{#if @controller.denseStepSeconds}}<span class="mg-fi__muted">(dense step {{@controller.denseStepSeconds}}s)</span>{{/if}}</div>
+                {{#if @controller.hasPhaseDriftResult}}
+                  <div><strong>Time drift:</strong> {{@controller.chosenDriftPercentDisplay}} {{#if @controller.chosenDriftEndSeconds}}<span class="mg-fi__muted">({{@controller.chosenDriftEndSeconds}}s correction at clip end)</span>{{/if}}</div>
+                {{/if}}
               {{/if}}
               <div><strong>Offset expansion:</strong> {{if @controller.offsetExpansionApplied "applied" "not applied"}} {{#if @controller.offsetExpansionReason}}<span class="mg-fi__muted">({{@controller.offsetExpansionReason}})</span>{{/if}}</div>
               <div><strong>Phase refinement:</strong> {{#if @controller.phaseRefinementAttempted}}{{if @controller.phaseRefinementApplied "applied" "rejected"}}{{else}}not attempted{{/if}} {{#if @controller.phaseRefinementReason}}<span class="mg-fi__muted">({{@controller.phaseRefinementReason}})</span>{{/if}}</div>
@@ -1315,7 +1318,7 @@ export default RouteTemplate(
 
                     {{#if @controller.topCandidate}}
             <div class="mg-fi__result-section">
-              <h3 class="mg-fi__section-title">Top candidate</h3>
+              <h3 class="mg-fi__section-title">{{@controller.topCandidateSectionTitle}}</h3>
               <div class="mg-fi__candidate-summary-grid">
                 {{#each @controller.topCandidateSummaryCards as |card|}}
                   <div class={{if card.span2 "mg-fi__meta-card is-span-2" "mg-fi__meta-card"}}>
@@ -1332,7 +1335,7 @@ export default RouteTemplate(
 
               <div class="mg-fi__candidate-note-card">
                 <div class="mg-fi__metric-heading">
-                  <strong>Top candidate rationale</strong>
+                  <strong>{{@controller.topCandidateRationaleTitle}}</strong>
                 </div>
                 {{#if @controller.topCandidateRationaleMetrics.length}}
                   <div class="mg-fi__candidate-note-grid">
@@ -1453,7 +1456,7 @@ export default RouteTemplate(
                     <div>Match</div>
                     <div>Mis / Comp</div>
                     <div>Best offset</div>
-                    <div>Δ vs #1</div>
+                    <div>Match Δ vs #1</div>
                   </div>
 
                   {{#each @controller.topCandidates as |c|}}
