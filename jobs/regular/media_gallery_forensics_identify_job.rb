@@ -21,6 +21,8 @@ module Jobs
         max_samples: task["max_samples"].to_i,
         max_offset_segments: task["max_offset_segments"].to_i,
         layout: task["layout"].to_s.presence,
+        synthetic_population_total: task["synthetic_population_total"].to_i > 0 ? task["synthetic_population_total"].to_i : nil,
+        synthetic_population_seed: task["synthetic_population_seed"].to_s.presence,
         async_mode: true,
       )
 

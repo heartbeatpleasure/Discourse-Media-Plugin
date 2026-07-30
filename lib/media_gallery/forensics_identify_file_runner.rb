@@ -27,7 +27,7 @@ module ::MediaGallery
     DEFAULT_POLICY_MIN_DELTA_LIKELY = 0.10
     DEFAULT_POLICY_MIN_USABLE_ANY = 5
 
-    def run(media_item:, file_path:, max_samples:, max_offset_segments:, layout: nil, async_mode: false)
+    def run(media_item:, file_path:, max_samples:, max_offset_segments:, layout: nil, synthetic_population_total: nil, synthetic_population_seed: nil, async_mode: false)
       raise Discourse::InvalidParameters.new(:file) if file_path.blank? || !File.exist?(file_path)
 
       max_samples = max_samples.to_i
@@ -78,6 +78,9 @@ module ::MediaGallery
         file_size_mb: file_mb,
         max_samples_autocapped: (capped_max_samples != max_samples),
         effective_max_samples: capped_max_samples,
+        synthetic_population_test_enabled: synthetic_population_total.to_i > 0,
+        synthetic_population_requested_total: synthetic_population_total.to_i > 0 ? synthetic_population_total.to_i : nil,
+        synthetic_population_seed: synthetic_population_total.to_i > 0 ? synthetic_population_seed.to_s.presence : nil,
       }
 
       identify_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -85,14 +88,25 @@ module ::MediaGallery
 
       begin
         Timeout.timeout(soft_budget) do
-          result = ::MediaGallery::ForensicsIdentify.identify_from_file(
-            media_item: media_item,
-            file_path: file_path,
-            max_samples: capped_max_samples,
-            max_offset_segments: max_offset,
-            layout: layout,
-            time_budget_seconds: engine_budget,
-          )
+          identify_call = lambda do
+            ::MediaGallery::ForensicsIdentify.identify_from_file(
+              media_item: media_item,
+              file_path: file_path,
+              max_samples: capped_max_samples,
+              max_offset_segments: max_offset,
+              layout: layout,
+              time_budget_seconds: engine_budget,
+            )
+          end
+
+          result = if synthetic_population_total.to_i > 0
+            ::MediaGallery::ForensicsIdentify.with_synthetic_population_test(
+              total: synthetic_population_total,
+              seed: synthetic_population_seed
+            ) { identify_call.call }
+          else
+            identify_call.call
+          end
         end
       rescue Timeout::Error
         result = {
@@ -148,6 +162,7 @@ module ::MediaGallery
 
       apply_no_signal_guard!(result)
       apply_decision_policy!(result)
+      ::MediaGallery::ForensicsIdentify.apply_synthetic_population_decision_guard!(result)
       result
     end
 

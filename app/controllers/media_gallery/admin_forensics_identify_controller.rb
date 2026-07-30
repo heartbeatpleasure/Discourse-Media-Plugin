@@ -31,6 +31,11 @@ module ::MediaGallery
     FORENSICS_HLS_TEMP_PREFIX = "media_gallery_forensics_hls_"
     FORENSICS_HLS_TEMP_TTL_SECONDS = 2 * 60 * 60
 
+    SYNTHETIC_POPULATION_DEFAULT_TOTAL = 3_000
+    SYNTHETIC_POPULATION_MAX_TOTAL = 5_000
+    SYNTHETIC_POPULATION_DEFAULT_SEED = "12345"
+    SYNTHETIC_POPULATION_SEED_PATTERN = /\A[A-Za-z0-9._:-]{1,64}\z/
+
     def show
       public_id = params[:public_id].to_s
       public_id = public_id.sub(/\.(json|html)\z/i, "")
@@ -84,6 +89,20 @@ module ::MediaGallery
               </label>
             </p>
 
+            <fieldset>
+              <legend>Synthetic population test (V10)</legend>
+              <p>
+                <label><input type="checkbox" name="synthetic_population_test" value="1"> Simulate a large candidate population</label>
+              </p>
+              <p>
+                <label>Total candidate count: <input type="number" name="synthetic_population_total" value="3000" min="2" max="5000"></label>
+              </p>
+              <p>
+                <label>Seed: <input type="text" name="synthetic_population_seed" value="12345" maxlength="64"></label>
+              </p>
+              <p style="opacity:0.75">Temporary candidates are generated only in memory; no users or fingerprint records are created.</p>
+            </fieldset>
+
             <p>
               <button class="btn btn-primary" type="submit">Identify</button>
             </p>
@@ -122,6 +141,10 @@ module ::MediaGallery
       max_offset = [max_offset, 300].min
 
       layout = params[:layout].to_s.presence
+      synthetic_population = synthetic_population_options_from_params
+      if synthetic_population[:error].present?
+        return render json: { ok: false, error: synthetic_population[:error], error_class: "Discourse::InvalidParameters" }, status: 422
+      end
 
       task_id = ::MediaGallery::ForensicsIdentifyTasks.create_file_task!(
         public_id: item.public_id,
@@ -130,10 +153,26 @@ module ::MediaGallery
         max_samples: max_samples,
         max_offset_segments: max_offset,
         layout: layout,
+        synthetic_population_total: synthetic_population[:enabled] ? synthetic_population[:total] : nil,
+        synthetic_population_seed: synthetic_population[:enabled] ? synthetic_population[:seed] : nil,
       )
 
       ::Jobs.enqueue(:media_gallery_forensics_identify_job, task_id: task_id)
-      ::MediaGallery::OperationLogger.audit("forensics_identify_queued", item: item, operation: "forensics_identify_queue", user: current_user, request: request, result: "queued", data: { task_id: task_id, max_samples: max_samples, max_offset_segments: max_offset })
+      ::MediaGallery::OperationLogger.audit(
+        "forensics_identify_queued",
+        item: item,
+        operation: "forensics_identify_queue",
+        user: current_user,
+        request: request,
+        result: "queued",
+        data: {
+          task_id: task_id,
+          max_samples: max_samples,
+          max_offset_segments: max_offset,
+          synthetic_population_test: synthetic_population[:enabled] == true,
+          synthetic_population_total: synthetic_population[:enabled] ? synthetic_population[:total] : nil,
+        }
+      )
 
       render_json_dump(
         ok: true,
@@ -259,6 +298,10 @@ module ::MediaGallery
       max_offset = [max_offset, 300].min
 
       layout = params[:layout].to_s.presence
+      synthetic_population = synthetic_population_options_from_params
+      if synthetic_population[:error].present?
+        return render json: { errors: [synthetic_population[:error]] }, status: 422
+      end
 
       # Admin convenience: if URL mode is used and the initial result is weak,
       # we can automatically retry with a longer sample / more samples.
@@ -280,19 +323,42 @@ module ::MediaGallery
         max_offset_segments: max_offset,
         configured_filemode_soft_time_budget_seconds: filemode_soft_budget_seconds,
         configured_filemode_engine_time_budget_seconds: filemode_engine_budget_seconds,
+        synthetic_population_test_enabled: synthetic_population[:enabled] == true,
+        synthetic_population_requested_total: synthetic_population[:enabled] ? synthetic_population[:total] : nil,
+        synthetic_population_seed: synthetic_population[:enabled] ? synthetic_population[:seed] : nil,
       }
 
       if source_url.present?
         begin
-          result, meta_patch, temps = identify_from_source_url(
-            source_url,
-            media_item: item,
-            max_samples: max_samples,
-            max_offset_segments: max_offset,
-            layout: layout,
-            segment_seconds: seg,
-            auto_extend: auto_extend
-          )
+          if synthetic_population[:enabled]
+            source_result = nil
+            source_meta_patch = nil
+            source_temps = nil
+            result = run_with_synthetic_population_test(synthetic_population) do
+              source_result, source_meta_patch, source_temps = identify_from_source_url(
+                source_url,
+                media_item: item,
+                max_samples: max_samples,
+                max_offset_segments: max_offset,
+                layout: layout,
+                segment_seconds: seg,
+                auto_extend: auto_extend
+              )
+              source_result
+            end
+            meta_patch = source_meta_patch
+            temps = source_temps
+          else
+            result, meta_patch, temps = identify_from_source_url(
+              source_url,
+              media_item: item,
+              max_samples: max_samples,
+              max_offset_segments: max_offset,
+              layout: layout,
+              segment_seconds: seg,
+              auto_extend: auto_extend
+            )
+          end
 
           meta_patch = base_meta.merge(meta_patch || {})
         rescue => e
@@ -323,14 +389,16 @@ module ::MediaGallery
         identify_started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         begin
           Timeout.timeout(filemode_soft_budget_seconds) do
-            result = ::MediaGallery::ForensicsIdentify.identify_from_file(
-              media_item: item,
-              file_path: path,
-              max_samples: capped_max_samples,
-              max_offset_segments: max_offset,
-              layout: layout,
-              time_budget_seconds: filemode_engine_budget_seconds
-            )
+            result = run_with_synthetic_population_test(synthetic_population) do
+              ::MediaGallery::ForensicsIdentify.identify_from_file(
+                media_item: item,
+                file_path: path,
+                max_samples: capped_max_samples,
+                max_offset_segments: max_offset,
+                layout: layout,
+                time_budget_seconds: filemode_engine_budget_seconds
+              )
+            end
           end
         rescue Timeout::Error
           result = {
@@ -406,8 +474,23 @@ module ::MediaGallery
         result["meta"]["user_message"] ||= "Internal error during score calculation (debug_id=#{debug_id})."
       end
 
+      ::MediaGallery::ForensicsIdentify.apply_synthetic_population_decision_guard!(result)
+
       begin
-        ::MediaGallery::OperationLogger.audit("forensics_identify_run", item: item, operation: "forensics_identify", user: current_user, request: request, result: result.dig("meta", "decision"), data: { source_mode: result.dig("meta", "source_mode"), auto_extend: auto_extend })
+        ::MediaGallery::OperationLogger.audit(
+          "forensics_identify_run",
+          item: item,
+          operation: "forensics_identify",
+          user: current_user,
+          request: request,
+          result: result.dig("meta", "decision"),
+          data: {
+            source_mode: result.dig("meta", "source_mode"),
+            auto_extend: auto_extend,
+            synthetic_population_test: synthetic_population[:enabled] == true,
+            synthetic_population_total: synthetic_population[:enabled] ? synthetic_population[:total] : nil,
+          }
+        )
         render_json_dump(result)
       rescue => e
         debug_id = "mgfi_render_#{SecureRandom.hex(6)}"
@@ -438,6 +521,47 @@ module ::MediaGallery
 
     # Some installs use long signed tokens in query strings. 2k is often too small.
     DEFAULT_MAX_SOURCE_URL_LENGTH = 10_000
+
+    def synthetic_population_options_from_params
+      enabled_value = params[:synthetic_population_test].to_s
+      enabled = enabled_value == "1" || enabled_value.casecmp("true").zero?
+      return { enabled: false, total: nil, seed: nil, error: nil } unless enabled
+
+      total = params[:synthetic_population_total].to_i
+      total = SYNTHETIC_POPULATION_DEFAULT_TOTAL if total <= 0
+      if total < 2 || total > SYNTHETIC_POPULATION_MAX_TOTAL
+        return {
+          enabled: true,
+          total: total,
+          seed: nil,
+          error: "synthetic_population_total_must_be_between_2_and_#{SYNTHETIC_POPULATION_MAX_TOTAL}",
+        }
+      end
+
+      seed = params[:synthetic_population_seed].to_s.strip
+      seed = SYNTHETIC_POPULATION_DEFAULT_SEED if seed.blank?
+      unless SYNTHETIC_POPULATION_SEED_PATTERN.match?(seed)
+        return {
+          enabled: true,
+          total: total,
+          seed: seed,
+          error: "synthetic_population_seed_must_use_1_to_64_letters_numbers_dot_underscore_colon_or_dash",
+        }
+      end
+
+      { enabled: true, total: total, seed: seed, error: nil }
+    end
+
+    def run_with_synthetic_population_test(options)
+      if options.to_h[:enabled] == true
+        ::MediaGallery::ForensicsIdentify.with_synthetic_population_test(
+          total: options[:total],
+          seed: options[:seed]
+        ) { yield }
+      else
+        yield
+      end
+    end
 
     def setting_filemode_soft_time_budget_seconds
       v = SiteSetting.media_gallery_forensics_identify_filemode_soft_time_budget_seconds.to_i
@@ -946,6 +1070,7 @@ module ::MediaGallery
         observed_variants: observed_variants,
         observed_confidences: nil,
         observed_segment_indices: observed_segment_indices,
+        spec: { layout: lay },
         max_offset_segments: max_offset_segments
       )
 

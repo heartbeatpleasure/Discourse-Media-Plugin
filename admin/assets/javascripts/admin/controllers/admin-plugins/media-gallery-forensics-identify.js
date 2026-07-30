@@ -101,6 +101,9 @@ function candidateUserLabel(candidate) {
   if (!candidate) {
     return "—";
   }
+  if (candidate?.synthetic) {
+    return `${candidate?.username || "Synthetic candidate"} (simulation)`;
+  }
   if (candidate?.username) {
     return `${candidate.username} (#${candidate.user_id})`;
   }
@@ -221,6 +224,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked maxOffsetSegments = 30;
   @tracked layout = "";
   @tracked autoExtend = true;
+  @tracked syntheticPopulationTest = false;
+  @tracked syntheticPopulationTotal = 3000;
+  @tracked syntheticPopulationSeed = "12345";
   @tracked isRunning = false;
 
   // public_id finder
@@ -427,6 +433,31 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
     return this.meta?.layout === "v10_reference_spread";
   }
 
+  get isSyntheticPopulationTestResult() {
+    return !!this.meta?.synthetic_population_test_enabled;
+  }
+
+  get syntheticPopulationTestApplied() {
+    return !!this.meta?.synthetic_population_test_applied;
+  }
+
+  get syntheticPopulationSummary() {
+    if (!this.isSyntheticPopulationTestResult) {
+      return "";
+    }
+
+    if (!this.syntheticPopulationTestApplied) {
+      const reason = this.meta?.synthetic_population_ignored_reason || "requires v10_reference_spread";
+      return `Synthetic population simulation was not applied: ${reason}.`;
+    }
+
+    const total = this.meta?.synthetic_population_actual_total ?? this.meta?.candidate_population_count ?? 0;
+    const real = this.meta?.synthetic_population_real_candidate_count ?? 0;
+    const added = this.meta?.synthetic_population_candidates_added ?? 0;
+    const seed = this.meta?.synthetic_population_seed || "—";
+    return `Tested ${total} candidates (${real} real, ${added} synthetic) with seed ${seed}. Synthetic candidates existed only in memory and were not saved as accounts or fingerprint records.`;
+  }
+
   get candidates() {
     return this.result?.candidates || [];
   }
@@ -531,10 +562,23 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
 
   get topCandidateScoringMetrics() {
     if (this.isV10Result) {
-      return [
+      const metrics = [
         { label: "Decision policy", value: this.meta?.decision_policy || "v10_soft_reference_v4", help: "V10 uses weighted A/B reference evidence rather than legacy raw mismatch and pairwise scores." },
-        { label: "Candidate population", value: String(this.meta?.candidate_population_count ?? this.candidates.length), help: "Number of fingerprints evaluated for this media item." },
+        { label: "Candidate population", value: String(this.meta?.candidate_population_count ?? this.candidates.length), help: "Total number of real and optional in-memory synthetic fingerprints evaluated for this media item." },
       ];
+
+      if (this.isSyntheticPopulationTestResult) {
+        metrics.push(
+          { label: "Real candidates", value: String(this.meta?.synthetic_population_real_candidate_count ?? 0), help: "Real MediaFingerprint records for this media item." },
+          { label: "Synthetic added", value: String(this.meta?.synthetic_population_candidates_added ?? 0), help: "Temporary deterministic candidates generated only in memory for this run." },
+          { label: "Seed", value: this.meta?.synthetic_population_seed || "—", help: "Using the same seed reproduces the same synthetic population for this media item." },
+          { label: "Best synthetic rank", value: this.meta?.synthetic_population_best_synthetic_rank ?? "outside returned shortlist", help: "Rank of the strongest visible synthetic candidate. If absent, it ranked below the returned shortlist." },
+          { label: "Best synthetic match", value: formatRatio(this.meta?.synthetic_population_best_synthetic_match_ratio), help: "Soft-reference match of the strongest synthetic candidate visible in the returned shortlist." },
+          { label: "Winner Δ vs synthetic", value: formatRatio(this.meta?.synthetic_population_winner_delta_vs_best_synthetic), help: "Separation between the winner and the strongest visible synthetic candidate." }
+        );
+      }
+
+      return metrics;
     }
 
     return [
@@ -1380,6 +1424,22 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   }
 
   @action
+  onSyntheticPopulationTestChange(event) {
+    this.syntheticPopulationTest = !!event?.target?.checked;
+  }
+
+  @action
+  onSyntheticPopulationTotalInput(event) {
+    const value = parseInt(event?.target?.value, 10);
+    this.syntheticPopulationTotal = Number.isFinite(value) ? value : 3000;
+  }
+
+  @action
+  onSyntheticPopulationSeedInput(event) {
+    this.syntheticPopulationSeed = String(event?.target?.value || "").trim();
+  }
+
+  @action
   clearLookup() {
     this.lookupCode = "";
     this.lookupError = "";
@@ -1682,6 +1742,20 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       return;
     }
 
+    if (this.syntheticPopulationTest) {
+      const total = parseInt(this.syntheticPopulationTotal, 10);
+      if (!Number.isFinite(total) || total < 2 || total > 5000) {
+        this.error = "Total candidate count must be between 2 and 5000.";
+        return;
+      }
+
+      const seed = String(this.syntheticPopulationSeed || "").trim();
+      if (!/^[A-Za-z0-9._:-]{1,64}$/.test(seed)) {
+        this.error = "Seed must contain 1–64 letters, numbers, dots, underscores, colons, or dashes.";
+        return;
+      }
+    }
+
     const csrfToken = document
       .querySelector("meta[name='csrf-token']")
       ?.getAttribute("content");
@@ -1700,6 +1774,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       form.append("layout", this.layout);
     }
     form.append("auto_extend", this.autoExtend ? "1" : "0");
+    if (this.syntheticPopulationTest) {
+      form.append("synthetic_population_test", "1");
+      form.append("synthetic_population_total", String(this.syntheticPopulationTotal || 3000));
+      form.append("synthetic_population_seed", String(this.syntheticPopulationSeed || "12345").trim());
+    }
 
     const syncUrl = `/admin/plugins/media-gallery/forensics-identify/${encodeURIComponent(
       this.publicId

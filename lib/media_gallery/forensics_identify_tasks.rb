@@ -58,7 +58,7 @@ module ::MediaGallery
       File.join(task_dir(task_id), "input#{ext}")
     end
 
-    def create_file_task!(public_id:, media_item_id:, upload:, max_samples:, max_offset_segments:, layout: nil)
+    def create_file_task!(public_id:, media_item_id:, upload:, max_samples:, max_offset_segments:, layout: nil, synthetic_population_total: nil, synthetic_population_seed: nil)
       ensure_root!
       cleanup!
 
@@ -85,6 +85,8 @@ module ::MediaGallery
         "max_samples" => max_samples.to_i,
         "max_offset_segments" => max_offset_segments.to_i,
         "layout" => layout.to_s.presence,
+        "synthetic_population_total" => synthetic_population_total.to_i > 0 ? synthetic_population_total.to_i : nil,
+        "synthetic_population_seed" => synthetic_population_seed.to_s.presence,
         "status" => "queued",
         "created_at" => Time.now.utc.iso8601,
         "updated_at" => Time.now.utc.iso8601,

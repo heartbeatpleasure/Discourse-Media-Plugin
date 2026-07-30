@@ -1158,6 +1158,43 @@ export default RouteTemplate(
                 </div>
                 <div class="mg-fi__helper">If the first result is weak or ambiguous, retry automatically with a longer sample. URL mode only.</div>
               </div>
+
+              <div class="mg-fi__field is-full">
+                <div class="mg-fi__checkbox-row">
+                  <label>
+                    <input type="checkbox" checked={{@controller.syntheticPopulationTest}} {{on "change" @controller.onSyntheticPopulationTestChange}} />
+                    <span>Simulate large candidate population (V10)</span>
+                  </label>
+                </div>
+                <div class="mg-fi__helper">Adds deterministic candidates only in memory during this identify run. No accounts, fingerprint records, or downloads are created. The simulation is applied only when the effective media layout is v10_reference_spread.</div>
+              </div>
+
+              {{#if @controller.syntheticPopulationTest}}
+                <div class="mg-fi__field">
+                  <label>Total candidate count</label>
+                  <input
+                    class="admin-input"
+                    type="number"
+                    min="2"
+                    max="5000"
+                    value={{@controller.syntheticPopulationTotal}}
+                    {{on "input" @controller.onSyntheticPopulationTotalInput}}
+                  />
+                  <div class="mg-fi__helper">Includes the real candidates already linked to this media item. Default: 3000.</div>
+                </div>
+
+                <div class="mg-fi__field">
+                  <label>Seed</label>
+                  <input
+                    class="admin-input"
+                    type="text"
+                    maxlength="64"
+                    value={{@controller.syntheticPopulationSeed}}
+                    {{on "input" @controller.onSyntheticPopulationSeedInput}}
+                  />
+                  <div class="mg-fi__helper">Reuse the same seed to generate the same synthetic population for comparable test runs.</div>
+                </div>
+              {{/if}}
             </div>
 
             <div class="mg-fi__actions" style="margin-top: 1rem;">
@@ -1224,6 +1261,13 @@ export default RouteTemplate(
               </div>
             {{/each}}
           </div>
+
+          {{#if @controller.isSyntheticPopulationTestResult}}
+            <div class="mg-fi__notice is-info" style="margin-top: 1rem;">
+              <strong>Synthetic population test</strong>
+              <div style="margin-top: 0.35rem;">{{@controller.syntheticPopulationSummary}}</div>
+            </div>
+          {{/if}}
 
           <div class="mg-fi__notice {{@controller.confidenceClass}}">
             <strong>Summary</strong>

@@ -225,6 +225,28 @@ module ::MediaGallery
       "a"
     end
 
+    def reference_stream_v10_block(fingerprint_id:, media_item_id:, block_index:)
+      cache = current_expected_variant_cache
+      cache_key = [:reference_stream_hmac_v10, fingerprint_id.to_s, media_item_id.to_i, block_index.to_i]
+      return cache[cache_key] if cache && cache.key?(cache_key)
+
+      block = block_index.to_i
+      block = 0 if block.negative?
+      first_segment = block * REFERENCE_STREAM_BALANCED_BLOCK
+      variants = REFERENCE_STREAM_BALANCED_BLOCK.times.map do |slot|
+        idx = first_segment + slot
+        msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|segment=#{idx}|reference_stream=v10"
+        byte0 = OpenSSL::HMAC.digest("SHA256", secret, msg).getbyte(0)
+        (byte0 & 1) == 1 ? "b" : "a"
+      end.freeze
+      cache[cache_key] = variants if cache
+      variants
+    rescue
+      # Preserve the previous per-segment emergency behavior for the legacy V10
+      # codebook: an unexpected derivation failure resolves to variant A.
+      Array.new(REFERENCE_STREAM_BALANCED_BLOCK, "a").freeze
+    end
+
     def balanced_reference_stream_block(fingerprint_id:, media_item_id:, block_index:)
       cache = current_expected_variant_cache
       cache_key = [:reference_stream_balanced_v10_2, fingerprint_id.to_s, media_item_id.to_i, block_index.to_i]
@@ -268,8 +290,13 @@ module ::MediaGallery
     def expected_variant_for_segment(fingerprint_id:, media_item_id:, segment_index:, codebook: nil, layout: nil)
       scheme = codebook_scheme_for(codebook: codebook, layout: layout)
       cache = current_expected_variant_cache
+      # Both V10 schemes cache one compact 64-symbol block per candidate while
+      # identify is running. Avoid also caching every individual segment, which
+      # would add hundreds of thousands of duplicate entries during a large
+      # population simulation.
+      segment_cache_enabled = ![CODEBOOK_REFERENCE_STREAM_V10, CODEBOOK_REFERENCE_STREAM_BALANCED_V10_2].include?(scheme.to_s)
       cache_key = [:expected_variant, fingerprint_id.to_s, media_item_id.to_i, segment_index.to_i, scheme.to_s]
-      return cache[cache_key] if cache && cache.key?(cache_key)
+      return cache[cache_key] if segment_cache_enabled && cache && cache.key?(cache_key)
 
       if scheme.to_s == CODEBOOK_REFERENCE_STREAM_BALANCED_V10_2
         idx = segment_index.to_i
@@ -284,9 +311,19 @@ module ::MediaGallery
       elsif scheme.to_s == CODEBOOK_REFERENCE_STREAM_V10
         idx = segment_index.to_i
         idx = 0 if idx.negative?
-        msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|segment=#{idx}|reference_stream=v10"
-        byte0 = OpenSSL::HMAC.digest("SHA256", secret, msg).getbyte(0)
-        result = (byte0 & 1) == 1 ? "b" : "a"
+        if cache
+          block_index = idx / REFERENCE_STREAM_BALANCED_BLOCK
+          slot = idx % REFERENCE_STREAM_BALANCED_BLOCK
+          result = reference_stream_v10_block(
+            fingerprint_id: fingerprint_id,
+            media_item_id: media_item_id,
+            block_index: block_index
+          )[slot]
+        else
+          msg = "#{SALT}|fp=#{fingerprint_id}|m=#{media_item_id}|segment=#{idx}|reference_stream=v10"
+          byte0 = OpenSSL::HMAC.digest("SHA256", secret, msg).getbyte(0)
+          result = (byte0 & 1) == 1 ? "b" : "a"
+        end
       else
         slot = logical_slot_for_segment(segment_index: segment_index, codebook: scheme, layout: layout)
         result = expected_logical_variant(
@@ -298,7 +335,7 @@ module ::MediaGallery
           layout: layout
         )
       end
-      cache[cache_key] = result if cache
+      cache[cache_key] = result if segment_cache_enabled && cache
       result
     rescue
       "a"

@@ -69,6 +69,14 @@ module ::MediaGallery
     CANDIDATE_EVIDENCE_CHUNK_SIZE = 8
     SHORTLIST_LIMIT = 10
     SHORTLIST_VERIFY_LIMIT = 4
+    # Population-test and large-real-population prefilter. Keep enough candidates
+    # for reliable evidence enrichment without running the expensive shortlist
+    # decoders for every one of thousands of fingerprints.
+    SHORTLIST_PREFILTER_MIN = 24
+    SHORTLIST_PREFILTER_MAX = 96
+    SHORTLIST_PREFILTER_POP_SQRT_FACTOR = 1.0
+    SHORTLIST_PREFILTER_OBSERVED_DIVISOR = 3.0
+    SHORTLIST_PREFILTER_TIE_EPSILON = 0.0025
     CANDIDATE_EVIDENCE_LOCAL_OFFSET_RADIUS = 6
     CANDIDATE_EVIDENCE_LOCAL_OFFSET_PENALTY = 0.02
     ANCHORED_SHORTLIST_STRONG_TRUST = 0.72
@@ -159,6 +167,26 @@ module ::MediaGallery
     GRID_DETECTOR_LAYOUTS = %w[v8_microgrid v9_spread_spectrum v8_v9_hybrid v10_reference_spread].freeze
     REFERENCE_CACHE_VERSION = "v6"
     V10_REFERENCE_CACHE_VERSION = "v10_full_frame_v4"
+
+    SYNTHETIC_POPULATION_CONTEXT_KEY = :media_gallery_forensics_synthetic_population_test
+    SYNTHETIC_POPULATION_GENERATOR_VERSION = "deterministic_sha256_v1"
+    SYNTHETIC_POPULATION_DEFAULT_TOTAL = 3_000
+    SYNTHETIC_POPULATION_MAX_TOTAL = 5_000
+    SYNTHETIC_POPULATION_DEFAULT_SEED = "12345"
+
+    SyntheticCandidateUser = Struct.new(:username, keyword_init: true)
+    SyntheticFingerprintRecord = Struct.new(
+      :user_id,
+      :fingerprint_id,
+      :user,
+      :synthetic_index,
+      keyword_init: true
+    ) do
+      def synthetic?
+        true
+      end
+    end
+
     REFERENCE_GRID_SAMPLE_RATIO = 0.22
     REFERENCE_GRID_SAMPLE_MIN_SECONDS = 0.30
     REFERENCE_GRID_SAMPLE_MAX_SECONDS = 0.75
@@ -166,6 +194,250 @@ module ::MediaGallery
     V9_REFERENCE_GRID_OUTER_RATIO = 0.28
     V9_REFERENCE_GRID_INNER_MAX_SECONDS = 0.45
     V9_REFERENCE_GRID_OUTER_MAX_SECONDS = 0.95
+
+    def with_synthetic_population_test(total:, seed:)
+      previous = Thread.current[SYNTHETIC_POPULATION_CONTEXT_KEY]
+      requested_total = total.to_i
+      requested_total = SYNTHETIC_POPULATION_DEFAULT_TOTAL if requested_total <= 0
+      requested_total = [[requested_total, 2].max, SYNTHETIC_POPULATION_MAX_TOTAL].min
+      normalized_seed = seed.to_s.strip
+      normalized_seed = SYNTHETIC_POPULATION_DEFAULT_SEED if normalized_seed.blank?
+
+      context = {
+        enabled: true,
+        requested_total: requested_total,
+        seed: normalized_seed,
+        generator_version: SYNTHETIC_POPULATION_GENERATOR_VERSION,
+        records_by_media_id: {},
+        applied: false,
+        ignored_reason: nil,
+        real_candidate_count: 0,
+        synthetic_candidates_added: 0,
+        actual_total: 0,
+        layout: nil,
+      }
+      Thread.current[SYNTHETIC_POPULATION_CONTEXT_KEY] = context
+
+      result = yield
+      annotate_synthetic_population_result!(result, context: context)
+      result
+    ensure
+      Thread.current[SYNTHETIC_POPULATION_CONTEXT_KEY] = previous
+    end
+
+    def synthetic_population_test_active?
+      synthetic_population_context.to_h[:enabled] == true
+    rescue
+      false
+    end
+
+    def apply_synthetic_population_decision_guard!(result)
+      return result unless result.is_a?(Hash)
+
+      meta = result["meta"] || result[:meta]
+      candidates = result["candidates"] || result[:candidates]
+      return result unless meta.is_a?(Hash)
+      return result unless fetch_hash_value(meta, :synthetic_population_test_enabled) == true
+      return result unless fetch_hash_value(meta, :synthetic_population_test_applied) == true
+
+      top = Array(candidates).first
+      top_is_synthetic = fetch_hash_value(top, :synthetic) == true
+      set_hash_value(meta, :synthetic_population_top_candidate_is_synthetic, top_is_synthetic)
+      set_hash_value(meta, :synthetic_population_real_candidate_won, !top_is_synthetic && top.present?)
+
+      if top_is_synthetic
+        previous_decision = fetch_hash_value(meta, :decision).to_s
+        set_hash_value(meta, :synthetic_population_decision_before_guard, previous_decision) if previous_decision.present?
+        set_hash_value(meta, :decision, "synthetic_population_test_failed")
+        set_hash_value(meta, :conclusive, false)
+        set_hash_value(meta, :recommendation, "review_v10_candidate_separation_before_production_rollout")
+        set_hash_value(
+          meta,
+          :user_message,
+          "A synthetic candidate ranked first. This simulation is not a real-user identification and the result must not be treated as conclusive."
+        )
+      end
+
+      result
+    rescue
+      result
+    end
+
+    def synthetic_population_context
+      Thread.current[SYNTHETIC_POPULATION_CONTEXT_KEY]
+    rescue
+      nil
+    end
+    private_class_method :synthetic_population_context
+
+    def fetch_hash_value(hash, key)
+      return nil unless hash.is_a?(Hash)
+      return hash[key.to_s] if hash.key?(key.to_s)
+      hash[key.to_sym]
+    rescue
+      nil
+    end
+    private_class_method :fetch_hash_value
+
+    def set_hash_value(hash, key, value)
+      return hash unless hash.is_a?(Hash)
+
+      if hash.key?(key.to_sym) && !hash.key?(key.to_s)
+        hash[key.to_sym] = value
+      else
+        hash[key.to_s] = value
+      end
+      hash
+    end
+    private_class_method :set_hash_value
+
+    def synthetic_fingerprint_record?(record)
+      record.respond_to?(:synthetic?) && record.synthetic? == true
+    rescue
+      false
+    end
+    private_class_method :synthetic_fingerprint_record?
+
+    def synthetic_fingerprint_records_for(media_item:, real_records:, requested_total:, seed:)
+      context = synthetic_population_context
+      return [] unless context.is_a?(Hash)
+
+      real = Array(real_records)
+      add_count = [requested_total.to_i - real.length, 0].max
+      return [] if add_count <= 0
+
+      real_ids = real.map { |record| record.fingerprint_id.to_s }.reject(&:blank?).sort
+      cache_key = [media_item.id.to_i, requested_total.to_i, seed.to_s, Digest::SHA256.hexdigest(real_ids.join("|"))]
+      cached = context[:records_by_media_id][cache_key]
+      return cached if cached.is_a?(Array)
+
+      used_ids = real_ids.each_with_object({}) { |fingerprint_id, acc| acc[fingerprint_id] = true }
+      width = [add_count.to_s.length, 4].max
+      records = []
+
+      add_count.times do |zero_based_index|
+        synthetic_index = zero_based_index + 1
+        nonce = 0
+        fingerprint_id = nil
+
+        loop do
+          material = [
+            "media_gallery_forensics_synthetic_population_v1",
+            "seed=#{seed}",
+            "public_id=#{media_item.public_id}",
+            "media_item_id=#{media_item.id}",
+            "index=#{synthetic_index}",
+            "nonce=#{nonce}",
+          ].join("|")
+          fingerprint_id = Digest::SHA256.hexdigest(material)[0, 32]
+          break unless used_ids[fingerprint_id]
+          nonce += 1
+        end
+
+        used_ids[fingerprint_id] = true
+        records << SyntheticFingerprintRecord.new(
+          user_id: -synthetic_index,
+          fingerprint_id: fingerprint_id,
+          user: SyntheticCandidateUser.new(username: format("Synthetic %0#{width}d", synthetic_index)),
+          synthetic_index: synthetic_index
+        )
+      end
+
+      context[:records_by_media_id][cache_key] = records.freeze
+    rescue => e
+      context[:ignored_reason] = "synthetic_candidate_generation_failed:#{e.class}" if context.is_a?(Hash)
+      []
+    end
+    private_class_method :synthetic_fingerprint_records_for
+
+    def fingerprints_with_synthetic_population(real_records:, media_item:, layout:)
+      context = synthetic_population_context
+      real = Array(real_records)
+      return real unless context.is_a?(Hash) && context[:enabled] == true
+
+      layout_name = layout.to_s
+      context[:layout] = layout_name
+      context[:real_candidate_count] = real.length
+
+      unless v10_reference_layout?(layout_name)
+        context[:applied] = false
+        context[:ignored_reason] = "requires_v10_reference_spread"
+        context[:synthetic_candidates_added] = 0
+        context[:actual_total] = real.length
+        return real
+      end
+
+      synthetic = synthetic_fingerprint_records_for(
+        media_item: media_item,
+        real_records: real,
+        requested_total: context[:requested_total],
+        seed: context[:seed]
+      )
+
+      context[:applied] = true
+      context[:ignored_reason] = nil
+      context[:synthetic_candidates_added] = synthetic.length
+      context[:actual_total] = real.length + synthetic.length
+      real + synthetic
+    rescue => e
+      context[:applied] = false if context.is_a?(Hash)
+      context[:ignored_reason] = "synthetic_population_expansion_failed:#{e.class}" if context.is_a?(Hash)
+      real
+    end
+    private_class_method :fingerprints_with_synthetic_population
+
+    def annotate_synthetic_population_result!(result, context:)
+      return result unless result.is_a?(Hash) && context.is_a?(Hash)
+
+      meta = result["meta"] || result[:meta]
+      candidates = result["candidates"] || result[:candidates]
+      return result unless meta.is_a?(Hash)
+
+      set_hash_value(meta, :synthetic_population_test_enabled, true)
+      set_hash_value(meta, :synthetic_population_test_applied, context[:applied] == true)
+      set_hash_value(meta, :synthetic_population_requested_total, context[:requested_total].to_i)
+      set_hash_value(meta, :synthetic_population_actual_total, context[:actual_total].to_i)
+      set_hash_value(meta, :synthetic_population_real_candidate_count, context[:real_candidate_count].to_i)
+      set_hash_value(meta, :synthetic_population_candidates_added, context[:synthetic_candidates_added].to_i)
+      set_hash_value(meta, :synthetic_population_seed, context[:seed].to_s)
+      set_hash_value(meta, :synthetic_population_generator_version, context[:generator_version].to_s)
+      set_hash_value(meta, :synthetic_population_layout, context[:layout].to_s.presence)
+      set_hash_value(meta, :synthetic_population_ignored_reason, context[:ignored_reason].to_s.presence)
+      set_hash_value(meta, :candidate_population_count, context[:actual_total].to_i) if context[:applied] == true
+
+      visible_candidates = Array(candidates)
+      top = visible_candidates.first
+      best_synthetic_index = visible_candidates.index { |candidate| fetch_hash_value(candidate, :synthetic) == true }
+      best_synthetic = best_synthetic_index.nil? ? nil : visible_candidates[best_synthetic_index]
+      top_ratio = candidate_soft_match_ratio(top)
+      synthetic_ratio = candidate_soft_match_ratio(best_synthetic)
+
+      set_hash_value(meta, :synthetic_population_top_candidate_is_synthetic, fetch_hash_value(top, :synthetic) == true)
+      set_hash_value(meta, :synthetic_population_best_synthetic_visible, best_synthetic.present?)
+      set_hash_value(meta, :synthetic_population_best_synthetic_rank, best_synthetic_index.nil? ? nil : best_synthetic_index + 1)
+      set_hash_value(meta, :synthetic_population_best_synthetic_match_ratio, best_synthetic.present? ? synthetic_ratio.round(4) : nil)
+      set_hash_value(meta, :synthetic_population_winner_delta_vs_best_synthetic, best_synthetic.present? ? (top_ratio - synthetic_ratio).round(4) : nil)
+      set_hash_value(meta, :synthetic_population_test_note, "Synthetic candidates existed only in memory for this identify run; no users or fingerprint records were created.")
+      result
+    rescue
+      result
+    end
+    private_class_method :annotate_synthetic_population_result!
+
+    def candidate_soft_match_ratio(candidate)
+      return 0.0 unless candidate.is_a?(Hash)
+
+      adaptive = fetch_hash_value(candidate, :match_ratio_adaptive_weighted)
+      return adaptive.to_f if !adaptive.nil? && adaptive.to_f > 0.0
+
+      weighted = fetch_hash_value(candidate, :match_ratio_weighted)
+      return weighted.to_f if !weighted.nil? && weighted.to_f > 0.0
+
+      fetch_hash_value(candidate, :match_ratio).to_f
+    rescue
+      0.0
+    end
+    private_class_method :candidate_soft_match_ratio
 
     def normalize_filemode_time_budget_seconds(value)
       v = value.to_f
@@ -4039,6 +4311,8 @@ module ::MediaGallery
           user_id: rec.user_id,
           username: rec.user&.username,
           fingerprint_id: rec.fingerprint_id,
+          synthetic: synthetic_fingerprint_record?(rec),
+          synthetic_index: (rec.respond_to?(:synthetic_index) ? rec.synthetic_index : nil),
           best_offset_segments: chosen_chunks.first[:offset].to_i,
           mismatches: mism,
           compared: comp,
@@ -6102,8 +6376,46 @@ end
     private_class_method :apply_shortlist_meta!
 
     def match_fingerprints(media_item:, observed_variants:, observed_confidences: nil, observed_scores: nil, observed_payload_vectors: nil, observed_sync_variants: nil, observed_sync_confidences: nil, observed_segment_indices: nil, observed_quality_hints: nil, spec: nil, max_offset_segments:, started_at: nil, time_budget_seconds: nil)
+      unless ::MediaGallery::Fingerprinting.current_expected_variant_cache
+        return ::MediaGallery::Fingerprinting.with_expected_variant_cache do
+          match_fingerprints(
+            media_item: media_item,
+            observed_variants: observed_variants,
+            observed_confidences: observed_confidences,
+            observed_scores: observed_scores,
+            observed_payload_vectors: observed_payload_vectors,
+            observed_sync_variants: observed_sync_variants,
+            observed_sync_confidences: observed_sync_confidences,
+            observed_segment_indices: observed_segment_indices,
+            observed_quality_hints: observed_quality_hints,
+            spec: spec,
+            max_offset_segments: max_offset_segments,
+            started_at: started_at,
+            time_budget_seconds: time_budget_seconds
+          )
+        end
+      end
+
       fps = ::MediaGallery::MediaFingerprint.where(media_item_id: media_item.id).includes(:user).to_a
-      return { candidates: [], meta: { offset_strategy: "global" } } if fps.empty?
+      if fps.empty?
+        context = synthetic_population_context
+        if context.is_a?(Hash) && context[:enabled] == true
+          context[:layout] = spec.is_a?(Hash) ? (spec[:layout] || spec["layout"]).to_s : ""
+          context[:real_candidate_count] = 0
+          context[:synthetic_candidates_added] = 0
+          context[:actual_total] = 0
+          context[:applied] = false
+          context[:ignored_reason] = "requires_at_least_one_real_candidate"
+        end
+        return { candidates: [], meta: { offset_strategy: "global" } }
+      end
+
+      population_layout = spec.is_a?(Hash) ? (spec[:layout] || spec["layout"]).to_s : ""
+      fps = fingerprints_with_synthetic_population(
+        real_records: fps,
+        media_item: media_item,
+        layout: population_layout
+      )
 
       # Reference-calibrated matching path (for screen recordings / re-encodes):
       # If we have per-sample numeric scores (from pixel extraction) AND can read the packaged A/B segments,
@@ -6373,6 +6685,8 @@ end
           user_id: rec.user_id,
           username: rec.user&.username,
           fingerprint_id: rec.fingerprint_id,
+          synthetic: synthetic_fingerprint_record?(rec),
+          synthetic_index: (rec.respond_to?(:synthetic_index) ? rec.synthetic_index : nil),
           best_offset_segments: chosen_offset,
           mismatches: mism,
           compared: comp,
@@ -7857,6 +8171,8 @@ end
         user_id: rec.user_id,
         username: rec.user&.username,
         fingerprint_id: rec.fingerprint_id,
+        synthetic: synthetic_fingerprint_record?(rec),
+        synthetic_index: (rec.respond_to?(:synthetic_index) ? rec.synthetic_index : nil),
         best_offset_segments: best_offset,
         mismatches: mism,
         compared: comp,
