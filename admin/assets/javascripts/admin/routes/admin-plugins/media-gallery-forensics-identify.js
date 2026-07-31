@@ -29,8 +29,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyRoute extends Disc
     controller.publicId = initialPublicId || initialQuery;
     controller.file = null;
     controller.sourceUrl = "";
-    controller.maxSamples = 60;
-    controller.maxOffsetSegments = 30;
+    controller.maxSamples = 600;
+    controller.maxOffsetSegments = 0;
     controller.layout = "";
     controller.autoExtend = true;
     controller.isRunning = false;

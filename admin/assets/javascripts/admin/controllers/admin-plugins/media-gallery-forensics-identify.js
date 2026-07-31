@@ -220,8 +220,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked publicId = "";
   @tracked file = null;
   @tracked sourceUrl = "";
-  @tracked maxSamples = 60;
-  @tracked maxOffsetSegments = 30;
+  @tracked maxSamples = 600;
+  @tracked maxOffsetSegments = 0;
   @tracked layout = "";
   @tracked autoExtend = true;
   @tracked syntheticPopulationTest = false;
@@ -1458,13 +1458,13 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @action
   onMaxSamplesInput(event) {
     const v = parseInt(event?.target?.value, 10);
-    this.maxSamples = Number.isFinite(v) ? v : 60;
+    this.maxSamples = Number.isFinite(v) ? v : 600;
   }
 
   @action
   onMaxOffsetInput(event) {
     const v = parseInt(event?.target?.value, 10);
-    this.maxOffsetSegments = Number.isFinite(v) ? v : 30;
+    this.maxOffsetSegments = Number.isFinite(v) ? v : 0;
   }
 
   @action
@@ -1822,11 +1822,11 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       form.append("source_url", this.sourceUrl);
     }
 
-    form.append("max_samples", String(this.maxSamples || 60));
+    form.append("max_samples", String(this.maxSamples || 600));
     const parsedMaxOffsetSegments = Number.parseInt(this.maxOffsetSegments, 10);
     form.append(
       "max_offset_segments",
-      String(Number.isFinite(parsedMaxOffsetSegments) ? parsedMaxOffsetSegments : 30)
+      String(Number.isFinite(parsedMaxOffsetSegments) ? parsedMaxOffsetSegments : 0)
     );
     if (this.layout) {
       form.append("layout", this.layout);

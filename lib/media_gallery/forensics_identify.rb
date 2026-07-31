@@ -63,6 +63,10 @@ module ::MediaGallery
     # complements, so require substantially more evidence before accepting an
     # inverted interpretation. Normal polarity remains the safe default.
     V10_SHORT_CLIP_MAX_USABLE = 24
+    # Alignment is a property of the captured video. Apply the population-invariant
+    # alignment and shared-offset rules to short and medium external clips, while
+    # keeping long/full reference runs on their proven existing path.
+    V10_POPULATION_INVARIANT_ALIGNMENT_MAX_SAMPLES = 64
     V10_POLARITY_SWITCH_MIN_USABLE = 24
     V10_POLARITY_SWITCH_MIN_TOP_RATIO = 0.78
     V10_POLARITY_SWITCH_MIN_RATIO_GAIN = 0.08
@@ -1577,7 +1581,7 @@ module ::MediaGallery
 
     def phase_drift_candidates(base_points:, spec:, dense_step_seconds:, candidate_count: 0)
       return [0.0] unless v10_full_frame_reference?(spec)
-      return [0.0] unless Array(base_points).length <= V10_SHORT_CLIP_MAX_USABLE.to_i
+      return [0.0] unless Array(base_points).length <= V10_POPULATION_INVARIANT_ALIGNMENT_MAX_SAMPLES.to_i
       return [0.0] unless dense_step_seconds.to_f <= DENSE_SAMPLE_STEP_FINE.to_f
 
       V10_SHORT_CLIP_DRIFT_RATIOS
@@ -1659,7 +1663,7 @@ module ::MediaGallery
         meta[:phase_drift_candidates] ||= drift_candidates.map { |v| v.round(4) }
         meta[:phase_drift_candidate_count] = drift_candidates.length
         meta[:phase_drift_population_count] = candidate_count
-        meta[:phase_drift_population_independent] = v10_full_frame_reference?(spec) && Array(base_points).length <= V10_SHORT_CLIP_MAX_USABLE.to_i
+        meta[:phase_drift_population_independent] = v10_full_frame_reference?(spec) && Array(base_points).length <= V10_POPULATION_INVARIANT_ALIGNMENT_MAX_SAMPLES.to_i
         meta[:chosen_drift_ratio] = drift_ratio.to_f.round(5)
         meta[:chosen_drift_seconds_at_end] = (drift_span_seconds * drift_ratio.to_f).round(3)
         meta[:dense_step_seconds] = dense_step_seconds.round(3)
@@ -5770,7 +5774,7 @@ end
       return false unless v10_reference_layout?(layout)
 
       usable = usable_count.to_i
-      usable.positive? && usable <= V10_SHORT_CLIP_MAX_USABLE.to_i
+      usable.positive? && usable <= V10_POPULATION_INVARIANT_ALIGNMENT_MAX_SAMPLES.to_i
     rescue
       false
     end
@@ -5781,7 +5785,7 @@ end
       return false unless vector_reference == true
 
       count = score_count.to_i
-      count.positive? && count <= V10_SHORT_CLIP_MAX_USABLE.to_i
+      count.positive? && count <= V10_POPULATION_INVARIANT_ALIGNMENT_MAX_SAMPLES.to_i
     rescue
       false
     end

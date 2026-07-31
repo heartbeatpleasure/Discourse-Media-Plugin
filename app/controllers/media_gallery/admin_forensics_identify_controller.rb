@@ -71,11 +71,11 @@ module ::MediaGallery
             </p>
 
             <p>
-              <label>Max samples (frames): <input type="number" name="max_samples" value="60" min="5" max="600"></label>
+              <label>Max samples (frames): <input type="number" name="max_samples" value="600" min="5" max="600"></label>
             </p>
 
             <p>
-              <label>Max offset segments to scan: <input type="number" name="max_offset_segments" value="30" min="0" max="300"></label>
+              <label>Max offset segments to scan: <input type="number" name="max_offset_segments" value="0" min="0" max="300"></label>
             </p>
 
             <p>
@@ -133,11 +133,11 @@ module ::MediaGallery
       return render json: { ok: false, error: "missing_file", error_class: "Discourse::InvalidParameters" }, status: 422 if file.blank?
 
       max_samples = params[:max_samples].to_i
-      max_samples = 60 if max_samples <= 0
+      max_samples = 600 if max_samples <= 0
       max_samples = [max_samples, 600].min
 
       max_offset = params[:max_offset_segments].to_i
-      max_offset = 30 if max_offset.negative?
+      max_offset = 0 if max_offset.negative?
       max_offset = [max_offset, 300].min
 
       layout = params[:layout].to_s.presence
@@ -290,11 +290,11 @@ module ::MediaGallery
       end
 
       max_samples = params[:max_samples].to_i
-      max_samples = 60 if max_samples <= 0
+      max_samples = 600 if max_samples <= 0
       max_samples = [max_samples, 600].min
 
       max_offset = params[:max_offset_segments].to_i
-      max_offset = 30 if max_offset.negative?
+      max_offset = 0 if max_offset.negative?
       max_offset = [max_offset, 300].min
 
       layout = params[:layout].to_s.presence

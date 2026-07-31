@@ -1117,7 +1117,7 @@ export default RouteTemplate(
                   value={{@controller.maxSamples}}
                   {{on "input" @controller.onMaxSamplesInput}}
                 />
-                <div class="mg-fi__helper">Sets the initial frame-sampling budget. Background file analysis may safely use more samples when the clip is longer and the analysis budget allows it, which improves reliability.</div>
+                <div class="mg-fi__helper">Defaults to the maximum request of 600 samples. The actual number is still limited safely by clip duration, file-size caps and the analysis time budget; lower this only when you deliberately want a faster, less exhaustive run.</div>
               </div>
 
               <div class="mg-fi__field">
@@ -1130,7 +1130,7 @@ export default RouteTemplate(
                   value={{@controller.maxOffsetSegments}}
                   {{on "input" @controller.onMaxOffsetInput}}
                 />
-                <div class="mg-fi__helper">Use 0 for the automatic full plausible offset range (recommended for partial clips with an unknown start). A positive value limits how many original HLS segments are searched.</div>
+                <div class="mg-fi__helper">Defaults to 0, which automatically searches the full plausible offset range (recommended when the clip start is unknown). A positive value limits the number of original HLS segments searched; 0 does not disable alignment.</div>
               </div>
 
               <div class="mg-fi__field is-full">

@@ -31,14 +31,14 @@ module ::MediaGallery
       raise Discourse::InvalidParameters.new(:file) if file_path.blank? || !File.exist?(file_path)
 
       max_samples = max_samples.to_i
-      max_samples = 60 if max_samples <= 0
+      max_samples = 600 if max_samples <= 0
       # Background jobs can now use the one-pass streaming sampler, so allow
       # enough segment observations for long full/partial HLS-derived MP4s.
       max_samples = [max_samples, 320].max if async_mode && max_samples <= 60
       max_samples = [max_samples, 600].min
 
       max_offset = max_offset_segments.to_i
-      max_offset = 30 if max_offset.negative?
+      max_offset = 0 if max_offset.negative?
       max_offset = [max_offset, 300].min
 
       file_bytes = (File.size(file_path) rescue 0).to_i
