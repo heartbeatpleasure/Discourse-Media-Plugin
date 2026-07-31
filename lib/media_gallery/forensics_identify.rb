@@ -5623,6 +5623,16 @@ end
     end
     private_class_method :candidate_local_offset_radius
 
+    def v10_short_clip_shared_alignment?(layout:, usable_count:)
+      return false unless v10_reference_layout?(layout)
+
+      usable = usable_count.to_i
+      usable.positive? && usable <= V10_SHORT_CLIP_MAX_USABLE.to_i
+    rescue
+      false
+    end
+    private_class_method :v10_short_clip_shared_alignment?
+
 
     def clamp_unit_interval(value)
       v = value.to_f
@@ -8448,15 +8458,43 @@ end
   end
   candidates = prefilter_info[:candidates]
 
-  local_evidence_radius = candidate_local_offset_radius(
-    max_off: max_off,
-    observed_count: u[:usable_count].to_i
+  # The population-wide scan above already selected one shared physical offset.
+  # On short V10 clips, letting every candidate or chunk reselect that offset adds
+  # unsupported hypotheses and rewards chance matches. Keep the shared alignment;
+  # the decision policy will remain ambiguous when the available evidence is weak.
+  v10_shared_alignment_locked = !use_chunked && v10_short_clip_shared_alignment?(
+    layout: layout_name,
+    usable_count: u[:usable_count].to_i
   )
+  local_evidence_radius = if v10_shared_alignment_locked
+    0
+  else
+    candidate_local_offset_radius(
+      max_off: max_off,
+      observed_count: u[:usable_count].to_i
+    )
+  end
+
+  if v10_shared_alignment_locked
+    candidates.each do |candidate|
+      candidate[:retrieval_offset_segments] = best_offset.to_i
+      candidate[:best_offset_segments] = best_offset.to_i
+      candidate[:local_best_offset_segments] = best_offset.to_i
+      candidate[:candidate_offset_shift] = 0
+      candidate[:candidate_offset_search_mode] = "shared_alignment_locked"
+      candidate[:candidate_offset_search_bounds] = [best_offset.to_i, best_offset.to_i]
+      candidate[:candidate_offset_shift_penalty] = 0.0
+      candidate[:candidate_offset_polarity_penalty] = 0.0
+    end
+  end
+
   shortlist_verification_used = false
   shortlist_verification_reason = if use_chunked
     "skipped_for_chunked_reference"
   elsif candidates.blank?
     "no_candidates"
+  elsif v10_shared_alignment_locked
+    "v10_short_clip_shared_alignment_locked"
   elsif local_evidence_radius <= 0
     "local_offset_radius_zero"
   else
@@ -8636,8 +8674,14 @@ end
 
   meta[:shortlist_verification_used] = shortlist_verification_used
   meta[:shortlist_verification_reason] = shortlist_verification_reason
-  meta[:shortlist_verification_candidates] = [SHORTLIST_VERIFY_LIMIT, candidates.length].min
+  meta[:shortlist_verification_candidates] = v10_shared_alignment_locked ? 0 : [SHORTLIST_VERIFY_LIMIT, candidates.length].min
   meta[:shortlist_verification_local_offset_radius] = local_evidence_radius
+  meta[:v10_shared_alignment_locked] = v10_shared_alignment_locked
+  if v10_shared_alignment_locked
+    meta[:v10_shared_alignment_offset_segments] = best_offset.to_i
+    meta[:v10_candidate_specific_offset_search_disabled] = true
+    meta[:v10_local_chunk_offset_search_disabled] = true
+  end
   meta[:pairwise_chunk_decoder_used] = (pairwise_chunk_decoder[:used] == true)
   meta[:pairwise_chunk_decoder_reason] = pairwise_chunk_decoder[:reason]
   meta[:pairwise_chunk_decoder_chunks] = pairwise_chunk_decoder[:chunks] if pairwise_chunk_decoder[:chunks]
