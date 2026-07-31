@@ -70,7 +70,13 @@ module ::MediaGallery
     V10_POLARITY_SWITCH_MIN_SCORE_GAIN = 0.02
     V10_POLARITY_SWITCH_MAX_DELTA_REGRESSION = 0.0
     V10_SHORT_CLIP_DRIFT_RATIOS = [-0.006, -0.003, 0.0, 0.003, 0.006].freeze
-    V10_SHORT_CLIP_DRIFT_MAX_CANDIDATES = 100
+    # Short-clip alignment must be a property of the captured video, not of the
+    # candidate population. Keep the same bounded drift hypotheses for 2, 500 or
+    # 3,000 candidates; candidate comparison happens only after shared alignment.
+    V10_SHORT_ALIGNMENT_CONTENT_WEIGHT = 0.68
+    V10_SHORT_ALIGNMENT_LOWER_QUARTILE_WEIGHT = 0.22
+    V10_SHORT_ALIGNMENT_CARRIER_COVERAGE_WEIGHT = 0.07
+    V10_SHORT_ALIGNMENT_REFERENCE_MARGIN_WEIGHT = 0.03
 
     # Chunked re-sync: for longer leaked clips, one global offset/phase can drift.
     # We therefore allow local offset re-selection per chunk and aggregate the chunks.
@@ -649,12 +655,87 @@ module ::MediaGallery
     end
     private_class_method :reference_weight_adjustment_for_match
 
-    def full_frame_reference_vote_for_sample(vector:, thr_vector:, delta_vector:, profile:, leak_scale: 1.0)
+    def full_frame_content_alignment_metrics(vector:, thr_vector:, delta_vector:)
+      vec = Array(vector)
+      thr = Array(thr_vector)
+      carrier = Array(delta_vector)
+      width = [vec.length, thr.length, carrier.length].min
+      return nil if width <= 0
+
+      sum_vec = 0.0
+      sum_thr = 0.0
+      sum_vec_sq = 0.0
+      sum_thr_sq = 0.0
+      sum_cross = 0.0
+      sum_a_error_sq = 0.0
+      sum_b_error_sq = 0.0
+
+      width.times do |idx|
+        sample = vec[idx].to_f
+        midpoint = thr[idx].to_f
+        delta = carrier[idx].to_f
+
+        sum_vec += sample
+        sum_thr += midpoint
+        sum_vec_sq += sample * sample
+        sum_thr_sq += midpoint * midpoint
+        sum_cross += sample * midpoint
+
+        a_error = sample - (midpoint + delta)
+        b_error = sample - (midpoint - delta)
+        sum_a_error_sq += a_error * a_error
+        sum_b_error_sq += b_error * b_error
+      end
+
+      n = width.to_f
+      covariance = sum_cross - ((sum_vec * sum_thr) / n)
+      vec_energy = sum_vec_sq - ((sum_vec * sum_vec) / n)
+      thr_energy = sum_thr_sq - ((sum_thr * sum_thr) / n)
+      denom = Math.sqrt([vec_energy, 0.0].max * [thr_energy, 0.0].max)
+      correlation = denom.positive? ? (covariance / denom) : 0.0
+      correlation = 0.0 unless correlation.finite?
+      correlation = -1.0 if correlation < -1.0
+      correlation = 1.0 if correlation > 1.0
+
+      best_error_sq = [sum_a_error_sq, sum_b_error_sq].min
+      best_rmse = Math.sqrt([best_error_sq / n, 0.0].max)
+      reference_stddev = Math.sqrt([thr_energy / n, 0.0].max)
+      residual_scale = [reference_stddev, 12.0].max
+      normalized_rmse = best_rmse / residual_scale
+      normalized_rmse = 10.0 unless normalized_rmse.finite?
+
+      correlation_quality = [[correlation, 0.0].max, 1.0].min
+      residual_quality = 1.0 / (1.0 + [normalized_rmse, 0.0].max)
+      content_score = (correlation_quality * 0.72) + (residual_quality * 0.28)
+
+      {
+        content_match_score: content_score.to_f,
+        content_correlation: correlation.to_f,
+        content_best_reference_rmse: best_rmse.to_f,
+        content_normalized_rmse: normalized_rmse.to_f,
+        content_reference_stddev: reference_stddev.to_f,
+      }
+    rescue
+      nil
+    end
+    private_class_method :full_frame_content_alignment_metrics
+
+    def full_frame_reference_vote_for_sample(vector:, thr_vector:, delta_vector:, profile:, leak_scale: 1.0, collect_content_alignment: false)
       vec = Array(vector).map(&:to_f)
       thr = Array(thr_vector).map(&:to_f)
       carrier = Array(delta_vector).map(&:to_f)
       width = [vec.length, thr.length, carrier.length].min
       return nil if width <= 0
+
+      content_metrics = if collect_content_alignment == true
+        full_frame_content_alignment_metrics(
+          vector: vec.first(width),
+          thr_vector: thr.first(width),
+          delta_vector: carrier.first(width)
+        ) || {}
+      else
+        {}
+      end
 
       residual = Array.new(width) { |idx| vec[idx] - thr[idx] }
       carrier = carrier.first(width)
@@ -668,7 +749,19 @@ module ::MediaGallery
       width.times do |idx|
         selected << idx if carrier[idx].abs >= carrier_floor && carrier[idx].abs.positive?
       end
-      return nil if selected.length < 24
+      if selected.length < 24
+        return nil unless collect_content_alignment == true
+
+        return content_metrics.merge(
+          variant: nil,
+          weight: 0.0,
+          margin: 0.0,
+          ratio: 1.0,
+          confidence: 0.0,
+          pairs_used: selected.length,
+          pair_coverage: selected.length.to_f / width.to_f,
+        )
+      end
 
       carrier_mean = selected.sum { |idx| carrier[idx] }.to_f / selected.length.to_f
       residual_mean = selected.sum { |idx| residual[idx] }.to_f / selected.length.to_f
@@ -683,14 +776,50 @@ module ::MediaGallery
         residual_energy += r * r
       end
       denom = Math.sqrt(carrier_energy * residual_energy)
-      return nil if denom <= 0.0 || denom.nan? || denom.infinite?
+      if denom <= 0.0 || denom.nan? || denom.infinite?
+        return nil unless collect_content_alignment == true
+
+        return content_metrics.merge(
+          variant: nil,
+          weight: 0.0,
+          margin: 0.0,
+          ratio: 1.0,
+          confidence: 0.0,
+          pairs_used: selected.length,
+          pair_coverage: selected.length.to_f / width.to_f,
+        )
+      end
 
       correlation = numerator / denom
-      return nil unless correlation.finite?
+      unless correlation.finite?
+        return nil unless collect_content_alignment == true
+
+        return content_metrics.merge(
+          variant: nil,
+          weight: 0.0,
+          margin: 0.0,
+          ratio: 1.0,
+          confidence: 0.0,
+          pairs_used: selected.length,
+          pair_coverage: selected.length.to_f / width.to_f,
+        )
+      end
       abs_correlation = correlation.abs
       min_correlation = profile[:min_correlation].to_f
       min_correlation = 0.008 if min_correlation <= 0.0
-      return nil if abs_correlation < min_correlation
+      if abs_correlation < min_correlation
+        return nil unless collect_content_alignment == true
+
+        return content_metrics.merge(
+          variant: nil,
+          weight: 0.0,
+          margin: abs_correlation.to_f,
+          ratio: 1.0,
+          confidence: 0.0,
+          pairs_used: selected.length,
+          pair_coverage: selected.length.to_f / width.to_f,
+        )
+      end
 
       confidence_scale = profile[:confidence_correlation].to_f
       confidence_scale = 0.06 if confidence_scale <= 0.0
@@ -699,7 +828,7 @@ module ::MediaGallery
       carrier_rms = Math.sqrt(carrier_energy / selected.length.to_f)
       weight = abs_correlation * Math.sqrt(selected.length.to_f) * [[carrier_rms, 0.25].max, 4.0].min * [[leak_scale.to_f, 0.35].max, 1.0].min
 
-      {
+      content_metrics.merge(
         variant: correlation >= 0.0 ? "a" : "b",
         weight: weight.to_f,
         margin: confidence.to_f,
@@ -711,20 +840,21 @@ module ::MediaGallery
         median_ratio: (1.0 - confidence).to_f,
         median_strength: carrier_rms.to_f,
         correlation: correlation.to_f,
-      }
+      )
     rescue
       nil
     end
     private_class_method :full_frame_reference_vote_for_sample
 
-    def vector_reference_vote_for_sample(vector:, thr_vector:, delta_vector:, delta_median:, profile:, leak_scale: 1.0)
+    def vector_reference_vote_for_sample(vector:, thr_vector:, delta_vector:, delta_median:, profile:, leak_scale: 1.0, collect_content_alignment: false)
       if profile.to_h[:vector_mode].to_s == "full_frame_correlation"
         return full_frame_reference_vote_for_sample(
           vector: vector,
           thr_vector: thr_vector,
           delta_vector: delta_vector,
           profile: profile,
-          leak_scale: leak_scale
+          leak_scale: leak_scale,
+          collect_content_alignment: collect_content_alignment
         )
       end
       vec = Array(vector).map(&:to_f)
@@ -1449,7 +1579,6 @@ module ::MediaGallery
       return [0.0] unless v10_full_frame_reference?(spec)
       return [0.0] unless Array(base_points).length <= V10_SHORT_CLIP_MAX_USABLE.to_i
       return [0.0] unless dense_step_seconds.to_f <= DENSE_SAMPLE_STEP_FINE.to_f
-      return [0.0] if candidate_count.to_i > V10_SHORT_CLIP_DRIFT_MAX_CANDIDATES.to_i
 
       V10_SHORT_CLIP_DRIFT_RATIOS
     rescue
@@ -1528,7 +1657,9 @@ module ::MediaGallery
           0.0
         end
         meta[:phase_drift_candidates] ||= drift_candidates.map { |v| v.round(4) }
-        meta[:phase_drift_candidate_count] = candidate_count
+        meta[:phase_drift_candidate_count] = drift_candidates.length
+        meta[:phase_drift_population_count] = candidate_count
+        meta[:phase_drift_population_independent] = v10_full_frame_reference?(spec) && Array(base_points).length <= V10_SHORT_CLIP_MAX_USABLE.to_i
         meta[:chosen_drift_ratio] = drift_ratio.to_f.round(5)
         meta[:chosen_drift_seconds_at_end] = (drift_span_seconds * drift_ratio.to_f).round(3)
         meta[:dense_step_seconds] = dense_step_seconds.round(3)
@@ -1980,6 +2111,18 @@ module ::MediaGallery
     def phase_result_score(match:)
       return -Float::INFINITY if match.blank?
       meta = match[:meta] || {}
+
+      if meta[:reference_alignment_candidate_independent] == true
+        alignment_score = meta[:reference_alignment_score].to_f
+        alignment_gap = [meta[:reference_alignment_gap].to_f, 0.0].max
+        content_coverage = [[meta[:reference_alignment_content_coverage].to_f, 0.0].max, 1.0].min
+        carrier_coverage = [[meta[:reference_alignment_carrier_coverage].to_f, 0.0].max, 1.0].min
+        phase_penalty = meta[:chosen_phase_seconds].to_f.abs * 0.001
+        drift_penalty = meta[:chosen_drift_ratio].to_f.abs * 0.05
+
+        return alignment_score + (alignment_gap * 0.12) + (content_coverage * 0.01) + (carrier_coverage * 0.005) - phase_penalty - drift_penalty
+      end
+
       cands = Array(match[:candidates])
       top = cands[0]
       second = cands[1]
@@ -5633,6 +5776,64 @@ end
     end
     private_class_method :v10_short_clip_shared_alignment?
 
+    def v10_candidate_independent_alignment?(layout:, score_count:, vector_reference:)
+      return false unless v10_reference_layout?(layout)
+      return false unless vector_reference == true
+
+      count = score_count.to_i
+      count.positive? && count <= V10_SHORT_CLIP_MAX_USABLE.to_i
+    rescue
+      false
+    end
+    private_class_method :v10_candidate_independent_alignment?
+
+    def v10_content_alignment_score(usable_result:, observed_count:, offset:, sync_prior: nil)
+      u = usable_result.to_h
+      content_count = u[:content_alignment_count].to_i
+      return nil if content_count <= 0
+
+      observed = [observed_count.to_i, 1].max
+      content_coverage = [[content_count.to_f / observed.to_f, 0.0].max, 1.0].min
+      carrier_coverage = [[u[:usable_count].to_f / observed.to_f, 0.0].max, 1.0].min
+      content_median = [[u[:content_alignment_score_median].to_f, 0.0].max, 1.0].min
+      content_lower_quartile = [[u[:content_alignment_score_lower_quartile].to_f, 0.0].max, 1.0].min
+      reference_margin = [[u[:median_margin].to_f, 0.0].max, 1.0].min
+
+      score =
+        (content_median * V10_SHORT_ALIGNMENT_CONTENT_WEIGHT.to_f) +
+          (content_lower_quartile * V10_SHORT_ALIGNMENT_LOWER_QUARTILE_WEIGHT.to_f) +
+          (carrier_coverage * V10_SHORT_ALIGNMENT_CARRIER_COVERAGE_WEIGHT.to_f) +
+          (reference_margin * V10_SHORT_ALIGNMENT_REFERENCE_MARGIN_WEIGHT.to_f)
+
+      # Missing content observations should never be rewarded merely because the
+      # surviving subset happens to look strong.
+      score *= (0.55 + (0.45 * content_coverage))
+
+      sync_bonus = 0.0
+      if sync_prior.present? && sync_prior[:trust].to_f.positive?
+        distance = (offset.to_i - sync_prior[:best_offset].to_i).abs
+        proximity = [1.0 - (distance.to_f / 6.0), 0.0].max
+        sync_bonus = proximity * sync_prior[:trust].to_f * 0.02
+        score += sync_bonus
+      end
+
+      {
+        score: score.to_f,
+        content_count: content_count,
+        content_coverage: content_coverage.to_f,
+        carrier_coverage: carrier_coverage.to_f,
+        content_median: content_median.to_f,
+        content_lower_quartile: content_lower_quartile.to_f,
+        content_correlation_median: u[:content_alignment_correlation_median].to_f,
+        content_normalized_rmse_median: u[:content_alignment_normalized_rmse_median].to_f,
+        reference_margin: reference_margin.to_f,
+        sync_bonus: sync_bonus.to_f,
+      }
+    rescue
+      nil
+    end
+    private_class_method :v10_content_alignment_score
+
 
     def clamp_unit_interval(value)
       v = value.to_f
@@ -8109,6 +8310,11 @@ end
   ref_thr_vecs = Array(ref_thr_vectors)
   ref_delta_vecs = Array(ref_delta_vectors)
   use_vector_reference = vector_reference_layout?(layout_name) && vector_scores.present? && ref_thr_vecs.present? && ref_delta_vecs.present?
+  reference_alignment_candidate_independent = v10_candidate_independent_alignment?(
+    layout: layout_name,
+    score_count: scores.length,
+    vector_reference: use_vector_reference
+  )
 
   usable_cache = {}
 
@@ -8122,6 +8328,9 @@ end
     ratios = []
     margins = []
     comp_w = 0.0
+    content_scores = []
+    content_correlations = []
+    content_normalized_rmses = []
 
     scores.each_with_index do |s, i|
       base_seg_idx = seg_indices[i].present? ? seg_indices[i].to_i : i
@@ -8135,18 +8344,27 @@ end
           delta_vector: ref_delta_vecs[j],
           delta_median: delta_med,
           profile: reference_profile,
-          leak_scale: leak_scale[i]
+          leak_scale: leak_scale[i],
+          collect_content_alignment: reference_alignment_candidate_independent
         )
         if vote.present?
+          content_score = vote[:content_match_score].to_f
+          content_correlation = vote[:content_correlation].to_f
+          content_normalized_rmse = vote[:content_normalized_rmse].to_f
+          content_scores << content_score if content_score.finite? && content_score.positive?
+          content_correlations << content_correlation if content_correlation.finite?
+          content_normalized_rmses << content_normalized_rmse if content_normalized_rmse.finite? && content_normalized_rmse >= 0.0
+
           v = vote[:variant].to_s
           v = invert_variant(v) if polarity_flip
           w = vote[:weight].to_f
-          next if w <= 0.0 || w.nan? || w.infinite?
-          usable << [i, base_seg_idx, v, w, vote[:margin].to_f, vote[:ratio].to_f, base_seg_idx, vote[:pairs_used].to_i]
-          comp_w += w
-          ratios << vote[:ratio].to_f
-          margins << vote[:margin].to_f
-          next
+          if v.present? && w > 0.0 && !w.nan? && !w.infinite?
+            usable << [i, base_seg_idx, v, w, vote[:margin].to_f, vote[:ratio].to_f, base_seg_idx, vote[:pairs_used].to_i]
+            comp_w += w
+            ratios << vote[:ratio].to_f
+            margins << vote[:margin].to_f
+            next
+          end
         end
       end
 
@@ -8199,9 +8417,15 @@ end
       margins << margin
     end
 
-    usable_cache[cache_key] = ecc_grouped_reference_usable(usable: usable, offset: offset).merge(
+    grouped = ecc_grouped_reference_usable(usable: usable, offset: offset)
+    usable_cache[cache_key] = grouped.merge(
       raw_usable_count: usable.length,
-      raw_comp_w: comp_w.to_f
+      raw_comp_w: comp_w.to_f,
+      content_alignment_count: content_scores.length,
+      content_alignment_score_median: median(content_scores).to_f,
+      content_alignment_score_lower_quartile: quantile_value(content_scores, 0.25).to_f,
+      content_alignment_correlation_median: median(content_correlations).to_f,
+      content_alignment_normalized_rmse_median: median(content_normalized_rmses).to_f,
     )
   end
 
@@ -8219,71 +8443,142 @@ end
   best_diag = nil
   polarity_best_scores = { false => -Float::INFINITY, true => -Float::INFINITY }
   best_by_polarity = {}
+  reference_alignment_best = nil
+  reference_alignment_second = nil
+  reference_alignment_hypotheses = []
+  reference_alignment_fallback_reason = nil
 
-  [false, true].each do |polarity_flip|
+  score_population_at_offset = lambda do |offset, polarity_flip|
+    u = build_usable.call(offset, polarity_flip)
+    next nil if u[:usable].empty? || u[:comp_w] <= 0.0
+
+    top = nil
+    second = nil
+
+    fps.each do |rec|
+      mism_w = 0.0
+      u[:usable].each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count)|
+        exp = expected_variant_for_forensics(
+          fingerprint_id: rec.fingerprint_id,
+          media_item_id: media_item.id,
+          segment_index: base_seg_idx.to_i + offset.to_i,
+          layout: layout_name
+        )
+        mism_w += w if exp != ov
+      end
+
+      ratio_w = 1.0 - (mism_w / u[:comp_w])
+      entry = { ratio_w: ratio_w, rec: rec }
+
+      if top.nil? || ratio_w > top[:ratio_w]
+        second = top
+        top = entry
+      elsif second.nil? || ratio_w > second[:ratio_w]
+        second = entry
+      end
+    end
+
+    next nil unless top
+
+    second_ratio = second ? second[:ratio_w].to_f : 0.0
+    delta = top[:ratio_w].to_f - second_ratio
+    sync_anchor_bonus = 0.0
+    if sync_prior.present? && sync_prior[:trust].to_f > 0.0
+      distance = (offset.to_i - sync_prior[:best_offset].to_i).abs
+      proximity = [1.0 - (distance.to_f / 6.0), 0.0].max
+      sync_anchor_bonus = proximity * (0.035 + (sync_prior[:delta].to_f * 0.08)) * sync_prior[:trust].to_f
+    end
+
+    score =
+      delta +
+        (top[:ratio_w].to_f * 0.03) +
+        (u[:median_margin].to_f * 0.02) +
+        sync_anchor_bonus -
+        (offset.to_f * 0.0002) -
+        (polarity_flip ? 0.0025 : 0.0)
+
+    {
+      score: score,
+      offset: offset.to_i,
+      flip: polarity_flip,
+      diag: {
+        top_ratio_w: top[:ratio_w].to_f,
+        second_ratio_w: second_ratio,
+        delta: delta,
+        comp_w: u[:comp_w],
+        usable_count: u[:usable_count],
+        median_ratio: u[:median_ratio],
+        median_margin: u[:median_margin],
+        raw_usable_count: u[:raw_usable_count],
+        raw_comp_w: u[:raw_comp_w]
+      }
+    }
+  end
+
+  if reference_alignment_candidate_independent
     (0..max_off).each do |offset|
-      u = build_usable.call(offset, polarity_flip)
-      next if u[:usable].empty? || u[:comp_w] <= 0.0
+      u = build_usable.call(offset, false)
+      alignment = v10_content_alignment_score(
+        usable_result: u,
+        observed_count: scores.length,
+        offset: offset,
+        sync_prior: sync_prior
+      )
+      next if alignment.blank?
 
-      top = nil
-      second = nil
+      reference_alignment_hypotheses << alignment.merge(
+        offset: offset.to_i,
+        usable_count: u[:usable_count].to_i,
+        raw_usable_count: u[:raw_usable_count].to_i,
+      )
+    end
 
-      fps.each do |rec|
-        mism_w = 0.0
-        u[:usable].each do |(_obs_idx, base_seg_idx, ov, w, _m, _r, _seg_idx, _raw_count)|
-          exp = expected_variant_for_forensics(
-            fingerprint_id: rec.fingerprint_id,
-            media_item_id: media_item.id,
-            segment_index: base_seg_idx.to_i + offset,
-            layout: layout_name
-          )
-          mism_w += w if exp != ov
-        end
+    reference_alignment_hypotheses.sort_by! do |entry|
+      [
+        -entry[:score].to_f,
+        -entry[:content_median].to_f,
+        -entry[:content_lower_quartile].to_f,
+        -entry[:carrier_coverage].to_f,
+        entry[:content_normalized_rmse_median].to_f,
+        entry[:offset].to_i,
+      ]
+    end
 
-        ratio_w = 1.0 - (mism_w / u[:comp_w])
-        entry = { ratio_w: ratio_w, rec: rec }
-
-        if top.nil? || ratio_w > top[:ratio_w]
-          second = top
-          top = entry
-        elsif second.nil? || ratio_w > second[:ratio_w]
-          second = entry
-        end
+    reference_alignment_best = reference_alignment_hypotheses.find { |entry| entry[:usable_count].to_i.positive? }
+    reference_alignment_best ||= reference_alignment_hypotheses.first
+    if reference_alignment_best.present?
+      reference_alignment_second = reference_alignment_hypotheses.find do |entry|
+        entry[:offset].to_i != reference_alignment_best[:offset].to_i
       end
+      best_offset = reference_alignment_best[:offset].to_i
 
-      next unless top
-      second_ratio = second ? second[:ratio_w].to_f : 0.0
-      delta = top[:ratio_w].to_f - second_ratio
+      [false, true].each do |polarity_flip|
+        result = score_population_at_offset.call(best_offset, polarity_flip)
+        next if result.blank?
 
-      sync_anchor_bonus = 0.0
-      if sync_prior.present? && sync_prior[:trust].to_f > 0.0
-        dist = (offset.to_i - sync_prior[:best_offset].to_i).abs
-        local = [1.0 - (dist.to_f / 6.0), 0.0].max
-        sync_anchor_bonus = local * (0.035 + (sync_prior[:delta].to_f * 0.08)) * sync_prior[:trust].to_f
+        best_by_polarity[polarity_flip] = result
+        polarity_best_scores[polarity_flip] = result[:score].to_f
       end
+    else
+      reference_alignment_candidate_independent = false
+      reference_alignment_fallback_reason = "content_alignment_unavailable"
+    end
+  end
 
-      score = delta + (top[:ratio_w].to_f * 0.03) + (u[:median_margin].to_f * 0.02) + sync_anchor_bonus - (offset.to_f * 0.0002) - (polarity_flip ? 0.0025 : 0.0)
-      polarity_best_scores[polarity_flip] = score if score > polarity_best_scores[polarity_flip]
+  unless reference_alignment_candidate_independent
+    [false, true].each do |polarity_flip|
+      (0..max_off).each do |offset|
+        result = score_population_at_offset.call(offset, polarity_flip)
+        next if result.blank?
 
-      current_best = best_by_polarity[polarity_flip]
-      if current_best.nil? || score > current_best[:score] ||
-           (score == current_best[:score] && top[:ratio_w].to_f > current_best.dig(:diag, :top_ratio_w).to_f)
-        best_by_polarity[polarity_flip] = {
-          score: score,
-          offset: offset,
-          flip: polarity_flip,
-          diag: {
-            top_ratio_w: top[:ratio_w].to_f,
-            second_ratio_w: second_ratio,
-            delta: delta,
-            comp_w: u[:comp_w],
-            usable_count: u[:usable_count],
-            median_ratio: u[:median_ratio],
-            median_margin: u[:median_margin],
-            raw_usable_count: u[:raw_usable_count],
-            raw_comp_w: u[:raw_comp_w]
-          }
-        }
+        score = result[:score].to_f
+        polarity_best_scores[polarity_flip] = score if score > polarity_best_scores[polarity_flip]
+
+        current_best = best_by_polarity[polarity_flip]
+        if current_best.nil? || score > current_best[:score].to_f ||
+             (score == current_best[:score].to_f && result.dig(:diag, :top_ratio_w).to_f > current_best.dig(:diag, :top_ratio_w).to_f)
+          best_by_polarity[polarity_flip] = result
+        end
       end
     end
   end
@@ -8604,6 +8899,20 @@ end
     reference_samples_per_segment: reference_samples_per_segment.to_f > 0.0 ? reference_samples_per_segment.to_f.round(2) : 1.0,
     reference_median_margin: (best_diag ? best_diag[:median_margin].to_f : 0.0).round(4),
     reference_median_ratio: (best_diag ? best_diag[:median_ratio].to_f : 0.0).round(4),
+    reference_alignment_candidate_independent: reference_alignment_candidate_independent,
+    reference_alignment_method: (reference_alignment_candidate_independent ? "v10_full_frame_content_v1" : nil),
+    reference_alignment_fallback_reason: reference_alignment_fallback_reason,
+    reference_alignment_score: reference_alignment_best.to_h[:score].to_f.round(6),
+    reference_alignment_second_score: reference_alignment_second.to_h[:score].to_f.round(6),
+    reference_alignment_gap: (reference_alignment_second.present? ? (reference_alignment_best.to_h[:score].to_f - reference_alignment_second.to_h[:score].to_f).round(6) : 0.0),
+    reference_alignment_content_count: reference_alignment_best.to_h[:content_count].to_i,
+    reference_alignment_content_coverage: reference_alignment_best.to_h[:content_coverage].to_f.round(4),
+    reference_alignment_carrier_coverage: reference_alignment_best.to_h[:carrier_coverage].to_f.round(4),
+    reference_alignment_content_median: reference_alignment_best.to_h[:content_median].to_f.round(6),
+    reference_alignment_content_lower_quartile: reference_alignment_best.to_h[:content_lower_quartile].to_f.round(6),
+    reference_alignment_content_correlation_median: reference_alignment_best.to_h[:content_correlation_median].to_f.round(6),
+    reference_alignment_content_normalized_rmse_median: reference_alignment_best.to_h[:content_normalized_rmse_median].to_f.round(6),
+    reference_alignment_top_hypotheses: (reference_alignment_candidate_independent ? reference_alignment_hypotheses.first(3).map { |entry| { offset: entry[:offset].to_i, score: entry[:score].to_f.round(6), usable: entry[:usable_count].to_i } } : nil),
     effective_samples: u[:usable_count].to_f.round(2),
     offset_top_match_ratio: (best_diag ? best_diag[:top_ratio_w].to_f : top&.dig(:match_ratio_weighted).to_f).round(4),
     offset_second_match_ratio: (best_diag ? best_diag[:second_ratio_w].to_f : second&.dig(:match_ratio_weighted).to_f).round(4),
