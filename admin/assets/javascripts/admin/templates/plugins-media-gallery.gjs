@@ -392,6 +392,19 @@ export default RouteTemplate(
         </a>
         {{/if}}
 
+        {{#if @model.can.evidenceCases}}
+        <a class="mg-landing__card" href="/admin/plugins/media-gallery-evidence-cases">
+          <div class="mg-landing__card-header">
+            <div class="mg-landing__card-title">
+              <span class="mg-landing__card-badge">{{i18n "admin.media_gallery.category_forensics"}}</span>
+              <h3>Forensic evidence cases</h3>
+            </div>
+          </div>
+          <p class="mg-landing__card-description">Create reviewed English technical evidence reports and verifiable integrity or CMS evidence packages without exposing staff identities.</p>
+          <span class="mg-landing__card-action">{{i18n "admin.media_gallery.open_tool"}}</span>
+        </a>
+        {{/if}}
+
         {{#if @model.can.forensicsExports}}
         <a class="mg-landing__card" href="/admin/plugins/media-gallery-forensics-exports">
           <div class="mg-landing__card-header">

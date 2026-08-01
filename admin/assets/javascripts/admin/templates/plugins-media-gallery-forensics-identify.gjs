@@ -1248,6 +1248,16 @@ export default RouteTemplate(
           <div class="mg-fi__panel-header">
             <h2>{{i18n "admin.media_gallery.forensics_identify.result"}}</h2>
             <p class="mg-fi__muted">Review the match confidence, policy decision, and candidate evidence.</p>
+            {{#if @controller.evidenceAttested}}
+              <div class="mg-fi__actions" style="margin-top: 0.65rem;">
+                <button type="button" class="btn btn-default" disabled={{@controller.evidenceCaseBusy}} {{on "click" @controller.createEvidenceCase}}>
+                  {{if @controller.evidenceCaseBusy "Creating evidence case…" "Create forensic evidence case"}}
+                </button>
+                <span class="mg-fi__muted">Creates a server-attested immutable snapshot only; it does not finalize or accuse a user.</span>
+              </div>
+              {{#if @controller.evidenceCaseError}}<div class="mg-fi__notice is-danger" style="margin-top: 0.65rem;">{{@controller.evidenceCaseError}}</div>{{/if}}
+              {{#if @controller.evidenceCaseNotice}}<div class="mg-fi__notice is-success" style="margin-top: 0.65rem;">{{@controller.evidenceCaseNotice}}</div>{{/if}}
+            {{/if}}
           </div>
 
           <div class="mg-fi__summary-grid">

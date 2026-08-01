@@ -1570,3 +1570,97 @@ plugins:
     min: 5
     max: 500
     client: false
+
+  # Forensic evidence reporting. Disabled by default until privacy/legal policy and issuer identity are configured.
+  media_gallery_evidence_enabled:
+    default: false
+    client: false
+
+  media_gallery_staff_access_evidence_cases_enabled:
+    default: false
+    client: false
+
+  media_gallery_evidence_root_path:
+    default: "/shared/media_gallery/evidence_cases"
+    type: string
+    client: false
+
+  media_gallery_evidence_issuer_name:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_operator_identity:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_legal_notice_url:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_jurisdiction_notice:
+    default: "This report is a jurisdiction-neutral technical record. It does not state that the material is admissible or legally sufficient in any particular country or court."
+    type: string
+    client: false
+
+  # Optional secret for case-specific pseudonymous reviewer/account references. Falls back to Rails secret_key_base.
+  media_gallery_evidence_reviewer_secret:
+    default: ""
+    type: string
+    secret: true
+    client: false
+
+  media_gallery_evidence_max_upload_mb:
+    default: 1024
+    type: integer
+    min: 1
+    max: 10240
+    client: false
+
+  media_gallery_evidence_package_include_max_mb:
+    default: 20
+    type: integer
+    min: 1
+    max: 256
+    client: false
+
+  media_gallery_evidence_require_clean_quarantine_for_final:
+    default: true
+    client: false
+
+  media_gallery_evidence_draft_retention_days:
+    default: 30
+    type: integer
+    min: 1
+    max: 3650
+    client: false
+
+  media_gallery_evidence_seal_mode:
+    default: "integrity_only"
+    type: enum
+    choices:
+      - integrity_only
+      - cms_detached
+    client: false
+
+  media_gallery_evidence_seal_private_key_path:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_seal_certificate_path:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_seal_key_password_env:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_seal_key_id:
+    default: ""
+    type: string
+    client: false

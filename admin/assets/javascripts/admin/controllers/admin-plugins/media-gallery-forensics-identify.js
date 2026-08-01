@@ -252,6 +252,9 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
   @tracked preflightResult = null;
   @tracked isPreflighting = false;
   @tracked activeTaskId = null;
+  @tracked evidenceCaseBusy = false;
+  @tracked evidenceCaseError = "";
+  @tracked evidenceCaseNotice = "";
 
   _statusPollTimer = null;
   _statusPollRunId = 0;
@@ -1892,5 +1895,54 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       }
     }
   }
+  get evidenceAttested() {
+    const attestation = this.result?.meta?.evidence_attestation;
+    return !!attestation?.signature && !!attestation?.run_ref;
+  }
+
+  @action
+  async createEvidenceCase() {
+    if (!this.result || !this.publicId || !this.evidenceAttested || this.evidenceCaseBusy) {
+      return;
+    }
+
+    this.evidenceCaseBusy = true;
+    this.evidenceCaseError = "";
+    this.evidenceCaseNotice = "";
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") || "";
+    try {
+      const response = await fetch("/admin/plugins/media-gallery/evidence-cases/from-identify.json", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+          ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
+        },
+        body: JSON.stringify({
+          media_public_id: this.publicId,
+          result: this.result,
+          claimant_ref: "PENDING-CLAIMANT",
+          classification: "confidential",
+          jurisdiction_context: "international",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || data?.ok === false) {
+        throw new Error(data?.error || `Evidence case creation failed (${response.status})`);
+      }
+      const caseRef = data?.case?.case_ref;
+      this.evidenceCaseNotice = `Immutable evidence case ${caseRef} created. Complete source capture, rights statement, evidence acquisition and review before finalization.`;
+      if (caseRef) {
+        window.location.href = `/admin/plugins/media-gallery-evidence-cases?case_ref=${encodeURIComponent(caseRef)}`;
+      }
+    } catch (error) {
+      this.evidenceCaseError = error?.message || String(error);
+    } finally {
+      this.evidenceCaseBusy = false;
+    }
+  }
+
 }
 

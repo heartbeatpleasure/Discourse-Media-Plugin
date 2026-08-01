@@ -12,6 +12,7 @@ enabled_site_setting :media_gallery_enabled
 
 module ::MediaGallery
   PLUGIN_NAME = "Discourse-Media-Plugin"
+  PLUGIN_VERSION = "0.3.1"
 end
 
 after_initialize do
@@ -77,6 +78,17 @@ after_initialize do
   require_relative "lib/media_gallery/chunked_uploads"
   require_relative "lib/media_gallery/permissions"
   require_relative "lib/media_gallery/admin_access"
+  require_relative "lib/media_gallery/evidence_immutable_record"
+  require_relative "lib/media_gallery/evidence_reference"
+  require_relative "lib/media_gallery/evidence_attestation"
+  require_relative "lib/media_gallery/evidence_vault"
+  require_relative "lib/media_gallery/evidence_chain"
+  require_relative "lib/media_gallery/evidence_policy"
+  require_relative "lib/media_gallery/evidence_snapshot"
+  require_relative "lib/media_gallery/evidence_pdf"
+  require_relative "lib/media_gallery/evidence_review"
+  require_relative "lib/media_gallery/evidence_reporter"
+  require_relative "lib/media_gallery/evidence_package"
   require_relative "lib/media_gallery/private_storage"
   require_relative "lib/media_gallery/test_downloads"
   require_relative "lib/media_gallery/forensics_identify_tasks"
@@ -101,12 +113,21 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/media_overlay_session.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_forensics_export.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/media_log_event.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_case.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_object.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_identify_snapshot.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_review.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_chain_event.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_report.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_package.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_legal_hold.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_comment_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_access_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_fingerprints_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/admin_evidence_cases_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_media_items_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_reports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_health_controller.rb", __dir__)
@@ -142,6 +163,7 @@ after_initialize do
     get "/admin/plugins/media-gallery-settings-guide" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-forensics-exports" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-forensics-identify" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:forensics_identify)
+    get "/admin/plugins/media-gallery-evidence-cases" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:evidence_cases)
     get "/admin/plugins/media-gallery-test-downloads" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-migrations" => "admin/plugins#index", constraints: AdminConstraint.new
     get "/admin/plugins/media-gallery-management" => "admin/plugins#index", constraints: ::MediaGallery::AdminPageConstraint.new(:management)
@@ -166,6 +188,25 @@ after_initialize do
     delete "/admin/plugins/media-gallery/forensics-exports/:id" => "media_gallery/admin_forensics_exports#destroy", defaults: { format: :json }, constraints: { id: /\d+/ }
 
     get "/admin/plugins/media-gallery/forensics-identify/overlay-lookup" => "media_gallery/admin_forensics_identify#overlay_lookup", defaults: { format: :json }
+
+    # Privacy-aware forensic evidence case workflow. No server-side external URL fetching.
+    get "/admin/plugins/media-gallery/evidence-cases" => "media_gallery/admin_evidence_cases#index", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/evidence-cases" => "media_gallery/admin_evidence_cases#create", defaults: { format: :json }
+    post "/admin/plugins/media-gallery/evidence-cases/from-identify" => "media_gallery/admin_evidence_cases#from_identify", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/evidence-cases/:case_ref" => "media_gallery/admin_evidence_cases#show", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    put "/admin/plugins/media-gallery/evidence-cases/:case_ref" => "media_gallery/admin_evidence_cases#update", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/objects" => "media_gallery/admin_evidence_cases#upload_object", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/vault-references" => "media_gallery/admin_evidence_cases#add_vault_reference", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/objects/:object_ref/quarantine" => "media_gallery/admin_evidence_cases#quarantine", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, object_ref: /OBJ-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/identify-snapshots" => "media_gallery/admin_evidence_cases#attach_identify", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/reviews" => "media_gallery/admin_evidence_cases#review", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/claimant-confirmation" => "media_gallery/admin_evidence_cases#confirm_claimant", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/reports" => "media_gallery/admin_evidence_cases#generate_report", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/packages" => "media_gallery/admin_evidence_cases#create_package", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/legal-hold" => "media_gallery/admin_evidence_cases#legal_hold", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/packages/:package_ref/verify" => "media_gallery/admin_evidence_cases#verify_package", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, package_ref: /EP-[A-Za-z0-9-]+/ }
+    get "/admin/plugins/media-gallery/evidence-cases/:case_ref/reports/:report_ref" => "media_gallery/admin_evidence_cases#download_report", constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, report_ref: /RPT-[A-Za-z0-9-]+/ }
+    get "/admin/plugins/media-gallery/evidence-cases/:case_ref/packages/:package_ref" => "media_gallery/admin_evidence_cases#download_package", constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, package_ref: /EP-[A-Za-z0-9-]+/ }
 
     # Admin-only: upload a leaked copy to identify likely user/fingerprint.
     get "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#show"

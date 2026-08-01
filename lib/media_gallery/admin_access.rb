@@ -9,6 +9,7 @@ module ::MediaGallery
       user_diagnostics: :media_gallery_staff_access_user_diagnostics_enabled,
       logs: :media_gallery_staff_access_logs_enabled,
       forensics_identify: :media_gallery_staff_access_forensics_identify_enabled,
+      evidence_cases: :media_gallery_staff_access_evidence_cases_enabled,
     }.freeze
 
     ADMIN_ONLY_PAGE_KEY = :admin_only
@@ -43,6 +44,12 @@ module ::MediaGallery
       false
     end
 
+    def evidence_cases_enabled?
+      enabled? && SiteSetting.respond_to?(:media_gallery_evidence_enabled) && SiteSetting.media_gallery_evidence_enabled
+    rescue
+      false
+    end
+
     def user_from_guardian(guardian)
       return nil if guardian.blank?
 
@@ -58,13 +65,15 @@ module ::MediaGallery
     end
 
     def can_access?(page_key, user: nil, guardian: nil)
+      normalized_page_key = normalize_page_key(page_key)
       user ||= user_from_guardian(guardian)
       return false if user.blank?
+      return false if normalized_page_key == :evidence_cases && !evidence_cases_enabled?
       return true if user.admin?
       return false unless enabled?
       return false unless user.staff?
 
-      setting_enabled?(page_key)
+      setting_enabled?(normalized_page_key)
     end
 
     def any_staff_access_enabled?
@@ -98,6 +107,7 @@ module ::MediaGallery
         userDiagnostics: can_access?(:user_diagnostics, user: user),
         logs: can_access?(:logs, user: user),
         forensicsIdentify: can_access?(:forensics_identify, user: user),
+        evidenceCases: can_access?(:evidence_cases, user: user),
         forensicsExports: is_admin,
         testDownloads: is_admin,
         jobs: is_admin,

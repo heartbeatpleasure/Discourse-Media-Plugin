@@ -118,6 +118,18 @@ module ::MediaGallery
 
     def mark_task_complete!(task_id, result)
       payload = read_task(task_id) || {}
+      if ::MediaGallery::EvidencePolicy.enabled? && result.is_a?(Hash)
+        begin
+          ::MediaGallery::EvidenceAttestation.attach!(
+            result: result,
+            public_id: payload["public_id"],
+            media_item_id: payload["media_item_id"],
+            source_ref: "background-task:#{task_id}",
+          )
+        rescue => e
+          Rails.logger.error("[media_gallery] evidence attestation failed for identify task #{task_id}: #{e.class}: #{e.message}") rescue nil
+        end
+      end
       payload["status"] = "complete"
       payload["result"] = result
       payload["error"] = nil

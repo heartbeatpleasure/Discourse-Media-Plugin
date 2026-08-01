@@ -476,6 +476,20 @@ module ::MediaGallery
 
       ::MediaGallery::ForensicsIdentify.apply_synthetic_population_decision_guard!(result)
 
+      if ::MediaGallery::EvidencePolicy.enabled?
+        begin
+          ::MediaGallery::EvidenceAttestation.attach!(
+            result: result,
+            public_id: item.public_id,
+            media_item_id: item.id,
+            source_ref: "synchronous-identify",
+            actor_user_id: current_user&.id,
+          )
+        rescue => e
+          Rails.logger.error("[media_gallery] evidence attestation failed for synchronous identify: #{e.class}: #{e.message}") rescue nil
+        end
+      end
+
       begin
         ::MediaGallery::OperationLogger.audit(
           "forensics_identify_run",

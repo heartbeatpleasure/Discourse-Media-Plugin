@@ -1,0 +1,510 @@
+# frozen_string_literal: true
+
+module ::MediaGallery
+  class AdminEvidenceCasesController < ::Admin::AdminController
+    requires_plugin "Discourse-Media-Plugin"
+
+    MEDIA_GALLERY_ADMIN_PAGE_KEY = :evidence_cases
+    include ::MediaGallery::AdminAccess::ControllerMethods
+
+    before_action :ensure_evidence_enabled
+    before_action :no_store_headers!
+
+    def index
+      scope = ::MediaGallery::ForensicEvidenceCase.order(created_at: :desc, id: :desc)
+      scope = scope.where(status: params[:status].to_s) if ::MediaGallery::ForensicEvidenceCase::STATUSES.include?(params[:status].to_s)
+      scope = scope.where(decision: params[:decision].to_s) if ::MediaGallery::ForensicEvidenceCase::DECISIONS.include?(params[:decision].to_s)
+      query = params[:q].to_s.strip
+      if query.present?
+        escaped = ActiveRecord::Base.sanitize_sql_like(query)
+        scope = scope.where("case_ref ILIKE :q OR claimant_ref ILIKE :q OR external_platform ILIKE :q", q: "%#{escaped}%")
+      end
+      limit = [[params[:limit].to_i, 1].max, 100].min
+      limit = 50 if params[:limit].to_i <= 0
+      rows = scope.limit(limit).to_a
+
+      render_json_dump(
+        ok: true,
+        cases: rows.map { |evidence_case| case_summary(evidence_case) },
+        selected: params[:case_ref].present? ? case_payload(find_case!) : nil,
+        config: config_payload,
+      )
+    end
+
+    def show
+      render_json_dump(ok: true, case: case_payload(find_case!), config: config_payload)
+    end
+
+    def create
+      evidence_case = ::MediaGallery::EvidenceSnapshot.create_case!(
+        user: current_user,
+        public_id: params[:media_public_id],
+        claimant_ref: params[:claimant_ref],
+        research_question: params[:research_question],
+        classification: params[:classification],
+        jurisdiction_context: params[:jurisdiction_context],
+        external_url: params[:external_url],
+        external_platform: params[:external_platform],
+        external_username: params[:external_username],
+        external_observed_at: params[:external_observed_at],
+        external_displayed_at: params[:external_displayed_at],
+        rights_statement_received_at: params[:rights_statement_received_at],
+        rights_statement_ref: params[:rights_statement_ref],
+      )
+      render_json_dump(ok: true, case: case_payload(evidence_case))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def from_identify
+      public_id = identify_public_id
+      evidence_case = nil
+      snapshot = nil
+      ::MediaGallery::ForensicEvidenceCase.transaction do
+        evidence_case = ::MediaGallery::EvidenceSnapshot.create_case!(
+          user: current_user,
+          public_id: public_id,
+          claimant_ref: params[:claimant_ref].presence || "PENDING-CLAIMANT",
+          research_question: params[:research_question].presence || default_research_question(public_id),
+          classification: params[:classification],
+          jurisdiction_context: params[:jurisdiction_context],
+        )
+        snapshot = ::MediaGallery::EvidenceSnapshot.attach_identify!(
+          evidence_case: evidence_case,
+          raw_result: params[:result] || params[:raw_result],
+          user: current_user,
+          public_id: public_id,
+        )
+      end
+      render_json_dump(ok: true, case: case_payload(evidence_case), identify_snapshot: identify_payload(snapshot))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def update
+      evidence_case = find_case!
+      ::MediaGallery::EvidenceSnapshot.update_case!(evidence_case: evidence_case, user: current_user, attributes: params.permit(
+        :claimant_ref, :research_question, :classification, :jurisdiction_context, :external_url,
+        :external_platform, :external_username, :external_observed_at, :external_displayed_at,
+        :rights_statement_received_at, :rights_statement_ref,
+      ))
+      render_json_dump(ok: true, case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def upload_object
+      evidence_case = find_case!
+      raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
+      role = params[:role].to_s
+      object = nil
+      ::MediaGallery::ForensicEvidenceCase.transaction do
+        object = ::MediaGallery::EvidenceVault.store_upload!(
+          evidence_case: evidence_case,
+          upload: params[:file],
+          role: role,
+          user: current_user,
+          parent: params[:parent_object_ref].present? ? evidence_case.evidence_objects.find_by!(object_ref: params[:parent_object_ref]) : nil,
+          metadata: { "staff_description" => plain_text(params[:description], 1000), "acquisition_method" => plain_text(params[:acquisition_method], 500) }.compact,
+          include_in_package: params.key?(:include_in_package) ? ActiveModel::Type::Boolean.new.cast(params[:include_in_package]) : nil,
+        )
+        after_object_added!(evidence_case, object)
+      end
+      render_json_dump(ok: true, object: evidence_object_payload(object), case: case_payload(evidence_case.reload))
+    rescue => e
+      ::MediaGallery::EvidenceVault.discard_uncommitted_file!(object) if defined?(object) && object.present?
+      render_evidence_error(e)
+    end
+
+    def add_vault_reference
+      evidence_case = find_case!
+      raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
+      object = nil
+      ::MediaGallery::ForensicEvidenceCase.transaction do
+        object = ::MediaGallery::EvidenceVault.register_vault_reference!(
+          evidence_case: evidence_case,
+          vault_reference: params[:vault_reference],
+          sha256: params[:sha256],
+          size_bytes: params[:size_bytes],
+          role: params[:role],
+          user: current_user,
+          mime_type: params[:mime_type],
+          original_filename: params[:original_filename],
+          metadata: { "staff_description" => plain_text(params[:description], 1000) }.compact,
+        )
+        after_object_added!(evidence_case, object)
+      end
+      render_json_dump(ok: true, object: evidence_object_payload(object), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def quarantine
+      evidence_case = find_case!
+      raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
+      object = evidence_case.evidence_objects.find_by!(object_ref: params[:object_ref].to_s)
+      status = params[:quarantine_status].to_s
+      raise ArgumentError, "invalid_quarantine_status" unless ::MediaGallery::ForensicEvidenceObject::QUARANTINE_STATUSES.include?(status)
+      raise ArgumentError, "not_applicable_not_allowed" if status == "not_applicable" && %w[external_original working_copy].include?(object.role)
+      previous = object.quarantine_status
+      ::MediaGallery::ForensicEvidenceCase.transaction do
+        object.update!(quarantine_status: status)
+        ::MediaGallery::EvidenceChain.record!(
+          evidence_case: evidence_case,
+          event_type: "evidence_quarantine_reviewed",
+          user: current_user,
+          object_ref: object.object_ref,
+          reason: plain_text(params[:reason], 1000),
+          details: { previous_status: previous, quarantine_status: status },
+        )
+      end
+      render_json_dump(ok: true, object: evidence_object_payload(object.reload), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def attach_identify
+      evidence_case = find_case!
+      snapshot = ::MediaGallery::EvidenceSnapshot.attach_identify!(
+        evidence_case: evidence_case,
+        raw_result: params[:result] || params[:raw_result],
+        user: current_user,
+        public_id: params[:media_public_id],
+      )
+      render_json_dump(ok: true, identify_snapshot: identify_payload(snapshot), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def review
+      evidence_case = find_case!
+      review = ::MediaGallery::EvidenceReview.record!(
+        evidence_case: evidence_case,
+        user: current_user,
+        review_kind: params[:review_kind],
+        outcome: params[:outcome],
+        checklist: params[:checklist].respond_to?(:to_unsafe_h) ? params[:checklist].to_unsafe_h : params[:checklist],
+        reason: params[:reason],
+      )
+      render_json_dump(ok: true, review: review_payload(review), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def confirm_claimant
+      evidence_case = find_case!
+      ::MediaGallery::EvidenceSnapshot.confirm_claimant!(evidence_case: evidence_case, user: current_user, reason: params[:reason])
+      render_json_dump(ok: true, case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def generate_report
+      evidence_case = find_case!
+      report = ::MediaGallery::EvidenceReporter.generate!(
+        evidence_case: evidence_case,
+        user: current_user,
+        final: ActiveModel::Type::Boolean.new.cast(params[:final]),
+      )
+      render_json_dump(ok: true, report: report_payload(report), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def create_package
+      ensure_evidence_admin!
+      evidence_case = find_case!
+      report = if params[:report_ref].present?
+        evidence_case.reports.find_by!(report_ref: params[:report_ref].to_s)
+      else
+        evidence_case.reports.where(status: %w[final_unsealed final_sealed]).order(version: :desc).first
+      end
+      raise ArgumentError, "final_report_missing" if report.blank?
+      package = ::MediaGallery::EvidencePackage.create!(evidence_case: evidence_case, report: report, user: current_user)
+      render_json_dump(ok: true, package: package_payload(package), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def legal_hold
+      ensure_evidence_admin!
+      evidence_case = find_case!
+      hold = ::MediaGallery::EvidenceReview.set_legal_hold!(
+        evidence_case: evidence_case,
+        user: current_user,
+        active: params[:active],
+        reason: params[:reason],
+        authority_ref: params[:authority_ref],
+      )
+      render_json_dump(ok: true, legal_hold: legal_hold_payload(hold), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def verify_package
+      ensure_evidence_admin!
+      evidence_case = find_case!
+      package = evidence_case.packages.find_by!(package_ref: params[:package_ref].to_s)
+      render_json_dump(ok: true, verification: ::MediaGallery::EvidencePackage.verify(package), package: package_payload(package))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def download_report
+      evidence_case = find_case!
+      report = evidence_case.reports.find_by!(report_ref: params[:report_ref].to_s)
+      ensure_evidence_admin! unless report.status == "draft"
+      path = ::MediaGallery::EvidenceReporter.absolute_path(report)
+      no_store_headers!
+      send_file path, filename: "#{report.report_ref}.pdf", type: "application/pdf", disposition: "attachment"
+    end
+
+    def download_package
+      ensure_evidence_admin!
+      evidence_case = find_case!
+      package = evidence_case.packages.find_by!(package_ref: params[:package_ref].to_s)
+      path = ::MediaGallery::EvidencePackage.absolute_path(package)
+      no_store_headers!
+      send_file path, filename: "#{package.package_ref}.tar.gz", type: "application/gzip", disposition: "attachment"
+    end
+
+    private
+
+    def ensure_evidence_enabled
+      raise Discourse::InvalidAccess.new unless ::MediaGallery::EvidencePolicy.enabled?
+    end
+
+    def ensure_evidence_admin!
+      raise Discourse::InvalidAccess.new unless current_user&.admin?
+    end
+
+    def find_case!
+      ref = params[:case_ref].to_s.sub(/\.(json|html)\z/i, "").strip
+      ::MediaGallery::ForensicEvidenceCase.find_by!(case_ref: ref)
+    end
+
+    def after_object_added!(evidence_case, object)
+      event_type = object.role.start_with?("source_") ? "source_capture_added" : "evidence_object_acquired"
+      next_status = object.role.start_with?("source_") ? "source_captured" : (evidence_case.identify_snapshots.exists? ? evidence_case.status : "evidence_acquired")
+      evidence_case.update!(status: next_status, updated_by: current_user) if evidence_case.mutable?
+      ::MediaGallery::EvidenceChain.record!(
+        evidence_case: evidence_case,
+        event_type: event_type,
+        user: current_user,
+        object_ref: object.object_ref,
+        details: {
+          role: object.role,
+          storage_kind: object.storage_kind,
+          sha256: object.sha256,
+          size_bytes: object.size_bytes,
+          quarantine_status: object.quarantine_status,
+        },
+      )
+    end
+
+    def case_summary(evidence_case)
+      {
+        case_ref: evidence_case.case_ref,
+        status: evidence_case.status,
+        classification: evidence_case.classification,
+        decision: evidence_case.decision,
+        claimant_ref: evidence_case.claimant_ref,
+        media_public_id: evidence_case.media_snapshot&.dig("public_id"),
+        media_title: evidence_case.media_snapshot&.dig("title"),
+        external_platform: evidence_case.external_platform,
+        legal_hold: evidence_case.legal_hold?,
+        mutable: evidence_case.mutable?,
+        created_at_utc: evidence_case.created_at&.utc&.iso8601(6),
+        updated_at_utc: evidence_case.updated_at&.utc&.iso8601(6),
+      }
+    end
+
+    def case_payload(evidence_case)
+      policy = ::MediaGallery::EvidencePolicy.finalization_blockers(evidence_case)
+      case_summary(evidence_case).merge(
+        research_question: evidence_case.research_question,
+        jurisdiction_context: evidence_case.jurisdiction_context,
+        report_language: evidence_case.report_language,
+        external_url: evidence_case.external_url,
+        external_url_sha256: evidence_case.external_url_sha256,
+        external_username: evidence_case.external_username,
+        external_observed_at_utc: evidence_case.external_observed_at&.utc&.iso8601(6),
+        external_displayed_at: evidence_case.external_displayed_at,
+        rights_statement_received_at_utc: evidence_case.rights_statement_received_at&.utc&.iso8601(6),
+        rights_statement_ref: evidence_case.rights_statement_ref,
+        claimant_confirmed: evidence_case.claimant_confirmed?,
+        claimant_confirmed_at_utc: evidence_case.claimant_confirmed_at&.utc&.iso8601(6),
+        retention_due_at_utc: evidence_case.retention_due_at&.utc&.iso8601(6),
+        media_snapshot: evidence_case.media_snapshot,
+        identify_snapshots: evidence_case.identify_snapshots.order(created_at: :desc).map { |snapshot| identify_payload(snapshot) },
+        evidence_objects: evidence_case.evidence_objects.order(:created_at, :id).map { |object| evidence_object_payload(object) },
+        reviews: evidence_case.reviews.order(:reviewed_at, :id).map { |review| review_payload(review) },
+        reports: visible_reports(evidence_case).map { |report| report_payload(report) },
+        packages: visible_packages(evidence_case).map { |package| package_payload(package) },
+        legal_holds: current_user.admin? ? evidence_case.legal_holds.order(:occurred_at, :id).map { |hold| legal_hold_payload(hold) } : [],
+        chain: {
+          verification: policy[:chain],
+          events: evidence_case.chain_events.order(:occurred_at, :id).map { |event| ::MediaGallery::EvidenceChain.external_hash(event) },
+        },
+        finalization: { ready: policy[:ready], blockers: policy[:blockers], warnings: policy[:warnings] },
+      )
+    end
+
+    def visible_reports(evidence_case)
+      scope = evidence_case.reports.order(version: :desc)
+      current_user.admin? ? scope.to_a : scope.where(status: "draft").to_a
+    end
+
+    def visible_packages(evidence_case)
+      current_user.admin? ? evidence_case.packages.order(version: :desc).to_a : []
+    end
+
+    def evidence_object_payload(object)
+      {
+        object_ref: object.object_ref,
+        parent_ref: object.parent&.object_ref,
+        role: object.role,
+        storage_kind: object.storage_kind,
+        vault_reference: current_user.admin? && object.storage_kind == "vault_reference" ? object.vault_reference : nil,
+        original_filename: object.original_filename,
+        mime_type: object.mime_type,
+        size_bytes: object.size_bytes,
+        sha256: object.sha256,
+        quarantine_status: object.quarantine_status,
+        include_in_package: object.include_in_package?,
+        immutable_at_utc: object.immutable_at&.utc&.iso8601(6),
+        metadata: object.metadata,
+      }.compact
+    end
+
+    def identify_payload(snapshot)
+      {
+        run_ref: snapshot.run_ref,
+        run_kind: snapshot.run_kind,
+        decision: snapshot.decision,
+        conclusive: snapshot.conclusive?,
+        synthetic_population: snapshot.synthetic_population?,
+        candidate_population_count: snapshot.candidate_population_count,
+        attributed_username: snapshot.attributed_username,
+        attributed_account_ref: snapshot.attributed_account_ref,
+        fingerprint_id: snapshot.fingerprint_id,
+        fingerprint_assigned_at_utc: snapshot.fingerprint_assigned_at&.utc&.iso8601(6),
+        layout: snapshot.layout,
+        raw_result_sha256: snapshot.raw_result_sha256,
+        summary: snapshot.summary,
+        software_snapshot: snapshot.software_snapshot,
+        analysis_settings: snapshot.analysis_settings,
+        sanity_checks: snapshot.sanity_checks,
+        immutable_at_utc: snapshot.immutable_at&.utc&.iso8601(6),
+      }.compact
+    end
+
+    def review_payload(review)
+      {
+        review_ref: review.review_ref,
+        review_kind: review.review_kind,
+        reviewer_role: review.reviewer_role,
+        reviewer_ref: review.reviewer_ref,
+        outcome: review.outcome,
+        reason: review.reason,
+        checklist: review.checklist,
+        reviewed_at_utc: review.reviewed_at&.utc&.iso8601(6),
+      }.compact
+    end
+
+    def report_payload(report)
+      {
+        report_ref: report.report_ref,
+        version: report.version,
+        status: report.status,
+        pdf_sha256: report.pdf_sha256,
+        report_data_sha256: report.report_data_sha256,
+        size_bytes: report.size_bytes,
+        immutable_at_utc: report.immutable_at&.utc&.iso8601(6),
+        download_url: "/admin/plugins/media-gallery/evidence-cases/#{report.evidence_case.case_ref}/reports/#{report.report_ref}",
+      }
+    end
+
+    def package_payload(package)
+      {
+        package_ref: package.package_ref,
+        version: package.version,
+        status: package.status,
+        package_sha256: package.package_sha256,
+        manifest_sha256: package.manifest_sha256,
+        size_bytes: package.size_bytes,
+        seal_method: package.seal_method,
+        seal_key_id: package.seal_key_id,
+        signature_verified: package.signature_verified?,
+        cms_signature_integrity_verified: package.signature_verified?,
+        certificate_trust_verified: false,
+        timestamp_status: package.timestamp_status,
+        immutable_at_utc: package.immutable_at&.utc&.iso8601(6),
+        download_url: "/admin/plugins/media-gallery/evidence-cases/#{package.evidence_case.case_ref}/packages/#{package.package_ref}",
+      }.compact
+    end
+
+    def legal_hold_payload(hold)
+      {
+        hold_ref: hold.hold_ref,
+        action: hold.action,
+        reason: hold.reason,
+        authority_ref: hold.authority_ref,
+        actor_ref: hold.actor_ref,
+        occurred_at_utc: hold.occurred_at&.utc&.iso8601(6),
+      }.compact
+    end
+
+    def config_payload
+      {
+        enabled: ::MediaGallery::EvidencePolicy.enabled?,
+        can_finalize: current_user.admin?,
+        issuer_name: ::MediaGallery::EvidencePolicy.issuer_name,
+        operator_identity: ::MediaGallery::EvidencePolicy.operator_identity,
+        legal_notice_url: ::MediaGallery::EvidencePolicy.legal_notice_url,
+        jurisdiction_notice: ::MediaGallery::EvidencePolicy.jurisdiction_notice,
+        seal_mode: ::MediaGallery::EvidencePolicy.seal_mode,
+        cms_seal_configured: ::MediaGallery::EvidencePolicy.cms_seal_configured?,
+        timestamp_status: "not_configured",
+        report_language: "en",
+        automatic_source_fetch: false,
+        restricted_identity_annex: false,
+        required_review_checks: ::MediaGallery::EvidencePolicy::REQUIRED_REVIEW_CHECKS,
+        roles: ::MediaGallery::ForensicEvidenceObject::ROLES,
+        classifications: ::MediaGallery::ForensicEvidenceCase::CLASSIFICATIONS,
+        decisions: ::MediaGallery::ForensicEvidenceCase::DECISIONS,
+      }
+    end
+
+    def identify_public_id
+      raw = params[:result] || params[:raw_result]
+      raw = raw.to_unsafe_h if raw.respond_to?(:to_unsafe_h)
+      raw = JSON.parse(raw) if raw.is_a?(String)
+      params[:media_public_id].to_s.strip.presence || raw&.dig("meta", "public_id").to_s.strip.presence || raw&.dig(:meta, :public_id).to_s.strip.presence
+    rescue JSON::ParserError
+      params[:media_public_id].to_s.strip.presence
+    end
+
+    def default_research_question(public_id)
+      id = plain_text(public_id, 200).presence || "the selected media item"
+      "Does the acquired external file correspond to media item #{id}, and does its forensic pattern meet the recorded criteria for attribution within the investigated candidate population?"
+    end
+
+    def plain_text(value, max_length)
+      ::MediaGallery::TextSanitizer.plain_text(value, max_length: max_length, allow_newlines: true).to_s.strip.presence
+    end
+
+    def render_evidence_error(error)
+      status = error.is_a?(Discourse::InvalidAccess) ? 403 : (error.is_a?(ActiveRecord::RecordNotFound) || error.is_a?(Discourse::NotFound) ? 404 : 422)
+      Rails.logger.warn("[media_gallery] evidence reporting request failed user_id=#{current_user&.id} action=#{action_name} #{error.class}: #{error.message}")
+      render json: { ok: false, error: error.message.to_s.truncate(1000), error_class: error.class.name }, status: status
+    end
+
+    def no_store_headers!
+      response.headers["Cache-Control"] = "no-store, private"
+      response.headers["Pragma"] = "no-cache"
+      response.headers["X-Content-Type-Options"] = "nosniff"
+      response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    end
+  end
+end
