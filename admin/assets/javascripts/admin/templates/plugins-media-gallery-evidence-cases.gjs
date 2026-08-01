@@ -10,11 +10,16 @@ export default RouteTemplate(
       .mg-evidence h1, .mg-evidence h2, .mg-evidence h3, .mg-evidence p { margin: 0; }
       .mg-ev-panel { border: 1px solid var(--mg-border); border-radius: 16px; background: var(--secondary); padding: 1rem; display: grid; gap: .85rem; min-width: 0; }
       .mg-ev-hero, .mg-ev-head, .mg-ev-actions { display: flex; gap: .75rem; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+      .mg-ev-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: end; }
+      .mg-ev-search input { width: 100%; min-width: 0; height: 40px; box-sizing: border-box; }
+      .mg-ev-search .btn { align-self: end; height: 40px; margin: 0; white-space: nowrap; }
       .mg-ev-grid { display: grid; grid-template-columns: minmax(250px,.7fr) minmax(0,1.3fr); gap: 1rem; align-items: start; }
       .mg-ev-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .75rem; }
       .mg-ev-field { display: grid; gap: .3rem; min-width: 0; }
       .mg-ev-field.is-full { grid-column: 1/-1; }
-      .mg-ev-field input, .mg-ev-field textarea, .mg-ev-field select { width: 100%; box-sizing: border-box; min-height: 40px; }
+      .mg-ev-field input, .mg-ev-field textarea, .mg-ev-field select { width: 100%; box-sizing: border-box; }
+      .mg-ev-field input, .mg-ev-field select { height: 40px; min-height: 40px; }
+      .mg-ev-field input[type="datetime-local"] { height: 40px; min-height: 40px; margin: 0; }
       .mg-ev-field textarea { min-height: 90px; }
       .mg-ev-list { display: grid; gap: .65rem; }
       .mg-ev-row { border: 1px solid var(--mg-border); border-radius: 12px; padding: .75rem; background: var(--primary-very-low); display: grid; gap: .4rem; }
@@ -34,6 +39,7 @@ export default RouteTemplate(
       .mg-ev-check { display:flex; gap:.55rem; align-items:flex-start; }
       .mg-ev-check input { margin-top:.2rem; }
       @media (max-width: 900px) { .mg-ev-grid, .mg-ev-form { grid-template-columns:1fr; } .mg-ev-field.is-full { grid-column:auto; } }
+      @media (max-width: 520px) { .mg-ev-search { grid-template-columns: 1fr; } .mg-ev-search .btn { width: 100%; } }
     </style>
 
     <div class="mg-evidence">
@@ -51,22 +57,39 @@ export default RouteTemplate(
       <section class="mg-ev-panel">
         <div class="mg-ev-head">
           <div><h2>Safety profile</h2><p class="mg-ev-meta">Sensitive identity annex and automatic external URL fetching are intentionally disabled.</p></div>
-          <div class="mg-ev-badges">
-            <span class="mg-ev-badge">Language: EN</span>
-            <span class="mg-ev-badge">Seal: {{this.config.seal_mode}}</span>
-            <span class="mg-ev-badge">Timestamp: not configured</span>
-          </div>
+          {{#if this.configLoaded}}
+            <div class="mg-ev-badges">
+              <span class="mg-ev-badge">Report language: {{this.reportLanguageLabel}}</span>
+              <span class="mg-ev-badge">Package protection: {{this.sealModeLabel}}</span>
+              <span class="mg-ev-badge">Trusted timestamp: {{this.timestampLabel}}</span>
+            </div>
+          {{else}}
+            <span class="mg-ev-badge is-danger">Configuration unavailable</span>
+          {{/if}}
         </div>
-        <div class="mg-ev-meta">Issuer: {{this.config.issuer_name}} | Operator: {{this.config.operator_identity}}</div>
-        <div class="mg-ev-meta">{{this.config.jurisdiction_notice}}</div>
+        {{#if this.configLoaded}}
+          {{#if this.identitySettingsComplete}}
+            <div class="mg-ev-meta"><strong>Issuer:</strong> {{this.issuerName}} &nbsp;|&nbsp; <strong>Operator:</strong> {{this.operatorIdentity}}</div>
+          {{else}}
+            <div class="mg-ev-flash is-error">
+              Evidence identity settings are incomplete. Configure both the non-personal issuer name and operator identity before finalization.
+              {{#if this.hasIssuerIdentity}}<span> Issuer: {{this.issuerName}}.</span>{{/if}}
+              {{#if this.hasOperatorIdentity}}<span> Operator: {{this.operatorIdentity}}.</span>{{/if}}
+            </div>
+          {{/if}}
+          {{#if this.config.legal_notice_url}}<div class="mg-ev-meta"><strong>Legal notice:</strong> {{this.config.legal_notice_url}}</div>{{/if}}
+          {{#if this.config.jurisdiction_notice}}<div class="mg-ev-meta">{{this.config.jurisdiction_notice}}</div>{{/if}}
+        {{else}}
+          <div class="mg-ev-meta">The evidence configuration could not be loaded. Reload the page and check the evidence API response before creating or finalizing a case.</div>
+        {{/if}}
       </section>
 
       {{#unless this.hasSelected}}
         <div class="mg-ev-grid">
           <section class="mg-ev-panel">
             <div class="mg-ev-head"><h2>Cases</h2><span class="mg-ev-meta">{{this.cases.length}} shown</span></div>
-            <form class="mg-ev-actions" {{on "submit" this.search}}>
-              <input type="search" placeholder="Case, claimant or platform" value={{this.query}} {{on "input" (fn this.setField "query")}} />
+            <form class="mg-ev-search" {{on "submit" this.search}}>
+              <input type="search" aria-label="Search evidence cases" placeholder="Case, claimant, platform" value={{this.query}} {{on "input" (fn this.setField "query")}} />
               <button class="btn btn-default" type="submit" disabled={{this.busy}}>Search</button>
             </form>
             <div class="mg-ev-list">

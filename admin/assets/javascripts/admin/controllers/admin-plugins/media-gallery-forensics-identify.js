@@ -97,6 +97,21 @@ function formatProbability(value) {
   return num.toExponential(2);
 }
 
+function evidenceCaseErrorMessage(code, fallback) {
+  switch (String(code || "")) {
+    case "identify_attestation_legacy_result_requires_rerun":
+      return "This result uses the earlier attestation format. Run Identify again after installing the updated evidence patch, then create the case from the new result.";
+    case "identify_attestation_result_hash_mismatch":
+      return "The server-attested identify result changed during transport and cannot be imported safely. Run Identify again; check the server logs if the new result also fails.";
+    case "identify_result_not_server_attested":
+      return "This identify result is not server-attested. Run Identify again after evidence reporting is enabled.";
+    case "identify_attestation_signature_invalid":
+      return "The server attestation signature is invalid. Do not create an evidence case from this result; run Identify again and check the server logs if it repeats.";
+    default:
+      return fallback || code || "Evidence case creation failed.";
+  }
+}
+
 function candidateUserLabel(candidate) {
   if (!candidate) {
     return "—";
@@ -1930,7 +1945,8 @@ export default class AdminPluginsMediaGalleryForensicsIdentifyController extends
       });
       const data = await response.json();
       if (!response.ok || data?.ok === false) {
-        throw new Error(data?.error || `Evidence case creation failed (${response.status})`);
+        const fallback = data?.error || `Evidence case creation failed (${response.status})`;
+        throw new Error(evidenceCaseErrorMessage(data?.error, fallback));
       }
       const caseRef = data?.case?.case_ref;
       this.evidenceCaseNotice = `Immutable evidence case ${caseRef} created. Complete source capture, rights statement, evidence acquisition and review before finalization.`;

@@ -40,10 +40,34 @@ function utcDatetimeInput(value) {
   return Number.isNaN(date.getTime()) ? "" : date.toISOString();
 }
 
+function normalizeConfig(config) {
+  const source = config || {};
+  return {
+    ...source,
+    enabled: source.enabled ?? false,
+    can_finalize: source.can_finalize ?? source.canFinalize ?? false,
+    issuer_name: source.issuer_name ?? source.issuerName ?? "",
+    operator_identity: source.operator_identity ?? source.operatorIdentity ?? "",
+    legal_notice_url: source.legal_notice_url ?? source.legalNoticeUrl ?? "",
+    jurisdiction_notice: source.jurisdiction_notice ?? source.jurisdictionNotice ?? "",
+    seal_mode: source.seal_mode ?? source.sealMode ?? "",
+    cms_seal_configured: source.cms_seal_configured ?? source.cmsSealConfigured ?? false,
+    timestamp_status: source.timestamp_status ?? source.timestampStatus ?? "",
+    report_language: source.report_language ?? source.reportLanguage ?? "en",
+    automatic_source_fetch: source.automatic_source_fetch ?? source.automaticSourceFetch ?? false,
+    restricted_identity_annex: source.restricted_identity_annex ?? source.restrictedIdentityAnnex ?? false,
+    required_review_checks: source.required_review_checks ?? source.requiredReviewChecks ?? [],
+    roles: source.roles ?? [],
+    classifications: source.classifications ?? [],
+    decisions: source.decisions ?? [],
+  };
+}
+
 export default class AdminPluginsMediaGalleryEvidenceCasesController extends Controller {
   @tracked cases = [];
   @tracked selected = null;
-  @tracked config = {};
+  @tracked config = normalizeConfig({});
+  @tracked configLoaded = false;
   @tracked busy = false;
   @tracked error = "";
   @tracked notice = "";
@@ -77,7 +101,8 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   initializeFromModel(model) {
     this.cases = model?.cases || [];
     this.selected = model?.selected || null;
-    this.config = model?.config || {};
+    this.configLoaded = !!model?.config;
+    this.config = normalizeConfig(model?.config);
     this.error = model?.error || "";
     this.notice = "";
     this.reviewChecklist = {};
@@ -151,6 +176,44 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     return this.selected?.chain?.verification?.ok === true;
   }
 
+  get reportLanguageLabel() {
+    return String(this.config?.report_language || "en").toLowerCase() === "en" ? "English" : String(this.config?.report_language || "").toUpperCase();
+  }
+
+  get sealModeLabel() {
+    if (this.config?.seal_mode === "cms_detached") {
+      return this.config?.cms_seal_configured ? "CMS detached signature" : "CMS selected, not configured";
+    }
+    if (this.config?.seal_mode === "integrity_only") {
+      return "SHA-256 integrity manifest";
+    }
+    return "configuration unavailable";
+  }
+
+  get timestampLabel() {
+    return this.config?.timestamp_status === "configured" ? "configured" : "not configured";
+  }
+
+  get issuerName() {
+    return String(this.config?.issuer_name || "").trim();
+  }
+
+  get operatorIdentity() {
+    return String(this.config?.operator_identity || "").trim();
+  }
+
+  get hasIssuerIdentity() {
+    return this.issuerName.length > 0;
+  }
+
+  get hasOperatorIdentity() {
+    return this.operatorIdentity.length > 0;
+  }
+
+  get identitySettingsComplete() {
+    return this.hasIssuerIdentity && this.hasOperatorIdentity;
+  }
+
   formatUtc(value) {
     return utc(value);
   }
@@ -177,7 +240,10 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     const q = encodeURIComponent(this.query.trim());
     const data = await this.request(`/admin/plugins/media-gallery/evidence-cases.json?limit=50&q=${q}`);
     this.cases = data?.cases || [];
-    this.config = data?.config || this.config;
+    if (data?.config) {
+      this.config = normalizeConfig(data.config);
+      this.configLoaded = true;
+    }
   }
 
   async reloadSelected() {
@@ -186,6 +252,10 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     }
     const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}.json`);
     this.selected = data?.case || null;
+    if (data?.config) {
+      this.config = normalizeConfig(data.config);
+      this.configLoaded = true;
+    }
     this.loadSelectedFields();
     const index = this.cases.findIndex((row) => row.case_ref === this.selected?.case_ref);
     if (index >= 0) {
@@ -218,6 +288,10 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   async openCase(caseRef) {
     const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${caseRef}.json`);
     this.selected = data?.case || null;
+    if (data?.config) {
+      this.config = normalizeConfig(data.config);
+      this.configLoaded = true;
+    }
     this.loadSelectedFields();
   }
 
