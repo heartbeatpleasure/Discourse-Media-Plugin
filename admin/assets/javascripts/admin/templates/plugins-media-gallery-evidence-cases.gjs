@@ -80,9 +80,20 @@ export default RouteTemplate(
           {{#if this.config.legal_notice_url}}<div class="mg-ev-meta"><strong>Legal notice:</strong> {{this.config.legal_notice_url}}</div>{{/if}}
           {{#if this.config.jurisdiction_notice}}<div class="mg-ev-meta">{{this.config.jurisdiction_notice}}</div>{{/if}}
         {{else}}
-          <div class="mg-ev-meta">The evidence configuration could not be loaded. Reload the page and check the evidence API response before creating or finalizing a case.</div>
+          <div class="mg-ev-meta">The evidence configuration could not be loaded. This is a loading or server-side error, not a field you still need to complete.</div>
+          <div class="mg-ev-actions"><button class="btn btn-default" type="button" disabled={{this.busy}} {{on "click" this.retrySelectedCase}}>Retry loading</button></div>
         {{/if}}
       </section>
+
+      {{#if this.pendingCaseLoad}}
+        <section class="mg-ev-panel">
+          <div>
+            <h2>Evidence case details could not be loaded</h2>
+            <p class="mg-ev-meta">The case was created as {{this.requestedCaseRef}}, but this page could not retrieve its details. The case has not been lost. Retry the request; if it still fails, the readable error above corresponds to a detailed entry in the Discourse server logs.</p>
+          </div>
+          <div class="mg-ev-actions"><button class="btn btn-primary" type="button" disabled={{this.busy}} {{on "click" this.retrySelectedCase}}>Retry case loading</button><button class="btn btn-default" type="button" {{on "click" this.closeCase}}>Back to case list</button></div>
+        </section>
+      {{/if}}
 
       {{#unless this.hasSelected}}
         <div class="mg-ev-grid">
@@ -93,10 +104,10 @@ export default RouteTemplate(
               <button class="btn btn-default" type="submit" disabled={{this.busy}}>Search</button>
             </form>
             <div class="mg-ev-list">
-              {{#each this.cases as |row|}}
+              {{#each this.caseRows as |row|}}
                 <button class="mg-ev-row is-clickable" type="button" {{on "click" (fn this.openCase row.case_ref)}}>
                   <strong>{{row.case_ref}}</strong>
-                  <div class="mg-ev-badges"><span class="mg-ev-badge">{{row.status}}</span><span class="mg-ev-badge">{{row.decision}}</span>{{#if row.legal_hold}}<span class="mg-ev-badge is-danger">legal hold</span>{{/if}}</div>
+                  <div class="mg-ev-badges"><span class="mg-ev-badge">{{row.status_label}}</span><span class="mg-ev-badge">{{row.decision_label}}</span>{{#if row.legal_hold}}<span class="mg-ev-badge is-danger">Legal hold</span>{{/if}}</div>
                   <span class="mg-ev-meta">{{row.media_title}} | {{row.claimant_ref}} | {{row.external_platform}}</span>
                 </button>
               {{else}}
@@ -126,7 +137,7 @@ export default RouteTemplate(
             <div><h2>{{this.selected.case_ref}}</h2><p class="mg-ev-meta">{{this.selected.research_question}}</p></div>
             <div class="mg-ev-actions"><button class="btn btn-default" type="button" {{on "click" this.reloadSelected}}>Refresh</button><button class="btn btn-default" type="button" {{on "click" this.closeCase}}>Back to cases</button></div>
           </div>
-          <div class="mg-ev-badges"><span class="mg-ev-badge">{{this.selected.status}}</span><span class="mg-ev-badge">{{this.selected.decision}}</span><span class="mg-ev-badge">{{this.selected.classification}}</span>{{#if this.selected.claimant_confirmed}}<span class="mg-ev-badge is-ok">claimant confirmed</span>{{/if}}{{#if this.selected.legal_hold}}<span class="mg-ev-badge is-danger">legal hold</span>{{/if}}</div>
+          <div class="mg-ev-badges"><span class="mg-ev-badge">{{this.selectedHeader.status_label}}</span><span class="mg-ev-badge">{{this.selectedHeader.decision_label}}</span><span class="mg-ev-badge">{{this.selectedHeader.classification_label}}</span>{{#if this.selected.claimant_confirmed}}<span class="mg-ev-badge is-ok">Claimant confirmed</span>{{/if}}{{#if this.selected.legal_hold}}<span class="mg-ev-badge is-danger">Legal hold</span>{{/if}}</div>
           <div class="mg-ev-meta">Media: {{this.selected.media_title}} ({{this.selected.media_public_id}}) | Claimant: {{this.selected.claimant_ref}} | External: {{this.selected.external_platform}} / {{this.selected.external_username}}</div>
           <div class="mg-ev-meta">Retention review due: {{this.selected.retention_due_at_utc}} (advisory only; no automatic deletion in this release)</div>
           {{#unless this.selectedMutable}}<div class="mg-ev-flash is-success">This case is immutable after package creation. Existing report and package bytes remain downloadable and verifiable.</div>{{/unless}}
@@ -165,7 +176,7 @@ export default RouteTemplate(
               </form>
               <div class="mg-ev-list">
                 {{#each this.selectedObjects as |object|}}
-                  <div class="mg-ev-row"><strong>{{object.object_ref}} · {{object.role}}</strong><span class="mg-ev-code">SHA-256 {{object.sha256}}</span><span class="mg-ev-meta">{{object.original_filename}} · {{object.size_bytes}} bytes · quarantine {{object.quarantine_status}}</span>{{#if (or (eq object.role "external_original") (eq object.role "working_copy"))}}<div class="mg-ev-actions"><button class="btn btn-default" type="button" disabled={{not this.selectedMutable}} {{on "click" (fn this.setQuarantine object.object_ref "clean")}}>Mark clean</button><button class="btn btn-danger" type="button" disabled={{not this.selectedMutable}} {{on "click" (fn this.setQuarantine object.object_ref "rejected")}}>Reject</button></div>{{/if}}</div>
+                  <div class="mg-ev-row"><strong>{{object.object_ref}} · {{object.role_label}}</strong><span class="mg-ev-code">SHA-256 {{object.sha256}}</span><span class="mg-ev-meta">{{object.original_filename}} · {{object.size_bytes}} bytes · Quarantine: {{object.quarantine_status_label}}</span>{{#if (or (eq object.role "external_original") (eq object.role "working_copy"))}}<div class="mg-ev-actions"><button class="btn btn-default" type="button" disabled={{not this.selectedMutable}} {{on "click" (fn this.setQuarantine object.object_ref "clean")}}>Mark clean</button><button class="btn btn-danger" type="button" disabled={{not this.selectedMutable}} {{on "click" (fn this.setQuarantine object.object_ref "rejected")}}>Reject</button></div>{{/if}}</div>
                 {{else}}<p class="mg-ev-meta">No evidence objects stored yet.</p>{{/each}}
               </div>
             </section>
@@ -173,7 +184,7 @@ export default RouteTemplate(
             <section class="mg-ev-panel">
               <h3>Identify snapshot</h3>
               {{#if this.selectedIdentify}}
-                <div class="mg-ev-row"><strong>{{this.selectedIdentify.run_ref}} · {{this.selectedIdentify.decision}}</strong><span class="mg-ev-meta">{{this.selectedIdentify.run_kind}} · candidates {{this.selectedIdentify.candidate_population_count}} · layout {{this.selectedIdentify.layout}}</span><span class="mg-ev-code">Raw result SHA-256 {{this.selectedIdentify.raw_result_sha256}}</span><span>Attributed distribution account: {{this.selectedIdentify.attributed_username}} / {{this.selectedIdentify.attributed_account_ref}}</span></div>
+                <div class="mg-ev-row"><strong>{{this.selectedIdentify.run_ref}} · {{this.selectedIdentify.decision_label}}</strong><span class="mg-ev-meta">{{this.selectedIdentify.run_kind_label}} · Candidates: {{this.selectedIdentify.candidate_population_count}} · Layout: {{this.selectedIdentify.layout}}</span><span class="mg-ev-code">Raw result SHA-256 {{this.selectedIdentify.raw_result_sha256}}</span><span>Attributed distribution account: {{this.selectedIdentify.attributed_username}} / {{this.selectedIdentify.attributed_account_ref}}</span></div>
               {{else}}<p class="mg-ev-meta">No immutable identify result attached. Create a case directly from a completed Forensics Identify result.</p>{{/if}}
             </section>
 
@@ -187,7 +198,7 @@ export default RouteTemplate(
               </div>
               <label class="mg-ev-field"><span>Internal review reason / notes</span><textarea value={{this.reviewReason}} {{on "input" (fn this.setField "reviewReason")}}></textarea><small class="mg-ev-meta">Free text remains internal. External reports and packages contain only a SHA-256 digest indicating that notes existed.</small></label>
               <div class="mg-ev-actions"><button class="btn btn-default" type="button" disabled={{or (not this.reviewChecklistComplete) (not this.selectedMutable)}} {{on "click" (fn this.addReview "technical" "approved")}}>Approve technical review</button>{{#if this.config.can_finalize}}<button class="btn btn-default" type="button" disabled={{or (not this.reviewChecklistComplete) (not this.selectedMutable)}} {{on "click" (fn this.addReview "senior" "approved")}}>Approve senior review</button><button class="btn btn-default" type="button" disabled={{or (not this.reviewChecklistComplete) (not this.selectedMutable)}} {{on "click" (fn this.addReview "privacy" "approved")}}>Approve privacy review</button>{{/if}}<button class="btn btn-danger" type="button" disabled={{not this.selectedMutable}} {{on "click" (fn this.addReview "technical" "rejected")}}>Reject review</button></div>
-              <div class="mg-ev-list">{{#each this.selectedReviews as |review|}}<div class="mg-ev-row"><strong>{{review.review_kind}} · {{review.outcome}}</strong><span>{{review.reviewer_role}} ({{review.reviewer_ref}})</span><span class="mg-ev-meta">{{review.reviewed_at_utc}} · {{review.reason}}</span></div>{{else}}<p class="mg-ev-meta">No reviews recorded.</p>{{/each}}</div>
+              <div class="mg-ev-list">{{#each this.selectedReviews as |review|}}<div class="mg-ev-row"><strong>{{review.review_kind_label}} · {{review.outcome_label}}</strong><span>{{review.reviewer_role_label}} ({{review.reviewer_ref}})</span><span class="mg-ev-meta">{{review.reviewed_at_utc}} · {{review.reason}}</span></div>{{else}}<p class="mg-ev-meta">No reviews recorded.</p>{{/each}}</div>
             </section>
           </div>
 
@@ -195,20 +206,20 @@ export default RouteTemplate(
             <section class="mg-ev-panel">
               <div class="mg-ev-head"><h3>Finalization policy</h3>{{#if this.selectedFinalization.ready}}<span class="mg-ev-badge is-ok">ready</span>{{else}}<span class="mg-ev-badge is-danger">blocked</span>{{/if}}</div>
               <div class="mg-ev-row"><span>Chain of custody: {{if this.selectedChainOk "verified" "invalid"}}</span></div>
-              {{#each this.selectedFinalization.blockers as |issue|}}<div class="mg-ev-row"><strong>{{issue.code}}</strong><span>{{issue.message}}</span></div>{{/each}}
-              {{#each this.selectedFinalization.warnings as |issue|}}<div class="mg-ev-row"><strong>{{issue.code}}</strong><span>{{issue.message}}</span></div>{{/each}}
+              {{#each this.selectedFinalizationBlockers as |issue|}}<div class="mg-ev-row"><strong>{{issue.title}}</strong><span>{{issue.message}}</span></div>{{/each}}
+              {{#each this.selectedFinalizationWarnings as |issue|}}<div class="mg-ev-row"><strong>{{issue.title}}</strong><span>{{issue.message}}</span></div>{{/each}}
             </section>
 
             <section class="mg-ev-panel">
               <h3>Reports</h3>
               <div class="mg-ev-actions"><button class="btn btn-default" type="button" disabled={{not this.selectedMutable}} {{on "click" (fn this.generateReport false)}}>Generate DRAFT PDF</button>{{#if this.config.can_finalize}}<button class="btn btn-primary" type="button" disabled={{or (not this.selectedFinalization.ready) (not this.selectedMutable)}} {{on "click" (fn this.generateReport true)}}>Generate final report</button>{{/if}}</div>
-              <div class="mg-ev-list">{{#each this.selectedReports as |report|}}<div class="mg-ev-row"><strong>{{report.report_ref}} · {{report.status}}</strong><span class="mg-ev-code">PDF {{report.pdf_sha256}}</span><a class="btn btn-default" href={{report.download_url}}>Download PDF</a></div>{{else}}<p class="mg-ev-meta">No reports generated.</p>{{/each}}</div>
+              <div class="mg-ev-list">{{#each this.selectedReports as |report|}}<div class="mg-ev-row"><strong>{{report.report_ref}} · {{report.status_label}}</strong><span class="mg-ev-code">PDF {{report.pdf_sha256}}</span><a class="btn btn-default" href={{report.download_url}}>Download PDF</a></div>{{else}}<p class="mg-ev-meta">No reports generated.</p>{{/each}}</div>
             </section>
 
             <section class="mg-ev-panel">
               <h3>Evidence packages</h3>
               {{#if this.config.can_finalize}}<button class="btn btn-primary" type="button" disabled={{or (not this.selectedFinalization.ready) (not this.selectedMutable)}} {{on "click" this.createPackage}}>Generate integrity / CMS package</button>{{/if}}
-              <div class="mg-ev-list">{{#each this.selectedPackages as |package|}}<div class="mg-ev-row"><strong>{{package.package_ref}} · {{package.status}}</strong><span class="mg-ev-code">Package {{package.package_sha256}}</span><span class="mg-ev-code">Manifest {{package.manifest_sha256}}</span><span class="mg-ev-meta">CMS content signature: {{package.cms_signature_integrity_verified}} · certificate trust: external · timestamp: {{package.timestamp_status}}</span><div class="mg-ev-actions"><a class="btn btn-default" href={{package.download_url}}>Download tar.gz</a><button class="btn btn-default" type="button" {{on "click" (fn this.verifyPackage package.package_ref)}}>Verify</button></div></div>{{else}}<p class="mg-ev-meta">No package generated.</p>{{/each}}</div>
+              <div class="mg-ev-list">{{#each this.selectedPackages as |package|}}<div class="mg-ev-row"><strong>{{package.package_ref}} · {{package.status_label}}</strong><span class="mg-ev-code">Package {{package.package_sha256}}</span><span class="mg-ev-code">Manifest {{package.manifest_sha256}}</span><span class="mg-ev-meta">CMS content signature: {{package.cms_signature_integrity_verified}} · certificate trust: external · Timestamp: {{package.timestamp_status_label}}</span><div class="mg-ev-actions"><a class="btn btn-default" href={{package.download_url}}>Download tar.gz</a><button class="btn btn-default" type="button" {{on "click" (fn this.verifyPackage package.package_ref)}}>Verify</button></div></div>{{else}}<p class="mg-ev-meta">No package generated.</p>{{/each}}</div>
             </section>
 
             {{#if this.config.can_finalize}}<section class="mg-ev-panel"><h3>Legal hold</h3><label class="mg-ev-field"><span>Reason (required)</span><textarea value={{this.holdReason}} {{on "input" (fn this.setField "holdReason")}}></textarea></label><div class="mg-ev-actions">{{#if this.selected.legal_hold}}<button class="btn btn-danger" type="button" {{on "click" (fn this.setLegalHold false)}}>Release legal hold</button>{{else}}<button class="btn btn-danger" type="button" {{on "click" (fn this.setLegalHold true)}}>Place legal hold</button>{{/if}}</div></section>{{/if}}

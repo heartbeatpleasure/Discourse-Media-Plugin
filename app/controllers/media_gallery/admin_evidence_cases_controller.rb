@@ -23,16 +23,32 @@ module ::MediaGallery
       limit = 50 if params[:limit].to_i <= 0
       rows = scope.limit(limit).to_a
 
+      selected = nil
+      selected_error = nil
+      if params[:case_ref].present?
+        begin
+          selected = case_payload(find_case!)
+        rescue => e
+          selected_error = ::MediaGallery::EvidenceErrors.payload(e)
+          log_evidence_error(e, context: "index_selected_case")
+        end
+      end
+
       render_json_dump(
         ok: true,
         cases: rows.map { |evidence_case| case_summary(evidence_case) },
-        selected: params[:case_ref].present? ? case_payload(find_case!) : nil,
+        selected: selected,
+        selected_error: selected_error,
         config: config_payload,
       )
+    rescue => e
+      render_evidence_error(e)
     end
 
     def show
       render_json_dump(ok: true, case: case_payload(find_case!), config: config_payload)
+    rescue => e
+      render_evidence_error(e)
     end
 
     def create
@@ -495,9 +511,16 @@ module ::MediaGallery
     end
 
     def render_evidence_error(error)
-      status = error.is_a?(Discourse::InvalidAccess) ? 403 : (error.is_a?(ActiveRecord::RecordNotFound) || error.is_a?(Discourse::NotFound) ? 404 : 422)
-      Rails.logger.warn("[media_gallery] evidence reporting request failed user_id=#{current_user&.id} action=#{action_name} #{error.class}: #{error.message}")
-      render json: { ok: false, error: error.message.to_s.truncate(1000), error_class: error.class.name }, status: status
+      log_evidence_error(error)
+      payload = ::MediaGallery::EvidenceErrors.payload(error)
+      render json: { ok: false, **payload }, status: ::MediaGallery::EvidenceErrors.status_for(error)
+    end
+
+    def log_evidence_error(error, context: nil)
+      suffix = context.present? ? " context=#{context}" : ""
+      Rails.logger.warn(
+        "[media_gallery] evidence reporting request failed user_id=#{current_user&.id} action=#{action_name}#{suffix} "         "#{error.class}: #{error.message.to_s.truncate(1000)}",
+      )
     end
 
     def no_store_headers!

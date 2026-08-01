@@ -80,6 +80,7 @@ after_initialize do
   require_relative "lib/media_gallery/admin_access"
   require_relative "lib/media_gallery/evidence_immutable_record"
   require_relative "lib/media_gallery/evidence_reference"
+  require_relative "lib/media_gallery/evidence_errors"
   require_relative "lib/media_gallery/evidence_attestation"
   require_relative "lib/media_gallery/evidence_vault"
   require_relative "lib/media_gallery/evidence_chain"

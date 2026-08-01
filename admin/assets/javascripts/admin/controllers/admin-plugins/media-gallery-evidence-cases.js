@@ -2,15 +2,12 @@ import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
 import { ajax } from "discourse/lib/ajax";
-
-function errorMessage(error) {
-  return (
-    error?.jqXHR?.responseJSON?.error ||
-    error?.jqXHR?.responseJSON?.errors?.join(" ") ||
-    error?.message ||
-    String(error)
-  );
-}
+import {
+  ajaxEvidenceErrorMessage,
+  evidenceErrorMessage,
+  evidenceLabel,
+  humanizeEvidenceCode,
+} from "../../lib/media-gallery-evidence-ui";
 
 function utc(value) {
   if (!value) {
@@ -68,6 +65,8 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @tracked selected = null;
   @tracked config = normalizeConfig({});
   @tracked configLoaded = false;
+  @tracked requestedCaseRef = "";
+  @tracked selectedLoadError = "";
   @tracked busy = false;
   @tracked error = "";
   @tracked notice = "";
@@ -103,7 +102,15 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.selected = model?.selected || null;
     this.configLoaded = !!model?.config;
     this.config = normalizeConfig(model?.config);
-    this.error = model?.error || "";
+    this.requestedCaseRef = model?.requestedCaseRef || "";
+    const selectedError = model?.selectedError || model?.selected_error || "";
+    this.selectedLoadError = selectedError
+      ? evidenceErrorMessage(selectedError)
+      : "";
+    const modelError = model?.error || "";
+    this.error = modelError
+      ? evidenceErrorMessage(modelError)
+      : this.selectedLoadError;
     this.notice = "";
     this.reviewChecklist = {};
     this.loadSelectedFields();
@@ -136,16 +143,60 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     return this.selected?.mutable === true;
   }
 
+  get pendingCaseLoad() {
+    return !this.hasSelected && this.requestedCaseRef.length > 0;
+  }
+
+  get caseRows() {
+    return this.cases.map((row) => ({
+      ...row,
+      status_label: evidenceLabel(row.status),
+      decision_label: evidenceLabel(row.decision),
+    }));
+  }
+
+  get selectedHeader() {
+    const selected = this.selected || {};
+    return {
+      status_label: evidenceLabel(selected.status),
+      decision_label: evidenceLabel(selected.decision),
+      classification_label: evidenceLabel(selected.classification),
+    };
+  }
+
   get selectedFinalization() {
     return this.selected?.finalization || { ready: false, blockers: [], warnings: [] };
   }
 
+  get selectedFinalizationBlockers() {
+    return (this.selectedFinalization.blockers || []).map((issue) => ({
+      ...issue,
+      title: humanizeEvidenceCode(issue.code),
+    }));
+  }
+
+  get selectedFinalizationWarnings() {
+    return (this.selectedFinalization.warnings || []).map((issue) => ({
+      ...issue,
+      title: humanizeEvidenceCode(issue.code),
+    }));
+  }
+
   get selectedObjects() {
-    return this.selected?.evidence_objects || [];
+    return (this.selected?.evidence_objects || []).map((object) => ({
+      ...object,
+      role_label: evidenceLabel(object.role),
+      quarantine_status_label: evidenceLabel(object.quarantine_status),
+    }));
   }
 
   get selectedReviews() {
-    return this.selected?.reviews || [];
+    return (this.selected?.reviews || []).map((review) => ({
+      ...review,
+      review_kind_label: evidenceLabel(review.review_kind),
+      outcome_label: evidenceLabel(review.outcome),
+      reviewer_role_label: evidenceLabel(review.reviewer_role),
+    }));
   }
 
   get reviewChecklistItems() {
@@ -161,15 +212,30 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   get selectedReports() {
-    return this.selected?.reports || [];
+    return (this.selected?.reports || []).map((report) => ({
+      ...report,
+      status_label: evidenceLabel(report.status),
+    }));
   }
 
   get selectedPackages() {
-    return this.selected?.packages || [];
+    return (this.selected?.packages || []).map((evidencePackage) => ({
+      ...evidencePackage,
+      status_label: evidenceLabel(evidencePackage.status),
+      timestamp_status_label: evidenceLabel(evidencePackage.timestamp_status),
+    }));
   }
 
   get selectedIdentify() {
-    return this.selected?.identify_snapshots?.[0] || null;
+    const identify = this.selected?.identify_snapshots?.[0];
+    if (!identify) {
+      return null;
+    }
+    return {
+      ...identify,
+      decision_label: evidenceLabel(identify.decision),
+      run_kind_label: evidenceLabel(identify.run_kind),
+    };
   }
 
   get selectedChainOk() {
@@ -229,7 +295,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     try {
       return await ajax(url, options);
     } catch (error) {
-      this.error = errorMessage(error);
+      this.error = ajaxEvidenceErrorMessage(error);
       throw error;
     } finally {
       this.busy = false;
@@ -286,20 +352,61 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
 
   @action
   async openCase(caseRef) {
+    this.requestedCaseRef = caseRef;
     const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${caseRef}.json`);
     this.selected = data?.case || null;
+    this.selectedLoadError = "";
     if (data?.config) {
       this.config = normalizeConfig(data.config);
       this.configLoaded = true;
     }
     this.loadSelectedFields();
+    window.history.replaceState(
+      {},
+      "",
+      `/admin/plugins/media-gallery-evidence-cases?case_ref=${encodeURIComponent(caseRef)}`
+    );
+  }
+
+  @action
+  async retrySelectedCase() {
+    if (!this.requestedCaseRef) {
+      await this.reloadList();
+      return;
+    }
+
+    try {
+      await this.reloadList();
+      const data = await this.request(
+        `/admin/plugins/media-gallery/evidence-cases/${encodeURIComponent(
+          this.requestedCaseRef
+        )}.json`
+      );
+      this.selected = data?.case || null;
+      this.selectedLoadError = "";
+      if (data?.config) {
+        this.config = normalizeConfig(data.config);
+        this.configLoaded = true;
+      }
+      this.loadSelectedFields();
+      this.error = "";
+    } catch (error) {
+      this.selectedLoadError = ajaxEvidenceErrorMessage(
+        error,
+        `Evidence case ${this.requestedCaseRef} could not be loaded.`
+      );
+      this.error = this.selectedLoadError;
+    }
   }
 
   @action
   closeCase() {
     this.selected = null;
+    this.requestedCaseRef = "";
+    this.selectedLoadError = "";
     this.error = "";
     this.notice = "";
+    window.history.replaceState({}, "", "/admin/plugins/media-gallery-evidence-cases");
   }
 
   @action
@@ -321,6 +428,8 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       },
     });
     this.selected = data?.case;
+    this.requestedCaseRef = this.selected?.case_ref || "";
+    this.selectedLoadError = "";
     this.loadSelectedFields();
     this.newMediaPublicId = "";
     this.newClaimantRef = "";
@@ -332,6 +441,15 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.newRightsStatementReceivedAt = "";
     await this.reloadList();
     this.notice = `Evidence case ${this.selected?.case_ref} created.`;
+    if (this.requestedCaseRef) {
+      window.history.replaceState(
+        {},
+        "",
+        `/admin/plugins/media-gallery-evidence-cases?case_ref=${encodeURIComponent(
+          this.requestedCaseRef
+        )}`
+      );
+    }
   }
 
   @action
@@ -381,7 +499,9 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       });
       const data = await response.json();
       if (!response.ok || data?.ok === false) {
-        throw new Error(data?.error || `Upload failed (${response.status})`);
+        throw new Error(
+          evidenceErrorMessage(data, `Evidence upload failed (${response.status}).`)
+        );
       }
       this.selected = data.case;
       this.notice = `Evidence object ${data?.object?.object_ref} stored and hashed.`;
@@ -389,7 +509,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       this.uploadDescription = "";
       event?.target?.reset?.();
     } catch (error) {
-      this.error = errorMessage(error);
+      this.error = ajaxEvidenceErrorMessage(error);
     } finally {
       this.busy = false;
     }
@@ -402,7 +522,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       data: { quarantine_status: status, reason: "Manual evidence quarantine review" },
     });
     this.selected = data.case;
-    this.notice = `Quarantine status changed to ${status}.`;
+    this.notice = `Quarantine status changed to ${evidenceLabel(status)}.`;
   }
 
   @action
@@ -432,7 +552,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.selected = data.case;
     this.reviewReason = "";
     this.reviewChecklist = {};
-    this.notice = `${kind} review recorded as ${outcome}.`;
+    this.notice = `${evidenceLabel(kind)} review recorded as ${evidenceLabel(outcome).toLowerCase()}.`;
   }
 
   @action
@@ -461,7 +581,11 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       type: "POST",
       data: {},
     });
-    this.notice = data?.verification?.ok ? "Package verification succeeded." : `Package verification failed: ${(data?.verification?.errors || []).join(", ")}`;
+    this.notice = data?.verification?.ok
+      ? "Package verification succeeded."
+      : `Package verification failed: ${(data?.verification?.errors || [])
+          .map((item) => humanizeEvidenceCode(item))
+          .join(", ")}.`;
   }
 
   @action
