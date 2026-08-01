@@ -11,7 +11,7 @@ module ::MediaGallery
     before_action :no_store_headers!
 
     def index
-      scope = ::MediaGallery::ForensicEvidenceCase.order(created_at: :desc, id: :desc)
+      scope = ::MediaGallery::ForensicEvidenceCase.includes(:supersedes_case, :superseded_by_case).order(created_at: :desc, id: :desc)
       scope = scope.where(status: params[:status].to_s) if ::MediaGallery::ForensicEvidenceCase::STATUSES.include?(params[:status].to_s)
       scope = scope.where(decision: params[:decision].to_s) if ::MediaGallery::ForensicEvidenceCase::DECISIONS.include?(params[:decision].to_s)
       query = params[:q].to_s.strip
@@ -266,6 +266,94 @@ module ::MediaGallery
       render_evidence_error(e)
     end
 
+    def create_release
+      ensure_evidence_admin!
+      evidence_case = find_case!
+      package = if params[:package_ref].present?
+        evidence_case.packages.find_by!(package_ref: params[:package_ref].to_s)
+      else
+        evidence_case.latest_package
+      end
+      raise ArgumentError, "evidence_package_missing" if package.blank?
+
+      result = ::MediaGallery::EvidenceRelease.create!(
+        evidence_case: evidence_case,
+        package: package,
+        user: current_user,
+        recipient_ref: params[:recipient_ref],
+        purpose: params[:purpose],
+        expires_in_hours: params[:expires_in_hours],
+        max_downloads: params[:max_downloads],
+      )
+      disclosure = result[:disclosure]
+      render_json_dump(
+        ok: true,
+        disclosure: disclosure_payload(disclosure),
+        release_url: ::MediaGallery::EvidenceRelease.public_url(disclosure, result[:token]),
+        release_url_shown_once: true,
+        case: case_payload(evidence_case.reload),
+      )
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def revoke_release
+      ensure_evidence_admin!
+      evidence_case = find_case!
+      disclosure = evidence_case.disclosures.find_by!(disclosure_ref: params[:disclosure_ref].to_s)
+      ::MediaGallery::EvidenceRelease.revoke!(
+        disclosure: disclosure,
+        user: current_user,
+        reason: params[:reason],
+      )
+      render_json_dump(ok: true, disclosure: disclosure_payload(disclosure.reload), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def download_release_receipt
+      ensure_evidence_admin!
+      evidence_case = find_case!
+      disclosure = evidence_case.disclosures.find_by!(disclosure_ref: params[:disclosure_ref].to_s)
+      receipt = ::MediaGallery::EvidenceRelease.receipt(disclosure)
+      no_store_headers!
+      send_data(
+        JSON.pretty_generate(receipt) + "\n",
+        filename: "#{disclosure.disclosure_ref}-release-receipt.json",
+        type: "application/json",
+        disposition: "attachment",
+      )
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def lifecycle
+      ensure_evidence_admin!
+      evidence_case = find_case!
+      action = params[:lifecycle_action].to_s
+      case action
+      when "withdraw"
+        ::MediaGallery::EvidenceLifecycle.withdraw!(
+          evidence_case: evidence_case,
+          user: current_user,
+          reason: params[:reason],
+        )
+      when "supersede"
+        replacement = ::MediaGallery::ForensicEvidenceCase.find_by!(case_ref: params[:replacement_case_ref].to_s.strip)
+        ::MediaGallery::EvidenceLifecycle.supersede!(
+          evidence_case: evidence_case,
+          replacement_case: replacement,
+          user: current_user,
+          reason: params[:reason],
+        )
+      else
+        raise ArgumentError, "invalid_lifecycle_action"
+      end
+      render_json_dump(ok: true, case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
     def download_report
       evidence_case = find_case!
       report = evidence_case.reports.find_by!(report_ref: params[:report_ref].to_s)
@@ -330,6 +418,9 @@ module ::MediaGallery
         external_platform: evidence_case.external_platform,
         legal_hold: evidence_case.legal_hold?,
         mutable: evidence_case.mutable?,
+        supersedes_case_ref: evidence_case.supersedes_case&.case_ref,
+        superseded_by_case_ref: evidence_case.superseded_by_case&.case_ref,
+        closed_at_utc: evidence_case.closed_at&.utc&.iso8601(6),
         created_at_utc: evidence_case.created_at&.utc&.iso8601(6),
         updated_at_utc: evidence_case.updated_at&.utc&.iso8601(6),
       }
@@ -351,6 +442,10 @@ module ::MediaGallery
         claimant_confirmed: evidence_case.claimant_confirmed?,
         claimant_confirmed_at_utc: evidence_case.claimant_confirmed_at&.utc&.iso8601(6),
         retention_due_at_utc: evidence_case.retention_due_at&.utc&.iso8601(6),
+        lifecycle_reason: current_user.admin? ? evidence_case.lifecycle_reason : nil,
+        supersedes_case_ref: evidence_case.supersedes_case&.case_ref,
+        superseded_by_case_ref: evidence_case.superseded_by_case&.case_ref,
+        closed_at_utc: evidence_case.closed_at&.utc&.iso8601(6),
         media_snapshot: evidence_case.media_snapshot,
         identify_snapshots: evidence_case.identify_snapshots.order(created_at: :desc).map { |snapshot| identify_payload(snapshot) },
         evidence_objects: evidence_case.evidence_objects.order(:created_at, :id).map { |object| evidence_object_payload(object) },
@@ -358,6 +453,7 @@ module ::MediaGallery
         reports: visible_reports(evidence_case).map { |report| report_payload(report) },
         packages: visible_packages(evidence_case).map { |package| package_payload(package) },
         legal_holds: current_user.admin? ? evidence_case.legal_holds.order(:occurred_at, :id).map { |hold| legal_hold_payload(hold) } : [],
+        disclosures: current_user.admin? ? evidence_case.disclosures.order(released_at: :desc, id: :desc).map { |disclosure| disclosure_payload(disclosure) } : [],
         chain: {
           verification: policy[:chain],
           events: evidence_case.chain_events.order(:occurred_at, :id).map { |event| ::MediaGallery::EvidenceChain.external_hash(event) },
@@ -460,6 +556,26 @@ module ::MediaGallery
       }.compact
     end
 
+    def disclosure_payload(disclosure)
+      {
+        disclosure_ref: disclosure.disclosure_ref,
+        package_ref: disclosure.evidence_package.package_ref,
+        recipient_ref: disclosure.recipient_ref,
+        purpose: disclosure.purpose,
+        status: disclosure.status,
+        expires_at_utc: disclosure.expires_at&.utc&.iso8601(6),
+        max_downloads: disclosure.max_downloads,
+        download_count: disclosure.download_count,
+        released_at_utc: disclosure.released_at&.utc&.iso8601(6),
+        first_downloaded_at_utc: disclosure.first_downloaded_at&.utc&.iso8601(6),
+        last_downloaded_at_utc: disclosure.last_downloaded_at&.utc&.iso8601(6),
+        revoked_at_utc: disclosure.revoked_at&.utc&.iso8601(6),
+        revocation_reason: disclosure.revoked? ? disclosure.revocation_reason : nil,
+        active: disclosure.active?,
+        receipt_download_url: "/admin/plugins/media-gallery/evidence-cases/#{disclosure.evidence_case.case_ref}/releases/#{disclosure.disclosure_ref}/receipt",
+      }.compact
+    end
+
     def legal_hold_payload(hold)
       {
         hold_ref: hold.hold_ref,
@@ -485,6 +601,11 @@ module ::MediaGallery
         report_language: "en",
         automatic_source_fetch: false,
         restricted_identity_annex: false,
+        release_transport_secure: ::MediaGallery::EvidenceRelease.transport_secure?,
+        release_insecure_test_override: ::MediaGallery::EvidenceRelease.insecure_transport_allowed?,
+        release_default_hours: ::MediaGallery::EvidenceRelease.default_expiry_hours,
+        release_max_hours: ::MediaGallery::EvidenceRelease.max_expiry_hours,
+        release_max_downloads: ::MediaGallery::EvidenceRelease.max_downloads_limit,
         required_review_checks: ::MediaGallery::EvidencePolicy::REQUIRED_REVIEW_CHECKS,
         roles: ::MediaGallery::ForensicEvidenceObject::ROLES,
         classifications: ::MediaGallery::ForensicEvidenceCase::CLASSIFICATIONS,
@@ -519,7 +640,8 @@ module ::MediaGallery
     def log_evidence_error(error, context: nil)
       suffix = context.present? ? " context=#{context}" : ""
       Rails.logger.warn(
-        "[media_gallery] evidence reporting request failed user_id=#{current_user&.id} action=#{action_name}#{suffix} "         "#{error.class}: #{error.message.to_s.truncate(1000)}",
+        "[media_gallery] evidence reporting request failed user_id=#{current_user&.id} " \
+          "action=#{action_name}#{suffix} #{error.class}: #{error.message.to_s.truncate(1000)}",
       )
     end
 

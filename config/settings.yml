@@ -1637,6 +1637,31 @@ plugins:
     max: 3650
     client: false
 
+  media_gallery_evidence_allow_insecure_release_links:
+    default: false
+    client: false
+
+  media_gallery_evidence_release_default_hours:
+    default: 72
+    type: integer
+    min: 1
+    max: 720
+    client: false
+
+  media_gallery_evidence_release_max_hours:
+    default: 168
+    type: integer
+    min: 1
+    max: 720
+    client: false
+
+  media_gallery_evidence_release_max_downloads:
+    default: 5
+    type: integer
+    min: 1
+    max: 20
+    client: false
+
   media_gallery_evidence_seal_mode:
     default: "integrity_only"
     type: enum

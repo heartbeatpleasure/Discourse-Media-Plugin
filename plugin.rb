@@ -90,6 +90,8 @@ after_initialize do
   require_relative "lib/media_gallery/evidence_review"
   require_relative "lib/media_gallery/evidence_reporter"
   require_relative "lib/media_gallery/evidence_package"
+  require_relative "lib/media_gallery/evidence_release"
+  require_relative "lib/media_gallery/evidence_lifecycle"
   require_relative "lib/media_gallery/private_storage"
   require_relative "lib/media_gallery/test_downloads"
   require_relative "lib/media_gallery/forensics_identify_tasks"
@@ -122,6 +124,7 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_report.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_package.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/forensic_legal_hold.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_disclosure.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_comment_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_access_controller.rb", __dir__)
@@ -129,6 +132,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_exports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_forensics_identify_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_evidence_cases_controller.rb", __dir__)
+  require_dependency File.expand_path("app/controllers/media_gallery/evidence_release_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_media_items_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_reports_controller.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_health_controller.rb", __dir__)
@@ -208,6 +212,12 @@ after_initialize do
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/packages/:package_ref/verify" => "media_gallery/admin_evidence_cases#verify_package", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, package_ref: /EP-[A-Za-z0-9-]+/ }
     get "/admin/plugins/media-gallery/evidence-cases/:case_ref/reports/:report_ref" => "media_gallery/admin_evidence_cases#download_report", constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, report_ref: /RPT-[A-Za-z0-9-]+/ }
     get "/admin/plugins/media-gallery/evidence-cases/:case_ref/packages/:package_ref" => "media_gallery/admin_evidence_cases#download_package", constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, package_ref: /EP-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/releases" => "media_gallery/admin_evidence_cases#create_release", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/releases/:disclosure_ref/revoke" => "media_gallery/admin_evidence_cases#revoke_release", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, disclosure_ref: /DISC-[A-Za-z0-9-]+/ }
+    get "/admin/plugins/media-gallery/evidence-cases/:case_ref/releases/:disclosure_ref/receipt" => "media_gallery/admin_evidence_cases#download_release_receipt", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, disclosure_ref: /DISC-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/lifecycle" => "media_gallery/admin_evidence_cases#lifecycle", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    get "/media-gallery/evidence-release/:disclosure_ref" => "media_gallery/evidence_release#landing", constraints: { disclosure_ref: /DISC-[A-Za-z0-9-]+/ }
+    post "/media-gallery/evidence-release/:disclosure_ref/redeem" => "media_gallery/evidence_release#redeem", constraints: { disclosure_ref: /DISC-[A-Za-z0-9-]+/ }
 
     # Admin-only: upload a leaked copy to identify likely user/fingerprint.
     get "/admin/plugins/media-gallery/forensics-identify/:public_id" => "media_gallery/admin_forensics_identify#show"

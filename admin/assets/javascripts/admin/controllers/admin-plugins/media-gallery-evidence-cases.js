@@ -14,7 +14,7 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
   safety_profile: {
     title: "Safety profile",
     guidance_title: "What this shows",
-    guidance: "The report language, package protection, timestamp status, issuer identity and operator identity that will be used for this evidence environment.",
+    guidance: "The report language, package protection, timestamp status, release transport, issuer identity and operator identity that will be used for this evidence environment.",
     purpose: "Reviewers can immediately see whether the environment is configured for testing, integrity-only export or stronger production sealing.",
     note: "The CMS key and certificate fields may remain empty when package protection is set to SHA-256 integrity only.",
   },
@@ -260,6 +260,87 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
     example: "Pending external counsel review under matter LEGAL-2026-018.",
     note: "Avoid unnecessary details about users or the underlying adult content.",
   },
+  controlled_release: {
+    title: "Controlled package release",
+    guidance_title: "What this does",
+    guidance: "Creates an opaque, short-lived download link for one verified evidence package. The raw link token is shown only once and is never stored by the plugin.",
+    purpose: "This lets an authorised lawyer, expert or other recipient obtain the exact immutable package without receiving an administrator account.",
+    note: "Use HTTPS and send the link through an appropriately secure channel. A release link is not a legal approval by itself.",
+  },
+  release_package: {
+    title: "Package to release",
+    guidance_title: "How to choose",
+    guidance: "Select the latest verified evidence package. Older package versions cannot be released through a new link because they may no longer represent the current case version.",
+    purpose: "Tying each release to one package hash prevents ambiguity about which bytes were disclosed.",
+  },
+  release_recipient_ref: {
+    title: "Recipient reference",
+    guidance_title: "What to enter",
+    guidance: "Enter a non-sensitive internal reference for the authorised recipient, such as a legal matter contact code, law firm reference or expert reference.",
+    purpose: "The release audit can identify the authorised recipient context without exposing unnecessary personal information.",
+    example: "COUNSEL-2026-014 or EXPERT-REF-82",
+    note: "Do not enter an email address, private phone number or full personal identity unless your approved policy specifically requires it.",
+  },
+  release_purpose: {
+    title: "Release purpose",
+    guidance_title: "What to enter",
+    guidance: "Describe why this package may be disclosed and what the recipient is authorised to do with it.",
+    purpose: "Purpose limitation is an important privacy and accountability control, especially for evidence from an adult community.",
+    example: "Independent technical review for matter LEGAL-2026-018.",
+  },
+  release_expiry: {
+    title: "Link expiry",
+    guidance_title: "How to choose",
+    guidance: "Set how many hours the link remains usable. The configured server maximum is enforced even when a larger value is entered.",
+    purpose: "Short expiry reduces the period in which a copied or intercepted link can be used.",
+    note: "Use the shortest practical period and create a new link rather than extending an old one.",
+  },
+  release_download_limit: {
+    title: "Download limit",
+    guidance_title: "How to choose",
+    guidance: "Choose how many download responses the server may authorise before the link is consumed.",
+    purpose: "A one-response link is safest. A slightly higher limit can provide a controlled retry if a transfer is interrupted after the server has already authorised it.",
+  },
+  release_link: {
+    title: "Release link shown once",
+    guidance_title: "How to handle it",
+    guidance: "Copy and deliver this link now. Its secret is placed after the # character, which browsers do not send in the initial server request. The plugin stores only a SHA-256 digest, so the link cannot be displayed again after leaving or reloading the page.",
+    purpose: "Keeping the secret out of ordinary access logs and out of the database reduces accidental exposure.",
+  },
+  release_revocation_reason: {
+    title: "Release revocation reason",
+    guidance_title: "What to enter",
+    guidance: "Explain why an active release link must be disabled, for example because it was sent to the wrong recipient, is no longer needed or may have been exposed.",
+    purpose: "The reason is added to the append-only chain of custody so revocation remains accountable.",
+    note: "Revocation prevents future downloads but cannot recall a package that was already downloaded.",
+  },
+  lifecycle_reason: {
+    title: "Lifecycle reason",
+    guidance_title: "What to enter",
+    guidance: "Record the factual reason for withdrawing this case or replacing it with a newer case version.",
+    purpose: "A clear reason explains why the old case remains preserved but should no longer be treated as the current technical record.",
+    note: "Do not use accusatory language or include unnecessary sensitive personal information.",
+  },
+  replacement_case: {
+    title: "Replacement case reference",
+    guidance_title: "What to enter",
+    guidance: "Enter the CASE-... reference of the newer evidence case that replaces this one. It must refer to the same media item and must not itself be withdrawn or superseded.",
+    purpose: "The reciprocal link lets reviewers trace the correction without overwriting or deleting the older case.",
+  },
+  case_withdrawal: {
+    title: "Withdraw case",
+    guidance_title: "When to use",
+    guidance: "Withdraw a case when the technical record should no longer be relied on because of an error, invalid scope, new information or another documented reason.",
+    purpose: "Withdrawal preserves the immutable audit history while clearly preventing further release as a current case.",
+    note: "Active release links are revoked automatically. Existing downloaded packages cannot be remotely recalled.",
+  },
+  case_supersession: {
+    title: "Supersede case",
+    guidance_title: "When to use",
+    guidance: "Link this case to a newer replacement case for the same media item when a corrected or expanded investigation has been created.",
+    purpose: "The old case remains intact and auditable, while recipients can be directed to the replacement case.",
+    note: "Active release links for the old case are revoked automatically.",
+  },
 });
 
 function evidenceHelpTopic(key) {
@@ -310,6 +391,11 @@ function normalizeConfig(config) {
     report_language: source.report_language ?? source.reportLanguage ?? "en",
     automatic_source_fetch: source.automatic_source_fetch ?? source.automaticSourceFetch ?? false,
     restricted_identity_annex: source.restricted_identity_annex ?? source.restrictedIdentityAnnex ?? false,
+    release_transport_secure: source.release_transport_secure ?? source.releaseTransportSecure ?? false,
+    release_insecure_test_override: source.release_insecure_test_override ?? source.releaseInsecureTestOverride ?? false,
+    release_default_hours: source.release_default_hours ?? source.releaseDefaultHours ?? 72,
+    release_max_hours: source.release_max_hours ?? source.releaseMaxHours ?? 168,
+    release_max_downloads: source.release_max_downloads ?? source.releaseMaxDownloads ?? 5,
     required_review_checks: source.required_review_checks ?? source.requiredReviewChecks ?? [],
     roles: source.roles ?? [],
     classifications: source.classifications ?? [],
@@ -348,6 +434,7 @@ const STEP_LABELS = {
   review: "Review & confirmation",
   readiness: "Finalization readiness",
   reports: "Reports & packages",
+  release: "Controlled release",
   administration: "Case administration",
 };
 
@@ -401,6 +488,15 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @tracked reviewReason = "";
   @tracked reviewChecklist = {};
   @tracked holdReason = "";
+  @tracked releasePackageRef = "";
+  @tracked releaseRecipientRef = "";
+  @tracked releasePurpose = "";
+  @tracked releaseExpiresInHours = "72";
+  @tracked releaseMaxDownloads = "1";
+  @tracked releaseRevocationReason = "";
+  @tracked releaseUrl = "";
+  @tracked lifecycleReason = "";
+  @tracked replacementCaseRef = "";
   @tracked activeStep = "intake";
   @tracked activeHelpKey = "";
   @tracked helpOverlayStyle = htmlSafe("");
@@ -440,6 +536,10 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.editExternalDisplayedAt = selected.external_displayed_at || "";
     this.editRightsStatementRef = selected.rights_statement_ref || "";
     this.editRightsStatementReceivedAt = localDatetimeInput(selected.rights_statement_received_at_utc);
+    this.releasePackageRef = selected.packages?.[0]?.package_ref || "";
+    this.releaseExpiresInHours = String(this.config?.release_default_hours || 72);
+    this.releaseMaxDownloads = "1";
+    this.releaseUrl = "";
   }
 
   get hasCases() {
@@ -560,6 +660,25 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       return this.selectedReports.length > 0 ? "progress" : "not_started";
     }
 
+    if (key === "release") {
+      if (["withdrawn", "superseded"].includes(this.selected?.status)) {
+        return "attention";
+      }
+      if (this.selectedPackages.length === 0) {
+        return "not_started";
+      }
+      if (this.selectedDisclosures.some((item) => item.download_count > 0)) {
+        return "complete";
+      }
+      if (this.selectedDisclosures.some((item) => item.active === true)) {
+        return "progress";
+      }
+      return "ready";
+    }
+
+    if (["withdrawn", "superseded"].includes(this.selected?.status)) {
+      return "attention";
+    }
     return this.selected?.legal_hold ? "attention" : "optional";
   }
 
@@ -569,7 +688,8 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       action: "Action required",
       progress: "In progress",
       not_started: "Not started",
-      attention: "Legal hold active",
+      attention: "Attention",
+      ready: "Ready",
       optional: "Optional",
     }[state] || evidenceLabel(state);
   }
@@ -594,7 +714,16 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
         return key;
       }
     }
-    return this.selectedFinalization.ready ? "reports" : "readiness";
+    if (!this.selectedFinalization.ready) {
+      return "readiness";
+    }
+    if (this.selectedPackages.length === 0) {
+      return "reports";
+    }
+    if (["withdrawn", "superseded"].includes(this.selected?.status)) {
+      return "administration";
+    }
+    return this.stepState("release") === "complete" ? "administration" : "release";
   }
 
   get workflowStatusLabel() {
@@ -679,6 +808,43 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
         evidencePackage.cms_signature_integrity_verified
       ),
     }));
+  }
+
+  get selectedDisclosures() {
+    return (this.selected?.disclosures || []).map((disclosure) => ({
+      ...disclosure,
+      status_label: evidenceLabel(disclosure.status),
+      released_at_label: utc(disclosure.released_at_utc),
+      expires_at_label: utc(disclosure.expires_at_utc),
+      last_downloaded_at_label: utc(disclosure.last_downloaded_at_utc),
+    }));
+  }
+
+  get releaseTransportReady() {
+    return this.config?.release_transport_secure === true || this.config?.release_insecure_test_override === true;
+  }
+
+  get releaseTransportLabel() {
+    if (this.config?.release_transport_secure === true) {
+      return "HTTPS";
+    }
+    if (this.config?.release_insecure_test_override === true) {
+      return "HTTP test override";
+    }
+    return "Blocked: HTTPS required";
+  }
+
+  get releaseCanCreate() {
+    return (
+      this.config?.can_finalize === true &&
+      this.releaseTransportReady &&
+      this.selectedPackages.length > 0 &&
+      !["withdrawn", "superseded"].includes(this.selected?.status)
+    );
+  }
+
+  get selectedLifecycleClosed() {
+    return ["withdrawn", "superseded"].includes(this.selected?.status);
   }
 
   get selectedIdentify() {
@@ -1143,6 +1309,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       data: {},
     });
     this.selected = data.case;
+    this.releasePackageRef = data?.package?.package_ref || this.selectedPackages[0]?.package_ref || "";
     this.notice = data?.package?.status === "cms_signed" ? "CMS-signed integrity package generated. The embedded certificate signature verified; certificate-chain trust and timestamp remain external." : "SHA-256 integrity evidence package generated and verified.";
   }
 
@@ -1157,6 +1324,123 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       : `Package verification failed: ${(data?.verification?.errors || [])
           .map((item) => humanizeEvidenceCode(item))
           .join(", ")}.`;
+  }
+
+  @action
+  async createRelease(event) {
+    event?.preventDefault?.();
+    if (!this.releasePackageRef) {
+      this.error = "Select an evidence package first.";
+      return;
+    }
+    if (!this.releaseRecipientRef.trim()) {
+      this.error = "Enter a non-sensitive recipient reference.";
+      return;
+    }
+    if (!this.releasePurpose.trim()) {
+      this.error = "Describe the authorised purpose for this release.";
+      return;
+    }
+
+    const data = await this.request(
+      `/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/releases.json`,
+      {
+        type: "POST",
+        data: {
+          package_ref: this.releasePackageRef,
+          recipient_ref: this.releaseRecipientRef,
+          purpose: this.releasePurpose,
+          expires_in_hours: this.releaseExpiresInHours,
+          max_downloads: this.releaseMaxDownloads,
+        },
+      }
+    );
+    this.selected = data.case;
+    this.releaseUrl = data.release_url || "";
+    this.releaseRecipientRef = "";
+    this.releasePurpose = "";
+    this.notice = "Controlled release link created. Copy it now; the raw token will not be shown again.";
+  }
+
+  @action
+  async revokeRelease(disclosureRef) {
+    if (!this.releaseRevocationReason.trim()) {
+      this.error = "Enter a revocation reason before revoking a release link.";
+      return;
+    }
+    if (!window.confirm("Revoke this evidence release link? Existing downloaded copies cannot be recalled.")) {
+      return;
+    }
+    const data = await this.request(
+      `/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/releases/${encodeURIComponent(disclosureRef)}/revoke.json`,
+      {
+        type: "POST",
+        data: { reason: this.releaseRevocationReason },
+      }
+    );
+    this.selected = data.case;
+    this.releaseRevocationReason = "";
+    this.releaseUrl = "";
+    this.notice = "Evidence release link revoked.";
+  }
+
+  @action
+  async copyReleaseUrl() {
+    if (!this.releaseUrl) {
+      return;
+    }
+    try {
+      if (window.isSecureContext && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(this.releaseUrl);
+      } else {
+        const input = document.getElementById("mg-ev-release-url");
+        input?.focus();
+        input?.select();
+        if (!document.execCommand?.("copy")) {
+          throw new Error("clipboard_copy_unavailable");
+        }
+      }
+      this.notice = "Release link copied to the clipboard.";
+    } catch {
+      this.error = "The browser could not copy the link. Select and copy it manually.";
+    }
+  }
+
+  @action
+  async applyLifecycleAction(action) {
+    if (!this.lifecycleReason.trim()) {
+      this.error = "Enter a reason for the lifecycle action.";
+      return;
+    }
+    if (action === "supersede" && !this.replacementCaseRef.trim()) {
+      this.error = "Enter the replacement case reference.";
+      return;
+    }
+    const confirmation = action === "withdraw"
+      ? "Withdraw this evidence case and revoke all active release links?"
+      : `Supersede this case with ${this.replacementCaseRef.trim()} and revoke all active release links?`;
+    if (!window.confirm(confirmation)) {
+      return;
+    }
+    const data = await this.request(
+      `/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/lifecycle.json`,
+      {
+        type: "POST",
+        data: {
+          lifecycle_action: action,
+          reason: this.lifecycleReason,
+          replacement_case_ref: this.replacementCaseRef,
+        },
+      }
+    );
+    this.selected = data.case;
+    this.lifecycleReason = "";
+    this.replacementCaseRef = "";
+    this.releaseUrl = "";
+    await this.reloadList();
+    this.notice = action === "withdraw"
+      ? "Evidence case withdrawn."
+      : "Evidence case superseded by the replacement case.";
   }
 
   @action

@@ -17,7 +17,8 @@ module ::MediaGallery
       size_bytes quarantine_status previous_status run_ref run_kind decision synthetic_population
       raw_result_sha256 sanity_status review_kind reviewer_role reviewer_ref checklist report_version
       report_data_sha256 pdf_sha256 package_version package_sha256 manifest_sha256 seal_method
-      cms_signature_integrity_verified certificate_trust_verified timestamp_status
+      cms_signature_integrity_verified certificate_trust_verified timestamp_status disclosure_ref package_ref
+      expires_at_utc max_downloads download_count release_status recipient_ref_sha256 purpose_sha256 superseding_case_ref superseded_case_ref
     ].freeze
 
     def record!(evidence_case:, event_type:, user: nil, object_ref: nil, reason: nil, details: {}, actor_ref: nil, actor_type: nil, occurred_at: Time.now.utc)

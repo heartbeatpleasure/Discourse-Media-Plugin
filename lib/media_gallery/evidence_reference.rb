@@ -44,6 +44,10 @@ module ::MediaGallery
       "HOLD-#{SecureRandom.hex(8).upcase}"
     end
 
+    def disclosure_ref
+      "DISC-#{Time.now.utc.year}-#{SecureRandom.hex(8).upcase}"
+    end
+
     def reviewer_ref(case_ref:, user_id:, role: "staff_reviewer")
       prefix = role.to_s == "senior_staff_reviewer" ? "SSR" : (role.to_s == "privacy_legal_approver" ? "PLA" : "SR")
       digest = OpenSSL::HMAC.hexdigest("SHA256", reviewer_secret, "#{case_ref}:reviewer:#{user_id}")

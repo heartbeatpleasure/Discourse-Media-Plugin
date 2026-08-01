@@ -324,6 +324,29 @@ module ::MediaGallery
         }.compact
       end
       entries << bytes_entry("07_chain-of-custody/review-approvals.json", "review_approvals", pretty_json(reviews))
+      disclosures = evidence_case.disclosures.order(:released_at, :id).map do |disclosure|
+        {
+          "disclosure_ref" => disclosure.disclosure_ref,
+          "package_ref" => disclosure.evidence_package.package_ref,
+          "status" => disclosure.status,
+          "released_at_utc" => disclosure.released_at&.utc&.iso8601(6),
+          "expires_at_utc" => disclosure.expires_at&.utc&.iso8601(6),
+          "max_downloads" => disclosure.max_downloads,
+          "download_count" => disclosure.download_count,
+          "first_downloaded_at_utc" => disclosure.first_downloaded_at&.utc&.iso8601(6),
+          "last_downloaded_at_utc" => disclosure.last_downloaded_at&.utc&.iso8601(6),
+          "revoked_at_utc" => disclosure.revoked_at&.utc&.iso8601(6),
+          "recipient_ref_sha256" => Digest::SHA256.hexdigest(disclosure.recipient_ref.to_s),
+          "purpose_sha256" => Digest::SHA256.hexdigest(disclosure.purpose.to_s),
+        }.compact
+      end
+      disclosure_log = {
+        "schema" => "media-gallery-evidence-disclosure-log-v1",
+        "scope" => "snapshot_at_package_creation",
+        "note" => "This immutable package contains only disclosure records that existed when it was created. Later releases, downloads and revocations remain in the append-only case audit and may be exported as separate release receipts; this package is never rewritten.",
+        "disclosures" => disclosures,
+      }
+      entries << bytes_entry("07_chain-of-custody/disclosure-log.json", "privacy_minimized_disclosure_log", pretty_json(disclosure_log))
       entries << bytes_entry("09_restricted-annex/annex-reference.txt", "restricted_annex_notice", "Restricted Identity Annex is not implemented in this release. Sensitive identity data is excluded by default.\n")
       [entries, exclusions]
     end
@@ -357,6 +380,7 @@ module ::MediaGallery
           "The built-in report is PDF 1.4 and is not certified PDF/A.",
           "A CMS signature, when present, does not by itself establish trust in the embedded certificate.",
           "No trusted timestamp token is included in this release.",
+          "Release activity after package creation is preserved in the case audit and separate release receipts; this immutable package is not rewritten.",
         ],
       }
     end

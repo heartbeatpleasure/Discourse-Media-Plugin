@@ -9,6 +9,10 @@ module ::MediaGallery
     belongs_to :evidence_case, class_name: "MediaGallery::ForensicEvidenceCase"
     belongs_to :evidence_report, class_name: "MediaGallery::ForensicEvidenceReport"
     belongs_to :created_by, class_name: "::User"
+    has_many :disclosures,
+             class_name: "MediaGallery::ForensicEvidenceDisclosure",
+             foreign_key: :evidence_package_id,
+             dependent: :restrict_with_error
 
     validates :package_ref, presence: true, uniqueness: true
     validates :version, numericality: { only_integer: true, greater_than: 0 }

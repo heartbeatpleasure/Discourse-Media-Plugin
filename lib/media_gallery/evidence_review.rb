@@ -65,12 +65,15 @@ module ::MediaGallery
     def set_legal_hold!(evidence_case:, user:, active:, reason:, authority_ref: nil)
       raise Discourse::InvalidAccess.new unless user.admin?
       requested = ActiveModel::Type::Boolean.new.cast(active)
-      raise ArgumentError, "legal_hold_already_in_state" if evidence_case.legal_hold? == requested
       cleaned_reason = sanitize(reason, 4000)
       raise ArgumentError, "legal_hold_reason_missing" if cleaned_reason.blank?
 
       hold = nil
       ::MediaGallery::ForensicEvidenceCase.transaction do
+        evidence_case.lock!
+        evidence_case.reload
+        raise ArgumentError, "legal_hold_already_in_state" if evidence_case.legal_hold? == requested
+
         actor_ref = ::MediaGallery::EvidenceReference.reviewer_ref(
           case_ref: evidence_case.case_ref,
           user_id: user.id,
@@ -86,7 +89,20 @@ module ::MediaGallery
           actor_ref: actor_ref,
           occurred_at: Time.now.utc,
         )
-        evidence_case.update!(legal_hold: requested, status: requested ? "legal_hold" : restored_status(evidence_case), updated_by: user)
+        closed_status = %w[withdrawn superseded].include?(evidence_case.status)
+        next_status = if requested
+          closed_status ? evidence_case.status : "legal_hold"
+        elsif closed_status
+          evidence_case.status
+        else
+          evidence_case.pre_legal_hold_status.presence || restored_status(evidence_case)
+        end
+        evidence_case.update!(
+          legal_hold: requested,
+          status: next_status,
+          pre_legal_hold_status: requested && !closed_status ? evidence_case.status : nil,
+          updated_by: user,
+        )
         ::MediaGallery::EvidenceChain.record!(
           evidence_case: evidence_case,
           event_type: requested ? "legal_hold_placed" : "legal_hold_released",

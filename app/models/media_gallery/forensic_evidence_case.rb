@@ -14,6 +14,8 @@ module ::MediaGallery
     belongs_to :media_item, class_name: "MediaGallery::MediaItem", optional: true
     belongs_to :created_by, class_name: "::User"
     belongs_to :updated_by, class_name: "::User", optional: true
+    belongs_to :supersedes_case, class_name: "MediaGallery::ForensicEvidenceCase", optional: true
+    belongs_to :superseded_by_case, class_name: "MediaGallery::ForensicEvidenceCase", optional: true
 
     has_many :evidence_objects,
              class_name: "MediaGallery::ForensicEvidenceObject",
@@ -41,6 +43,10 @@ module ::MediaGallery
              dependent: :restrict_with_error
     has_many :legal_holds,
              class_name: "MediaGallery::ForensicLegalHold",
+             foreign_key: :evidence_case_id,
+             dependent: :restrict_with_error
+    has_many :disclosures,
+             class_name: "MediaGallery::ForensicEvidenceDisclosure",
              foreign_key: :evidence_case_id,
              dependent: :restrict_with_error
 
