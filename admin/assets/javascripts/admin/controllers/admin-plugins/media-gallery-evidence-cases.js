@@ -1,6 +1,8 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
+import { htmlSafe } from "@ember/template";
+import { evidenceHelpTopic } from "../../lib/media-gallery-evidence-help";
 import { ajax } from "discourse/lib/ajax";
 import {
   ajaxEvidenceErrorMessage,
@@ -145,6 +147,10 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @tracked reviewChecklist = {};
   @tracked holdReason = "";
   @tracked activeStep = "intake";
+  @tracked activeHelpKey = "";
+  @tracked helpOverlayStyle = htmlSafe("");
+  @tracked helpOverlayPlacement = "below";
+  helpTriggerElement = null;
 
   initializeFromModel(model) {
     this.cases = model?.cases || [];
@@ -385,7 +391,17 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       key,
       checked: this.reviewChecklist[key] === true,
       label: humanizeEvidenceCode(key),
+      help_key: `review_${key}`,
+      help_label: `Help for ${humanizeEvidenceCode(key)}`,
     }));
+  }
+
+  get activeHelp() {
+    return evidenceHelpTopic(this.activeHelpKey);
+  }
+
+  get helpOverlayClass() {
+    return `mg-ev-help-popover is-${this.helpOverlayPlacement}`;
   }
 
   get reviewChecklistComplete() {
@@ -529,10 +545,94 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   @action
+  toggleHelp(key, event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+
+    if (!evidenceHelpTopic(key)) {
+      return;
+    }
+
+    if (this.activeHelpKey === key) {
+      this.closeHelp();
+      return;
+    }
+
+    const trigger = event?.currentTarget;
+    const rect = trigger?.getBoundingClientRect?.();
+    if (!rect || typeof window === "undefined") {
+      return;
+    }
+
+    const margin = 12;
+    const gap = 8;
+    const width = Math.min(390, Math.max(0, window.innerWidth - margin * 2));
+    const idealLeft = rect.left + rect.width / 2 - width / 2;
+    const left = Math.max(
+      margin,
+      Math.min(idealLeft, window.innerWidth - width - margin)
+    );
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - margin - gap);
+    const spaceAbove = Math.max(0, rect.top - margin - gap);
+    const availableSide = Math.max(spaceBelow, spaceAbove);
+    const useViewportPanel = availableSide < 140;
+    const placeAbove = !useViewportPanel && spaceBelow < 260 && spaceAbove > spaceBelow;
+    const availableHeight = useViewportPanel
+      ? Math.max(0, window.innerHeight - margin * 2)
+      : placeAbove
+        ? spaceAbove
+        : spaceBelow;
+    const top = useViewportPanel
+      ? margin
+      : placeAbove
+        ? rect.top - gap
+        : rect.bottom + gap;
+    const transform = placeAbove ? "translateY(-100%)" : "none";
+
+    this.helpOverlayPlacement = useViewportPanel
+      ? "viewport"
+      : placeAbove
+        ? "above"
+        : "below";
+    this.helpOverlayStyle = htmlSafe(
+      `left:${Math.round(left)}px;top:${Math.round(top)}px;width:${Math.round(
+        width
+      )}px;max-height:${Math.floor(availableHeight)}px;transform:${transform};`
+    );
+    this.helpTriggerElement = trigger;
+    this.activeHelpKey = key;
+    requestAnimationFrame(() => {
+      document.getElementById("mg-ev-help-overlay")?.focus();
+    });
+  }
+
+  @action
+  closeHelp() {
+    const trigger = this.helpTriggerElement;
+    this.activeHelpKey = "";
+    this.helpOverlayStyle = htmlSafe("");
+    this.helpTriggerElement = null;
+    requestAnimationFrame(() => {
+      if (trigger?.isConnected) {
+        trigger.focus();
+      }
+    });
+  }
+
+  @action
+  handleHelpKeydown(event) {
+    if (event?.key === "Escape") {
+      event.preventDefault();
+      this.closeHelp();
+    }
+  }
+
+  @action
   selectWorkflowStep(step) {
     if (!STEP_LABELS[step]) {
       return;
     }
+    this.closeHelp();
     this.activeStep = step;
     requestAnimationFrame(() => {
       document.querySelector(".mg-ev-workflow-content")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -552,6 +652,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
 
   @action
   async openCase(caseRef) {
+    this.closeHelp();
     this.requestedCaseRef = caseRef;
     const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${caseRef}.json`);
     this.selected = data?.case || null;
@@ -603,6 +704,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
 
   @action
   closeCase() {
+    this.closeHelp();
     this.selected = null;
     this.requestedCaseRef = "";
     this.selectedLoadError = "";
