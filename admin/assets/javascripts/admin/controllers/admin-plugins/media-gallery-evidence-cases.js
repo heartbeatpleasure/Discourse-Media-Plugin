@@ -2,7 +2,6 @@ import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { tracked } from "@glimmer/tracking";
 import { htmlSafe } from "@ember/template";
-import { evidenceHelpTopic } from "../../lib/media-gallery-evidence-help";
 import { ajax } from "discourse/lib/ajax";
 import {
   ajaxEvidenceErrorMessage,
@@ -10,6 +9,262 @@ import {
   evidenceLabel,
   humanizeEvidenceCode,
 } from "../../lib/media-gallery-evidence-ui";
+
+const EVIDENCE_HELP_TOPICS = Object.freeze({
+  safety_profile: {
+    title: "Safety profile",
+    guidance_title: "What this shows",
+    guidance: "The report language, package protection, timestamp status, issuer identity and operator identity that will be used for this evidence environment.",
+    purpose: "Reviewers can immediately see whether the environment is configured for testing, integrity-only export or stronger production sealing.",
+    note: "The CMS key and certificate fields may remain empty when package protection is set to SHA-256 integrity only.",
+  },
+  media_public_id: {
+    title: "Media public ID",
+    guidance_title: "What to enter",
+    guidance: "Enter the immutable public ID of the Media Library item that the acquired file is believed to correspond to.",
+    purpose: "This links the case to the exact reference media, fingerprint assignments and packaging metadata used by Forensics Identify.",
+    example: "07ba4140-f69a-4600-8e77-1361338f1e77",
+  },
+  claimant_reference: {
+    title: "Claimant reference",
+    guidance_title: "What to enter",
+    guidance: "Use an internal, non-sensitive reference for the person or organisation asserting rights in the media.",
+    purpose: "The report can refer to the claimant consistently without exposing unnecessary personal details.",
+    example: "RC-2026-0041 or LEGAL-TICKET-1842",
+    note: "Do not enter an email address, home address or other sensitive identity data here.",
+  },
+  research_question: {
+    title: "Research question",
+    guidance_title: "What to enter",
+    guidance: "Describe the exact technical question the case must answer, without presuming infringement, intent or personal responsibility.",
+    purpose: "A narrowly framed question keeps the report factual and prevents the technical result from being presented as a legal conclusion.",
+    example: "Does the acquired file correspond to media item X, and does its forensic pattern meet the recorded attribution criteria within the investigated candidate population?",
+  },
+  external_url: {
+    title: "External URL",
+    guidance_title: "What to enter",
+    guidance: "Enter the full page URL where staff observed the file or publication. Leave it blank when the evidence was received through another documented channel.",
+    purpose: "The URL records source context and supports later review of where the evidence was found.",
+    note: "The plugin records this value only. It never opens, crawls or downloads the URL automatically.",
+  },
+  external_platform: {
+    title: "External platform",
+    guidance_title: "What to enter",
+    guidance: "Enter the public name of the website, forum, social network, file host or other service where the material was observed.",
+    purpose: "Platform context helps explain displayed usernames, timestamps and whether the downloaded file may be a transcode.",
+    example: "Example Video Host, public forum, received by email",
+  },
+  external_username: {
+    title: "Visible external username",
+    guidance_title: "What to enter",
+    guidance: "Record only the account name visibly shown by the external platform at the time of observation.",
+    purpose: "This preserves what staff actually saw without claiming that the account name identifies a natural person.",
+    note: "Do not describe this account as the proven uploader or offender.",
+  },
+  rights_statement_reference: {
+    title: "Rights statement reference",
+    guidance_title: "What to enter",
+    guidance: "Enter an immutable document, ticket, signed declaration or other record reference for the claimant's rights and authorisation statement.",
+    purpose: "Finalisation requires a traceable source for the claimant's assertion; the system does not independently prove ownership or lack of permission.",
+    example: "RS-2026-0012 or signed-document SHA-256 reference",
+    note: "Store the actual document as a Rights statement evidence object when appropriate.",
+  },
+  rights_statement_received: {
+    title: "Rights statement received",
+    guidance_title: "What to enter",
+    guidance: "Select the local date and time when staff received the claimant's statement. The server stores the corresponding canonical UTC value.",
+    purpose: "This timestamps when the rights assertion entered the evidence process and supports the review sequence.",
+  },
+  classification: {
+    title: "Classification",
+    guidance_title: "How to choose",
+    guidance: "Use Confidential for standard evidence cases. Use Restricted when access must be limited more tightly because of unusually sensitive content or context.",
+    purpose: "The classification communicates handling expectations; it does not change the technical identify result.",
+    note: "Restricted does not automatically add identity data or create a Restricted Identity Annex.",
+  },
+  jurisdiction_context: {
+    title: "Jurisdiction context",
+    guidance_title: "What to enter",
+    guidance: "Record the relevant geographic or legal context known at intake, such as international, Netherlands, European Union or unknown.",
+    purpose: "This helps legal reviewers understand which jurisdiction-specific assessment may be needed later.",
+    note: "The technical report remains jurisdiction-neutral and does not claim admissibility in any country.",
+  },
+  observed_by_staff: {
+    title: "Observed by staff",
+    guidance_title: "What to enter",
+    guidance: "Select the local date and time when an authenticated staff member personally observed the external source or received the evidence.",
+    purpose: "This is the evidence service's own observation timestamp and is stronger than relying only on a platform-displayed date.",
+  },
+  platform_displayed_datetime: {
+    title: "Platform-displayed date/time",
+    guidance_title: "What to enter",
+    guidance: "Copy the date/time exactly as displayed by the external platform, including any visible timezone wording or ambiguity.",
+    purpose: "The report can distinguish the platform's claim from the independently recorded staff observation time.",
+    example: "Uploaded 3 hours ago; 2026-08-01 14:22 UTC; date not displayed",
+  },
+  evidence_role: {
+    title: "Evidence role",
+    guidance_title: "How to choose",
+    guidance: "Choose the role that describes why the file belongs in the case: acquired external original, analysis working copy, screenshot, HTML/WARC capture, headers, rights statement or other supporting material.",
+    purpose: "Correct roles preserve provenance and determine which objects must pass quarantine review before finalisation.",
+    note: "Use External original for the file as acquired. Use Working copy only for a separately derived analysis copy.",
+  },
+  evidence_file: {
+    title: "Evidence file",
+    guidance_title: "What to select",
+    guidance: "Select the exact file to preserve. Avoid editing, recompressing, renaming through another application or otherwise transforming an acquired original before upload.",
+    purpose: "The plugin immediately hashes and freezes the uploaded bytes so later changes can be detected.",
+    note: "Treat external media as untrusted input and follow your malware/quarantine procedure before marking it clean.",
+  },
+  evidence_description: {
+    title: "Evidence description",
+    guidance_title: "What to enter",
+    guidance: "Briefly describe how the object was obtained and what it represents in the case.",
+    purpose: "A clear description makes the chain of custody understandable without opening the file.",
+    example: "File downloaded without transformation from the recorded external URL by staff on 2026-08-01.",
+    note: "Do not place passwords, tokens, private messages or unnecessary personal data in this field.",
+  },
+  stored_evidence_objects: {
+    title: "Stored evidence objects",
+    guidance_title: "What this section shows",
+    guidance: "Every stored object receives a case-specific reference, immutable SHA-256 hash, role, size and quarantine status.",
+    purpose: "These records form the technical evidence inventory used by reports, packages and chain-of-custody verification.",
+    note: "Mark clean only after the applicable review or scanning process. Reject files that must not be used for finalisation.",
+  },
+  identify_decision: {
+    title: "Identify decision",
+    guidance_title: "What this means",
+    guidance: "The policy decision produced by the immutable Forensics Identify snapshot, such as conclusive match, likely match, ambiguous or no match.",
+    purpose: "The decision controls the permitted conclusion language. It is a technical classification, not a probability of guilt or identity.",
+  },
+  attributed_account: {
+    title: "Attributed distribution account",
+    guidance_title: "What this means",
+    guidance: "The Discourse account reference whose assigned distribution copy best matches the acquired file under the recorded policy and candidate population.",
+    purpose: "This identifies a distribution copy and platform account reference, not the natural person who copied, forwarded or uploaded the file.",
+  },
+  candidate_population: {
+    title: "Candidate population",
+    guidance_title: "What this means",
+    guidance: "The number and kind of candidate fingerprints compared during the production identify run.",
+    purpose: "Attribution is only valid within the investigated population. A fingerprint that was not included cannot be ranked.",
+    note: "Synthetic candidates are diagnostic only and must not determine a final evidence attribution.",
+  },
+  identify_snapshot: {
+    title: "Immutable identify snapshot",
+    guidance_title: "What this shows",
+    guidance: "The server-attested production result, layout, run reference and raw-result SHA-256 captured when the case was created from Forensics Identify.",
+    purpose: "Freezing this snapshot prevents later UI, account or settings changes from silently altering the evidence result.",
+  },
+  claimant_confirmation: {
+    title: "Claimant confirmation",
+    guidance_title: "What to verify",
+    guidance: "Confirm that the rights statement reference and receipt time are correct and that the claimant has explicitly asserted the relevant rights and lack of authorisation as applicable.",
+    purpose: "This records receipt and human confirmation of the claimant's statement; it does not independently validate legal ownership.",
+    note: "Material case changes invalidate earlier confirmations and approvals.",
+  },
+  technical_review_checklist: {
+    title: "Technical review checklist",
+    guidance_title: "How to use it",
+    guidance: "Complete every item only after personally reviewing the underlying evidence, hashes, raw result, wording, alternatives and privacy impact.",
+    purpose: "The checklist creates a repeatable human-control gate before approvals can be recorded.",
+    note: "A conclusive final report requires a different account to perform Senior Staff Review.",
+  },
+  review_acquisition_reviewed: {
+    title: "Acquisition reviewed",
+    guidance_title: "What to verify",
+    guidance: "Confirm that the source, acquisition method, original file or vault reference, observation time and supporting captures are documented consistently.",
+    purpose: "This reduces the risk of analysing the wrong file or presenting undocumented source context.",
+  },
+  review_hashes_verified: {
+    title: "Hashes verified",
+    guidance_title: "What to verify",
+    guidance: "Confirm that evidence-object hashes, the identify raw-result hash and any relevant report/package hashes are present and internally consistent.",
+    purpose: "Hash verification detects byte-level substitution or corruption between acquisition, analysis and export.",
+  },
+  review_raw_json_reviewed: {
+    title: "Raw JSON reviewed",
+    guidance_title: "What to verify",
+    guidance: "Inspect the immutable raw identify result and confirm that the displayed decision, top candidate, warnings, settings and population agree with it.",
+    purpose: "The readable UI is a summary; the raw result is the detailed technical source used for reproducibility.",
+  },
+  review_decision_language_reviewed: {
+    title: "Decision language reviewed",
+    guidance_title: "What to verify",
+    guidance: "Confirm that the conclusion matches the technical decision and does not accuse a natural person, claim legal wrongdoing or present scores as probability percentages.",
+    purpose: "Controlled wording keeps the report within what the fingerprinting evidence actually establishes.",
+  },
+  review_alternatives_reviewed: {
+    title: "Alternatives reviewed",
+    guidance_title: "What to verify",
+    guidance: "Consider account sharing, compromise, forwarding, screen recording, transcoding, incomplete candidate populations, mixed files and missing historical logs.",
+    purpose: "A defensible report must disclose plausible alternative explanations and relevant technical limitations.",
+  },
+  review_privacy_reviewed: {
+    title: "Privacy reviewed",
+    guidance_title: "What to verify",
+    guidance: "Confirm that the report and standard package exclude personal staff identities, email addresses, IP addresses, credentials, private messages and other unnecessary sensitive data.",
+    purpose: "Evidence reporting must remain proportionate and privacy-minimised, especially in an adult-community context.",
+  },
+  internal_review_notes: {
+    title: "Internal review reason / notes",
+    guidance_title: "What to enter",
+    guidance: "Record concise internal reasoning, exceptions, limitations or the reason for rejecting a review.",
+    purpose: "The notes support internal accountability while external exports include only a digest showing that notes existed.",
+    note: "Do not copy unnecessary personal or intimate details into free text.",
+  },
+  finalization_readiness: {
+    title: "Finalization readiness",
+    guidance_title: "How to read this step",
+    guidance: "Required actions are hard blockers enforced by the evidence policy. Advisory notices describe limitations that should be disclosed but do not automatically prevent export.",
+    purpose: "This separates missing evidence or approvals from known product limitations such as PDF/A or trusted timestamp configuration.",
+  },
+  technical_evidence_report: {
+    title: "Technical Evidence Report",
+    guidance_title: "What is generated",
+    guidance: "An English, jurisdiction-neutral PDF summarising the research question, evidence hashes, immutable identify result, controlled conclusion, limitations and review references.",
+    purpose: "The draft is for review and is not sealed. The final report is only available after all mandatory controls pass.",
+    note: "The report attributes a distribution copy and account reference; it does not prove the conduct or identity of a natural person.",
+  },
+  sealed_evidence_package: {
+    title: "Sealed Evidence Package",
+    guidance_title: "What is generated",
+    guidance: "A machine-verifiable archive containing the report, manifest, checksums, technical snapshots and chain-of-custody material permitted by the privacy policy.",
+    purpose: "The package lets a recipient detect any changed byte and inspect the technical basis independently.",
+    note: "Integrity-only mode uses SHA-256 manifests. CMS mode additionally requires a configured signing key and certificate; certificate trust remains a recipient decision.",
+  },
+  retention_review_due: {
+    title: "Retention review due",
+    guidance_title: "What this means",
+    guidance: "The date on which an administrator should reconsider whether the case still needs to be retained under the applicable policy.",
+    purpose: "Periodic review supports storage limitation and prevents evidence cases from being kept indefinitely without a documented reason.",
+    note: "This release does not automatically delete a case when the date is reached.",
+  },
+  legal_hold: {
+    title: "Legal hold",
+    guidance_title: "What this means",
+    guidance: "A legal hold records that normal deletion or retention actions must be suspended because the case is needed for a claim, dispute, investigation or proceeding.",
+    purpose: "The hold protects evidence from routine disposal while preserving an auditable reason and status.",
+  },
+  case_mutability: {
+    title: "Case mutability",
+    guidance_title: "What this means",
+    guidance: "Mutable cases may still receive factual edits, evidence and reviews. After package creation, the case is made immutable so existing report and package bytes cannot be silently replaced.",
+    purpose: "Corrections must be handled through versioning rather than overwriting sealed evidence.",
+  },
+  legal_hold_reason: {
+    title: "Legal hold reason",
+    guidance_title: "What to enter",
+    guidance: "Enter the specific operational or legal reason for placing or releasing the hold, including an internal authority or matter reference where appropriate.",
+    purpose: "A documented reason makes the retention override accountable and reviewable.",
+    example: "Pending external counsel review under matter LEGAL-2026-018.",
+    note: "Avoid unnecessary details about users or the underlying adult content.",
+  },
+});
+
+function evidenceHelpTopic(key) {
+  return EVIDENCE_HELP_TOPICS[String(key || "")] || null;
+}
 
 function utc(value) {
   if (!value) {
