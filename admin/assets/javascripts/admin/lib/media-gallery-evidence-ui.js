@@ -248,7 +248,7 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
     example: "Pending external counsel review under matter LEGAL-2026-018.",
     note: "Avoid unnecessary details about users or the underlying adult content.",
   },
-});;
+});
 
 export function evidenceHelpTopic(key) {
   return EVIDENCE_HELP_TOPICS[String(key || "")] || null;
