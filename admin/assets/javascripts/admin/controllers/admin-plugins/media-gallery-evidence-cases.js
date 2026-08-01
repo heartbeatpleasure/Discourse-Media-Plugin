@@ -607,6 +607,16 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   @action
+  handleHelpTriggerKeydown(key, event) {
+    if (!["Enter", " ", "Spacebar"].includes(event?.key)) {
+      return;
+    }
+
+    event.preventDefault();
+    this.toggleHelp(key, event);
+  }
+
+  @action
   closeHelp() {
     const trigger = this.helpTriggerElement;
     this.activeHelpKey = "";
