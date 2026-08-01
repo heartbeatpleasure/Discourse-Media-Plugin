@@ -51,7 +51,7 @@ module ::MediaGallery
       "latest_final_report_required" => "Create the package from the latest final report version.",
       "final_report_stale_after_material_change" => "The final report is older than a material case change. Generate and approve a new final report first.",
       "cms_seal_not_configured" => "CMS signing is selected, but the signing key and certificate are not fully configured.",
-      "evidence_case_not_ready" => "This case is not ready for finalization. Complete the remaining items shown under Finalization policy.",
+      "evidence_case_not_ready" => "This case is not ready for finalization. Complete the remaining items shown under Finalization readiness.",
       "generated_package_verification_failed" => "The generated evidence package failed its integrity verification and was not accepted.",
       "package_hash_mismatch" => "The stored evidence package no longer matches its recorded SHA-256 hash.",
       "report_hash_mismatch" => "The stored evidence report no longer matches its recorded SHA-256 hash.",

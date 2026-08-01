@@ -60,6 +60,54 @@ function normalizeConfig(config) {
   };
 }
 
+const ISSUE_STEP_MAP = {
+  rights_statement_missing: "intake",
+  rights_statement_reference_missing: "intake",
+  external_observation_time_missing: "intake",
+  source_capture_missing: "evidence",
+  external_evidence_missing: "evidence",
+  rejected_evidence_present: "evidence",
+  quarantine_review_incomplete: "evidence",
+  media_snapshot_missing: "identify",
+  identify_snapshot_missing: "identify",
+  diagnostic_run_not_evidence: "identify",
+  synthetic_population_present: "identify",
+  identify_sanity_checks_failed: "identify",
+  attributed_account_missing: "identify",
+  fingerprint_assignment_missing: "identify",
+  assignment_after_observation: "identify",
+  claimant_confirmation_missing: "review",
+  technical_review_missing: "review",
+  senior_review_missing: "review",
+  four_eyes_review_missing: "review",
+  privacy_review_missing: "review",
+  current_review_rejected: "review",
+};
+
+const STEP_LABELS = {
+  intake: "Case intake",
+  evidence: "Evidence acquisition",
+  identify: "Identify result",
+  review: "Review & confirmation",
+  readiness: "Finalization readiness",
+  reports: "Reports & packages",
+  administration: "Case administration",
+};
+
+function issueStep(code) {
+  return ISSUE_STEP_MAP[String(code || "")] || "readiness";
+}
+
+function cmsSignatureIntegrityLabel(value) {
+  if (value === true) {
+    return "Verified";
+  }
+  if (value === false) {
+    return "Not verified";
+  }
+  return "Not included";
+}
+
 export default class AdminPluginsMediaGalleryEvidenceCasesController extends Controller {
   @tracked cases = [];
   @tracked selected = null;
@@ -96,6 +144,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @tracked reviewReason = "";
   @tracked reviewChecklist = {};
   @tracked holdReason = "";
+  @tracked activeStep = "intake";
 
   initializeFromModel(model) {
     this.cases = model?.cases || [];
@@ -114,6 +163,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.notice = "";
     this.reviewChecklist = {};
     this.loadSelectedFields();
+    this.activeStep = this.hasSelected ? this.recommendedInitialStep : "intake";
   }
 
   loadSelectedFields() {
@@ -169,10 +219,15 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   get selectedFinalizationBlockers() {
-    return (this.selectedFinalization.blockers || []).map((issue) => ({
-      ...issue,
-      title: humanizeEvidenceCode(issue.code),
-    }));
+    return (this.selectedFinalization.blockers || []).map((issue) => {
+      const step = issueStep(issue.code);
+      return {
+        ...issue,
+        title: humanizeEvidenceCode(issue.code),
+        step,
+        step_label: STEP_LABELS[step],
+      };
+    });
   }
 
   get selectedFinalizationWarnings() {
@@ -180,6 +235,132 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       ...issue,
       title: humanizeEvidenceCode(issue.code),
     }));
+  }
+
+  get selectedFinalizationBlockerCodes() {
+    return new Set(this.selectedFinalizationBlockers.map((issue) => issue.code));
+  }
+
+  hasAnyBlocker(codes) {
+    const current = this.selectedFinalizationBlockerCodes;
+    return codes.some((code) => current.has(code));
+  }
+
+  stepState(key) {
+    if (key === "intake") {
+      return this.hasAnyBlocker([
+        "rights_statement_missing",
+        "rights_statement_reference_missing",
+        "external_observation_time_missing",
+      ]) ? "action" : "complete";
+    }
+
+    if (key === "evidence") {
+      return this.hasAnyBlocker([
+        "source_capture_missing",
+        "external_evidence_missing",
+        "rejected_evidence_present",
+        "quarantine_review_incomplete",
+      ]) ? "action" : "complete";
+    }
+
+    if (key === "identify") {
+      return this.hasAnyBlocker([
+        "media_snapshot_missing",
+        "identify_snapshot_missing",
+        "diagnostic_run_not_evidence",
+        "synthetic_population_present",
+        "identify_sanity_checks_failed",
+        "attributed_account_missing",
+        "fingerprint_assignment_missing",
+        "assignment_after_observation",
+      ]) ? "action" : "complete";
+    }
+
+    if (key === "review") {
+      return this.hasAnyBlocker([
+        "claimant_confirmation_missing",
+        "technical_review_missing",
+        "senior_review_missing",
+        "four_eyes_review_missing",
+        "privacy_review_missing",
+        "current_review_rejected",
+      ]) ? "action" : "complete";
+    }
+
+    if (key === "readiness") {
+      return this.selectedFinalization.ready ? "complete" : "action";
+    }
+
+    if (key === "reports") {
+      if (this.selectedPackages.length > 0) {
+        return "complete";
+      }
+      return this.selectedReports.length > 0 ? "progress" : "not_started";
+    }
+
+    return this.selected?.legal_hold ? "attention" : "optional";
+  }
+
+  stepStateLabel(state) {
+    return {
+      complete: "Complete",
+      action: "Action required",
+      progress: "In progress",
+      not_started: "Not started",
+      attention: "Legal hold active",
+      optional: "Optional",
+    }[state] || evidenceLabel(state);
+  }
+
+  get workflowSteps() {
+    return Object.entries(STEP_LABELS).map(([key, label], index) => {
+      const state = this.stepState(key);
+      return {
+        key,
+        label,
+        number: index + 1,
+        state,
+        state_label: this.stepStateLabel(state),
+        class_name: `mg-ev-step${this.activeStep === key ? " is-active" : ""} is-${state}`,
+      };
+    });
+  }
+
+  get recommendedInitialStep() {
+    for (const key of ["intake", "evidence", "identify", "review"]) {
+      if (this.stepState(key) === "action") {
+        return key;
+      }
+    }
+    return this.selectedFinalization.ready ? "reports" : "readiness";
+  }
+
+  get workflowStatusLabel() {
+    if (!this.selectedMutable) {
+      return `${evidenceLabel(this.selected?.status || "immutable")} · immutable`;
+    }
+    if (this.selectedFinalization.ready) {
+      return "Ready for finalization";
+    }
+    const firstAction = this.workflowSteps.find((step) => step.state === "action");
+    return firstAction ? `${firstAction.label}: action required` : "Review in progress";
+  }
+
+  get finalizationBlockerCount() {
+    return this.selectedFinalizationBlockers.length;
+  }
+
+  get finalizationWarningCount() {
+    return this.selectedFinalizationWarnings.length;
+  }
+
+  get claimantConfirmationAvailable() {
+    return (
+      this.selectedMutable &&
+      String(this.selected?.rights_statement_ref || "").trim().length > 0 &&
+      String(this.selected?.rights_statement_received_at_utc || "").length > 0
+    );
   }
 
   get selectedObjects() {
@@ -203,7 +384,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     return (this.config?.required_review_checks || []).map((key) => ({
       key,
       checked: this.reviewChecklist[key] === true,
-      label: key.replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase()),
+      label: humanizeEvidenceCode(key),
     }));
   }
 
@@ -223,6 +404,9 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       ...evidencePackage,
       status_label: evidenceLabel(evidencePackage.status),
       timestamp_status_label: evidenceLabel(evidencePackage.timestamp_status),
+      cms_signature_integrity_label: cmsSignatureIntegrityLabel(
+        evidencePackage.cms_signature_integrity_verified
+      ),
     }));
   }
 
@@ -345,6 +529,22 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   @action
+  selectWorkflowStep(step) {
+    if (!STEP_LABELS[step]) {
+      return;
+    }
+    this.activeStep = step;
+    requestAnimationFrame(() => {
+      document.querySelector(".mg-ev-workflow-content")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  @action
+  goToIssue(issue) {
+    this.selectWorkflowStep(issue?.step || "readiness");
+  }
+
+  @action
   async search(event) {
     event?.preventDefault?.();
     await this.reloadList();
@@ -361,6 +561,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       this.configLoaded = true;
     }
     this.loadSelectedFields();
+    this.activeStep = this.recommendedInitialStep;
     window.history.replaceState(
       {},
       "",
@@ -389,6 +590,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
         this.configLoaded = true;
       }
       this.loadSelectedFields();
+      this.activeStep = this.recommendedInitialStep;
       this.error = "";
     } catch (error) {
       this.selectedLoadError = ajaxEvidenceErrorMessage(
@@ -406,6 +608,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.selectedLoadError = "";
     this.error = "";
     this.notice = "";
+    this.activeStep = "intake";
     window.history.replaceState({}, "", "/admin/plugins/media-gallery-evidence-cases");
   }
 
@@ -431,6 +634,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.requestedCaseRef = this.selected?.case_ref || "";
     this.selectedLoadError = "";
     this.loadSelectedFields();
+    this.activeStep = "intake";
     this.newMediaPublicId = "";
     this.newClaimantRef = "";
     this.newResearchQuestion = "";

@@ -30,7 +30,7 @@ const FRIENDLY_MESSAGES = {
   final_report_missing:
     "Generate a final report before creating an evidence package.",
   evidence_case_not_ready:
-    "This case is not ready for finalization. Complete the remaining items shown under Finalization policy.",
+    "This case is not ready for finalization. Complete the remaining items shown under Finalization readiness.",
   record_not_found:
     "The requested evidence case or evidence object could not be found.",
   invalid_access:
@@ -40,6 +40,20 @@ const FRIENDLY_MESSAGES = {
 };
 
 const MACHINE_CODE = /^[a-z][a-z0-9_]*(?::.*)?$/;
+
+const EVIDENCE_ACRONYMS = {
+  cms: "CMS",
+  hmac: "HMAC",
+  id: "ID",
+  ip: "IP",
+  json: "JSON",
+  pdf: "PDF",
+  pdfa: "PDF/A",
+  sha256: "SHA-256",
+  url: "URL",
+  utc: "UTC",
+  warc: "WARC",
+};
 
 function baseCode(value) {
   const raw = String(value || "").trim();
@@ -51,9 +65,10 @@ export function humanizeEvidenceCode(value) {
   if (!code) {
     return "Evidence request failed";
   }
-  return code
-    .replaceAll("_", " ")
-    .replace(/^./, (character) => character.toUpperCase());
+
+  const words = code.split("_").map((word) => EVIDENCE_ACRONYMS[word] || word);
+  const label = words.join(" ");
+  return label.replace(/^./, (character) => character.toUpperCase());
 }
 
 export function evidenceLabel(value) {
