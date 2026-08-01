@@ -111,7 +111,7 @@ module ::MediaGallery
         "issuer" => {
           "service" => "#{issuer_name} Forensic Evidence Service",
           "operator_identity" => ::MediaGallery::EvidencePolicy.operator_identity,
-          "website" => SiteSetting.respond_to?(:base_url) ? SiteSetting.base_url : nil,
+          "website" => site_base_url,
           "legal_notice_url" => ::MediaGallery::EvidencePolicy.legal_notice_url,
           "personal_staff_names_included" => false,
         }.compact,
@@ -455,6 +455,12 @@ module ::MediaGallery
       allowed
     end
 
+    def site_base_url
+      return nil unless Discourse.respond_to?(:base_url)
+
+      Discourse.base_url.to_s.presence
+    end
+
     def issuer_name
       ::MediaGallery::EvidencePolicy.issuer_name.presence || "Discourse Media Library"
     end
@@ -463,6 +469,6 @@ module ::MediaGallery
                          :alternative_hypotheses, :review_summary, :report_data_digest,
                          :external_media_snapshot, :external_identify_summary, :privacy_minimize_identify_data, :sensitive_identity_key?,
                          :snapshot_account_ref_map, :external_account_snapshot, :external_fingerprint_snapshot,
-                         :external_object_metadata, :issuer_name
+                         :external_object_metadata, :site_base_url, :issuer_name
   end
 end

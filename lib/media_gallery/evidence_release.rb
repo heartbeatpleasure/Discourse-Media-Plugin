@@ -181,8 +181,18 @@ module ::MediaGallery
     end
 
 
+    def site_base_url
+      return "" unless Discourse.respond_to?(:base_url)
+
+      Discourse.base_url.to_s.strip.sub(%r{/+\z}, "")
+    end
+
     def transport_secure?
-      URI.parse(SiteSetting.base_url.to_s).scheme.to_s.downcase == "https"
+      base = site_base_url
+      return false if base.empty?
+
+      uri = URI.parse(base)
+      uri.scheme.to_s.downcase == "https" && uri.host.to_s.present?
     rescue URI::InvalidURIError
       false
     end
@@ -195,13 +205,15 @@ module ::MediaGallery
     end
 
     def transport_ready?
-      transport_secure? || insecure_transport_allowed?
+      site_base_url.present? && (transport_secure? || insecure_transport_allowed?)
     end
 
     # Keep the secret token in the URL fragment. Browsers do not send fragments to the server,
     # so reverse-proxy and Rails access logs receive only the non-secret disclosure reference.
     def public_url(disclosure, token)
-      base = SiteSetting.respond_to?(:base_url) ? SiteSetting.base_url.to_s.sub(%r{/\z}, "") : ""
+      base = site_base_url
+      raise ArgumentError, "secure_release_transport_required" if base.blank?
+
       "#{base}/media-gallery/evidence-release/#{disclosure.disclosure_ref}##{token}"
     end
 
