@@ -111,7 +111,7 @@ module ::MediaGallery
         "issuer" => {
           "service" => "#{issuer_name} Forensic Evidence Service",
           "operator_identity" => ::MediaGallery::EvidencePolicy.operator_identity,
-          "website" => site_base_url,
+          "website" => (Discourse.base_url.to_s if defined?(Discourse) && Discourse.respond_to?(:base_url)),
           "legal_notice_url" => ::MediaGallery::EvidencePolicy.legal_notice_url,
           "personal_staff_names_included" => false,
         }.compact,
@@ -279,7 +279,10 @@ module ::MediaGallery
           "Evidence object #{index + 1}: #{object['object_ref']}", "Role: #{object['role']}",
           "Original filename: excluded from external report; SHA-256 #{object['original_filename_sha256']}; extension #{object['original_extension']}", "MIME type: #{object['mime_type']}",
           "Size: #{object['size_bytes']} bytes", "SHA-256: #{object['sha256']}",
-          "Quarantine status: #{object['quarantine_status']}", "Storage kind: #{object['storage_kind']}",
+          "Quarantine status: #{object['quarantine_status']}",
+          "Malware scan: #{object.dig('scan', 'state').presence || 'not recorded'}",
+          "Technical inspection: #{object.dig('inspection', 'state').presence || 'not recorded'}",
+          "Storage kind: #{object['storage_kind']}",
         ]
       end
     end
@@ -300,6 +303,8 @@ module ::MediaGallery
         "size_bytes" => object.size_bytes,
         "sha256" => object.sha256,
         "quarantine_status" => object.quarantine_status,
+        "scan" => external_scan_metadata(object.respond_to?(:scan_metadata) ? object.scan_metadata : {}),
+        "inspection" => external_inspection_metadata(object.respond_to?(:inspection_metadata) ? object.inspection_metadata : {}),
         "immutable_at_utc" => object.immutable_at&.utc&.iso8601(6),
         "metadata" => external_object_metadata(object.metadata),
       }.compact
@@ -446,6 +451,23 @@ module ::MediaGallery
       value
     end
 
+    def external_scan_metadata(metadata)
+      value = metadata.is_a?(Hash) ? metadata.deep_stringify_keys : {}
+      value.slice(
+        "provider", "state", "complete", "signature", "scanned_at_utc", "started_at_utc",
+        "completed_at_utc", "duration_ms", "size_bytes", "scan_limit_bytes", "version",
+        "manual_review_at_utc", "manual_review_reason_sha256"
+      ).compact
+    end
+
+    def external_inspection_metadata(metadata)
+      value = metadata.is_a?(Hash) ? metadata.deep_stringify_keys : {}
+      value.slice(
+        "state", "inspected_at_utc", "declared_mime_type", "detected_file_type", "extension",
+        "media_type", "ffprobe", "message", "warnings"
+      ).compact
+    end
+
     def external_object_metadata(metadata)
       value = metadata.is_a?(Hash) ? metadata : {}
       allowed = value.slice("source", "production_evidence_eligible", "acquisition_method")
@@ -453,12 +475,6 @@ module ::MediaGallery
       allowed["staff_description_present"] = description.present?
       allowed["staff_description_sha256"] = Digest::SHA256.hexdigest(description) if description.present?
       allowed
-    end
-
-    def site_base_url
-      return nil unless Discourse.respond_to?(:base_url)
-
-      Discourse.base_url.to_s.presence
     end
 
     def issuer_name
@@ -469,6 +485,6 @@ module ::MediaGallery
                          :alternative_hypotheses, :review_summary, :report_data_digest,
                          :external_media_snapshot, :external_identify_summary, :privacy_minimize_identify_data, :sensitive_identity_key?,
                          :snapshot_account_ref_map, :external_account_snapshot, :external_fingerprint_snapshot,
-                         :external_object_metadata, :site_base_url, :issuer_name
+                         :external_scan_metadata, :external_inspection_metadata, :external_object_metadata, :issuer_name
   end
 end

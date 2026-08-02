@@ -131,6 +131,26 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
     purpose: "These records form the technical evidence inventory used by reports, packages and chain-of-custody verification.",
     note: "Mark clean only after the applicable review or scanning process. Reject files that must not be used for finalisation.",
   },
+  acquisition_security: {
+    title: "Acquisition security",
+    guidance_title: "How to read this status",
+    guidance: "This panel shows whether optional private malware scanning, bounded ffprobe inspection and the private evidence filesystem are available.",
+    purpose: "A scanner outage, size limit or low-storage condition must be visible and must never be interpreted as a clean result.",
+    note: "ClamAV is optional and disabled by default. When disabled, staff must document a manual quarantine review before finalisation.",
+  },
+  malware_scan_status: {
+    title: "Malware scan status",
+    guidance_title: "What this means",
+    guidance: "The status records whether a private ClamAV scan was queued, completed cleanly, detected malware, failed, was unavailable or skipped the file because of a configured size limit.",
+    purpose: "The evidence workflow fails closed: only a clean scan or an explicitly documented manual review can satisfy quarantine policy.",
+    note: "A clean result reduces risk but is not a guarantee that a file is harmless.",
+  },
+  technical_inspection_status: {
+    title: "Technical inspection status",
+    guidance_title: "What this means",
+    guidance: "The plugin performs bounded, read-only technical inspection. Primary media is checked with ffprobe; screenshots, WARC, HTML, headers and rights statements receive role-appropriate file checks.",
+    purpose: "This catches obvious type mismatches and records reproducible media metadata without modifying or transcoding the evidence bytes.",
+  },
   identify_decision: {
     title: "Identify decision",
     guidance_title: "What this means",
@@ -396,6 +416,10 @@ function normalizeConfig(config) {
     release_default_hours: source.release_default_hours ?? source.releaseDefaultHours ?? 72,
     release_max_hours: source.release_max_hours ?? source.releaseMaxHours ?? 168,
     release_max_downloads: source.release_max_downloads ?? source.releaseMaxDownloads ?? 5,
+    acquisition_health: source.acquisition_health ?? source.acquisitionHealth ?? {},
+    malware_scanner_mode: source.malware_scanner_mode ?? source.malwareScannerMode ?? "disabled",
+    malware_scanner_enabled: source.malware_scanner_enabled ?? source.malwareScannerEnabled ?? false,
+    scan_on_upload: source.scan_on_upload ?? source.scanOnUpload ?? false,
     required_review_checks: source.required_review_checks ?? source.requiredReviewChecks ?? [],
     roles: source.roles ?? [],
     classifications: source.classifications ?? [],
@@ -411,6 +435,8 @@ const ISSUE_STEP_MAP = {
   external_evidence_missing: "evidence",
   rejected_evidence_present: "evidence",
   quarantine_review_incomplete: "evidence",
+  evidence_inspection_incomplete: "evidence",
+  evidence_role_validation_failed: "evidence",
   media_snapshot_missing: "identify",
   identify_snapshot_missing: "identify",
   diagnostic_run_not_evidence: "identify",
@@ -622,6 +648,8 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
         "external_evidence_missing",
         "rejected_evidence_present",
         "quarantine_review_incomplete",
+        "evidence_inspection_incomplete",
+        "evidence_role_validation_failed",
       ]) ? "action" : "complete";
     }
 
@@ -754,11 +782,34 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   get selectedObjects() {
-    return (this.selected?.evidence_objects || []).map((object) => ({
-      ...object,
-      role_label: evidenceLabel(object.role),
-      quarantine_status_label: evidenceLabel(object.quarantine_status),
-    }));
+    const manualRoles = new Set([
+      "external_original", "working_copy", "source_screenshot", "source_html",
+      "source_warc", "source_headers", "rights_statement", "other",
+    ]);
+    return (this.selected?.evidence_objects || []).map((object) => {
+      const scan = object.scan_metadata || {};
+      const inspection = object.inspection_metadata || {};
+      return {
+        ...object,
+        role_label: evidenceLabel(object.role),
+        quarantine_status_label: evidenceLabel(object.quarantine_status),
+        scan_state: scan.state || "not_recorded",
+        scan_state_label: evidenceLabel(scan.state || "not_recorded"),
+        scan_provider_label: evidenceLabel(scan.provider || this.config?.malware_scanner_mode || "disabled"),
+        scan_signature: scan.signature || "",
+        inspection_state: inspection.state || "not_recorded",
+        inspection_state_label: evidenceLabel(inspection.state || "not_recorded"),
+        inspection_message: inspection.message || "",
+        inspection_warnings: Array.isArray(inspection.warnings)
+          ? inspection.warnings.join(" ")
+          : "",
+        can_rescan:
+          object.can_rescan === true &&
+          (this.config?.malware_scanner_enabled === true || object.quarantine_status === "clean"),
+        can_manual_review: manualRoles.has(object.role),
+        can_mark_clean: manualRoles.has(object.role) && object.quarantine_status !== "infected",
+      };
+    });
   }
 
   get selectedReviews() {
@@ -861,6 +912,57 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
 
   get selectedChainOk() {
     return this.selected?.chain?.verification?.ok === true;
+  }
+
+  get acquisitionHealth() {
+    return this.config?.acquisition_health || {};
+  }
+
+  get scannerHealth() {
+    return this.acquisitionHealth?.scanner || {};
+  }
+
+  get inspectorHealth() {
+    return this.acquisitionHealth?.inspector || {};
+  }
+
+  get storageHealth() {
+    return this.acquisitionHealth?.storage || {};
+  }
+
+  get scannerHealthLabel() {
+    if (this.config?.malware_scanner_enabled !== true) {
+      return "Disabled — manual quarantine review";
+    }
+    return evidenceLabel(this.scannerHealth.status || "unavailable");
+  }
+
+  get inspectorHealthLabel() {
+    return evidenceLabel(this.inspectorHealth.status || "unavailable");
+  }
+
+  get storageHealthLabel() {
+    const health = this.storageHealth;
+    if (["available", "limited_space", "low_space"].includes(health.status)) {
+      const prefix = health.status === "available" ? "" : `${evidenceLabel(health.status)} · `;
+      return `${prefix}${this.formatBytes(health.free_bytes)} free · ${health.used_percent ?? "?"}% used`;
+    }
+    return evidenceLabel(health.status || "unavailable");
+  }
+
+  get storageReserveLabel() {
+    return this.formatBytes(this.storageHealth?.minimum_free_bytes);
+  }
+
+  formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return "0 bytes";
+    }
+    const units = ["bytes", "KB", "MB", "GB", "TB"];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const amount = bytes / 1024 ** index;
+    return `${amount >= 10 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`;
   }
 
   get reportLanguageLabel() {
@@ -1241,7 +1343,13 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
         );
       }
       this.selected = data.case;
-      this.notice = `Evidence object ${data?.object?.object_ref} stored and hashed.`;
+      if (this.config?.scan_on_upload && this.config?.malware_scanner_enabled) {
+        this.notice = `Evidence object ${data?.object?.object_ref} stored, hashed and queued for private malware scanning and technical inspection.`;
+      } else if (this.config?.scan_on_upload) {
+        this.notice = `Evidence object ${data?.object?.object_ref} stored and hashed. Record a manual clean review before technical inspection can run.`;
+      } else {
+        this.notice = `Evidence object ${data?.object?.object_ref} stored and hashed. Complete the quarantine review and run the security checks manually.`;
+      }
       this.uploadFile = null;
       this.uploadDescription = "";
       event?.target?.reset?.();
@@ -1254,12 +1362,35 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
 
   @action
   async setQuarantine(objectRef, status) {
+    const defaultReason = status === "clean"
+      ? "Manual quarantine review completed; no suspicious indicators were observed."
+      : "Evidence rejected during manual quarantine review.";
+    const reason = window.prompt("Record the reason for this manual quarantine decision:", defaultReason);
+    if (reason === null) {
+      return;
+    }
+    if (!String(reason).trim()) {
+      this.error = "Enter a reason for the manual quarantine decision.";
+      return;
+    }
     const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/objects/${objectRef}/quarantine.json`, {
       type: "POST",
-      data: { quarantine_status: status, reason: "Manual evidence quarantine review" },
+      data: { quarantine_status: status, reason: String(reason).trim() },
     });
     this.selected = data.case;
-    this.notice = `Quarantine status changed to ${evidenceLabel(status)}.`;
+    this.notice = status === "clean" && data?.object?.storage_kind === "file"
+      ? "Manual clean review recorded; bounded technical inspection was queued."
+      : `Quarantine status changed to ${evidenceLabel(status)}.`;
+  }
+
+  @action
+  async rescanObject(objectRef) {
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/objects/${objectRef}/rescan.json`, {
+      type: "POST",
+      data: {},
+    });
+    this.selected = data.case;
+    this.notice = "Evidence security checks were queued. Refresh this case after the background job completes.";
   }
 
   @action

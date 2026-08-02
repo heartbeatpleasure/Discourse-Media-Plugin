@@ -9,12 +9,12 @@ module ::MediaGallery
     HASH_SCHEMA = "media-gallery-evidence-chain-v1"
     MATERIAL_REVIEW_EVENT_TYPES = %w[
       case_created case_intake_updated source_capture_added evidence_object_acquired
-      evidence_quarantine_reviewed identify_snapshot_attached claimant_confirmation_recorded
+      evidence_quarantine_reviewed evidence_acquisition_checked identify_snapshot_attached claimant_confirmation_recorded
     ].freeze
     REPORT_MATERIAL_EVENT_TYPES = (MATERIAL_REVIEW_EVENT_TYPES + %w[review_approved review_rejected]).freeze
     EXTERNAL_DETAIL_KEYS = %w[
       status media_public_id classification report_language changed_fields claimant_confirmation_invalidated role storage_kind sha256
-      size_bytes quarantine_status previous_status run_ref run_kind decision synthetic_population
+      size_bytes quarantine_status previous_status scan_state scan_provider inspection_state run_ref run_kind decision synthetic_population
       raw_result_sha256 sanity_status review_kind reviewer_role reviewer_ref checklist report_version
       report_data_sha256 pdf_sha256 package_version package_sha256 manifest_sha256 seal_method
       cms_signature_integrity_verified certificate_trust_verified timestamp_status disclosure_ref package_ref

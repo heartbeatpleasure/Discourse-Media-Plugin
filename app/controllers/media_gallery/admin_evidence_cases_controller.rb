@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+
 module ::MediaGallery
   class AdminEvidenceCasesController < ::Admin::AdminController
     requires_plugin "Discourse-Media-Plugin"
@@ -126,7 +128,8 @@ module ::MediaGallery
         )
         after_object_added!(evidence_case, object)
       end
-      render_json_dump(ok: true, object: evidence_object_payload(object), case: case_payload(evidence_case.reload))
+      ::MediaGallery::EvidenceAcquisition.enqueue!(object, requested_by_id: current_user.id)
+      render_json_dump(ok: true, object: evidence_object_payload(object.reload), case: case_payload(evidence_case.reload))
     rescue => e
       ::MediaGallery::EvidenceVault.discard_uncommitted_file!(object) if defined?(object) && object.present?
       render_evidence_error(e)
@@ -160,20 +163,54 @@ module ::MediaGallery
       raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
       object = evidence_case.evidence_objects.find_by!(object_ref: params[:object_ref].to_s)
       status = params[:quarantine_status].to_s
-      raise ArgumentError, "invalid_quarantine_status" unless ::MediaGallery::ForensicEvidenceObject::QUARANTINE_STATUSES.include?(status)
-      raise ArgumentError, "not_applicable_not_allowed" if status == "not_applicable" && %w[external_original working_copy].include?(object.role)
+      raise ArgumentError, "invalid_quarantine_status" unless %w[pending clean rejected].include?(status)
       previous = object.quarantine_status
+      raise ArgumentError, "infected_evidence_cannot_be_marked_clean" if previous == "infected" && status == "clean"
+      reason = plain_text(params[:reason], 1000)
+      raise ArgumentError, "quarantine_reason_required" if reason.blank?
+      scan_metadata = object.scan_metadata.is_a?(Hash) ? object.scan_metadata.deep_dup.deep_stringify_keys : {}
+      previous_scan_state = scan_metadata["state"].to_s
+      if previous_scan_state.present? && !previous_scan_state.start_with?("manual_")
+        scan_metadata["automatic_state_before_manual_review"] = previous_scan_state
+      end
+      scan_metadata.merge!(
+        "provider" => "manual_review",
+        "state" => status == "clean" ? "manual_clean" : (status == "rejected" ? "manual_rejected" : "manual_pending"),
+        "manual_review_at_utc" => Time.now.utc.iso8601(6),
+        "manual_review_reason_sha256" => Digest::SHA256.hexdigest(reason),
+      )
       ::MediaGallery::ForensicEvidenceCase.transaction do
-        object.update!(quarantine_status: status)
+        object.update!(quarantine_status: status, scan_metadata: scan_metadata)
         ::MediaGallery::EvidenceChain.record!(
           evidence_case: evidence_case,
           event_type: "evidence_quarantine_reviewed",
           user: current_user,
           object_ref: object.object_ref,
-          reason: plain_text(params[:reason], 1000),
-          details: { previous_status: previous, quarantine_status: status },
+          reason: reason,
+          details: { previous_status: previous, quarantine_status: status, scan_state: scan_metadata["state"] },
         )
       end
+      if status == "clean" && object.storage_kind == "file"
+        ::MediaGallery::EvidenceAcquisition.enqueue!(
+          object.reload,
+          requested_by_id: current_user.id,
+          force: true,
+          inspection_only: true,
+        )
+      end
+      render_json_dump(ok: true, object: evidence_object_payload(object.reload), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def rescan_object
+      evidence_case = find_case!
+      raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
+      object = evidence_case.evidence_objects.find_by!(object_ref: params[:object_ref].to_s)
+      raise ArgumentError, "evidence_object_not_file_backed" unless object.storage_kind == "file"
+      queued = ::MediaGallery::EvidenceAcquisition.enqueue!(object, requested_by_id: current_user.id, force: true)
+      raise ArgumentError, "evidence_scan_queue_failed" unless queued
+
       render_json_dump(ok: true, object: evidence_object_payload(object.reload), case: case_payload(evidence_case.reload))
     rescue => e
       render_evidence_error(e)
@@ -483,6 +520,12 @@ module ::MediaGallery
         size_bytes: object.size_bytes,
         sha256: object.sha256,
         quarantine_status: object.quarantine_status,
+        scan_metadata: object.respond_to?(:scan_metadata) ? object.scan_metadata : {},
+        inspection_metadata: object.respond_to?(:inspection_metadata) ? object.inspection_metadata : {},
+        scan_started_at_utc: object.respond_to?(:scan_started_at) ? object.scan_started_at&.utc&.iso8601(6) : nil,
+        scan_completed_at_utc: object.respond_to?(:scan_completed_at) ? object.scan_completed_at&.utc&.iso8601(6) : nil,
+        inspected_at_utc: object.respond_to?(:inspected_at) ? object.inspected_at&.utc&.iso8601(6) : nil,
+        can_rescan: object.storage_kind == "file",
         include_in_package: object.include_in_package?,
         immutable_at_utc: object.immutable_at&.utc&.iso8601(6),
         metadata: object.metadata,
@@ -601,15 +644,49 @@ module ::MediaGallery
         report_language: "en",
         automatic_source_fetch: false,
         restricted_identity_annex: false,
+        required_review_checks: ::MediaGallery::EvidencePolicy::REQUIRED_REVIEW_CHECKS,
+        roles: ::MediaGallery::ForensicEvidenceObject::ROLES,
+        classifications: ::MediaGallery::ForensicEvidenceCase::CLASSIFICATIONS,
+        decisions: ::MediaGallery::ForensicEvidenceCase::DECISIONS,
+      }.merge(release_config_payload).merge(acquisition_config_payload)
+    end
+
+    def acquisition_config_payload
+      health = ::MediaGallery::EvidenceAcquisition.health
+      {
+        acquisition_health: health,
+        malware_scanner_mode: ::MediaGallery::EvidenceScanner.mode,
+        malware_scanner_enabled: ::MediaGallery::EvidenceScanner.enabled?,
+        scan_on_upload: ::MediaGallery::EvidenceAcquisition.automatic_queue_enabled?,
+      }
+    rescue => e
+      log_evidence_error(e, context: "acquisition_config")
+      {
+        acquisition_health: { "status" => "unavailable", "message" => e.message.to_s.truncate(500) },
+        malware_scanner_mode: "unknown",
+        malware_scanner_enabled: false,
+        scan_on_upload: false,
+      }
+    end
+
+    def release_config_payload
+      {
+        release_configuration_available: true,
         release_transport_secure: ::MediaGallery::EvidenceRelease.transport_secure?,
         release_insecure_test_override: ::MediaGallery::EvidenceRelease.insecure_transport_allowed?,
         release_default_hours: ::MediaGallery::EvidenceRelease.default_expiry_hours,
         release_max_hours: ::MediaGallery::EvidenceRelease.max_expiry_hours,
         release_max_downloads: ::MediaGallery::EvidenceRelease.max_downloads_limit,
-        required_review_checks: ::MediaGallery::EvidencePolicy::REQUIRED_REVIEW_CHECKS,
-        roles: ::MediaGallery::ForensicEvidenceObject::ROLES,
-        classifications: ::MediaGallery::ForensicEvidenceCase::CLASSIFICATIONS,
-        decisions: ::MediaGallery::ForensicEvidenceCase::DECISIONS,
+      }
+    rescue => e
+      log_evidence_error(e, context: "release_config")
+      {
+        release_configuration_available: false,
+        release_transport_secure: false,
+        release_insecure_test_override: false,
+        release_default_hours: ::MediaGallery::EvidenceRelease::DEFAULT_EXPIRY_HOURS,
+        release_max_hours: ::MediaGallery::EvidenceRelease::MAX_EXPIRY_HOURS,
+        release_max_downloads: ::MediaGallery::EvidenceRelease::DEFAULT_MAX_DOWNLOADS,
       }
     end
 

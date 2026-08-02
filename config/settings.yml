@@ -1630,6 +1630,70 @@ plugins:
     default: true
     client: false
 
+  # Optional local/private malware scanning. Disabled by default. The plugin never uploads evidence to a public scanning service.
+  media_gallery_evidence_malware_scanner:
+    default: "disabled"
+    type: enum
+    choices:
+      - disabled
+      - clamd_tcp
+    client: false
+
+  media_gallery_evidence_scan_on_upload:
+    default: true
+    client: false
+
+  media_gallery_evidence_clamd_host:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_clamd_port:
+    default: 3310
+    type: integer
+    min: 1
+    max: 65535
+    client: false
+
+  media_gallery_evidence_scan_connect_timeout_seconds:
+    default: 3
+    type: integer
+    min: 1
+    max: 30
+    client: false
+
+  media_gallery_evidence_scan_timeout_seconds:
+    default: 180
+    type: integer
+    min: 10
+    max: 3600
+    client: false
+
+  media_gallery_evidence_scan_max_mb:
+    default: 512
+    type: integer
+    min: 1
+    max: 10240
+    client: false
+
+  media_gallery_evidence_ffprobe_inspection_enabled:
+    default: true
+    client: false
+
+  media_gallery_evidence_ffprobe_timeout_seconds:
+    default: 30
+    type: integer
+    min: 5
+    max: 300
+    client: false
+
+  media_gallery_evidence_min_free_space_mb:
+    default: 2048
+    type: integer
+    min: 256
+    max: 102400
+    client: false
+
   media_gallery_evidence_draft_retention_days:
     default: 30
     type: integer

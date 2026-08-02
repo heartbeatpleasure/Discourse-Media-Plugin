@@ -83,6 +83,9 @@ after_initialize do
   require_relative "lib/media_gallery/evidence_errors"
   require_relative "lib/media_gallery/evidence_attestation"
   require_relative "lib/media_gallery/evidence_vault"
+  require_relative "lib/media_gallery/evidence_scanner"
+  require_relative "lib/media_gallery/evidence_inspector"
+  require_relative "lib/media_gallery/evidence_acquisition"
   require_relative "lib/media_gallery/evidence_chain"
   require_relative "lib/media_gallery/evidence_policy"
   require_relative "lib/media_gallery/evidence_snapshot"
@@ -203,6 +206,7 @@ after_initialize do
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/objects" => "media_gallery/admin_evidence_cases#upload_object", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/vault-references" => "media_gallery/admin_evidence_cases#add_vault_reference", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/objects/:object_ref/quarantine" => "media_gallery/admin_evidence_cases#quarantine", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, object_ref: /OBJ-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/objects/:object_ref/rescan" => "media_gallery/admin_evidence_cases#rescan_object", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, object_ref: /OBJ-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/identify-snapshots" => "media_gallery/admin_evidence_cases#attach_identify", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/reviews" => "media_gallery/admin_evidence_cases#review", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/claimant-confirmation" => "media_gallery/admin_evidence_cases#confirm_claimant", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }

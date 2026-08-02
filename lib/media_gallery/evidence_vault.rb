@@ -2,6 +2,7 @@
 
 require "digest"
 require "fileutils"
+require "open3"
 require "securerandom"
 
 module ::MediaGallery
@@ -25,6 +26,7 @@ module ::MediaGallery
       raise ArgumentError, "unsafe_evidence_root" if root == File::SEPARATOR
 
       FileUtils.mkdir_p(root, mode: 0o750)
+      raise ArgumentError, "evidence_root_symlink_not_allowed" if File.lstat(root).symlink?
       File.chmod(0o750, root) rescue nil
       root
     end
@@ -70,9 +72,12 @@ module ::MediaGallery
 
     def store_file!(evidence_case:, source_path:, original_filename:, mime_type:, role:, user:, parent: nil, metadata: {}, include_in_package: nil)
       validate_role!(role)
-      size = File.size(source_path)
+      source_stat = File.lstat(source_path)
+      raise ArgumentError, "evidence_source_symlink_not_allowed" if source_stat.symlink?
+      size = source_stat.size
       raise ArgumentError, "evidence_file_empty" if size <= 0
       raise ArgumentError, "evidence_file_too_large" if size > max_upload_bytes
+      ensure_capacity!(size)
 
       object_ref = ::MediaGallery::EvidenceReference.object_ref
       safe_name = ::MediaGallery::EvidenceReference.safe_filename(original_filename)
@@ -81,9 +86,10 @@ module ::MediaGallery
 
       digest = Digest::SHA256.new
       bytes_written = 0
+      temporary = "#{destination}.pending-#{SecureRandom.hex(8)}"
       begin
         File.open(source_path, "rb") do |input|
-          File.open(destination, File::WRONLY | File::CREAT | File::EXCL, 0o640) do |output|
+          File.open(temporary, File::WRONLY | File::CREAT | File::EXCL, 0o640) do |output|
             while (chunk = input.read(BUFFER_SIZE))
               digest.update(chunk)
               output.write(chunk)
@@ -95,8 +101,14 @@ module ::MediaGallery
         end
 
         raise "evidence_copy_size_mismatch" unless bytes_written == size
+        temporary_hash = Digest::SHA256.file(temporary).hexdigest
+        raise "evidence_copy_hash_mismatch" unless temporary_hash == digest.hexdigest
+        raise "evidence_destination_exists" if File.exist?(destination)
+
+        File.rename(temporary, destination)
+        fsync_directory(File.dirname(destination))
         destination_hash = Digest::SHA256.file(destination).hexdigest
-        raise "evidence_copy_hash_mismatch" unless destination_hash == digest.hexdigest
+        raise "evidence_post_commit_hash_mismatch" unless destination_hash == temporary_hash
 
         record = ::MediaGallery::ForensicEvidenceObject.create!(
           evidence_case: evidence_case,
@@ -118,6 +130,7 @@ module ::MediaGallery
         File.chmod(0o440, destination) rescue nil
         record
       rescue
+        FileUtils.rm_f(temporary) rescue nil if defined?(temporary)
         FileUtils.rm_f(destination) rescue nil
         raise
       end
@@ -128,20 +141,29 @@ module ::MediaGallery
       payload = bytes.to_s.b
       raise ArgumentError, "evidence_file_empty" if payload.empty?
       raise ArgumentError, "evidence_file_too_large" if payload.bytesize > max_upload_bytes
+      ensure_capacity!(payload.bytesize)
 
       object_ref = ::MediaGallery::EvidenceReference.object_ref
       safe_name = ::MediaGallery::EvidenceReference.safe_filename(filename)
       destination = object_path(evidence_case.case_ref, object_ref, safe_name)
       FileUtils.mkdir_p(File.dirname(destination), mode: 0o750)
+      temporary = "#{destination}.pending-#{SecureRandom.hex(8)}"
+      expected_sha = Digest::SHA256.hexdigest(payload)
 
       begin
-        File.open(destination, File::WRONLY | File::CREAT | File::EXCL, 0o640) do |output|
+        File.open(temporary, File::WRONLY | File::CREAT | File::EXCL, 0o640) do |output|
           output.write(payload)
           output.flush
           output.fsync rescue nil
         end
+        temporary_sha = Digest::SHA256.file(temporary).hexdigest
+        raise "evidence_write_hash_mismatch" unless temporary_sha == expected_sha
+        raise "evidence_destination_exists" if File.exist?(destination)
+
+        File.rename(temporary, destination)
+        fsync_directory(File.dirname(destination))
         sha = Digest::SHA256.file(destination).hexdigest
-        raise "evidence_write_hash_mismatch" unless sha == Digest::SHA256.hexdigest(payload)
+        raise "evidence_post_commit_hash_mismatch" unless sha == expected_sha
 
         record = ::MediaGallery::ForensicEvidenceObject.create!(
           evidence_case: evidence_case,
@@ -162,6 +184,7 @@ module ::MediaGallery
         File.chmod(0o440, destination) rescue nil
         record
       rescue
+        FileUtils.rm_f(temporary) rescue nil if defined?(temporary)
         FileUtils.rm_f(destination) rescue nil
         raise
       end
@@ -237,6 +260,92 @@ module ::MediaGallery
       nil
     end
 
+    def minimum_free_space_bytes
+      mb = if SiteSetting.respond_to?(:media_gallery_evidence_min_free_space_mb)
+        SiteSetting.media_gallery_evidence_min_free_space_mb.to_i
+      else
+        2048
+      end
+      mb = 2048 if mb <= 0
+      mb * 1024 * 1024
+    rescue
+      2048 * 1024 * 1024
+    end
+
+    def ensure_capacity!(incoming_bytes)
+      health = storage_health
+      unless health["available"] == true && health["writable"] == true
+        raise ArgumentError, "evidence_storage_unavailable"
+      end
+
+      free = health["free_bytes"].to_i
+      required = incoming_bytes.to_i + minimum_free_space_bytes
+      raise ArgumentError, "evidence_storage_low_space" if free < required
+
+      true
+    end
+
+    def storage_health
+      root = ensure_root!
+      stdout, stderr, status = Open3.capture3("df", "-Pk", root)
+      unless status.success?
+        return {
+          "status" => "unavailable",
+          "available" => false,
+          "root" => root,
+          "message" => stderr.to_s.truncate(500),
+          "minimum_free_bytes" => minimum_free_space_bytes,
+        }
+      end
+
+      line = stdout.to_s.lines.reject { |row| row.strip.blank? }.last.to_s
+      fields = line.split
+      blocks = fields[-5].to_i
+      used = fields[-4].to_i
+      available = fields[-3].to_i
+      total_bytes = blocks * 1024
+      free_bytes = available * 1024
+      used_bytes = used * 1024
+      reserve = minimum_free_space_bytes
+      writable = File.writable?(root)
+      used_percent = total_bytes.positive? ? ((used_bytes.to_f / total_bytes) * 100).round(1) : nil
+      status = if !writable
+        "unavailable"
+      elsif free_bytes < reserve
+        "low_space"
+      elsif used_percent.present? && used_percent >= 90
+        "limited_space"
+      else
+        "available"
+      end
+      {
+        "status" => status,
+        "available" => writable,
+        "root" => root,
+        "total_bytes" => total_bytes,
+        "used_bytes" => used_bytes,
+        "free_bytes" => free_bytes,
+        "used_percent" => used_percent,
+        "minimum_free_bytes" => reserve,
+        "writable" => writable,
+      }.compact
+    rescue => e
+      {
+        "status" => "unavailable",
+        "available" => false,
+        "root" => root_path,
+        "minimum_free_bytes" => minimum_free_space_bytes,
+        "message" => e.message.to_s.truncate(500),
+      }
+    end
+
+    def fsync_directory(path)
+      File.open(path, File::RDONLY) { |directory| directory.fsync }
+    rescue
+      nil
+    end
+    private_class_method :fsync_directory
+
     def object_path(case_ref, object_ref, filename)
       root = ensure_root!
       ::MediaGallery::PathSecurity.safe_join!(root, "cases", safe_component(case_ref), "objects", safe_component(object_ref), filename)
@@ -285,7 +394,7 @@ module ::MediaGallery
     end
 
     def default_quarantine_status(role)
-      %w[identify_raw_json reference_snapshot report_pdf package source_headers].include?(role.to_s) ? "not_applicable" : "pending"
+      %w[identify_raw_json reference_snapshot report_pdf package].include?(role.to_s) ? "not_applicable" : "pending"
     end
 
     def default_include_in_package?(role, size)

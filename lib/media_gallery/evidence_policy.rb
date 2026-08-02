@@ -72,12 +72,48 @@ module ::MediaGallery
       evidence_files = objects.select { |o| %w[external_original working_copy].include?(o.role) }
       add_blocker(blockers, "external_evidence_missing", "Add the acquired external evidence file or a verifiable vault reference.") if evidence_files.empty?
 
-      rejected = objects.select { |o| o.quarantine_status == "rejected" }
-      add_blocker(blockers, "rejected_evidence_present", "One or more evidence objects were rejected during quarantine review.", object_refs: rejected.map(&:object_ref)) if rejected.any?
+      rejected = objects.select { |o| %w[rejected infected].include?(o.quarantine_status) }
+      add_blocker(blockers, "rejected_evidence_present", "One or more evidence objects were rejected or malware was detected during quarantine review.", object_refs: rejected.map(&:object_ref)) if rejected.any?
 
       if require_clean_quarantine?
-        pending = evidence_files.select { |o| o.quarantine_status != "clean" }
-        add_blocker(blockers, "quarantine_review_incomplete", "External evidence must be marked clean after the applicable quarantine/malware process.", object_refs: pending.map(&:object_ref)) if pending.any?
+        quarantine_scope = objects.select do |object|
+          ::MediaGallery::EvidenceAcquisition.scan_required?(object) ||
+            (object.storage_kind == "vault_reference" && %w[external_original working_copy].include?(object.role))
+        end
+        pending = quarantine_scope.select { |object| object.quarantine_status != "clean" }
+        add_blocker(
+          blockers,
+          "quarantine_review_incomplete",
+          "Required evidence objects must have a clean automatic scan or documented manual quarantine review.",
+          object_refs: pending.map(&:object_ref),
+          statuses: pending.to_h { |object| [object.object_ref, object.quarantine_status] },
+        ) if pending.any?
+      end
+
+      if ::MediaGallery::EvidenceInspector.enabled?
+        invalid_role_objects = objects.select do |object|
+          object.storage_kind == "file" && object.respond_to?(:inspection_metadata) &&
+            object.inspection_metadata.is_a?(Hash) && object.inspection_metadata["state"].to_s == "invalid"
+        end
+        add_blocker(
+          blockers,
+          "evidence_role_validation_failed",
+          "One or more evidence files do not match the selected evidence role.",
+          object_refs: invalid_role_objects.map(&:object_ref),
+        ) if invalid_role_objects.any?
+
+        inspection_incomplete = evidence_files.select do |object|
+          next false unless object.storage_kind == "file"
+
+          state = object.respond_to?(:inspection_metadata) && object.inspection_metadata.is_a?(Hash) ? object.inspection_metadata["state"].to_s : ""
+          !%w[valid warning].include?(state)
+        end
+        add_blocker(
+          blockers,
+          "evidence_inspection_incomplete",
+          "Primary external evidence must pass bounded technical media inspection before finalization.",
+          object_refs: inspection_incomplete.map(&:object_ref),
+        ) if inspection_incomplete.any?
       end
 
       if snapshot.blank?
@@ -138,6 +174,9 @@ module ::MediaGallery
       end
       warnings << issue("restricted_annex_not_implemented", "Sensitive identity disclosure is intentionally excluded; the restricted identity annex is not implemented in this release.")
       warnings << issue("automatic_source_fetch_disabled", "External pages are not fetched server-side; source capture must be uploaded or referenced by staff.")
+      unless ::MediaGallery::EvidenceScanner.enabled?
+        warnings << issue("automatic_malware_scanner_disabled", "Automatic malware scanning is disabled; clean status depends on a documented manual quarantine review.")
+      end
       warnings << issue("retention_due_advisory_only", "The retention due date is an administrative review reminder; this release does not automatically delete evidence cases.")
 
       {

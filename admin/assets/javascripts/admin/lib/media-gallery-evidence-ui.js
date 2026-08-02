@@ -31,6 +31,16 @@ const FRIENDLY_MESSAGES = {
     "Generate a final report before creating an evidence package.",
   evidence_case_not_ready:
     "This case is not ready for finalization. Complete the remaining items shown under Finalization readiness.",
+  evidence_storage_low_space:
+    "The evidence file was not stored because the private evidence filesystem would fall below its configured free-space reserve.",
+  evidence_storage_unavailable:
+    "The private evidence filesystem is unavailable or not writable. No evidence data was stored.",
+  evidence_scan_queue_failed:
+    "The evidence security check could not be queued. Check Sidekiq and the Discourse server logs.",
+  quarantine_reason_required:
+    "Enter a reason for the manual quarantine decision.",
+  infected_evidence_cannot_be_marked_clean:
+    "Evidence with a malware detection cannot be manually marked clean. Reject it or rescan a new corrected evidence object.",
   record_not_found:
     "The requested evidence case or evidence object could not be found.",
   invalid_access:
@@ -53,6 +63,9 @@ const EVIDENCE_ACRONYMS = {
   url: "URL",
   utc: "UTC",
   warc: "WARC",
+  tcp: "TCP",
+  clamd: "clamd",
+  ffprobe: "ffprobe",
 };
 
 function baseCode(value) {

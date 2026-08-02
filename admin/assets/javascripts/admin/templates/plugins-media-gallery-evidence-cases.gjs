@@ -72,6 +72,9 @@ export default RouteTemplate(
       .mg-ev-workflow-content { display:grid; gap:1rem; scroll-margin-top:1rem; }
       .mg-ev-section-intro { display:grid; gap:.3rem; max-width:820px; }
       .mg-ev-stat-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; }
+      .mg-ev-security-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; }
+      .mg-ev-security-card { border:1px solid var(--mg-border); border-radius:12px; padding:.8rem; background:var(--mg-soft); display:grid; gap:.3rem; min-width:0; }
+      .mg-ev-object-details { display:grid; gap:.25rem; font-size:var(--font-down-1); color:var(--mg-muted); }
       .mg-ev-stat { border:1px solid var(--mg-border); border-radius:12px; padding:.85rem; background:var(--mg-soft); display:grid; gap:.3rem; min-width:0; }
       .mg-ev-stat strong { font-size:var(--font-up-1); overflow-wrap:anywhere; }
       .mg-ev-object { border:1px solid var(--mg-border); border-radius:12px; padding:.85rem; background:var(--mg-soft); display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.65rem 1rem; align-items:start; }
@@ -107,7 +110,7 @@ export default RouteTemplate(
       .mg-ev-help-popover-section strong { font-size:var(--font-down-1); color:var(--primary-high); }
       .mg-ev-help-popover-example, .mg-ev-help-popover-note { padding:.6rem .7rem; border-radius:10px; background:var(--primary-very-low); overflow-wrap:anywhere; }
       .mg-ev-help-popover-note { border-left:3px solid var(--tertiary); }
-      @media (max-width: 900px) { .mg-ev-index-grid, .mg-ev-form, .mg-ev-form.is-upload, .mg-ev-stat-grid, .mg-ev-report-grid, .mg-ev-lifecycle-grid { grid-template-columns:1fr; } .mg-ev-field.is-full, .mg-ev-form-actions { grid-column:auto; } .mg-ev-checks { grid-template-columns:1fr; } }
+      @media (max-width: 900px) { .mg-ev-index-grid, .mg-ev-form, .mg-ev-form.is-upload, .mg-ev-stat-grid, .mg-ev-security-grid, .mg-ev-report-grid, .mg-ev-lifecycle-grid { grid-template-columns:1fr; } .mg-ev-field.is-full, .mg-ev-form-actions { grid-column:auto; } .mg-ev-checks { grid-template-columns:1fr; } }
       @media (max-width: 620px) { .mg-ev-search, .mg-ev-release-link { grid-template-columns:1fr; } .mg-ev-release-link .btn { width:100%; } .mg-ev-search .btn { width:100%; } .mg-ev-object { grid-template-columns:1fr; } .mg-ev-object-actions { justify-content:flex-start; } .mg-ev-object .mg-ev-code { grid-column:auto; } .mg-ev-form-actions { justify-content:stretch; } .mg-ev-form-actions .btn { width:100%; } }
     </style>
 
@@ -242,6 +245,27 @@ export default RouteTemplate(
           {{#if (eq @controller.activeStep "evidence")}}
             <section class="mg-ev-panel">
               <div class="mg-ev-section-intro"><h2>2. Evidence acquisition</h2><p class="mg-ev-meta">Store the acquired external file and supporting source captures. Each object is hashed immediately and frozen as an evidence record.</p></div>
+              <div class="mg-ev-subsection">
+                <div class="mg-ev-title-with-help"><h3>Acquisition security</h3><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for acquisition security" aria-expanded={{eq @controller.activeHelpKey "acquisition_security"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "acquisition_security")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "acquisition_security")}}>i</span></div>
+                <div class="mg-ev-security-grid">
+                  <div class="mg-ev-security-card">
+                    <div class="mg-ev-title-with-help"><span class="mg-ev-meta">Malware scanner</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for malware scan status" aria-expanded={{eq @controller.activeHelpKey "malware_scan_status"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "malware_scan_status")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "malware_scan_status")}}>i</span></div>
+                    <strong>{{@controller.scannerHealthLabel}}</strong>
+                    {{#if @controller.scannerHealth.version}}<span class="mg-ev-meta">{{@controller.scannerHealth.version}}</span>{{/if}}
+                  </div>
+                  <div class="mg-ev-security-card">
+                    <div class="mg-ev-title-with-help"><span class="mg-ev-meta">Technical inspection</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for technical inspection status" aria-expanded={{eq @controller.activeHelpKey "technical_inspection_status"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "technical_inspection_status")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "technical_inspection_status")}}>i</span></div>
+                    <strong>{{@controller.inspectorHealthLabel}}</strong>
+                    {{#if @controller.inspectorHealth.version}}<span class="mg-ev-meta">{{@controller.inspectorHealth.version}}</span>{{/if}}
+                  </div>
+                  <div class="mg-ev-security-card">
+                    <div class="mg-ev-title-with-help"><span class="mg-ev-meta">Private evidence storage</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for private evidence storage" aria-expanded={{eq @controller.activeHelpKey "acquisition_security"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "acquisition_security")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "acquisition_security")}}>i</span></div>
+                    <strong>{{@controller.storageHealthLabel}}</strong>
+                    {{#if @controller.storageHealth.minimum_free_bytes}}<span class="mg-ev-meta">Reserve: {{@controller.storageReserveLabel}}</span>{{/if}}
+                  </div>
+                </div>
+                {{#unless @controller.config.malware_scanner_enabled}}<div class="mg-ev-flash is-info">Automatic malware scanning is optional and currently disabled. Evidence is still hashed and inspected, but staff must record a manual quarantine decision before finalisation.</div>{{/unless}}
+              </div>
               <form class="mg-ev-form is-upload" {{on "submit" @controller.uploadObject}}>
                 <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-upload-role">Evidence role</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Evidence role" aria-expanded={{eq @controller.activeHelpKey "evidence_role"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "evidence_role")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "evidence_role")}}>i</span></div><select id="mg-ev-upload-role" value={{@controller.uploadRole}} disabled={{not @controller.selectedMutable}} {{on "change" (fn @controller.setField "uploadRole")}}><option value="external_original">External original</option><option value="working_copy">Working copy</option><option value="source_screenshot">Source screenshot</option><option value="source_html">Source HTML</option><option value="source_warc">Source WARC</option><option value="source_headers">Source headers</option><option value="rights_statement">Rights statement</option><option value="other">Other</option></select></div>
                 <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-upload-file">File</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Evidence file" aria-expanded={{eq @controller.activeHelpKey "evidence_file"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "evidence_file")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "evidence_file")}}>i</span></div><input id="mg-ev-upload-file" type="file" required disabled={{not @controller.selectedMutable}} {{on "change" @controller.setUploadFile}} /></div>
@@ -253,8 +277,27 @@ export default RouteTemplate(
                 <div class="mg-ev-list">
                   {{#each @controller.selectedObjects as |object|}}
                     <article class="mg-ev-object">
-                      <div class="mg-ev-object-main"><strong>{{object.object_ref}} · {{object.role_label}}</strong><span class="mg-ev-meta">{{object.original_filename}} · {{object.size_bytes}} bytes</span><div class="mg-ev-badges"><span class="mg-ev-badge">Quarantine: {{object.quarantine_status_label}}</span></div></div>
-                      {{#if (or (eq object.role "external_original") (eq object.role "working_copy"))}}<div class="mg-ev-object-actions"><button class="btn btn-default" type="button" disabled={{not @controller.selectedMutable}} {{on "click" (fn @controller.setQuarantine object.object_ref "clean")}}>Mark clean</button><button class="btn btn-danger" type="button" disabled={{not @controller.selectedMutable}} {{on "click" (fn @controller.setQuarantine object.object_ref "rejected")}}>Reject</button></div>{{/if}}
+                      <div class="mg-ev-object-main">
+                        <strong>{{object.object_ref}} · {{object.role_label}}</strong>
+                        <span class="mg-ev-meta">{{object.original_filename}} · {{object.size_bytes}} bytes</span>
+                        <div class="mg-ev-badges">
+                          <span class="mg-ev-badge">Quarantine: {{object.quarantine_status_label}}</span>
+                          <span class="mg-ev-badge">Malware scan: {{object.scan_state_label}}</span>
+                          <span class="mg-ev-badge">Inspection: {{object.inspection_state_label}}</span>
+                        </div>
+                        <div class="mg-ev-object-details">
+                          {{#if object.scan_signature}}<span>Detection: {{object.scan_signature}}</span>{{/if}}
+                          {{#if object.inspection_message}}<span>{{object.inspection_message}}</span>{{/if}}
+                          {{#if object.inspection_warnings}}<span>{{object.inspection_warnings}}</span>{{/if}}
+                        </div>
+                      </div>
+                      <div class="mg-ev-object-actions">
+                        {{#if object.can_rescan}}<button class="btn btn-default" type="button" disabled={{or @controller.busy (not @controller.selectedMutable)}} {{on "click" (fn @controller.rescanObject object.object_ref)}}>Run security checks</button>{{/if}}
+                        {{#if object.can_manual_review}}
+                          {{#if object.can_mark_clean}}<button class="btn btn-default" type="button" disabled={{or @controller.busy (not @controller.selectedMutable)}} {{on "click" (fn @controller.setQuarantine object.object_ref "clean")}}>Record manual clean review</button>{{/if}}
+                          <button class="btn btn-danger" type="button" disabled={{or @controller.busy (not @controller.selectedMutable)}} {{on "click" (fn @controller.setQuarantine object.object_ref "rejected")}}>Reject</button>
+                        {{/if}}
+                      </div>
                       <span class="mg-ev-code">SHA-256 {{object.sha256}}</span>
                     </article>
                   {{else}}

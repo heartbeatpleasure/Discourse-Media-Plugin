@@ -9,7 +9,7 @@ module ::MediaGallery
       rights_statement identify_raw_json reference_snapshot report_pdf package other
     ].freeze
     STORAGE_KINDS = %w[file vault_reference].freeze
-    QUARANTINE_STATUSES = %w[pending clean rejected not_applicable].freeze
+    QUARANTINE_STATUSES = %w[pending queued scanning clean infected scan_failed scanner_unavailable skipped_size rejected not_applicable].freeze
 
     belongs_to :evidence_case, class_name: "MediaGallery::ForensicEvidenceCase"
     belongs_to :parent, class_name: "MediaGallery::ForensicEvidenceObject", optional: true
@@ -29,7 +29,7 @@ module ::MediaGallery
     private
 
     def allow_only_quarantine_transition
-      allowed = %w[quarantine_status updated_at]
+      allowed = %w[quarantine_status scan_metadata inspection_metadata scan_started_at scan_completed_at inspected_at updated_at]
       forbidden = changes.keys.map(&:to_s) - allowed
       return if forbidden.empty?
 

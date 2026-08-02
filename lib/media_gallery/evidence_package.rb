@@ -475,6 +475,8 @@ module ::MediaGallery
         "size_bytes" => object.size_bytes,
         "sha256" => object.sha256,
         "quarantine_status" => object.quarantine_status,
+        "scan" => external_scan_metadata(object.respond_to?(:scan_metadata) ? object.scan_metadata : {}),
+        "inspection" => external_inspection_metadata(object.respond_to?(:inspection_metadata) ? object.inspection_metadata : {}),
         "include_in_package" => object.include_in_package?,
         "immutable_at_utc" => object.immutable_at&.utc&.iso8601(6),
         "metadata" => external_object_metadata(object.metadata),
@@ -657,6 +659,23 @@ module ::MediaGallery
       value
     end
 
+    def external_scan_metadata(metadata)
+      value = metadata.is_a?(Hash) ? metadata.deep_stringify_keys : {}
+      value.slice(
+        "provider", "state", "complete", "signature", "scanned_at_utc", "started_at_utc",
+        "completed_at_utc", "duration_ms", "size_bytes", "scan_limit_bytes", "version",
+        "manual_review_at_utc", "manual_review_reason_sha256"
+      ).compact
+    end
+
+    def external_inspection_metadata(metadata)
+      value = metadata.is_a?(Hash) ? metadata.deep_stringify_keys : {}
+      value.slice(
+        "state", "inspected_at_utc", "declared_mime_type", "detected_file_type", "extension",
+        "media_type", "ffprobe", "message", "warnings"
+      ).compact
+    end
+
     def external_object_metadata(metadata)
       value = metadata.is_a?(Hash) ? metadata : {}
       allowed = value.slice("source", "production_evidence_eligible", "acquisition_method")
@@ -773,7 +792,8 @@ module ::MediaGallery
                          :create_seal, :verify_cms, :seal_key_id, :seal_key_password, :folder_for_object,
                          :object_manifest, :verify_report_metadata, :verify_external_chain, :external_media_snapshot, :external_identify_snapshot,
                          :external_identify_summary, :external_raw_result, :privacy_minimize_identify_data, :sensitive_identity_key?,
-                         :snapshot_account_ref_map, :external_account_snapshot, :external_fingerprint_snapshot, :external_object_metadata, :safe_extension,
+                         :snapshot_account_ref_map, :external_account_snapshot, :external_fingerprint_snapshot, :external_scan_metadata,
+                         :external_inspection_metadata, :external_object_metadata, :safe_extension,
                          :bytes_entry, :file_entry, :validate_entries!, :write_tar_gz!, :read_tar_entries,
                          :parse_checksums, :safe_archive_path, :pretty_json, :canonical_pretty_json
   end
