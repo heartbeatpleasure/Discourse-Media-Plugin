@@ -8,11 +8,15 @@ module ::MediaGallery
   module EvidenceReporter
     module_function
 
-    REPORTER_VERSION = "1.1.0"
+    REPORTER_VERSION = "1.2.0"
 
     def generate!(evidence_case:, user:, final: false)
       raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
-      raise Discourse::InvalidAccess.new if final && !user.admin?
+      if final
+        ::MediaGallery::EvidenceAuthorization.ensure!(user, :senior_reviewer)
+      else
+        raise Discourse::InvalidAccess.new unless ::MediaGallery::EvidenceAuthorization.allowed?(user, :technical_reviewer) || ::MediaGallery::EvidenceAuthorization.allowed?(user, :case_operator)
+      end
       if !final && evidence_case.reports.where(status: %w[final_unsealed final_sealed]).exists?
         raise ArgumentError, "draft_not_allowed_after_final_report"
       end
@@ -33,7 +37,7 @@ module ::MediaGallery
         status: final ? "FINAL - UNSIGNED / PACKAGE VERIFICATION REQUIRED" : "DRAFT - NOT FINAL",
         generated_at: generated_at,
         sections: report_sections(report_data),
-        footer: "#{issuer_name} Forensic Evidence Service | #{evidence_case.case_ref}",
+        footer: "#{report_issuer_name(evidence_case)} Forensic Evidence Service | #{evidence_case.case_ref}",
       ).render
       pdf_sha256 = Digest::SHA256.hexdigest(pdf)
       storage_ref = "#{report_ref}-#{SecureRandom.hex(6)}"
@@ -74,6 +78,7 @@ module ::MediaGallery
           },
         )
       end
+      ::MediaGallery::EvidenceRetention.apply!(evidence_case: evidence_case.reload, user: user, anchor: generated_at, reason: "Report generation reviewed the case retention class.", force: true) if final
       report
     rescue
       File.chmod(0o640, path) rescue nil if defined?(path) && path.present? && File.file?(path)
@@ -100,7 +105,7 @@ module ::MediaGallery
       summary = snapshot.present? ? external_identify_summary(snapshot.summary, evidence_case.case_ref, snapshot_account_ref_map(snapshot)) : {}
 
       {
-        "schema" => "media-gallery-technical-evidence-report-v1.1",
+        "schema" => "media-gallery-technical-evidence-report-v1.2",
         "reporter_version" => REPORTER_VERSION,
         "case_ref" => evidence_case.case_ref,
         "report_ref" => report_ref,
@@ -108,12 +113,11 @@ module ::MediaGallery
         "generated_at_utc" => generated_at.iso8601(6),
         "language" => "en",
         "jurisdiction_profile" => "international_technical_core",
-        "issuer" => {
-          "service" => "#{issuer_name} Forensic Evidence Service",
-          "operator_identity" => ::MediaGallery::EvidencePolicy.operator_identity,
-          "website" => (Discourse.base_url.to_s if defined?(Discourse) && Discourse.respond_to?(:base_url)),
-          "legal_notice_url" => ::MediaGallery::EvidencePolicy.legal_notice_url,
-          "personal_staff_names_included" => false,
+        "issuer" => report_issuer_data(evidence_case),
+        "governance" => {
+          "profile_ref" => evidence_case.governance_profile_ref,
+          "profile_snapshot_sha256" => evidence_case.governance_snapshot.is_a?(Hash) ? evidence_case.governance_snapshot["profile_sha256"] : nil,
+          "profile_fields_included_by_configuration" => ::MediaGallery::EvidenceGovernance.external_profile(evidence_case).keys.sort,
         }.compact,
         "scope" => {
           "research_question" => evidence_case.research_question,
@@ -207,9 +211,14 @@ module ::MediaGallery
       [
         { heading: "1. Report status and issuer", lines: [
           "Case ID: #{data['case_ref']}", "Report ID: #{data['report_ref']}", "Status: #{data['status']}",
-          "Issued by: #{data.dig('issuer', 'service')}", "Operator identity: #{data.dig('issuer', 'operator_identity')}",
-          "Website: #{data.dig('issuer', 'website')}", "Personal staff names: not included",
-          "Report language: English", "Jurisdiction profile: international technical core",
+          "Issued by: #{data.dig('issuer', 'service')}",
+          *(data.dig('issuer', 'operator_identity').present? ? ["Operator identity: #{data.dig('issuer', 'operator_identity')}"] : []),
+          "Website: #{data.dig('issuer', 'website')}",
+          *(data.dig('issuer', 'generic_contact').present? ? ["Generic contact: #{data.dig('issuer', 'generic_contact')}"] : []),
+          *(data.dig('issuer', 'legal_notice_url').present? ? ["Privacy/legal notice: #{data.dig('issuer', 'legal_notice_url')}"] : []),
+          *(data.dig('issuer', 'policy_reference').present? ? ["Policy reference: #{data.dig('issuer', 'policy_reference')}"] : []),
+          *(data.dig('issuer', 'controller_country').present? ? ["Controller country: #{data.dig('issuer', 'controller_country')}"] : []),
+          "Personal staff names: not included", "Report language: English", "Jurisdiction profile: international technical core",
         ] },
         { heading: "2. Assignment and research question", lines: [
           "Research question: #{scope['research_question']}", "Rights claimant reference: #{scope['claimant_ref']}",
@@ -477,14 +486,30 @@ module ::MediaGallery
       allowed
     end
 
-    def issuer_name
-      ::MediaGallery::EvidencePolicy.issuer_name.presence || "Discourse Media Library"
+    def report_issuer_data(evidence_case)
+      profile = ::MediaGallery::EvidenceGovernance.external_profile(evidence_case)
+      issuer = profile["issuer_display_name"].to_s.presence || ::MediaGallery::EvidencePolicy.issuer_name.presence || "Media Library"
+      {
+        "service" => "#{issuer} Forensic Evidence Service",
+        "operator_identity" => profile["operator_display_name"],
+        "website" => profile["website_url"] || ::MediaGallery::EvidenceGovernance.site_base_url,
+        "generic_contact" => profile["generic_contact"],
+        "legal_notice_url" => profile["privacy_legal_notice_url"],
+        "policy_reference" => profile["policy_reference"],
+        "controller_country" => profile["controller_country"],
+        "personal_staff_names_included" => false,
+      }.compact
+    end
+
+    def report_issuer_name(evidence_case)
+      profile = evidence_case.governance_snapshot.is_a?(Hash) ? evidence_case.governance_snapshot : {}
+      profile["issuer_display_name"].to_s.presence || ::MediaGallery::EvidencePolicy.issuer_name.presence || "Media Library"
     end
     private_class_method :build_report_data, :report_sections, :evidence_lines, :evidence_object_summary,
                          :display_account, :controlled_conclusion, :mandatory_limitation,
                          :alternative_hypotheses, :review_summary, :report_data_digest,
                          :external_media_snapshot, :external_identify_summary, :privacy_minimize_identify_data, :sensitive_identity_key?,
                          :snapshot_account_ref_map, :external_account_snapshot, :external_fingerprint_snapshot,
-                         :external_scan_metadata, :external_inspection_metadata, :external_object_metadata, :issuer_name
+                         :external_scan_metadata, :external_inspection_metadata, :external_object_metadata, :report_issuer_data, :report_issuer_name
   end
 end

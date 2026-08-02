@@ -49,6 +49,18 @@ module ::MediaGallery
              class_name: "MediaGallery::ForensicEvidenceDisclosure",
              foreign_key: :evidence_case_id,
              dependent: :restrict_with_error
+    has_many :retention_reviews,
+             class_name: "MediaGallery::ForensicEvidenceRetentionReview",
+             foreign_key: :evidence_case_id,
+             dependent: :restrict_with_error
+    has_many :privacy_requests,
+             class_name: "MediaGallery::ForensicEvidencePrivacyRequest",
+             foreign_key: :evidence_case_id,
+             dependent: :restrict_with_error
+    has_many :identity_annexes,
+             class_name: "MediaGallery::ForensicEvidenceIdentityAnnex",
+             foreign_key: :evidence_case_id,
+             dependent: :restrict_with_error
 
     validates :case_ref, presence: true, uniqueness: true
     validates :claimant_ref, presence: true, length: { maximum: 200 }
@@ -57,6 +69,7 @@ module ::MediaGallery
     validates :classification, inclusion: { in: CLASSIFICATIONS }
     validates :decision, inclusion: { in: DECISIONS }
     validates :report_language, inclusion: { in: %w[en] }
+    validates :retention_class, inclusion: { in: %w[incomplete rejected non_conclusive conclusive sealed_released] }, allow_blank: true
 
     before_validation :ensure_case_ref, on: :create
 

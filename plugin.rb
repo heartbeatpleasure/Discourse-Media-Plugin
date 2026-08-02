@@ -27,6 +27,18 @@ after_initialize do
       :signature,
       :authorization,
       :cookie,
+      :passphrase,
+      :annex_passphrase,
+      :selections,
+      :annex_selections,
+      :necessity_reason,
+      :annex_necessity_reason,
+      :requester_ref,
+      :privacy_requester_ref,
+      :privacy_decision,
+      :privacy_reason,
+      :annex_recipient_ref,
+      :annex_purpose,
     ]
   rescue
     # Keep plugin boot resilient if Rails filter configuration is unavailable.
@@ -87,6 +99,11 @@ after_initialize do
   require_relative "lib/media_gallery/evidence_inspector"
   require_relative "lib/media_gallery/evidence_acquisition"
   require_relative "lib/media_gallery/evidence_chain"
+  require_relative "lib/media_gallery/evidence_authorization"
+  require_relative "lib/media_gallery/evidence_governance"
+  require_relative "lib/media_gallery/evidence_retention"
+  require_relative "lib/media_gallery/evidence_privacy"
+  require_relative "lib/media_gallery/evidence_identity_annex"
   require_relative "lib/media_gallery/evidence_policy"
   require_relative "lib/media_gallery/evidence_snapshot"
   require_relative "lib/media_gallery/evidence_pdf"
@@ -128,6 +145,9 @@ after_initialize do
   require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_package.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/forensic_legal_hold.rb", __dir__)
   require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_disclosure.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_retention_review.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_privacy_request.rb", __dir__)
+  require_dependency File.expand_path("app/models/media_gallery/forensic_evidence_identity_annex.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_item_serializer.rb", __dir__)
   require_dependency File.expand_path("app/serializers/media_gallery/media_comment_serializer.rb", __dir__)
   require_dependency File.expand_path("app/controllers/media_gallery/admin_access_controller.rb", __dir__)
@@ -213,6 +233,7 @@ after_initialize do
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/reports" => "media_gallery/admin_evidence_cases#generate_report", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/packages" => "media_gallery/admin_evidence_cases#create_package", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/legal-hold" => "media_gallery/admin_evidence_cases#legal_hold", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/legal-hold/review" => "media_gallery/admin_evidence_cases#review_legal_hold", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/packages/:package_ref/verify" => "media_gallery/admin_evidence_cases#verify_package", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, package_ref: /EP-[A-Za-z0-9-]+/ }
     get "/admin/plugins/media-gallery/evidence-cases/:case_ref/reports/:report_ref" => "media_gallery/admin_evidence_cases#download_report", constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, report_ref: /RPT-[A-Za-z0-9-]+/ }
     get "/admin/plugins/media-gallery/evidence-cases/:case_ref/packages/:package_ref" => "media_gallery/admin_evidence_cases#download_package", constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, package_ref: /EP-[A-Za-z0-9-]+/ }
@@ -220,6 +241,14 @@ after_initialize do
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/releases/:disclosure_ref/revoke" => "media_gallery/admin_evidence_cases#revoke_release", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, disclosure_ref: /DISC-[A-Za-z0-9-]+/ }
     get "/admin/plugins/media-gallery/evidence-cases/:case_ref/releases/:disclosure_ref/receipt" => "media_gallery/admin_evidence_cases#download_release_receipt", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, disclosure_ref: /DISC-[A-Za-z0-9-]+/ }
     post "/admin/plugins/media-gallery/evidence-cases/:case_ref/lifecycle" => "media_gallery/admin_evidence_cases#lifecycle", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/governance" => "media_gallery/admin_evidence_cases#capture_governance", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/retention-reviews" => "media_gallery/admin_evidence_cases#retention_review", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/privacy-requests" => "media_gallery/admin_evidence_cases#create_privacy_request", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    put "/admin/plugins/media-gallery/evidence-cases/:case_ref/privacy-requests/:request_ref" => "media_gallery/admin_evidence_cases#update_privacy_request", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, request_ref: /PRIV-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/identity-annexes" => "media_gallery/admin_evidence_cases#create_identity_annex", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/ }
+    get "/admin/plugins/media-gallery/evidence-cases/:case_ref/identity-annexes/:annex_ref" => "media_gallery/admin_evidence_cases#view_identity_annex", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, annex_ref: /RIA-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/identity-annexes/:annex_ref/approve" => "media_gallery/admin_evidence_cases#approve_identity_annex", defaults: { format: :json }, constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, annex_ref: /RIA-[A-Za-z0-9-]+/ }
+    post "/admin/plugins/media-gallery/evidence-cases/:case_ref/identity-annexes/:annex_ref/export" => "media_gallery/admin_evidence_cases#export_identity_annex", constraints: { case_ref: /CASE-[A-Za-z0-9-]+/, annex_ref: /RIA-[A-Za-z0-9-]+/ }
     get "/media-gallery/evidence-release/:disclosure_ref" => "media_gallery/evidence_release#landing", constraints: { disclosure_ref: /DISC-[A-Za-z0-9-]+/ }
     post "/media-gallery/evidence-release/:disclosure_ref/redeem" => "media_gallery/evidence_release#redeem", constraints: { disclosure_ref: /DISC-[A-Za-z0-9-]+/ }
 

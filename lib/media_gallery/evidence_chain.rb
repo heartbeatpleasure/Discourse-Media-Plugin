@@ -10,6 +10,7 @@ module ::MediaGallery
     MATERIAL_REVIEW_EVENT_TYPES = %w[
       case_created case_intake_updated source_capture_added evidence_object_acquired
       evidence_quarantine_reviewed evidence_acquisition_checked identify_snapshot_attached claimant_confirmation_recorded
+      governance_profile_captured governance_profile_replaced
     ].freeze
     REPORT_MATERIAL_EVENT_TYPES = (MATERIAL_REVIEW_EVENT_TYPES + %w[review_approved review_rejected]).freeze
     EXTERNAL_DETAIL_KEYS = %w[
@@ -19,6 +20,10 @@ module ::MediaGallery
       report_data_sha256 pdf_sha256 package_version package_sha256 manifest_sha256 seal_method
       cms_signature_integrity_verified certificate_trust_verified timestamp_status disclosure_ref package_ref
       expires_at_utc max_downloads download_count release_status recipient_ref_sha256 purpose_sha256 superseding_case_ref superseded_case_ref
+      governance_profile_ref governance_profile_sha256 previous_governance_profile_ref retention_action retention_class hold_action review_due_at_utc
+      retention_due_at_utc previous_due_at_utc next_due_at_utc request_type request_status processing_restricted due_at_utc
+      decision_present decision_sha256 requester_ref_sha256 annex_version annex_status annex_payload_sha256
+      annex_key_id necessity_reason_sha256 approval_kind envelope_schema
     ].freeze
 
     def record!(evidence_case:, event_type:, user: nil, object_ref: nil, reason: nil, details: {}, actor_ref: nil, actor_type: nil, occurred_at: Time.now.utc)

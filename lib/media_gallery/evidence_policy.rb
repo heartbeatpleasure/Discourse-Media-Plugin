@@ -53,7 +53,8 @@ module ::MediaGallery
 
       add_blocker(blockers, "evidence_module_disabled", "The evidence module is disabled in site settings.") unless enabled?
       add_blocker(blockers, "issuer_name_missing", "Configure a non-personal evidence issuer name.") if issuer_name.blank?
-      add_blocker(blockers, "operator_identity_missing", "Configure the website/operator legal identity or legal-notice identity.") if operator_identity.blank?
+      governance = evidence_case.respond_to?(:governance_snapshot) && evidence_case.governance_snapshot.is_a?(Hash) ? evidence_case.governance_snapshot : {}
+      add_blocker(blockers, "governance_profile_missing", "Capture the current platform governance profile before finalization.") if governance.blank? || evidence_case.governance_profile_ref.to_s.blank?
       case_key_id = evidence_case.metadata.is_a?(Hash) ? evidence_case.metadata["pseudonymization_key_id"].to_s : ""
       current_key_id = ::MediaGallery::EvidenceReference.reviewer_secret_key_id
       add_blocker(blockers, "pseudonymization_key_id_missing", "The case does not record the pseudonymization-key identifier required for stable reviewer/account references.") if case_key_id.blank?
@@ -172,12 +173,38 @@ module ::MediaGallery
         warnings << issue("cms_certificate_trust_external", "A CMS signature verifies manifest integrity against the embedded certificate only. Certificate-chain trust must be established independently by the recipient.")
         warnings << issue("cms_seal_not_configured", "CMS signing is selected but the private key and certificate are not fully configured; package generation will be blocked.") unless cms_seal_configured?
       end
-      warnings << issue("restricted_annex_not_implemented", "Sensitive identity disclosure is intentionally excluded; the restricted identity annex is not implemented in this release.")
+      if ::MediaGallery::EvidenceIdentityAnnex.enabled?
+        unless ::MediaGallery::EvidenceIdentityAnnex.configured?
+          warnings << issue("restricted_annex_encryption_not_configured", "The optional Restricted Identity Annex is enabled but its encryption key reference is not configured.")
+        end
+        warnings << issue("restricted_annex_separate_product", "Restricted identity annexes are encrypted, separately approved and never included in the standard report or evidence package.")
+      else
+        warnings << issue("restricted_annex_disabled", "Sensitive identity disclosure is disabled by default and excluded from standard exports.")
+      end
       warnings << issue("automatic_source_fetch_disabled", "External pages are not fetched server-side; source capture must be uploaded or referenced by staff.")
       unless ::MediaGallery::EvidenceScanner.enabled?
         warnings << issue("automatic_malware_scanner_disabled", "Automatic malware scanning is disabled; clean status depends on a documented manual quarantine review.")
       end
-      warnings << issue("retention_due_advisory_only", "The retention due date is an administrative review reminder; this release does not automatically delete evidence cases.")
+      if ::MediaGallery::EvidenceRetention.overdue?(evidence_case)
+        warnings << issue("retention_review_overdue", "The configured retention review date has passed. Review whether the case should be retained, restricted or proposed for disposal.")
+      elsif ::MediaGallery::EvidenceRetention.due_soon?(evidence_case)
+        warnings << issue("retention_review_due_soon", "The configured retention review date is approaching.")
+      end
+      warnings << issue("retention_manual_review_only", "Retention review is enforced through reminders and recorded decisions; file deletion is never automatic in this release.")
+      if evidence_case.legal_hold?
+        hold_review_due = evidence_case.legal_holds.where(action: %w[placed reviewed]).order(occurred_at: :desc, id: :desc).limit(1).pick(:review_due_at)
+        if hold_review_due.present? && hold_review_due < Time.now.utc
+          warnings << issue("legal_hold_review_overdue", "The active legal hold review date has passed. The hold remains active until an authorised reviewer explicitly releases it.")
+        elsif hold_review_due.present? && hold_review_due <= Time.now.utc + ::MediaGallery::EvidenceRetention.warning_days.days
+          warnings << issue("legal_hold_review_due_soon", "The active legal hold review date is approaching. Review and extend it if the hold remains necessary.")
+        end
+      end
+      if ::MediaGallery::EvidenceRetention.disposal_requested?(evidence_case)
+        add_blocker(blockers, "retention_disposal_requested", "A controlled-disposal proposal is pending. Cancel or resolve that proposal before creating new final reports, packages or disclosures.")
+      end
+      if evidence_case.respond_to?(:processing_restricted?) && evidence_case.processing_restricted?
+        add_blocker(blockers, "privacy_processing_restricted", "A privacy request currently restricts finalization and new disclosures from this case.")
+      end
 
       {
         ready: blockers.empty?,

@@ -8,7 +8,7 @@ module ::MediaGallery
       raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
       kind = review_kind.to_s
       raise ArgumentError, "invalid_review_kind" unless %w[technical senior privacy].include?(kind)
-      raise Discourse::InvalidAccess.new if %w[senior privacy].include?(kind) && !user.admin?
+      ::MediaGallery::EvidenceAuthorization.ensure!(user, ::MediaGallery::EvidenceAuthorization.review_capability(kind))
 
       normalized = ::MediaGallery::EvidencePolicy.normalize_checklist(checklist)
       result = outcome.to_s == "approved" ? "approved" : "rejected"
@@ -18,7 +18,11 @@ module ::MediaGallery
 
       review = nil
       ::MediaGallery::ForensicEvidenceCase.transaction do
-        role = ::MediaGallery::EvidenceReference.role_for_user(user, kind)
+        role = case kind
+        when "privacy" then "privacy_legal_approver"
+        when "senior" then "senior_staff_reviewer"
+        else "staff_reviewer"
+        end
         review = ::MediaGallery::ForensicEvidenceReview.create!(
           evidence_case: evidence_case,
           review_ref: ::MediaGallery::EvidenceReference.review_ref,
@@ -62,8 +66,55 @@ module ::MediaGallery
       review
     end
 
+    def review_legal_hold!(evidence_case:, user:, reason:, authority_ref: nil)
+      ::MediaGallery::EvidenceAuthorization.ensure!(user, :senior_reviewer)
+      raise ArgumentError, "legal_hold_not_active" unless evidence_case.legal_hold?
+      cleaned_reason = sanitize(reason, 4000)
+      raise ArgumentError, "legal_hold_reason_missing" if cleaned_reason.blank?
+
+      now = Time.now.utc
+      review_due_at = now + legal_hold_review_days.days
+      hold = nil
+      ::MediaGallery::ForensicEvidenceCase.transaction do
+        evidence_case.lock!
+        evidence_case.reload
+        raise ArgumentError, "legal_hold_not_active" unless evidence_case.legal_hold?
+
+        actor_ref = ::MediaGallery::EvidenceReference.reviewer_ref(
+          case_ref: evidence_case.case_ref,
+          user_id: user.id,
+          role: "senior_staff_reviewer",
+        )
+        hold = ::MediaGallery::ForensicLegalHold.create!(
+          evidence_case: evidence_case,
+          hold_ref: ::MediaGallery::EvidenceReference.hold_ref,
+          action: "reviewed",
+          reason: cleaned_reason,
+          authority_ref: sanitize(authority_ref, 200),
+          actor: user,
+          actor_ref: actor_ref,
+          occurred_at: now,
+          review_due_at: review_due_at,
+        )
+        ::MediaGallery::EvidenceChain.record!(
+          evidence_case: evidence_case,
+          event_type: "legal_hold_reviewed",
+          user: user,
+          actor_type: "senior_staff",
+          actor_ref: actor_ref,
+          object_ref: hold.hold_ref,
+          reason: cleaned_reason,
+          details: {
+            hold_action: "reviewed",
+            review_due_at_utc: review_due_at.iso8601(6),
+          },
+        )
+      end
+      hold
+    end
+
     def set_legal_hold!(evidence_case:, user:, active:, reason:, authority_ref: nil)
-      raise Discourse::InvalidAccess.new unless user.admin?
+      ::MediaGallery::EvidenceAuthorization.ensure!(user, :senior_reviewer)
       requested = ActiveModel::Type::Boolean.new.cast(active)
       cleaned_reason = sanitize(reason, 4000)
       raise ArgumentError, "legal_hold_reason_missing" if cleaned_reason.blank?
@@ -88,6 +139,7 @@ module ::MediaGallery
           actor: user,
           actor_ref: actor_ref,
           occurred_at: Time.now.utc,
+          review_due_at: requested ? Time.now.utc + legal_hold_review_days.days : nil,
         )
         closed_status = %w[withdrawn superseded].include?(evidence_case.status)
         next_status = if requested
@@ -109,7 +161,7 @@ module ::MediaGallery
           user: user,
           object_ref: hold.hold_ref,
           reason: cleaned_reason,
-          details: { authority_ref: hold.authority_ref },
+          details: { authority_ref: hold.authority_ref, review_due_at_utc: hold.review_due_at&.utc&.iso8601(6) }.compact,
         )
       end
       hold
@@ -128,9 +180,16 @@ module ::MediaGallery
       "draft"
     end
 
+    def legal_hold_review_days
+      value = SiteSetting.respond_to?(:media_gallery_evidence_legal_hold_review_days) ? SiteSetting.media_gallery_evidence_legal_hold_review_days.to_i : 180
+      value.between?(1, 3650) ? value : 180
+    rescue
+      180
+    end
+
     def sanitize(value, max_length)
       ::MediaGallery::TextSanitizer.plain_text(value, max_length: max_length, allow_newlines: true).to_s.strip
     end
-    private_class_method :sanitize, :restored_status
+    private_class_method :sanitize, :restored_status, :legal_hold_review_days
   end
 end

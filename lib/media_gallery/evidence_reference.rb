@@ -48,6 +48,18 @@ module ::MediaGallery
       "DISC-#{Time.now.utc.year}-#{SecureRandom.hex(8).upcase}"
     end
 
+    def retention_review_ref
+      "RET-#{Time.now.utc.year}-#{SecureRandom.hex(8).upcase}"
+    end
+
+    def privacy_request_ref
+      "PRIV-#{Time.now.utc.year}-#{SecureRandom.hex(8).upcase}"
+    end
+
+    def annex_ref(case_ref:, version:)
+      "RIA-#{case_ref.to_s.sub(/\ACASE-/, "")}-V#{version.to_i}"
+    end
+
     def reviewer_ref(case_ref:, user_id:, role: "staff_reviewer")
       prefix = role.to_s == "senior_staff_reviewer" ? "SSR" : (role.to_s == "privacy_legal_approver" ? "PLA" : "SR")
       digest = OpenSSL::HMAC.hexdigest("SHA256", reviewer_secret, "#{case_ref}:reviewer:#{user_id}")

@@ -73,11 +73,29 @@ module ::MediaGallery
       return false unless enabled?
       return false unless user.staff?
 
+      if normalized_page_key == :evidence_cases
+        return true if setting_enabled?(:evidence_cases)
+        return evidence_capability_granted?(user)
+      end
+
       setting_enabled?(normalized_page_key)
     end
 
-    def any_staff_access_enabled?
-      enabled? && PAGE_SETTINGS.keys.any? { |page_key| setting_enabled?(page_key) }
+    def evidence_capability_granted?(user)
+      return false unless defined?(::MediaGallery::EvidenceAuthorization)
+
+      ::MediaGallery::EvidenceAuthorization::CAPABILITY_SETTINGS.keys.any? do |capability|
+        ::MediaGallery::EvidenceAuthorization.allowed?(user, capability)
+      end
+    rescue
+      false
+    end
+
+    def any_staff_access_enabled?(user = nil)
+      return false unless enabled?
+      return true if PAGE_SETTINGS.keys.any? { |page_key| setting_enabled?(page_key) }
+
+      evidence_cases_enabled? && user.present? && evidence_capability_granted?(user)
     rescue
       false
     end
@@ -88,7 +106,7 @@ module ::MediaGallery
       return false unless enabled?
       return false unless user.staff?
 
-      any_staff_access_enabled?
+      any_staff_access_enabled?(user)
     rescue
       false
     end

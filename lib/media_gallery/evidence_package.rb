@@ -12,14 +12,15 @@ module ::MediaGallery
   module EvidencePackage
     module_function
 
-    PACKAGE_SCHEMA = "media-gallery-evidence-package-v1.1"
+    PACKAGE_SCHEMA = "media-gallery-evidence-package-v1.2"
+    SUPPORTED_PACKAGE_SCHEMAS = %w[media-gallery-evidence-package-v1.1 media-gallery-evidence-package-v1.2].freeze
     MAX_ARCHIVE_ENTRIES = 2_000
     MAX_VERIFY_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 
     Entry = Struct.new(:path, :role, :size, :sha256, :bytes, :source_path, keyword_init: true)
 
     def create!(evidence_case:, report:, user:)
-      raise Discourse::InvalidAccess.new unless user.admin?
+      ::MediaGallery::EvidenceAuthorization.ensure!(user, :senior_reviewer)
       raise ArgumentError, "report_case_mismatch" unless report.evidence_case_id == evidence_case.id
       raise ArgumentError, "final_report_required" unless %w[final_unsealed final_sealed].include?(report.status)
       latest_final = evidence_case.reports.where(status: %w[final_unsealed final_sealed]).order(version: :desc).first
@@ -110,6 +111,7 @@ module ::MediaGallery
           },
         )
       end
+      ::MediaGallery::EvidenceRetention.apply!(evidence_case: evidence_case.reload, user: user, anchor: generated_at, reason: "Evidence package creation changed the retention class.", force: true)
       record
     rescue
       File.chmod(0o640, path) rescue nil if defined?(path) && path.present? && File.file?(path)
@@ -162,7 +164,7 @@ module ::MediaGallery
         errors << "manifest_invalid_json"
       end
       if manifest.is_a?(Hash)
-        errors << "manifest_schema_mismatch" unless manifest["schema"] == PACKAGE_SCHEMA
+        errors << "manifest_schema_mismatch" unless SUPPORTED_PACKAGE_SCHEMAS.include?(manifest["schema"].to_s)
         manifest_paths = []
         Array(manifest["files"]).each do |row|
           next unless row.is_a?(Hash)
@@ -288,6 +290,7 @@ module ::MediaGallery
 
       entries << bytes_entry("04_reference-media/media-item-snapshot.json", "media_item_snapshot", pretty_json(external_media_snapshot(evidence_case)))
       entries << bytes_entry("04_reference-media/settings-snapshot.json", "settings_snapshot", pretty_json(evidence_case.settings_snapshot))
+      entries << bytes_entry("04_reference-media/governance-profile.json", "governance_profile", pretty_json(::MediaGallery::EvidenceGovernance.external_profile(evidence_case)))
 
       snapshot = evidence_case.latest_identify_snapshot
       if snapshot.present?
@@ -347,11 +350,30 @@ module ::MediaGallery
         "disclosures" => disclosures,
       }
       entries << bytes_entry("07_chain-of-custody/disclosure-log.json", "privacy_minimized_disclosure_log", pretty_json(disclosure_log))
-      entries << bytes_entry("09_restricted-annex/annex-reference.txt", "restricted_annex_notice", "Restricted Identity Annex is not implemented in this release. Sensitive identity data is excluded by default.\n")
+      annexes = evidence_case.identity_annexes.order(version: :asc).map do |annex|
+        {
+          "annex_ref" => annex.annex_ref,
+          "version" => annex.version,
+          "status" => annex.status,
+          "payload_sha256" => annex.payload_sha256,
+          "included_in_standard_package" => false,
+        }
+      end
+      annex_notice = {
+        "schema" => "media-gallery-restricted-annex-reference-v1",
+        "feature_enabled" => ::MediaGallery::EvidenceIdentityAnnex.enabled?,
+        "separate_encrypted_product" => true,
+        "included_in_standard_package" => false,
+        "annexes" => annexes,
+        "warning" => "Restricted identity data is never included in the standard evidence package.",
+      }
+      entries << bytes_entry("09_restricted-annex/annex-reference.json", "restricted_annex_notice", pretty_json(annex_notice))
       [entries, exclusions]
     end
 
     def manifest_data(evidence_case, report, package_ref, generated_at, entries, exclusions)
+      governance = ::MediaGallery::EvidenceGovernance.external_profile(evidence_case)
+      issuer = governance["issuer_display_name"].to_s.presence || ::MediaGallery::EvidencePolicy.issuer_name.presence || "Media Library"
       {
         "schema" => PACKAGE_SCHEMA,
         "package_id" => package_ref,
@@ -359,8 +381,10 @@ module ::MediaGallery
         "report_id" => report.report_ref,
         "status" => ::MediaGallery::EvidencePolicy.cms_seal_configured? ? "cms_signed_integrity" : "integrity_only",
         "created_at_utc" => generated_at.iso8601(6),
-        "issuer" => "#{::MediaGallery::EvidencePolicy.issuer_name} Forensic Evidence Service",
-        "operator_identity" => ::MediaGallery::EvidencePolicy.operator_identity,
+        "issuer" => "#{issuer} Forensic Evidence Service",
+        "operator_identity" => governance["operator_display_name"],
+        "governance_profile_ref" => evidence_case.governance_profile_ref,
+        "governance_profile_sha256" => evidence_case.governance_snapshot.is_a?(Hash) ? evidence_case.governance_snapshot["profile_sha256"] : nil,
         "jurisdiction_profile" => "international_technical_core",
         "files" => entries.sort_by(&:path).map do |entry|
           { "path" => entry.path, "role" => entry.role, "size" => entry.size, "sha256" => entry.sha256 }
@@ -382,7 +406,7 @@ module ::MediaGallery
           "No trusted timestamp token is included in this release.",
           "Release activity after package creation is preserved in the case audit and separate release receipts; this immutable package is not rewritten.",
         ],
-      }
+      }.compact
     end
 
     def package_info_data(evidence_case, report, package_ref, generated_at)

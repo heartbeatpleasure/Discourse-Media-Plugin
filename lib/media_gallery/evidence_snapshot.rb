@@ -36,6 +36,7 @@ module ::MediaGallery
       redacted_url, url_hash = ::MediaGallery::EvidenceReference.redacted_url(external_url)
       now = Time.now.utc
       case_ref = ::MediaGallery::EvidenceReference.case_ref(time: now)
+      governance_snapshot = ::MediaGallery::EvidenceGovernance.snapshot_for_new_case
       evidence_case = nil
       ::MediaGallery::ForensicEvidenceCase.transaction do
         evidence_case = ::MediaGallery::ForensicEvidenceCase.create!(
@@ -60,15 +61,19 @@ module ::MediaGallery
           updated_by: user,
           media_snapshot: item.present? ? media_snapshot(item, case_ref: case_ref) : {},
           settings_snapshot: settings_snapshot,
+          governance_profile_ref: governance_snapshot["profile_ref"],
+          governance_snapshot: governance_snapshot,
+          retention_class: "incomplete",
+          retention_review_due_at: now + ::MediaGallery::EvidenceRetention.days_for("incomplete").days,
           metadata: {
             "report_scope" => "international_jurisdiction_neutral_technical_core",
             "source_url_redacted" => redacted_url.present? && redacted_url != external_url.to_s.strip,
-            "restricted_identity_annex" => "not_implemented_default_deny",
+            "restricted_identity_annex" => (::MediaGallery::EvidenceIdentityAnnex.enabled? ? "optional_separate_encrypted_product" : "disabled_default_deny"),
             "automatic_source_fetch" => "disabled",
-            "retention_enforcement" => "advisory_review_date_only",
+            "retention_enforcement" => "manual_review_no_automatic_deletion",
             "pseudonymization_key_id" => ::MediaGallery::EvidenceReference.reviewer_secret_key_id,
           },
-          retention_due_at: draft_retention_due_at(now),
+          retention_due_at: now + ::MediaGallery::EvidenceRetention.days_for("incomplete").days,
         )
         ::MediaGallery::EvidenceChain.record!(
           evidence_case: evidence_case,
@@ -79,6 +84,7 @@ module ::MediaGallery
             media_public_id: item&.public_id,
             classification: evidence_case.classification,
             report_language: "en",
+            governance_profile_ref: governance_snapshot["profile_ref"],
           },
         )
       end
@@ -183,6 +189,7 @@ module ::MediaGallery
           },
         )
       end
+      ::MediaGallery::EvidenceRetention.apply!(evidence_case: evidence_case.reload, user: user, anchor: Time.now.utc, reason: "Identify decision updated the retention class.", force: true)
       snapshot
     rescue
       ::MediaGallery::EvidenceVault.discard_uncommitted_file!(raw_object) if defined?(raw_object) && raw_object.present?
@@ -233,6 +240,7 @@ module ::MediaGallery
           },
         )
       end
+      ::MediaGallery::EvidenceRetention.apply!(evidence_case: evidence_case.reload, user: user, anchor: Time.now.utc, reason: "Case intake update reviewed against the current retention policy.")
       evidence_case
     end
 

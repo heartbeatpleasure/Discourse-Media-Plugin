@@ -16,10 +16,12 @@ module ::MediaGallery
     ABSOLUTE_MAX_DOWNLOADS = 20
 
     def create!(evidence_case:, package:, user:, recipient_ref:, purpose:, expires_in_hours: nil, max_downloads: nil)
-      raise Discourse::InvalidAccess.new unless user&.admin?
+      ::MediaGallery::EvidenceAuthorization.ensure!(user, :senior_reviewer)
       raise ArgumentError, "package_case_mismatch" unless package.evidence_case_id == evidence_case.id
       raise ArgumentError, "case_withdrawn" if evidence_case.status == "withdrawn"
       raise ArgumentError, "case_superseded" if evidence_case.status == "superseded"
+      raise ArgumentError, "privacy_processing_restricted" if evidence_case.processing_restricted?
+      raise ArgumentError, "retention_disposal_requested" if ::MediaGallery::EvidenceRetention.disposal_requested?(evidence_case)
       raise ArgumentError, "latest_package_required" unless evidence_case.latest_package&.id == package.id
       raise ArgumentError, "secure_release_transport_required" unless transport_ready?
 
@@ -43,6 +45,8 @@ module ::MediaGallery
         evidence_case.reload
         raise ArgumentError, "case_withdrawn" if evidence_case.status == "withdrawn"
         raise ArgumentError, "case_superseded" if evidence_case.status == "superseded"
+        raise ArgumentError, "privacy_processing_restricted" if evidence_case.processing_restricted?
+        raise ArgumentError, "retention_disposal_requested" if ::MediaGallery::EvidenceRetention.disposal_requested?(evidence_case)
         raise ArgumentError, "latest_package_required" unless evidence_case.latest_package&.id == package.id
 
         disclosure = ::MediaGallery::ForensicEvidenceDisclosure.create!(
@@ -81,11 +85,12 @@ module ::MediaGallery
         )
       end
 
+      ::MediaGallery::EvidenceRetention.apply!(evidence_case: evidence_case.reload, user: user, anchor: now, reason: "Controlled disclosure changed the retention class.", force: true)
       { disclosure: disclosure, token: raw_token }
     end
 
     def revoke!(disclosure:, user:, reason:)
-      raise Discourse::InvalidAccess.new unless user&.admin?
+      ::MediaGallery::EvidenceAuthorization.ensure!(user, :senior_reviewer)
       clean_reason = sanitize(reason, 4000)
       raise ArgumentError, "release_revocation_reason_missing" if clean_reason.blank?
 
@@ -143,6 +148,7 @@ module ::MediaGallery
         disclosure.lock!
         now = Time.now.utc
         raise Unavailable if %w[withdrawn superseded].include?(evidence_case.status)
+        raise Unavailable if evidence_case.processing_restricted?
         raise Unavailable unless disclosure.active?(at: now)
 
         next_count = disclosure.download_count + 1

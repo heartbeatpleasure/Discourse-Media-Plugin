@@ -11,6 +11,9 @@ module ::MediaGallery
 
     before_action :ensure_evidence_enabled
     before_action :no_store_headers!
+    before_action :ensure_case_operator!, only: %i[create from_identify update upload_object add_vault_reference quarantine rescan_object attach_identify confirm_claimant]
+    before_action :ensure_senior_reviewer!, only: %i[create_package legal_hold review_legal_hold verify_package create_release revoke_release download_release_receipt lifecycle download_package]
+    before_action :ensure_policy_administrator!, only: %i[capture_governance retention_review create_privacy_request update_privacy_request]
 
     def index
       scope = ::MediaGallery::ForensicEvidenceCase.includes(:supersedes_case, :superseded_by_case).order(created_at: :desc, id: :desc)
@@ -265,7 +268,6 @@ module ::MediaGallery
     end
 
     def create_package
-      ensure_evidence_admin!
       evidence_case = find_case!
       report = if params[:report_ref].present?
         evidence_case.reports.find_by!(report_ref: params[:report_ref].to_s)
@@ -280,7 +282,6 @@ module ::MediaGallery
     end
 
     def legal_hold
-      ensure_evidence_admin!
       evidence_case = find_case!
       hold = ::MediaGallery::EvidenceReview.set_legal_hold!(
         evidence_case: evidence_case,
@@ -294,8 +295,20 @@ module ::MediaGallery
       render_evidence_error(e)
     end
 
+    def review_legal_hold
+      evidence_case = find_case!
+      hold = ::MediaGallery::EvidenceReview.review_legal_hold!(
+        evidence_case: evidence_case,
+        user: current_user,
+        reason: params[:reason],
+        authority_ref: params[:authority_ref],
+      )
+      render_json_dump(ok: true, legal_hold: legal_hold_payload(hold), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
     def verify_package
-      ensure_evidence_admin!
       evidence_case = find_case!
       package = evidence_case.packages.find_by!(package_ref: params[:package_ref].to_s)
       render_json_dump(ok: true, verification: ::MediaGallery::EvidencePackage.verify(package), package: package_payload(package))
@@ -304,7 +317,6 @@ module ::MediaGallery
     end
 
     def create_release
-      ensure_evidence_admin!
       evidence_case = find_case!
       package = if params[:package_ref].present?
         evidence_case.packages.find_by!(package_ref: params[:package_ref].to_s)
@@ -335,7 +347,6 @@ module ::MediaGallery
     end
 
     def revoke_release
-      ensure_evidence_admin!
       evidence_case = find_case!
       disclosure = evidence_case.disclosures.find_by!(disclosure_ref: params[:disclosure_ref].to_s)
       ::MediaGallery::EvidenceRelease.revoke!(
@@ -349,7 +360,6 @@ module ::MediaGallery
     end
 
     def download_release_receipt
-      ensure_evidence_admin!
       evidence_case = find_case!
       disclosure = evidence_case.disclosures.find_by!(disclosure_ref: params[:disclosure_ref].to_s)
       receipt = ::MediaGallery::EvidenceRelease.receipt(disclosure)
@@ -365,7 +375,6 @@ module ::MediaGallery
     end
 
     def lifecycle
-      ensure_evidence_admin!
       evidence_case = find_case!
       action = params[:lifecycle_action].to_s
       case action
@@ -391,17 +400,125 @@ module ::MediaGallery
       render_evidence_error(e)
     end
 
+    def capture_governance
+      evidence_case = find_case!
+      ::MediaGallery::EvidenceGovernance.capture!(
+        evidence_case: evidence_case,
+        user: current_user,
+        force: ActiveModel::Type::Boolean.new.cast(params[:force]),
+        reason: params[:reason],
+      )
+      render_json_dump(ok: true, case: case_payload(evidence_case.reload), config: config_payload)
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def retention_review
+      evidence_case = find_case!
+      review = ::MediaGallery::EvidenceRetention.review!(
+        evidence_case: evidence_case,
+        user: current_user,
+        action: params[:retention_action],
+        reason: params[:reason],
+        extension_days: params[:extension_days],
+      )
+      render_json_dump(ok: true, retention_review: retention_review_payload(review), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def create_privacy_request
+      evidence_case = find_case!
+      request = ::MediaGallery::EvidencePrivacy.create_request!(
+        evidence_case: evidence_case,
+        user: current_user,
+        request_type: params[:request_type],
+        requester_ref: params[:privacy_requester_ref].presence || params[:requester_ref],
+        received_at: params[:received_at],
+        processing_restricted: params[:processing_restricted],
+        reason: params[:privacy_reason].presence || params[:reason],
+      )
+      render_json_dump(ok: true, privacy_request: privacy_request_payload(request), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def update_privacy_request
+      evidence_case = find_case!
+      request = evidence_case.privacy_requests.find_by!(request_ref: params[:request_ref].to_s)
+      ::MediaGallery::EvidencePrivacy.update_request!(
+        request: request,
+        user: current_user,
+        status: params[:status],
+        processing_restricted: params.key?(:processing_restricted) ? params[:processing_restricted] : nil,
+        decision: params[:privacy_decision].presence || params[:decision],
+        reason: params[:privacy_reason].presence || params[:reason],
+      )
+      render_json_dump(ok: true, privacy_request: privacy_request_payload(request.reload), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def create_identity_annex
+      evidence_case = find_case!
+      annex = ::MediaGallery::EvidenceIdentityAnnex.create!(
+        evidence_case: evidence_case,
+        user: current_user,
+        selections: params[:annex_selections].presence || params[:selections],
+        necessity_reason: params[:annex_necessity_reason].presence || params[:necessity_reason],
+      )
+      render_json_dump(ok: true, identity_annex: identity_annex_payload(annex), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def view_identity_annex
+      evidence_case = find_case!
+      annex = evidence_case.identity_annexes.find_by!(annex_ref: params[:annex_ref].to_s)
+      render_json_dump(ok: true, identity_annex: identity_annex_payload(annex), payload: ::MediaGallery::EvidenceIdentityAnnex.view!(annex: annex, user: current_user))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def approve_identity_annex
+      evidence_case = find_case!
+      annex = evidence_case.identity_annexes.find_by!(annex_ref: params[:annex_ref].to_s)
+      ::MediaGallery::EvidenceIdentityAnnex.approve!(annex: annex, user: current_user, approval_kind: params[:approval_kind], reason: params[:reason])
+      render_json_dump(ok: true, identity_annex: identity_annex_payload(annex.reload), case: case_payload(evidence_case.reload))
+    rescue => e
+      render_evidence_error(e)
+    end
+
+    def export_identity_annex
+      evidence_case = find_case!
+      annex = evidence_case.identity_annexes.find_by!(annex_ref: params[:annex_ref].to_s)
+      bytes = ::MediaGallery::EvidenceIdentityAnnex.export!(
+        annex: annex,
+        user: current_user,
+        passphrase: params[:annex_passphrase].presence || params[:passphrase],
+        recipient_ref: params[:annex_recipient_ref].presence || params[:recipient_ref],
+        purpose: params[:annex_purpose].presence || params[:purpose],
+      )
+      no_store_headers!
+      send_data bytes, filename: "#{annex.annex_ref}-encrypted.json", type: "application/json", disposition: "attachment"
+    rescue => e
+      render_evidence_error(e)
+    end
+
     def download_report
       evidence_case = find_case!
       report = evidence_case.reports.find_by!(report_ref: params[:report_ref].to_s)
-      ensure_evidence_admin! unless report.status == "draft"
+      if report.status == "draft"
+        raise Discourse::InvalidAccess.new unless evidence_capability?(:technical_reviewer) || evidence_capability?(:case_operator)
+      else
+        ensure_senior_reviewer!
+      end
       path = ::MediaGallery::EvidenceReporter.absolute_path(report)
       no_store_headers!
       send_file path, filename: "#{report.report_ref}.pdf", type: "application/pdf", disposition: "attachment"
     end
 
     def download_package
-      ensure_evidence_admin!
       evidence_case = find_case!
       package = evidence_case.packages.find_by!(package_ref: params[:package_ref].to_s)
       path = ::MediaGallery::EvidencePackage.absolute_path(package)
@@ -415,8 +532,24 @@ module ::MediaGallery
       raise Discourse::InvalidAccess.new unless ::MediaGallery::EvidencePolicy.enabled?
     end
 
+    def evidence_capability?(capability)
+      ::MediaGallery::EvidenceAuthorization.allowed?(current_user, capability)
+    end
+
+    def ensure_case_operator!
+      ::MediaGallery::EvidenceAuthorization.ensure!(current_user, :case_operator)
+    end
+
+    def ensure_senior_reviewer!
+      ::MediaGallery::EvidenceAuthorization.ensure!(current_user, :senior_reviewer)
+    end
+
+    def ensure_policy_administrator!
+      ::MediaGallery::EvidenceAuthorization.ensure!(current_user, :policy_administrator)
+    end
+
     def ensure_evidence_admin!
-      raise Discourse::InvalidAccess.new unless current_user&.admin?
+      ensure_senior_reviewer!
     end
 
     def find_case!
@@ -454,6 +587,10 @@ module ::MediaGallery
         media_title: evidence_case.media_snapshot&.dig("title"),
         external_platform: evidence_case.external_platform,
         legal_hold: evidence_case.legal_hold?,
+        legal_hold_review_due_at_utc: latest_legal_hold_review_due_at(evidence_case)&.utc&.iso8601(6),
+        privacy_request_open: evidence_case.respond_to?(:privacy_request_open?) ? evidence_case.privacy_request_open? : false,
+        processing_restricted: evidence_case.respond_to?(:processing_restricted?) ? evidence_case.processing_restricted? : false,
+        retention_review_overdue: evidence_case.respond_to?(:retention_review_due_at) ? ::MediaGallery::EvidenceRetention.overdue?(evidence_case) : false,
         mutable: evidence_case.mutable?,
         supersedes_case_ref: evidence_case.supersedes_case&.case_ref,
         superseded_by_case_ref: evidence_case.superseded_by_case&.case_ref,
@@ -479,7 +616,18 @@ module ::MediaGallery
         claimant_confirmed: evidence_case.claimant_confirmed?,
         claimant_confirmed_at_utc: evidence_case.claimant_confirmed_at&.utc&.iso8601(6),
         retention_due_at_utc: evidence_case.retention_due_at&.utc&.iso8601(6),
-        lifecycle_reason: current_user.admin? ? evidence_case.lifecycle_reason : nil,
+        retention_class: evidence_case.respond_to?(:retention_class) ? evidence_case.retention_class : nil,
+        retention_reviewed_at_utc: evidence_case.respond_to?(:retention_reviewed_at) ? evidence_case.retention_reviewed_at&.utc&.iso8601(6) : nil,
+        retention_review_due_at_utc: evidence_case.respond_to?(:retention_review_due_at) ? evidence_case.retention_review_due_at&.utc&.iso8601(6) : nil,
+        retention_review_overdue: evidence_case.respond_to?(:retention_review_due_at) ? ::MediaGallery::EvidenceRetention.overdue?(evidence_case) : false,
+        retention_review_due_soon: evidence_case.respond_to?(:retention_review_due_at) ? ::MediaGallery::EvidenceRetention.due_soon?(evidence_case) : false,
+        retention_disposal_requested: ::MediaGallery::EvidenceRetention.disposal_requested?(evidence_case),
+        governance_profile_ref: evidence_case.respond_to?(:governance_profile_ref) ? evidence_case.governance_profile_ref : nil,
+        governance_snapshot: evidence_case.respond_to?(:governance_snapshot) ? evidence_case.governance_snapshot : {},
+        governance_matches_current: evidence_case.respond_to?(:governance_snapshot) ? ::MediaGallery::EvidenceGovernance.current_matches?(evidence_case) : false,
+        privacy_request_open: evidence_case.respond_to?(:privacy_request_open?) ? evidence_case.privacy_request_open? : false,
+        processing_restricted: evidence_case.respond_to?(:processing_restricted?) ? evidence_case.processing_restricted? : false,
+        lifecycle_reason: evidence_capability?(:senior_reviewer) ? evidence_case.lifecycle_reason : nil,
         supersedes_case_ref: evidence_case.supersedes_case&.case_ref,
         superseded_by_case_ref: evidence_case.superseded_by_case&.case_ref,
         closed_at_utc: evidence_case.closed_at&.utc&.iso8601(6),
@@ -489,8 +637,11 @@ module ::MediaGallery
         reviews: evidence_case.reviews.order(:reviewed_at, :id).map { |review| review_payload(review) },
         reports: visible_reports(evidence_case).map { |report| report_payload(report) },
         packages: visible_packages(evidence_case).map { |package| package_payload(package) },
-        legal_holds: current_user.admin? ? evidence_case.legal_holds.order(:occurred_at, :id).map { |hold| legal_hold_payload(hold) } : [],
-        disclosures: current_user.admin? ? evidence_case.disclosures.order(released_at: :desc, id: :desc).map { |disclosure| disclosure_payload(disclosure) } : [],
+        legal_holds: evidence_capability?(:senior_reviewer) ? evidence_case.legal_holds.order(:occurred_at, :id).map { |hold| legal_hold_payload(hold) } : [],
+        disclosures: evidence_capability?(:senior_reviewer) ? evidence_case.disclosures.order(released_at: :desc, id: :desc).map { |disclosure| disclosure_payload(disclosure) } : [],
+        retention_reviews: evidence_capability?(:policy_administrator) ? evidence_case.retention_reviews.order(occurred_at: :desc, id: :desc).map { |review| retention_review_payload(review) } : [],
+        privacy_requests: evidence_capability?(:policy_administrator) ? evidence_case.privacy_requests.order(received_at: :desc, id: :desc).map { |request| privacy_request_payload(request) } : [],
+        identity_annexes: ::MediaGallery::EvidenceIdentityAnnex.enabled? && evidence_capability?(:restricted_approver) ? evidence_case.identity_annexes.order(version: :desc).map { |annex| identity_annex_payload(annex) } : [],
         chain: {
           verification: policy[:chain],
           events: evidence_case.chain_events.order(:occurred_at, :id).map { |event| ::MediaGallery::EvidenceChain.external_hash(event) },
@@ -501,11 +652,19 @@ module ::MediaGallery
 
     def visible_reports(evidence_case)
       scope = evidence_case.reports.order(version: :desc)
-      current_user.admin? ? scope.to_a : scope.where(status: "draft").to_a
+      evidence_capability?(:senior_reviewer) ? scope.to_a : scope.where(status: "draft").to_a
     end
 
     def visible_packages(evidence_case)
-      current_user.admin? ? evidence_case.packages.order(version: :desc).to_a : []
+      evidence_capability?(:senior_reviewer) ? evidence_case.packages.order(version: :desc).to_a : []
+    end
+
+    def latest_legal_hold_review_due_at(evidence_case)
+      return nil unless evidence_case.legal_hold?
+
+      evidence_case.legal_holds.where(action: %w[placed reviewed]).order(occurred_at: :desc, id: :desc).limit(1).pick(:review_due_at)
+    rescue
+      nil
     end
 
     def evidence_object_payload(object)
@@ -514,7 +673,7 @@ module ::MediaGallery
         parent_ref: object.parent&.object_ref,
         role: object.role,
         storage_kind: object.storage_kind,
-        vault_reference: current_user.admin? && object.storage_kind == "vault_reference" ? object.vault_reference : nil,
+        vault_reference: (evidence_capability?(:case_operator) || evidence_capability?(:senior_reviewer)) && object.storage_kind == "vault_reference" ? object.vault_reference : nil,
         original_filename: object.original_filename,
         mime_type: object.mime_type,
         size_bytes: object.size_bytes,
@@ -627,13 +786,67 @@ module ::MediaGallery
         authority_ref: hold.authority_ref,
         actor_ref: hold.actor_ref,
         occurred_at_utc: hold.occurred_at&.utc&.iso8601(6),
+        review_due_at_utc: hold.respond_to?(:review_due_at) ? hold.review_due_at&.utc&.iso8601(6) : nil,
+      }.compact
+    end
+
+    def retention_review_payload(review)
+      {
+        review_ref: review.review_ref,
+        action: review.action,
+        retention_class: review.retention_class,
+        previous_due_at_utc: review.previous_due_at&.utc&.iso8601(6),
+        next_due_at_utc: review.next_due_at&.utc&.iso8601(6),
+        reason: review.reason,
+        actor_ref: review.actor_ref,
+        occurred_at_utc: review.occurred_at&.utc&.iso8601(6),
+      }.compact
+    end
+
+    def privacy_request_payload(request)
+      {
+        request_ref: request.request_ref,
+        request_type: request.request_type,
+        requester_ref: request.requester_ref,
+        status: request.status,
+        received_at_utc: request.received_at&.utc&.iso8601(6),
+        due_at_utc: request.due_at&.utc&.iso8601(6),
+        processing_restricted: request.processing_restricted?,
+        reason: request.reason,
+        decision: request.decision,
+        created_by_ref: request.created_by_ref,
+        resolved_by_ref: request.resolved_by_ref,
+        resolved_at_utc: request.resolved_at&.utc&.iso8601(6),
+      }.compact
+    end
+
+    def identity_annex_payload(annex)
+      {
+        annex_ref: annex.annex_ref,
+        version: annex.version,
+        status: annex.status,
+        categories: annex.categories,
+        key_id: annex.key_id,
+        payload_sha256: annex.payload_sha256,
+        necessity_reason_recorded: annex.necessity_reason_sha256.present?,
+        necessity_reason_sha256: annex.necessity_reason_sha256,
+        created_by_ref: annex.created_by_ref,
+        senior_approved_by_ref: annex.senior_approved_by_ref,
+        senior_approved_at_utc: annex.senior_approved_at&.utc&.iso8601(6),
+        privacy_approved_by_ref: annex.privacy_approved_by_ref,
+        privacy_approved_at_utc: annex.privacy_approved_at&.utc&.iso8601(6),
+        fully_approved: annex.fully_approved?,
+        last_viewed_at_utc: annex.last_viewed_at&.utc&.iso8601(6),
+        last_exported_at_utc: annex.last_exported_at&.utc&.iso8601(6),
+        created_at_utc: annex.created_at&.utc&.iso8601(6),
       }.compact
     end
 
     def config_payload
       {
         enabled: ::MediaGallery::EvidencePolicy.enabled?,
-        can_finalize: current_user.admin?,
+        can_finalize: evidence_capability?(:senior_reviewer),
+        capabilities: ::MediaGallery::EvidenceAuthorization.capabilities(current_user),
         issuer_name: ::MediaGallery::EvidencePolicy.issuer_name,
         operator_identity: ::MediaGallery::EvidencePolicy.operator_identity,
         legal_notice_url: ::MediaGallery::EvidencePolicy.legal_notice_url,
@@ -643,7 +856,14 @@ module ::MediaGallery
         timestamp_status: "not_configured",
         report_language: "en",
         automatic_source_fetch: false,
-        restricted_identity_annex: false,
+        restricted_identity_annex: ::MediaGallery::EvidenceIdentityAnnex.enabled?,
+        restricted_identity_annex_configured: ::MediaGallery::EvidenceIdentityAnnex.configured?,
+        restricted_identity_annex_allowed_categories: ::MediaGallery::EvidenceIdentityAnnex.allowed_categories,
+        governance_current_profile: ::MediaGallery::EvidenceGovernance.current_profile,
+        retention_classes: ::MediaGallery::EvidenceRetention::CLASSES,
+        retention_actions: ::MediaGallery::EvidenceRetention::ACTIONS,
+        privacy_request_types: ::MediaGallery::ForensicEvidencePrivacyRequest::REQUEST_TYPES,
+        privacy_request_statuses: ::MediaGallery::ForensicEvidencePrivacyRequest::STATUSES,
         required_review_checks: ::MediaGallery::EvidencePolicy::REQUIRED_REVIEW_CHECKS,
         roles: ::MediaGallery::ForensicEvidenceObject::ROLES,
         classifications: ::MediaGallery::ForensicEvidenceCase::CLASSIFICATIONS,

@@ -85,7 +85,7 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
   jurisdiction_context: {
     title: "Jurisdiction context",
     guidance_title: "What to enter",
-    guidance: "Record the relevant geographic or legal context known at intake, such as international, Netherlands, European Union or unknown.",
+    guidance: "Record the relevant geographic or legal context known at intake, such as a country or region relevant to the case, international, or unknown.",
     purpose: "This helps legal reviewers understand which jurisdiction-specific assessment may be needed later.",
     note: "The technical report remains jurisdiction-neutral and does not claim admissibility in any country.",
   },
@@ -264,7 +264,8 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
     title: "Legal hold",
     guidance_title: "What this means",
     guidance: "A legal hold records that normal deletion or retention actions must be suspended because the case is needed for a claim, dispute, investigation or proceeding.",
-    purpose: "The hold protects evidence from routine disposal while preserving an auditable reason and status.",
+    purpose: "The hold protects evidence from routine disposal while preserving an auditable reason, authority reference and periodic review history.",
+    note: "An overdue review shows a warning but never releases the hold automatically. Use Review and extend legal hold to record a fresh review deadline.",
   },
   case_mutability: {
     title: "Case mutability",
@@ -361,6 +362,40 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
     purpose: "The old case remains intact and auditable, while recipients can be directed to the replacement case.",
     note: "Active release links for the old case are revoked automatically.",
   },
+  governance_profile: {
+    title: "Platform governance snapshot",
+    guidance_title: "What this records",
+    guidance: "Captures the current generic issuer, operator, website and optional policy/contact settings into this case. It does not copy your full privacy policy into the evidence report.",
+    purpose: "A snapshot keeps old cases reproducible when the site operator, policy reference or report visibility settings change later.",
+    note: "All platform values come from settings. No platform, country or legal basis is hardcoded in this module.",
+  },
+  retention_review: {
+    title: "Retention review",
+    guidance_title: "How to use it",
+    guidance: "Record whether the case remains necessary, should be proposed for controlled disposal, or should have a previous disposal proposal cancelled.",
+    purpose: "The module turns retention promises into reviewable actions without deleting evidence automatically.",
+    note: "A disposal request is only a recorded proposal. It does not remove files and cannot be recorded while a legal hold is active.",
+  },
+  privacy_request: {
+    title: "Privacy request",
+    guidance_title: "What this records",
+    guidance: "Register a request concerning access, rectification, erasure, restriction or objection using a non-sensitive requester reference.",
+    purpose: "This preserves the request timeline and can temporarily restrict new final reports, packages, releases and annex exports while the request is reviewed.",
+    note: "The module records workflow and decisions; it does not make the legal decision automatically.",
+  },
+  restricted_annex: {
+    title: "Restricted Identity Annex",
+    guidance_title: "When to use it",
+    guidance: "Create a separately encrypted annex only when a concrete case requires specifically selected identity fields. It is disabled by default and never enters the standard report or package.",
+    purpose: "Field-level selection, two-person approval and separate encryption reduce unnecessary disclosure of sensitive account data.",
+    note: "Administrator status alone does not grant access. An explicit restricted-data group and an external encryption key are required.",
+  },
+  annex_event: {
+    title: "Selected restricted event",
+    guidance_title: "What to enter",
+    guidance: "Enter one relevant IP, access, device or external identity event together with its source, time, necessity and limitations.",
+    purpose: "The module intentionally avoids bulk history exports and requires a reason for every manually entered event.",
+  },
 });
 
 function evidenceHelpTopic(key) {
@@ -411,6 +446,14 @@ function normalizeConfig(config) {
     report_language: source.report_language ?? source.reportLanguage ?? "en",
     automatic_source_fetch: source.automatic_source_fetch ?? source.automaticSourceFetch ?? false,
     restricted_identity_annex: source.restricted_identity_annex ?? source.restrictedIdentityAnnex ?? false,
+    restricted_identity_annex_configured: source.restricted_identity_annex_configured ?? source.restrictedIdentityAnnexConfigured ?? false,
+    restricted_identity_annex_allowed_categories: source.restricted_identity_annex_allowed_categories ?? source.restrictedIdentityAnnexAllowedCategories ?? [],
+    capabilities: source.capabilities ?? {},
+    governance_current_profile: source.governance_current_profile ?? source.governanceCurrentProfile ?? {},
+    retention_classes: source.retention_classes ?? source.retentionClasses ?? [],
+    retention_actions: source.retention_actions ?? source.retentionActions ?? [],
+    privacy_request_types: source.privacy_request_types ?? source.privacyRequestTypes ?? [],
+    privacy_request_statuses: source.privacy_request_statuses ?? source.privacyRequestStatuses ?? [],
     release_transport_secure: source.release_transport_secure ?? source.releaseTransportSecure ?? false,
     release_insecure_test_override: source.release_insecure_test_override ?? source.releaseInsecureTestOverride ?? false,
     release_default_hours: source.release_default_hours ?? source.releaseDefaultHours ?? 72,
@@ -451,6 +494,9 @@ const ISSUE_STEP_MAP = {
   four_eyes_review_missing: "review",
   privacy_review_missing: "review",
   current_review_rejected: "review",
+  governance_profile_missing: "administration",
+  retention_disposal_requested: "administration",
+  privacy_processing_restricted: "administration",
 };
 
 const STEP_LABELS = {
@@ -514,6 +560,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @tracked reviewReason = "";
   @tracked reviewChecklist = {};
   @tracked holdReason = "";
+  @tracked holdAuthorityRef = "";
   @tracked releasePackageRef = "";
   @tracked releaseRecipientRef = "";
   @tracked releasePurpose = "";
@@ -523,6 +570,28 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @tracked releaseUrl = "";
   @tracked lifecycleReason = "";
   @tracked replacementCaseRef = "";
+  @tracked governanceReason = "";
+  @tracked retentionAction = "retain";
+  @tracked retentionExtensionDays = "";
+  @tracked retentionReason = "";
+  @tracked privacyRequestType = "access";
+  @tracked privacyRequesterRef = "";
+  @tracked privacyReceivedAt = "";
+  @tracked privacyRestrictProcessing = false;
+  @tracked privacyReason = "";
+  @tracked privacyDecision = "";
+  @tracked annexNecessityReason = "";
+  @tracked annexSelections = { account_username: true, internal_account_id: true };
+  @tracked annexEventCategory = "selected_ip_event";
+  @tracked annexEventValue = "";
+  @tracked annexEventTime = "";
+  @tracked annexEventSourceRef = "";
+  @tracked annexEventNecessity = "";
+  @tracked annexEventLimitation = "";
+  @tracked annexRecipientRef = "";
+  @tracked annexExportPurpose = "";
+  @tracked annexExportPassphrase = "";
+  @tracked annexPreview = null;
   @tracked activeStep = "intake";
   @tracked activeHelpKey = "";
   @tracked helpOverlayStyle = htmlSafe("");
@@ -566,6 +635,17 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.releaseExpiresInHours = String(this.config?.release_default_hours || 72);
     this.releaseMaxDownloads = "1";
     this.releaseUrl = "";
+    this.governanceReason = "";
+    this.retentionAction = "retain";
+    this.retentionExtensionDays = "";
+    this.retentionReason = "";
+    this.privacyRequestType = "access";
+    this.privacyRequesterRef = "";
+    this.privacyReceivedAt = "";
+    this.privacyRestrictProcessing = false;
+    this.privacyReason = "";
+    this.privacyDecision = "";
+    this.annexPreview = null;
   }
 
   get hasCases() {
@@ -707,7 +787,10 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     if (["withdrawn", "superseded"].includes(this.selected?.status)) {
       return "attention";
     }
-    return this.selected?.legal_hold ? "attention" : "optional";
+    if (this.selected?.legal_hold || this.selected?.privacy_request_open || this.selected?.processing_restricted || this.selected?.retention_review_overdue || !this.selected?.governance_profile_ref) {
+      return "attention";
+    }
+    return "optional";
   }
 
   stepStateLabel(state) {
@@ -741,6 +824,9 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       if (this.stepState(key) === "action") {
         return key;
       }
+    }
+    if (this.stepState("administration") === "attention" && (this.hasAnyBlocker(["governance_profile_missing", "retention_disposal_requested", "privacy_processing_restricted"]) || this.selected?.retention_review_overdue)) {
+      return "administration";
     }
     if (!this.selectedFinalization.ready) {
       return "readiness";
@@ -1003,6 +1089,111 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     return this.hasIssuerIdentity && this.hasOperatorIdentity;
   }
 
+  get capabilities() {
+    return this.config?.capabilities || {};
+  }
+
+  get canOperateCases() {
+    return this.capabilities.case_operator === true;
+  }
+
+  get canReviewTechnically() {
+    return this.capabilities.technical_reviewer === true;
+  }
+
+  get canReviewSenior() {
+    return this.capabilities.senior_reviewer === true;
+  }
+
+  get canAdministerPolicy() {
+    return this.capabilities.policy_administrator === true;
+  }
+
+  get canAccessRestrictedAnnex() {
+    return this.capabilities.restricted_approver === true;
+  }
+
+  get currentGovernanceProfile() {
+    return this.config?.governance_current_profile || {};
+  }
+
+  get selectedGovernanceProfile() {
+    return this.selected?.governance_snapshot || {};
+  }
+
+  get retentionActionOptions() {
+    return (this.config?.retention_actions || []).map((value) => ({ value, label: evidenceLabel(value) }));
+  }
+
+  get selectedLegalHolds() {
+    return (this.selected?.legal_holds || []).map((hold) => ({
+      ...hold,
+      action_label: evidenceLabel(hold.action),
+      occurred_at_label: utc(hold.occurred_at_utc),
+      review_due_at_label: utc(hold.review_due_at_utc),
+    }));
+  }
+
+  get latestLegalHoldReview() {
+    const rows = this.selectedLegalHolds;
+    return rows.length > 0 ? rows[rows.length - 1] : null;
+  }
+
+  get selectedRetentionReviews() {
+    return (this.selected?.retention_reviews || []).map((review) => ({
+      ...review,
+      action_label: evidenceLabel(review.action),
+      retention_class_label: evidenceLabel(review.retention_class),
+      occurred_at_label: utc(review.occurred_at_utc),
+      next_due_at_label: utc(review.next_due_at_utc),
+    }));
+  }
+
+  get selectedPrivacyRequests() {
+    return (this.selected?.privacy_requests || []).map((request) => ({
+      ...request,
+      request_type_label: evidenceLabel(request.request_type),
+      status_label: evidenceLabel(request.status),
+      received_at_label: utc(request.received_at_utc),
+      due_at_label: utc(request.due_at_utc),
+      open: ["open", "under_review"].includes(request.status),
+    }));
+  }
+
+  get selectedIdentityAnnexes() {
+    return (this.selected?.identity_annexes || []).map((annex) => ({
+      ...annex,
+      status_label: evidenceLabel(annex.status),
+      categories_label: (annex.categories || []).map((item) => evidenceLabel(item)).join(", "),
+      created_at_label: utc(annex.created_at_utc),
+    }));
+  }
+
+  get annexAllowedCategories() {
+    return this.config?.restricted_identity_annex_allowed_categories || [];
+  }
+
+  annexCategoryAllowed(category) {
+    return this.annexAllowedCategories.includes(category);
+  }
+
+  get restrictedAnnexAvailable() {
+    return this.config?.restricted_identity_annex === true && this.config?.restricted_identity_annex_configured === true;
+  }
+
+  get annexAllowEmail() { return this.annexCategoryAllowed("email_address"); }
+  get annexAllowSelectedIp() { return this.annexCategoryAllowed("selected_ip_event"); }
+  get annexAllowSelectedAccess() { return this.annexCategoryAllowed("selected_access_event"); }
+  get annexAllowDeviceHint() { return this.annexCategoryAllowed("device_hint"); }
+  get annexAllowCustomReference() { return this.annexCategoryAllowed("custom_identity_reference"); }
+  get annexHasOptionalEvents() {
+    return this.annexAllowSelectedIp || this.annexAllowSelectedAccess || this.annexAllowDeviceHint || this.annexAllowCustomReference;
+  }
+
+  get annexPreviewText() {
+    return this.annexPreview ? JSON.stringify(this.annexPreview, null, 2) : "";
+  }
+
   formatUtc(value) {
     return utc(value);
   }
@@ -1065,6 +1256,16 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @action
   setReviewCheck(key, event) {
     this.reviewChecklist = { ...this.reviewChecklist, [key]: event?.target?.checked === true };
+  }
+
+  @action
+  setBooleanField(field, event) {
+    this[field] = event?.target?.checked === true;
+  }
+
+  @action
+  setAnnexSelection(key, event) {
+    this.annexSelections = { ...this.annexSelections, [key]: event?.target?.checked === true };
   }
 
   @action
@@ -1575,13 +1776,227 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   @action
+  async captureGovernanceProfile() {
+    const force = Boolean(this.selected?.governance_profile_ref);
+    if (force && !this.governanceReason.trim()) {
+      this.error = "Enter a reason before replacing the case governance snapshot.";
+      return;
+    }
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/governance.json`, {
+      type: "POST",
+      data: { force, reason: this.governanceReason },
+    });
+    this.selected = data.case;
+    if (data.config) {
+      this.config = normalizeConfig(data.config);
+    }
+    this.governanceReason = "";
+    this.notice = force ? "Governance profile snapshot replaced and audited." : "Current governance profile captured for this case.";
+  }
+
+  @action
+  async recordRetentionReview(event) {
+    event?.preventDefault?.();
+    if (!this.retentionReason.trim()) {
+      this.error = "Enter a reason for the retention decision.";
+      return;
+    }
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/retention-reviews.json`, {
+      type: "POST",
+      data: {
+        retention_action: this.retentionAction,
+        extension_days: this.retentionExtensionDays,
+        reason: this.retentionReason,
+      },
+    });
+    this.selected = data.case;
+    this.retentionReason = "";
+    this.retentionExtensionDays = "";
+    this.notice = "Retention review recorded. No evidence was deleted.";
+  }
+
+  @action
+  async createPrivacyRequest(event) {
+    event?.preventDefault?.();
+    if (!this.privacyRequesterRef.trim()) {
+      this.error = "Enter a non-sensitive requester reference.";
+      return;
+    }
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/privacy-requests.json`, {
+      type: "POST",
+      data: {
+        request_type: this.privacyRequestType,
+        privacy_requester_ref: this.privacyRequesterRef,
+        received_at: utcDatetimeInput(this.privacyReceivedAt),
+        processing_restricted: this.privacyRestrictProcessing,
+        privacy_reason: this.privacyReason,
+      },
+    });
+    this.selected = data.case;
+    this.privacyRequesterRef = "";
+    this.privacyReceivedAt = "";
+    this.privacyRestrictProcessing = false;
+    this.privacyReason = "";
+    this.notice = "Privacy request recorded.";
+  }
+
+  @action
+  async updatePrivacyRequest(requestRef, status, processingRestricted) {
+    const closed = ["resolved", "rejected", "withdrawn"].includes(status);
+    if (closed && !this.privacyDecision.trim()) {
+      this.error = "Enter the decision before closing a privacy request.";
+      return;
+    }
+    const payload = {
+      status,
+      privacy_decision: this.privacyDecision,
+      privacy_reason: this.privacyReason,
+    };
+    if (typeof processingRestricted === "boolean") {
+      payload.processing_restricted = processingRestricted;
+    }
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/privacy-requests/${encodeURIComponent(requestRef)}.json`, {
+      type: "PUT",
+      data: payload,
+    });
+    this.selected = data.case;
+    this.privacyDecision = "";
+    this.privacyReason = "";
+    this.notice = `Privacy request marked ${evidenceLabel(status).toLowerCase()}.`;
+  }
+
+  @action
+  async createIdentityAnnex(event) {
+    event?.preventDefault?.();
+    if (!this.annexNecessityReason.trim()) {
+      this.error = "Explain why the selected restricted identity fields are necessary.";
+      return;
+    }
+    const selections = { ...this.annexSelections };
+    if (this.annexEventValue.trim() && this.annexCategoryAllowed(this.annexEventCategory)) {
+      selections[this.annexEventCategory] = {
+        value: this.annexEventValue,
+        event_time: this.annexEventTime,
+        source_ref: this.annexEventSourceRef,
+        necessity: this.annexEventNecessity,
+        limitation: this.annexEventLimitation,
+      };
+    }
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/identity-annexes.json`, {
+      type: "POST",
+      data: { annex_selections: selections, annex_necessity_reason: this.annexNecessityReason },
+    });
+    this.selected = data.case;
+    this.annexNecessityReason = "";
+    this.annexEventValue = "";
+    this.annexEventTime = "";
+    this.annexEventSourceRef = "";
+    this.annexEventNecessity = "";
+    this.annexEventLimitation = "";
+    this.notice = "Encrypted Restricted Identity Annex created and submitted for two-person approval.";
+  }
+
+  @action
+  async viewIdentityAnnex(annexRef) {
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/identity-annexes/${encodeURIComponent(annexRef)}.json`);
+    this.annexPreview = data.payload || null;
+    this.notice = "Restricted annex decrypted for this authorized view. The access was audited.";
+  }
+
+  @action
+  closeAnnexPreview() {
+    this.annexPreview = null;
+  }
+
+  @action
+  async approveIdentityAnnex(annexRef, approvalKind) {
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/identity-annexes/${encodeURIComponent(annexRef)}/approve.json`, {
+      type: "POST",
+      data: { approval_kind: approvalKind, reason: this.annexNecessityReason },
+    });
+    this.selected = data.case;
+    this.notice = `${evidenceLabel(approvalKind)} annex approval recorded.`;
+  }
+
+  @action
+  async exportIdentityAnnex(annexRef) {
+    if (!this.annexRecipientRef.trim() || !this.annexExportPurpose.trim()) {
+      this.error = "Enter a recipient reference and authorized export purpose.";
+      return;
+    }
+    if (this.annexExportPassphrase.length < 16) {
+      this.error = "Use an annex export passphrase of at least 16 characters.";
+      return;
+    }
+    this.busy = true;
+    this.error = "";
+    try {
+      const body = new URLSearchParams({
+        annex_recipient_ref: this.annexRecipientRef,
+        annex_purpose: this.annexExportPurpose,
+        annex_passphrase: this.annexExportPassphrase,
+      });
+      const response = await fetch(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/identity-annexes/${encodeURIComponent(annexRef)}/export`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-CSRF-Token": this.csrfToken(),
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body,
+      });
+      if (!response.ok) {
+        let payload = null;
+        try { payload = await response.json(); } catch {}
+        throw new Error(evidenceErrorMessage(payload, `Restricted annex export failed (${response.status}).`));
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${annexRef}-encrypted.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      this.annexRecipientRef = "";
+      this.annexExportPurpose = "";
+      this.annexExportPassphrase = "";
+      await this.reloadSelected();
+      this.notice = "Encrypted Restricted Identity Annex exported. Deliver the passphrase through a separate secure channel.";
+    } catch (error) {
+      this.error = ajaxEvidenceErrorMessage(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  @action
   async setLegalHold(active) {
     const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/legal-hold.json`, {
       type: "POST",
-      data: { active, reason: this.holdReason },
+      data: { active, reason: this.holdReason, authority_ref: this.holdAuthorityRef },
     });
     this.selected = data.case;
     this.holdReason = "";
+    this.holdAuthorityRef = "";
     this.notice = active ? "Legal hold placed." : "Legal hold released.";
+  }
+
+  @action
+  async reviewLegalHold() {
+    if (!this.holdReason.trim()) {
+      this.error = "Enter a reason for the legal hold review.";
+      return;
+    }
+    const data = await this.request(`/admin/plugins/media-gallery/evidence-cases/${this.selected.case_ref}/legal-hold/review.json`, {
+      type: "POST",
+      data: { reason: this.holdReason, authority_ref: this.holdAuthorityRef },
+    });
+    this.selected = data.case;
+    this.holdReason = "";
+    this.holdAuthorityRef = "";
+    this.notice = "Legal hold reviewed and its review deadline extended.";
   }
 }

@@ -1726,6 +1726,174 @@ plugins:
     max: 20
     client: false
 
+  # Generic governance profile. Values are snapshotted into each case and never hardcode a platform identity.
+  media_gallery_evidence_governance_profile_reference:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_governance_effective_from:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_generic_contact:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_policy_reference:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_controller_country:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_hosting_region:
+    default: "unknown"
+    type: enum
+    choices:
+      - unknown
+      - eu_eea
+      - non_eu_eea
+      - mixed
+    client: false
+
+  media_gallery_evidence_report_show_operator_identity:
+    default: true
+    client: false
+
+  media_gallery_evidence_report_show_generic_contact:
+    default: false
+    client: false
+
+  media_gallery_evidence_report_show_privacy_legal_notice_url:
+    default: true
+    client: false
+
+  media_gallery_evidence_report_show_policy_reference:
+    default: false
+    client: false
+
+  media_gallery_evidence_report_show_controller_country:
+    default: false
+    client: false
+
+  # Optional group-based capabilities. Empty lists keep the capability admin-only, except restricted identity access,
+  # which always requires explicit membership in a configured group.
+  media_gallery_evidence_case_operator_groups:
+    default: ""
+    type: list
+    client: false
+
+  media_gallery_evidence_technical_reviewer_groups:
+    default: ""
+    type: list
+    client: false
+
+  media_gallery_evidence_senior_reviewer_groups:
+    default: ""
+    type: list
+    client: false
+
+  media_gallery_evidence_restricted_approver_groups:
+    default: ""
+    type: list
+    client: false
+
+  media_gallery_evidence_policy_administrator_groups:
+    default: ""
+    type: list
+    client: false
+
+  # Retention values are review deadlines. This iteration never deletes evidence automatically.
+  media_gallery_evidence_retention_incomplete_days:
+    default: 30
+    type: integer
+    min: 1
+    max: 3650
+    client: false
+
+  media_gallery_evidence_retention_rejected_days:
+    default: 90
+    type: integer
+    min: 1
+    max: 3650
+    client: false
+
+  media_gallery_evidence_retention_non_conclusive_days:
+    default: 365
+    type: integer
+    min: 1
+    max: 3650
+    client: false
+
+  media_gallery_evidence_retention_conclusive_days:
+    default: 730
+    type: integer
+    min: 1
+    max: 3650
+    client: false
+
+  media_gallery_evidence_retention_sealed_released_days:
+    default: 1825
+    type: integer
+    min: 1
+    max: 7300
+    client: false
+
+  media_gallery_evidence_retention_warning_days:
+    default: 30
+    type: integer
+    min: 1
+    max: 365
+    client: false
+
+  media_gallery_evidence_legal_hold_review_days:
+    default: 180
+    type: integer
+    min: 1
+    max: 1825
+    client: false
+
+  # Optional Restricted Identity Annex. Disabled by default; the encryption key itself must live in an environment variable.
+  media_gallery_evidence_restricted_annex_enabled:
+    default: false
+    client: false
+
+  media_gallery_evidence_restricted_annex_key_env:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_restricted_annex_key_id:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_restricted_annex_allow_email:
+    default: false
+    client: false
+
+  media_gallery_evidence_restricted_annex_allow_selected_ip:
+    default: false
+    client: false
+
+  media_gallery_evidence_restricted_annex_allow_selected_access_event:
+    default: false
+    client: false
+
+  media_gallery_evidence_restricted_annex_allow_device_hint:
+    default: false
+    client: false
+
+  media_gallery_evidence_restricted_annex_allow_custom_reference:
+    default: true
+    client: false
+
   media_gallery_evidence_seal_mode:
     default: "integrity_only"
     type: enum
