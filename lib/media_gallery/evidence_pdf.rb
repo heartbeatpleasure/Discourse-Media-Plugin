@@ -177,7 +177,7 @@ module ::MediaGallery
       info_id = add_object(
         objects,
         "<< /Title (#{escape_pdf_text(@title)}) /Subject (Forensic technical evidence report) " \
-        "/Creator (Discourse Media Library Evidence Reporter 1.1.0) /Producer (Built-in deterministic PDF writer) " \
+        "/Creator (Discourse Media Library Evidence Reporter 1.3.0) /Producer (Built-in deterministic PDF writer) " \
         "/CreationDate (D:#{@generated_at.strftime("%Y%m%d%H%M%SZ")}) >>",
       )
 

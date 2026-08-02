@@ -237,6 +237,18 @@ module ::MediaGallery
         package_ref: package.package_ref,
         package_sha256: package.package_sha256,
         manifest_sha256: package.manifest_sha256,
+        package_assurance: {
+          status: package.status,
+          seal_method: package.seal_method,
+          seal_key_id: package.seal_key_id,
+          cms_signature_integrity_verified: package.metadata.dig("verification", "cms_signature_integrity_verified") == true,
+          certificate_trust_verified_at_creation: package.metadata.dig("verification", "certificate_trust_verified") == true,
+          certificate_trust_mode: package.metadata.dig("verification", "certificate_trust_mode"),
+          timestamp_status: package.timestamp_status,
+          rfc3161_timestamp_verified_at_creation: package.metadata.dig("verification", "trusted_timestamp_verified") == true,
+          timestamp_generated_at_utc: package.metadata.dig("verification", "timestamp_generated_at_utc"),
+          offline_verifier_version: package.metadata["offline_verifier_version"],
+        }.compact,
         recipient_ref: disclosure.recipient_ref,
         purpose: disclosure.purpose,
         released_by_ref: ::MediaGallery::EvidenceReference.reviewer_ref(

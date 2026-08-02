@@ -167,11 +167,28 @@ module ::MediaGallery
 
       warnings << issue("jurisdiction_specific_legal_review_required", "This is a jurisdiction-neutral technical report. Admissibility, disclosure and legal conclusions require review for the recipient jurisdiction.")
       warnings << issue("external_platform_missing", "The external platform name is not recorded; describe this limitation in the report review.") if evidence_case.external_platform.blank?
-      warnings << issue("pdf_not_pdfa", "The built-in generator creates a deterministic PDF 1.4 report, not a certified PDF/A file.")
-      warnings << issue("trusted_timestamp_not_configured", "No trusted timestamp is included in this release.")
+      if ::MediaGallery::EvidenceArchivalPdf.enabled?
+        unless ::MediaGallery::EvidenceArchivalPdf.configured?
+          add_blocker(blockers, "pdfa_conversion_not_configured", "PDF/A-2b is selected, but Ghostscript, the reviewed PDF/A definition and veraPDF are not all available.")
+        end
+      else
+        warnings << issue("pdf_not_pdfa", "The built-in generator creates a deterministic PDF 1.4 report. Select and configure the optional local PDF/A-2b pipeline only when archival conformance is required.")
+      end
+
+      if ::MediaGallery::EvidenceTimestamp.enabled?
+        warnings << issue("trusted_timestamp_not_configured", "RFC 3161 timestamping is selected but not fully configured; package generation will be blocked.") unless ::MediaGallery::EvidenceTimestamp.configured?
+      else
+        warnings << issue("trusted_timestamp_not_configured", "No external RFC 3161 timestamp is configured. This is optional and does not prevent integrity-package creation.")
+      end
+
       if seal_mode == "cms_detached"
-        warnings << issue("cms_certificate_trust_external", "A CMS signature verifies manifest integrity against the embedded certificate only. Certificate-chain trust must be established independently by the recipient.")
         warnings << issue("cms_seal_not_configured", "CMS signing is selected but the private key and certificate are not fully configured; package generation will be blocked.") unless cms_seal_configured?
+        if ::MediaGallery::EvidenceSeal.trust_mode == "embedded_only"
+          warnings << issue("cms_certificate_trust_external", "CMS signature integrity is checked against the embedded certificate, but no certificate trust model is configured.")
+        elsif !::MediaGallery::EvidenceSeal.trust_configured?
+          warnings << issue("cms_certificate_trust_not_configured", "The selected CMS certificate trust mode is incomplete; package generation will be blocked.")
+        end
+        warnings << issue("cms_seal_key_revoked", "The configured CMS key identifier is listed as revoked and cannot create new packages.") if ::MediaGallery::EvidenceSeal.current_key_revoked?
       end
       if ::MediaGallery::EvidenceIdentityAnnex.enabled?
         unless ::MediaGallery::EvidenceIdentityAnnex.configured?
@@ -290,6 +307,7 @@ module ::MediaGallery
 
     def cms_seal_configured?
       return false unless seal_mode == "cms_detached"
+      return ::MediaGallery::EvidenceSeal.configured? if defined?(::MediaGallery::EvidenceSeal)
 
       key_path = SiteSetting.respond_to?(:media_gallery_evidence_seal_private_key_path) ? SiteSetting.media_gallery_evidence_seal_private_key_path.to_s.strip : ""
       cert_path = SiteSetting.respond_to?(:media_gallery_evidence_seal_certificate_path) ? SiteSetting.media_gallery_evidence_seal_certificate_path.to_s.strip : ""

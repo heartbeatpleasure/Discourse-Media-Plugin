@@ -8,7 +8,7 @@ module ::MediaGallery
   module EvidenceReporter
     module_function
 
-    REPORTER_VERSION = "1.2.0"
+    REPORTER_VERSION = "1.3.0"
 
     def generate!(evidence_case:, user:, final: false)
       raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
@@ -31,7 +31,7 @@ module ::MediaGallery
       report_data_sha256 = report_data_digest(report_data)
       report_data["verification"]["report_data_sha256"] = report_data_sha256
 
-      pdf = ::MediaGallery::EvidencePdf.new(
+      rendered_pdf = ::MediaGallery::EvidencePdf.new(
         title: "TECHNICAL EVIDENCE REPORT",
         subtitle: "Case #{evidence_case.case_ref} | Report #{report_ref}",
         status: final ? "FINAL - UNSIGNED / PACKAGE VERIFICATION REQUIRED" : "DRAFT - NOT FINAL",
@@ -39,6 +39,8 @@ module ::MediaGallery
         sections: report_sections(report_data),
         footer: "#{report_issuer_name(evidence_case)} Forensic Evidence Service | #{evidence_case.case_ref}",
       ).render
+      archival = ::MediaGallery::EvidenceArchivalPdf.process(rendered_pdf, final: final)
+      pdf = archival[:bytes]
       pdf_sha256 = Digest::SHA256.hexdigest(pdf)
       storage_ref = "#{report_ref}-#{SecureRandom.hex(6)}"
       path = ::MediaGallery::EvidenceVault.report_path(evidence_case.case_ref, storage_ref)
@@ -47,6 +49,7 @@ module ::MediaGallery
       metadata = report_data.deep_dup
       metadata["verification"]["pdf_sha256_external"] = pdf_sha256
       metadata["verification"]["pdf_hash_location_note"] = "The final PDF byte hash is stored outside the PDF to avoid a self-referential hash."
+      metadata["verification"]["pdf_processing"] = archival[:metadata]
       report = nil
       ::MediaGallery::ForensicEvidenceCase.transaction do
         report = ::MediaGallery::ForensicEvidenceReport.create!(
@@ -75,6 +78,8 @@ module ::MediaGallery
             report_data_sha256: report.report_data_sha256,
             pdf_sha256: report.pdf_sha256,
             size_bytes: report.size_bytes,
+            pdf_profile: archival.dig(:metadata, "pdf_profile"),
+            pdfa_validated: archival.dig(:metadata, "validator_compliant") == true,
           },
         )
       end
@@ -192,7 +197,7 @@ module ::MediaGallery
           "report_data_sha256_scope" => "Canonical JSON with verification.report_data_sha256 set to null and external PDF-hash fields omitted",
           "pdf_sha256_location" => "External manifest and report database record",
           "package_status" => "Not yet generated",
-          "pdf_profile" => "PDF 1.4; not certified PDF/A",
+          "pdf_profile" => ::MediaGallery::EvidenceArchivalPdf.enabled? ? "PDF/A-2b; local veraPDF validation required" : "PDF 1.4; not certified PDF/A",
         },
       }
     end
@@ -377,6 +382,7 @@ module ::MediaGallery
       payload["verification"]["report_data_sha256"] = nil
       payload["verification"].delete("pdf_sha256_external")
       payload["verification"].delete("pdf_hash_location_note")
+      payload["verification"].delete("pdf_processing")
       Digest::SHA256.hexdigest(::MediaGallery::EvidenceReference.canonical_json(payload))
     end
 

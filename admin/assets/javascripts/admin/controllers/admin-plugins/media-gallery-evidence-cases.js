@@ -14,9 +14,9 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
   safety_profile: {
     title: "Safety profile",
     guidance_title: "What this shows",
-    guidance: "The report language, package protection, timestamp status, release transport, issuer identity and operator identity that will be used for this evidence environment.",
-    purpose: "Reviewers can immediately see whether the environment is configured for testing, integrity-only export or stronger production sealing.",
-    note: "The CMS key and certificate fields may remain empty when package protection is set to SHA-256 integrity only.",
+    guidance: "The report language and PDF profile, package protection, certificate-trust mode, RFC 3161 timestamp status, release transport and configured issuer details for this evidence environment.",
+    purpose: "Reviewers can distinguish basic SHA-256 integrity, CMS signature integrity, locally established certificate trust and an independently signed timestamp instead of treating them as one assurance level.",
+    note: "PDF/A-2b, CMS and RFC 3161 are optional. Empty CMS or timestamp settings are correct when those features are not selected.",
   },
   media_public_id: {
     title: "Media public ID",
@@ -242,16 +242,16 @@ const EVIDENCE_HELP_TOPICS = Object.freeze({
   technical_evidence_report: {
     title: "Technical Evidence Report",
     guidance_title: "What is generated",
-    guidance: "An English, jurisdiction-neutral PDF summarising the research question, evidence hashes, immutable identify result, controlled conclusion, limitations and review references.",
-    purpose: "The draft is for review and is not sealed. The final report is only available after all mandatory controls pass.",
+    guidance: "An English, jurisdiction-neutral PDF summarising the research question, evidence hashes, immutable identify result, controlled conclusion, limitations and review references. The default output is deterministic PDF 1.4. Optional PDF/A-2b output is only claimed after local conversion and successful veraPDF validation.",
+    purpose: "The draft is for review and is not sealed. The final report is only available after all mandatory controls and the selected PDF profile pass.",
     note: "The report attributes a distribution copy and account reference; it does not prove the conduct or identity of a natural person.",
   },
   sealed_evidence_package: {
     title: "Sealed Evidence Package",
     guidance_title: "What is generated",
-    guidance: "A machine-verifiable archive containing the report, manifest, checksums, technical snapshots and chain-of-custody material permitted by the privacy policy.",
-    purpose: "The package lets a recipient detect any changed byte and inspect the technical basis independently.",
-    note: "Integrity-only mode uses SHA-256 manifests. CMS mode additionally requires a configured signing key and certificate; certificate trust remains a recipient decision.",
+    guidance: "A machine-verifiable archive containing the report, manifest, checksums, technical snapshots, chain-of-custody material and a self-contained offline verifier. CMS and RFC 3161 artefacts are included only when those generic options are configured.",
+    purpose: "The package lets a recipient detect changed bytes, verify signature integrity, independently establish certificate trust and verify that a timestamp response covers the exact canonical manifest.",
+    note: "The module does not assume or claim a qualified trust-service-provider status. Cryptographic integrity, certificate trust, timestamp verification and legal admissibility remain separate questions.",
   },
   retention_review_due: {
     title: "Retention review due",
@@ -442,7 +442,11 @@ function normalizeConfig(config) {
     jurisdiction_notice: source.jurisdiction_notice ?? source.jurisdictionNotice ?? "",
     seal_mode: source.seal_mode ?? source.sealMode ?? "",
     cms_seal_configured: source.cms_seal_configured ?? source.cmsSealConfigured ?? false,
+    seal_health: source.seal_health ?? source.sealHealth ?? {},
     timestamp_status: source.timestamp_status ?? source.timestampStatus ?? "",
+    timestamp_health: source.timestamp_health ?? source.timestampHealth ?? {},
+    pdf_profile: source.pdf_profile ?? source.pdfProfile ?? "pdf_1_4",
+    pdf_health: source.pdf_health ?? source.pdfHealth ?? {},
     report_language: source.report_language ?? source.reportLanguage ?? "en",
     automatic_source_fetch: source.automatic_source_fetch ?? source.automaticSourceFetch ?? false,
     restricted_identity_annex: source.restricted_identity_annex ?? source.restrictedIdentityAnnex ?? false,
@@ -933,6 +937,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     return (this.selected?.reports || []).map((report) => ({
       ...report,
       status_label: evidenceLabel(report.status),
+      pdf_profile_label: report.pdf_profile || "PDF profile not recorded",
     }));
   }
 
@@ -941,9 +946,18 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       ...evidencePackage,
       status_label: evidenceLabel(evidencePackage.status),
       timestamp_status_label: evidenceLabel(evidencePackage.timestamp_status),
+      timestamp_generated_at_label: utc(evidencePackage.timestamp_generated_at_utc),
       cms_signature_integrity_label: cmsSignatureIntegrityLabel(
         evidencePackage.cms_signature_integrity_verified
       ),
+      certificate_trust_label: evidencePackage.certificate_trust_verified
+        ? "verified"
+        : evidencePackage.seal_method === "cms_detached"
+          ? evidenceLabel(evidencePackage.certificate_trust_mode || "not_verified")
+          : "not applicable",
+      trusted_timestamp_label: evidencePackage.trusted_timestamp_verified
+        ? "verified"
+        : evidenceLabel(evidencePackage.timestamp_status || "not_configured"),
     }));
   }
 
@@ -1066,7 +1080,56 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   get timestampLabel() {
-    return this.config?.timestamp_status === "configured" ? "configured" : "not configured";
+    if (this.config?.timestamp_status === "configured") {
+      return "RFC 3161 configured";
+    }
+    if (this.config?.timestamp_status === "disabled") {
+      return "disabled (optional)";
+    }
+    return "selected, not configured";
+  }
+
+  get sealTrustLabel() {
+    const health = this.config?.seal_health || {};
+    if (this.config?.seal_mode !== "cms_detached") {
+      return "not applicable";
+    }
+    if (health.trust_mode === "embedded_only") {
+      return "embedded certificate only";
+    }
+    return health.trust_configured ? evidenceLabel(health.trust_mode) : "trust not configured";
+  }
+
+  get pdfProfileLabel() {
+    const health = this.config?.pdf_health || {};
+    if (this.config?.pdf_profile === "pdfa_2b") {
+      return health.configured ? "PDF/A-2b configured" : "PDF/A-2b selected, not configured";
+    }
+    return "PDF 1.4";
+  }
+
+  get packageConfigurationReady() {
+    const sealHealth = this.config?.seal_health || {};
+    const timestampHealth = this.config?.timestamp_health || {};
+    if (this.config?.seal_mode === "cms_detached") {
+      if (!sealHealth.configured || sealHealth.key_revoked) {
+        return false;
+      }
+      if (sealHealth.trust_mode !== "embedded_only" && !sealHealth.trust_configured) {
+        return false;
+      }
+    }
+    if (timestampHealth.mode === "rfc3161" && !timestampHealth.configured) {
+      return false;
+    }
+    return true;
+  }
+
+  get packageConfigurationMessage() {
+    if (this.packageConfigurationReady) {
+      return "";
+    }
+    return "Complete the selected CMS or RFC 3161 configuration in Media Library settings before generating a package.";
   }
 
   get issuerName() {
@@ -1642,7 +1705,15 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     });
     this.selected = data.case;
     this.releasePackageRef = data?.package?.package_ref || this.selectedPackages[0]?.package_ref || "";
-    this.notice = data?.package?.status === "cms_signed" ? "CMS-signed integrity package generated. The embedded certificate signature verified; certificate-chain trust and timestamp remain external." : "SHA-256 integrity evidence package generated and verified.";
+    if (data?.package?.status === "sealed") {
+      this.notice = "Evidence package generated with a locally verified RFC 3161 timestamp.";
+    } else if (data?.package?.status === "cms_signed") {
+      this.notice = data?.package?.certificate_trust_verified
+        ? "CMS-signed evidence package generated with locally verified certificate trust."
+        : "CMS-signed integrity package generated; signature integrity verified against the embedded certificate.";
+    } else {
+      this.notice = "SHA-256 integrity evidence package generated and verified.";
+    }
   }
 
   @action
@@ -1651,11 +1722,16 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       type: "POST",
       data: {},
     });
-    this.notice = data?.verification?.ok
-      ? "Package verification succeeded."
-      : `Package verification failed: ${(data?.verification?.errors || [])
-          .map((item) => humanizeEvidenceCode(item))
-          .join(", ")}.`;
+    if (data?.verification?.ok) {
+      const warnings = (data?.verification?.warnings || [])
+        .map((item) => humanizeEvidenceCode(item))
+        .join(", ");
+      this.notice = `Package integrity verification succeeded. CMS trust: ${data?.verification?.certificate_trust_verified ? "verified" : "not currently established"}; RFC 3161 timestamp: ${data?.verification?.trusted_timestamp_verified ? "verified" : "not present or not currently established"}.${warnings ? ` Current assurance warnings: ${warnings}.` : ""}`;
+    } else {
+      this.notice = `Package verification failed: ${(data?.verification?.errors || [])
+        .map((item) => humanizeEvidenceCode(item))
+        .join(", ")}.`;
+    }
   }
 
   @action

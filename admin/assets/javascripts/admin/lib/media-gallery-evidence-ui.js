@@ -31,6 +31,18 @@ const FRIENDLY_MESSAGES = {
     "Generate a final report before creating an evidence package.",
   evidence_case_not_ready:
     "This case is not ready for finalization. Complete the remaining items shown under Finalization readiness.",
+  cms_seal_key_revoked:
+    "The configured CMS signing-key ID is marked as revoked. Select a current key before creating another package.",
+  cms_certificate_trust_not_configured:
+    "The selected CMS certificate-trust mode is incomplete. Configure the required CA bundle or certificate pin.",
+  pdfa_conversion_not_configured:
+    "PDF/A-2b is selected, but Ghostscript, the reviewed PDF/A definition file and veraPDF are not all available.",
+  pdfa_validation_failed:
+    "The converted report did not pass local PDF/A-2b validation and was not accepted.",
+  timestamp_not_configured:
+    "RFC 3161 timestamping is selected, but the endpoint or trust configuration is incomplete.",
+  timestamp_verification_failed:
+    "The RFC 3161 response could not be verified against the request and configured trust source.",
   evidence_storage_low_space:
     "The evidence file was not stored because the private evidence filesystem would fall below its configured free-space reserve.",
   evidence_storage_unavailable:
@@ -64,6 +76,9 @@ const EVIDENCE_ACRONYMS = {
   utc: "UTC",
   warc: "WARC",
   tcp: "TCP",
+  rfc: "RFC",
+  tsa: "TSA",
+  crl: "CRL",
   clamd: "clamd",
   ffprobe: "ffprobe",
 };

@@ -727,6 +727,7 @@ module ::MediaGallery
     end
 
     def report_payload(report)
+      processing = report.metadata.is_a?(Hash) ? report.metadata.dig("verification", "pdf_processing") : nil
       {
         report_ref: report.report_ref,
         version: report.version,
@@ -734,12 +735,18 @@ module ::MediaGallery
         pdf_sha256: report.pdf_sha256,
         report_data_sha256: report.report_data_sha256,
         size_bytes: report.size_bytes,
+        pdf_profile: processing.is_a?(Hash) ? processing["pdf_profile"] : report.metadata.dig("verification", "pdf_profile"),
+        pdfa_validated: processing.is_a?(Hash) && processing["validator_compliant"] == true,
         immutable_at_utc: report.immutable_at&.utc&.iso8601(6),
         download_url: "/admin/plugins/media-gallery/evidence-cases/#{report.evidence_case.case_ref}/reports/#{report.report_ref}",
-      }
+      }.compact
     end
 
     def package_payload(package)
+      verification = package.metadata.is_a?(Hash) ? package.metadata["verification"] : {}
+      verification = {} unless verification.is_a?(Hash)
+      timestamp = package.metadata.is_a?(Hash) ? package.metadata["timestamp"] : {}
+      timestamp = {} unless timestamp.is_a?(Hash)
       {
         package_ref: package.package_ref,
         version: package.version,
@@ -750,9 +757,17 @@ module ::MediaGallery
         seal_method: package.seal_method,
         seal_key_id: package.seal_key_id,
         signature_verified: package.signature_verified?,
-        cms_signature_integrity_verified: package.signature_verified?,
-        certificate_trust_verified: false,
+        cms_signature_integrity_verified: verification["cms_signature_integrity_verified"] == true || package.signature_verified?,
+        certificate_trust_verified: verification["certificate_trust_verified"] == true,
+        certificate_trust_mode: verification["certificate_trust_mode"],
+        certificate_time_valid: verification["certificate_time_valid"],
+        certificate_pin_verified: verification["certificate_pin_verified"],
+        certificate_revoked_by_configuration: verification["certificate_revoked_by_configuration"] == true,
         timestamp_status: package.timestamp_status,
+        trusted_timestamp_verified: verification["trusted_timestamp_verified"] == true,
+        timestamp_generated_at_utc: verification["timestamp_generated_at_utc"] || timestamp.dig("verification", "token", "gen_time_utc"),
+        timestamp_policy_oid: verification["timestamp_policy_oid"] || timestamp.dig("verification", "token", "policy_id"),
+        offline_verifier_included: package.metadata["offline_verifier_version"].present?,
         immutable_at_utc: package.immutable_at&.utc&.iso8601(6),
         download_url: "/admin/plugins/media-gallery/evidence-cases/#{package.evidence_case.case_ref}/packages/#{package.package_ref}",
       }.compact
@@ -853,7 +868,11 @@ module ::MediaGallery
         jurisdiction_notice: ::MediaGallery::EvidencePolicy.jurisdiction_notice,
         seal_mode: ::MediaGallery::EvidencePolicy.seal_mode,
         cms_seal_configured: ::MediaGallery::EvidencePolicy.cms_seal_configured?,
-        timestamp_status: "not_configured",
+        seal_health: ::MediaGallery::EvidenceSeal.health,
+        timestamp_status: ::MediaGallery::EvidenceTimestamp.enabled? ? (::MediaGallery::EvidenceTimestamp.configured? ? "configured" : "not_configured") : "disabled",
+        timestamp_health: ::MediaGallery::EvidenceTimestamp.health,
+        pdf_profile: ::MediaGallery::EvidenceArchivalPdf.profile,
+        pdf_health: ::MediaGallery::EvidenceArchivalPdf.health,
         report_language: "en",
         automatic_source_fetch: false,
         restricted_identity_annex: ::MediaGallery::EvidenceIdentityAnnex.enabled?,

@@ -1921,3 +1921,127 @@ plugins:
     default: ""
     type: string
     client: false
+
+  media_gallery_evidence_seal_certificate_chain_path:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_seal_trust_mode:
+    default: "embedded_only"
+    type: enum
+    choices:
+      - embedded_only
+      - system_store
+      - custom_ca_bundle
+      - pinned_certificate
+      - custom_ca_and_pinned
+    client: false
+
+  media_gallery_evidence_seal_ca_bundle_path:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_seal_expected_certificate_sha256:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_seal_crl_path:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_seal_revoked_key_ids:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_timestamp_mode:
+    default: "disabled"
+    type: enum
+    choices:
+      - disabled
+      - rfc3161
+    client: false
+
+  media_gallery_evidence_timestamp_url:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_timestamp_timeout_seconds:
+    default: 15
+    min: 3
+    max: 120
+    client: false
+
+  media_gallery_evidence_timestamp_username:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_timestamp_password_env:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_timestamp_tls_ca_bundle_path:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_timestamp_trust_mode:
+    default: "system_store"
+    type: enum
+    choices:
+      - system_store
+      - custom_ca_bundle
+      - pinned_certificate
+      - custom_ca_and_pinned
+    client: false
+
+  media_gallery_evidence_timestamp_trust_bundle_path:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_timestamp_expected_certificate_sha256:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_timestamp_policy_oid:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_pdf_profile:
+    default: "pdf_1_4"
+    type: enum
+    choices:
+      - pdf_1_4
+      - pdfa_2b
+    client: false
+
+  media_gallery_evidence_pdfa_ghostscript_path:
+    default: "gs"
+    type: string
+    client: false
+
+  media_gallery_evidence_pdfa_definition_path:
+    default: ""
+    type: string
+    client: false
+
+  media_gallery_evidence_pdfa_verapdf_path:
+    default: "verapdf"
+    type: string
+    client: false
+
+  media_gallery_evidence_pdfa_timeout_seconds:
+    default: 60
+    min: 10
+    max: 300
+    client: false

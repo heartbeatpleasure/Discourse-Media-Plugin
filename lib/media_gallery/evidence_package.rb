@@ -12,8 +12,8 @@ module ::MediaGallery
   module EvidencePackage
     module_function
 
-    PACKAGE_SCHEMA = "media-gallery-evidence-package-v1.2"
-    SUPPORTED_PACKAGE_SCHEMAS = %w[media-gallery-evidence-package-v1.1 media-gallery-evidence-package-v1.2].freeze
+    PACKAGE_SCHEMA = "media-gallery-evidence-package-v1.3"
+    SUPPORTED_PACKAGE_SCHEMAS = %w[media-gallery-evidence-package-v1.1 media-gallery-evidence-package-v1.2 media-gallery-evidence-package-v1.3].freeze
     MAX_ARCHIVE_ENTRIES = 2_000
     MAX_VERIFY_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 
@@ -28,8 +28,15 @@ module ::MediaGallery
       material_cutoff = ::MediaGallery::EvidenceChain.latest_report_material_event_at(evidence_case)
       raise ArgumentError, "final_report_stale_after_material_change" if report.immutable_at.blank? || report.immutable_at < material_cutoff
       raise ArgumentError, "case_not_mutable" unless evidence_case.mutable?
-      if ::MediaGallery::EvidencePolicy.seal_mode == "cms_detached" && !::MediaGallery::EvidencePolicy.cms_seal_configured?
-        raise ArgumentError, "cms_seal_not_configured"
+      if ::MediaGallery::EvidencePolicy.seal_mode == "cms_detached"
+        raise ArgumentError, "cms_seal_key_revoked" if ::MediaGallery::EvidenceSeal.current_key_revoked?
+        raise ArgumentError, "cms_seal_not_configured" unless ::MediaGallery::EvidencePolicy.cms_seal_configured?
+        if ::MediaGallery::EvidenceSeal.trust_mode != "embedded_only" && !::MediaGallery::EvidenceSeal.trust_configured?
+          raise ArgumentError, "cms_certificate_trust_not_configured"
+        end
+      end
+      if ::MediaGallery::EvidenceTimestamp.enabled? && !::MediaGallery::EvidenceTimestamp.configured?
+        raise ArgumentError, "timestamp_not_configured"
       end
 
       policy = ::MediaGallery::EvidencePolicy.finalization_blockers(evidence_case)
@@ -42,17 +49,25 @@ module ::MediaGallery
       package_info = package_info_data(evidence_case, report, package_ref, generated_at)
       entries << bytes_entry("00_manifest/package-info.json", "package_metadata", pretty_json(package_info))
       entries << bytes_entry("00_manifest/verification.txt", "verification_instructions", verification_text(package_ref))
+      entries << bytes_entry("08_reproducibility/verify-evidence-package.rb", "offline_verifier", ::MediaGallery::EvidenceOfflineVerifier.script)
 
       manifest = manifest_data(evidence_case, report, package_ref, generated_at, entries, exclusions)
       manifest_bytes = canonical_pretty_json(manifest)
       manifest_sha256 = Digest::SHA256.hexdigest(manifest_bytes)
-      seal = create_seal(manifest_bytes)
+      seal = ::MediaGallery::EvidenceSeal.create(manifest_bytes)
+      timestamp = ::MediaGallery::EvidenceTimestamp.create(manifest_bytes)
 
       final_entries = entries.dup
       final_entries << bytes_entry("00_manifest/manifest.json", "canonical_manifest", manifest_bytes)
       if seal[:signature]
         final_entries << bytes_entry("00_manifest/seal-signature.p7s", "cms_detached_signature", seal[:signature])
         final_entries << bytes_entry("00_manifest/seal-certificate.pem", "seal_certificate", seal[:certificate_pem])
+        final_entries << bytes_entry("00_manifest/seal-certificate-chain.pem", "seal_certificate_chain", seal[:chain_pem]) if seal[:chain_pem].present?
+      end
+      if timestamp[:response_der].present?
+        final_entries << bytes_entry("00_manifest/timestamp-request.tsq", "rfc3161_timestamp_request", timestamp[:request_der])
+        final_entries << bytes_entry("00_manifest/timestamp-response.tsr", "rfc3161_timestamp_response", timestamp[:response_der])
+        final_entries << bytes_entry("00_manifest/timestamp-metadata.json", "rfc3161_timestamp_metadata", pretty_json(timestamp_metadata(timestamp)))
       end
       checksums = final_entries.sort_by(&:path).map { |entry| "#{entry.sha256}  #{entry.path}" }.join("\n") + "\n"
       final_entries << bytes_entry("00_manifest/checksums.sha256", "checksum_index", checksums)
@@ -62,10 +77,10 @@ module ::MediaGallery
       path = ::MediaGallery::EvidenceVault.package_path(evidence_case.case_ref, storage_ref)
       write_tar_gz!(path, final_entries)
       package_sha256 = Digest::SHA256.file(path).hexdigest
-      verification = verify_path(path, expected_manifest_sha256: manifest_sha256)
+      verification = verify_path(path, expected_manifest_sha256: manifest_sha256, enforce_current_assurance: true)
       raise "generated_package_verification_failed:#{verification[:errors].join(',')}" unless verification[:ok]
 
-      status = seal[:method] == "cms_detached" && verification[:cms_signature_integrity_verified] ? "cms_signed" : "integrity_only"
+      status = package_status(seal: seal, timestamp: timestamp, verification: verification)
       record = nil
       ::MediaGallery::ForensicEvidenceCase.transaction do
         record = ::MediaGallery::ForensicEvidencePackage.create!(
@@ -81,7 +96,7 @@ module ::MediaGallery
           seal_method: seal[:method],
           seal_key_id: seal[:key_id],
           signature_verified: verification[:cms_signature_integrity_verified],
-          timestamp_status: "not_configured",
+          timestamp_status: timestamp[:status],
           immutable_at: generated_at,
           created_by: user,
           metadata: {
@@ -90,14 +105,21 @@ module ::MediaGallery
             "excluded_objects" => exclusions,
             "verification" => verification.except(:files),
             "jurisdiction_profile" => "international_technical_core",
-            "trusted_timestamp" => "not_configured",
-            "certificate_trust" => "not_verified_by_builtin_verifier",
+            "seal" => {
+              "method" => seal[:method],
+              "key_id" => seal[:key_id],
+              "certificate" => seal[:certificate],
+              "verification" => seal[:verification],
+            }.compact,
+            "timestamp" => timestamp_metadata(timestamp),
+            "offline_verifier_version" => ::MediaGallery::EvidenceOfflineVerifier::VERSION,
           },
         )
-        evidence_case.update!(status: "packaged", updated_by: user)
+        evidence_case.update!(status: status == "sealed" ? "sealed" : "packaged", updated_by: user)
+        report.update!(status: "final_sealed") if status == "sealed" && report.status == "final_unsealed"
         ::MediaGallery::EvidenceChain.record!(
           evidence_case: evidence_case,
-          event_type: status == "cms_signed" ? "cms_integrity_package_created" : "integrity_package_created",
+          event_type: status == "sealed" ? "trusted_sealed_package_created" : (status == "cms_signed" ? "cms_integrity_package_created" : "integrity_package_created"),
           user: user,
           object_ref: record.package_ref,
           details: {
@@ -106,8 +128,11 @@ module ::MediaGallery
             manifest_sha256: manifest_sha256,
             seal_method: record.seal_method,
             cms_signature_integrity_verified: record.signature_verified,
-            certificate_trust_verified: false,
+            certificate_trust_verified: verification[:certificate_trust_verified],
+            certificate_trust_mode: verification[:certificate_trust_mode],
             timestamp_status: record.timestamp_status,
+            trusted_timestamp_verified: verification[:trusted_timestamp_verified],
+            timestamp_generated_at_utc: verification[:timestamp_generated_at_utc],
           },
         )
       end
@@ -133,9 +158,10 @@ module ::MediaGallery
       verify_path(absolute_path(package), expected_manifest_sha256: package.manifest_sha256)
     end
 
-    def verify_path(path, expected_manifest_sha256: nil)
+    def verify_path(path, expected_manifest_sha256: nil, enforce_current_assurance: false)
       files = read_tar_entries(path)
       errors = []
+      warnings = []
       checksum_bytes = files["00_manifest/checksums.sha256"]
       manifest_bytes = files["00_manifest/manifest.json"]
       errors << "checksums_missing" if checksum_bytes.blank?
@@ -182,6 +208,9 @@ module ::MediaGallery
         control_paths = %w[
           00_manifest/manifest.json 00_manifest/checksums.sha256
           00_manifest/seal-signature.p7s 00_manifest/seal-certificate.pem
+          00_manifest/seal-certificate-chain.pem
+          00_manifest/timestamp-request.tsq 00_manifest/timestamp-response.tsr
+          00_manifest/timestamp-metadata.json
         ]
         (files.keys - manifest_paths - control_paths).each { |entry_path| errors << "not_declared_in_manifest:#{entry_path}" }
       end
@@ -192,27 +221,97 @@ module ::MediaGallery
       )
       verify_external_chain(files["07_chain-of-custody/events.jsonl"], errors)
 
-      signature_verified = false
       signature = files["00_manifest/seal-signature.p7s"]
       certificate = files["00_manifest/seal-certificate.pem"]
+      certificate_chain = files["00_manifest/seal-certificate-chain.pem"]
+      seal_verification = {
+        signature_integrity_verified: false,
+        certificate_trust_verified: false,
+        certificate_time_valid: false,
+        certificate_pin_verified: false,
+        certificate_revoked_by_configuration: false,
+        trust_mode: "none",
+        errors: [],
+      }
       if signature.present? || certificate.present?
         if signature.blank? || certificate.blank? || manifest_bytes.blank?
           errors << "incomplete_cms_seal"
         else
-          signature_verified = verify_cms(signature, certificate, manifest_bytes)
-          errors << "cms_signature_invalid" unless signature_verified
+          seal_verification = ::MediaGallery::EvidenceSeal.verify(
+            signature_der: signature,
+            certificate_pem: certificate,
+            chain_pem: certificate_chain,
+            content: manifest_bytes,
+            key_id: manifest&.dig("seal", "key_id"),
+            manifest_certificate_sha256: manifest&.dig("seal", "signing_certificate_sha256"),
+          )
+          seal_errors = Array(seal_verification[:errors])
+          integrity_codes = %w[cms_signature_invalid cms_verification_error cms_manifest_certificate_mismatch]
+          seal_errors.each do |item|
+            code = item.to_s.split(":", 2).first
+            if integrity_codes.include?(code) || enforce_current_assurance
+              errors << item
+            else
+              warnings << item
+            end
+          end
+        end
+      end
+
+      timestamp_request = files["00_manifest/timestamp-request.tsq"]
+      timestamp_response = files["00_manifest/timestamp-response.tsr"]
+      timestamp_verification = {
+        verified: false,
+        trust_mode: "none",
+        errors: [],
+      }
+      if timestamp_request.present? || timestamp_response.present?
+        if timestamp_request.blank? || timestamp_response.blank?
+          errors << "incomplete_timestamp"
+        else
+          timestamp_verification = ::MediaGallery::EvidenceTimestamp.verify(
+            request_der: timestamp_request,
+            response_der: timestamp_response,
+            expected_policy_oid: manifest&.dig("seal", "timestamp_policy_oid"),
+          )
+          timestamp_errors = Array(timestamp_verification[:errors])
+          timestamp_integrity_codes = %w[
+            timestamp_response_not_granted timestamp_token_missing timestamp_tsa_certificate_missing
+            timestamp_chain_or_imprint_invalid timestamp_verification_error timestamp_policy_mismatch
+          ]
+          timestamp_errors.each do |item|
+            code = item.to_s.split(":", 2).first
+            if timestamp_integrity_codes.include?(code) || enforce_current_assurance
+              errors << item
+            else
+              warnings << item
+            end
+          end
+          warnings.concat(Array(timestamp_verification[:warnings]))
         end
       end
 
       {
         ok: errors.empty?,
-        errors: errors,
+        errors: errors.uniq,
+        warnings: warnings.uniq,
         manifest_sha256: manifest_sha,
         signature_present: signature.present?,
-        signature_verified: signature_verified,
-        cms_signature_integrity_verified: signature_verified,
-        certificate_trust_verified: false,
-        trusted_timestamp_verified: false,
+        signature_verified: seal_verification[:signature_integrity_verified],
+        cms_signature_integrity_verified: seal_verification[:signature_integrity_verified],
+        certificate_trust_verified: seal_verification[:certificate_trust_verified],
+        certificate_trust_mode: seal_verification[:trust_mode],
+        certificate_time_valid: seal_verification[:certificate_time_valid],
+        certificate_pin_verified: seal_verification[:certificate_pin_verified],
+        certificate_revoked_by_configuration: seal_verification[:certificate_revoked_by_configuration],
+        manifest_certificate_match: seal_verification[:manifest_certificate_match],
+        seal_certificate: seal_verification[:certificate],
+        timestamp_present: timestamp_response.present?,
+        trusted_timestamp_verified: timestamp_verification[:verified],
+        timestamp_trust_mode: timestamp_verification[:trust_mode],
+        timestamp_generated_at_utc: timestamp_verification.dig(:token, "gen_time_utc"),
+        timestamp_policy_oid: timestamp_verification.dig(:token, "policy_id"),
+        timestamp_tsa_certificate: timestamp_verification[:tsa_certificate],
         file_count: files.length,
         files: files.keys.sort,
       }
@@ -220,10 +319,13 @@ module ::MediaGallery
       {
         ok: false,
         errors: ["verification_error:#{e.class}:#{e.message}"],
+        warnings: [],
         signature_verified: false,
         cms_signature_integrity_verified: false,
         certificate_trust_verified: false,
+        certificate_trust_mode: "none",
         trusted_timestamp_verified: false,
+        timestamp_present: false,
         files: [],
       }
     end
@@ -374,12 +476,33 @@ module ::MediaGallery
     def manifest_data(evidence_case, report, package_ref, generated_at, entries, exclusions)
       governance = ::MediaGallery::EvidenceGovernance.external_profile(evidence_case)
       issuer = governance["issuer_display_name"].to_s.presence || ::MediaGallery::EvidencePolicy.issuer_name.presence || "Media Library"
+      pdf_profile = report.metadata.is_a?(Hash) ? report.metadata.dig("verification", "pdf_processing", "pdf_profile") : nil
+      pdf_profile = report.metadata.dig("verification", "pdf_profile") if pdf_profile.blank? && report.metadata.is_a?(Hash)
+      limitations = [
+        "The package technically documents a distribution-copy attribution and does not identify a natural-person actor.",
+        "No legal admissibility, infringement, authorization, liability, intent or damages conclusion is made.",
+        "Release activity after package creation is preserved in the case audit and separate release receipts; this immutable package is not rewritten.",
+      ]
+      limitations << "The report profile is #{pdf_profile.presence || 'PDF 1.4; not certified PDF/A'}."
+      if ::MediaGallery::EvidencePolicy.seal_mode == "cms_detached"
+        limitations << if ::MediaGallery::EvidenceSeal.trust_mode == "embedded_only"
+          "The CMS signature proves integrity against the embedded certificate; certificate trust must be established independently."
+        else
+          "The CMS signature is verified using the configured certificate trust model at package creation and can be rechecked independently."
+        end
+      end
+      limitations << if ::MediaGallery::EvidenceTimestamp.enabled?
+        "An RFC 3161 timestamp is requested over the exact canonical manifest and package creation fails if it cannot be verified."
+      else
+        "No external RFC 3161 timestamp is configured for this package."
+      end
+
       {
         "schema" => PACKAGE_SCHEMA,
         "package_id" => package_ref,
         "case_id" => evidence_case.case_ref,
         "report_id" => report.report_ref,
-        "status" => ::MediaGallery::EvidencePolicy.cms_seal_configured? ? "cms_signed_integrity" : "integrity_only",
+        "status" => "finalized_manifest",
         "created_at_utc" => generated_at.iso8601(6),
         "issuer" => "#{issuer} Forensic Evidence Service",
         "operator_identity" => governance["operator_display_name"],
@@ -392,20 +515,20 @@ module ::MediaGallery
         "excluded_objects" => exclusions,
         "seal" => {
           "requested_method" => ::MediaGallery::EvidencePolicy.seal_mode,
-          "key_id" => seal_key_id,
-          "trusted_timestamp" => "not_configured",
-          "cms_signature_assurance" => "manifest signature checked against the embedded certificate only",
-          "certificate_chain_trust" => "must be established independently by recipient",
-          "eu_eidas_profile" => "not_claimed_without_external_qualified_trust_service_and_timestamp_configuration",
+          "key_id" => ::MediaGallery::EvidenceSeal.seal_key_id,
+          "signing_certificate_sha256" => ::MediaGallery::EvidenceSeal.current_certificate_metadata&.dig("sha256"),
+          "certificate_trust_mode" => ::MediaGallery::EvidenceSeal.trust_mode,
+          "timestamp_mode" => ::MediaGallery::EvidenceTimestamp.mode,
+          "timestamp_trust_mode" => ::MediaGallery::EvidenceTimestamp.trust_mode,
+          "timestamp_policy_oid" => ::MediaGallery::EvidenceTimestamp.expected_policy_oid.presence,
+          "assurance_note" => "Integrity, signature trust and timestamp verification are separate results; none is presented as a legal conclusion.",
         }.compact,
-        "limitations" => [
-          "The package technically documents a distribution-copy attribution and does not identify a natural-person actor.",
-          "No legal admissibility, infringement, authorization, liability, intent or damages conclusion is made.",
-          "The built-in report is PDF 1.4 and is not certified PDF/A.",
-          "A CMS signature, when present, does not by itself establish trust in the embedded certificate.",
-          "No trusted timestamp token is included in this release.",
-          "Release activity after package creation is preserved in the case audit and separate release receipts; this immutable package is not rewritten.",
-        ],
+        "report_profile" => pdf_profile,
+        "offline_verifier" => {
+          "path" => "08_reproducibility/verify-evidence-package.rb",
+          "version" => ::MediaGallery::EvidenceOfflineVerifier::VERSION,
+        },
+        "limitations" => limitations,
       }.compact
     end
 
@@ -418,10 +541,12 @@ module ::MediaGallery
         "archive_format" => "tar.gz",
         "manifest_path" => "00_manifest/manifest.json",
         "checksums_path" => "00_manifest/checksums.sha256",
-        "signature_path" => ::MediaGallery::EvidencePolicy.cms_seal_configured? ? "00_manifest/seal-signature.p7s" : nil,
-        "signature_trust_model" => ::MediaGallery::EvidencePolicy.cms_seal_configured? ? "embedded_certificate_integrity_only" : "none",
-        "certificate_chain_trust" => "not_verified_by_builtin_verifier",
-        "timestamp_status" => "not_configured",
+        "signature_path" => ::MediaGallery::EvidencePolicy.seal_mode == "cms_detached" ? "00_manifest/seal-signature.p7s" : nil,
+        "signature_trust_model" => ::MediaGallery::EvidencePolicy.seal_mode == "cms_detached" ? ::MediaGallery::EvidenceSeal.trust_mode : "none",
+        "timestamp_mode" => ::MediaGallery::EvidenceTimestamp.mode,
+        "timestamp_response_path" => ::MediaGallery::EvidenceTimestamp.enabled? ? "00_manifest/timestamp-response.tsr" : nil,
+        "offline_verifier_path" => "08_reproducibility/verify-evidence-package.rb",
+        "offline_verifier_version" => ::MediaGallery::EvidenceOfflineVerifier::VERSION,
       }.compact
     end
 
@@ -429,49 +554,37 @@ module ::MediaGallery
       <<~TEXT
         Evidence package #{package_ref}
 
-        1. Extract this tar.gz archive with a path-safe archive tool.
-        2. Verify every SHA-256 line in 00_manifest/checksums.sha256.
-        3. Verify that the SHA-256 of 00_manifest/manifest.json matches the value supplied with the release record.
-        4. When seal-signature.p7s is present, verify the detached CMS signature over the exact manifest.json bytes using seal-certificate.pem and the operator's independently trusted certificate chain.
-        5. This package does not include a trusted timestamp token unless a future timestamp integration explicitly adds and verifies one.
+        The archive contains a self-contained Ruby verifier at:
+          08_reproducibility/verify-evidence-package.rb
 
-        A successful integrity check proves that package bytes match the recorded manifest. It does not prove legal identity, conduct, rights, authorization or liability.
+        Basic offline verification:
+          ruby 08_reproducibility/verify-evidence-package.rb --package /path/to/#{package_ref}.tar.gz
+
+        Optional certificate-trust verification can be supplied with --cms-ca-bundle,
+        --tsa-ca-bundle and exact certificate SHA-256 pin arguments. The verifier never
+        treats an embedded certificate as trusted merely because it is embedded.
+
+        A successful integrity, CMS or RFC 3161 check proves only the corresponding
+        technical property of the package bytes. It does not prove legal identity,
+        conduct, rights, authorization, liability or admissibility.
       TEXT
     end
 
-    def create_seal(manifest_bytes)
-      return { method: "integrity_only", signature: nil, key_id: nil } unless ::MediaGallery::EvidencePolicy.cms_seal_configured?
+    def package_status(seal:, timestamp:, verification:)
+      return "sealed" if timestamp[:status] == "verified" && verification[:trusted_timestamp_verified]
+      return "cms_signed" if seal[:method] == "cms_detached" && verification[:cms_signature_integrity_verified]
 
-      key_path = SiteSetting.media_gallery_evidence_seal_private_key_path.to_s
-      cert_path = SiteSetting.media_gallery_evidence_seal_certificate_path.to_s
-      password = seal_key_password
-      key = OpenSSL::PKey.read(File.binread(key_path), password)
-      cert = OpenSSL::X509::Certificate.new(File.binread(cert_path))
-      flags = OpenSSL::PKCS7::BINARY | OpenSSL::PKCS7::DETACHED
-      signature = OpenSSL::PKCS7.sign(cert, key, manifest_bytes, [], flags).to_der
-      raise "cms_signature_self_verification_failed" unless verify_cms(signature, cert.to_pem, manifest_bytes)
-
-      { method: "cms_detached", signature: signature, certificate_pem: cert.to_pem, key_id: seal_key_id }
+      "integrity_only"
     end
 
-    def verify_cms(signature_der, certificate_pem, content)
-      pkcs7 = OpenSSL::PKCS7.new(signature_der)
-      cert = OpenSSL::X509::Certificate.new(certificate_pem)
-      store = OpenSSL::X509::Store.new
-      flags = OpenSSL::PKCS7::NOVERIFY | OpenSSL::PKCS7::BINARY
-      pkcs7.verify([cert], store, content, flags)
-    rescue
-      false
-    end
-
-    def seal_key_id
-      value = SiteSetting.respond_to?(:media_gallery_evidence_seal_key_id) ? SiteSetting.media_gallery_evidence_seal_key_id.to_s.strip : ""
-      value.presence
-    end
-
-    def seal_key_password
-      env_name = SiteSetting.respond_to?(:media_gallery_evidence_seal_key_password_env) ? SiteSetting.media_gallery_evidence_seal_key_password_env.to_s.strip : ""
-      env_name.present? ? ENV[env_name].to_s : nil
+    def timestamp_metadata(timestamp)
+      {
+        "status" => timestamp[:status],
+        "request_sha256" => timestamp[:request_sha256],
+        "response_sha256" => timestamp[:response_sha256],
+        "verification" => timestamp[:verification],
+        "transport" => timestamp[:http],
+      }.compact
     end
 
     def folder_for_object(object)
@@ -517,6 +630,7 @@ module ::MediaGallery
       payload["verification"]["report_data_sha256"] = nil
       payload["verification"].delete("pdf_sha256_external")
       payload["verification"].delete("pdf_hash_location_note")
+      payload["verification"].delete("pdf_processing")
       actual = Digest::SHA256.hexdigest(::MediaGallery::EvidenceReference.canonical_json(payload))
       errors << "report_data_hash_missing" if expected.blank?
       errors << "report_data_hash_mismatch" if expected.present? && actual != expected
@@ -813,7 +927,7 @@ module ::MediaGallery
     end
 
     private_class_method :payload_entries, :manifest_data, :package_info_data, :verification_text,
-                         :create_seal, :verify_cms, :seal_key_id, :seal_key_password, :folder_for_object,
+                         :package_status, :timestamp_metadata, :folder_for_object,
                          :object_manifest, :verify_report_metadata, :verify_external_chain, :external_media_snapshot, :external_identify_snapshot,
                          :external_identify_summary, :external_raw_result, :privacy_minimize_identify_data, :sensitive_identity_key?,
                          :snapshot_account_ref_map, :external_account_snapshot, :external_fingerprint_snapshot, :external_scan_metadata,
