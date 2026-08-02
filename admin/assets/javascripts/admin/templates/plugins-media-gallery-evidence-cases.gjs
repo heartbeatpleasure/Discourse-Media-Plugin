@@ -15,10 +15,16 @@ export default RouteTemplate(
       .mg-ev-actions.is-end { justify-content: flex-end; }
       .mg-ev-actions.is-full { grid-column: 1 / -1; }
       .mg-ev-actions .btn { width: auto; max-width: 100%; white-space: normal; }
-      .mg-ev-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: end; }
-      .mg-ev-search input { width: 100%; min-width: 0; height: 40px; box-sizing: border-box; }
-      .mg-ev-search .btn { align-self: end; height: 40px; margin: 0; white-space: nowrap; }
-      .mg-ev-index-grid { display: grid; grid-template-columns: minmax(320px,.8fr) minmax(440px,1.2fr); gap: 1rem; align-items: start; }
+      .mg-ev-search { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.75rem; align-items:stretch; }
+      .mg-ev-search input { width:100%; min-width:0; height:42px; min-height:42px; margin:0; box-sizing:border-box; }
+      .mg-ev-search .btn { display:inline-flex; align-items:center; justify-content:center; align-self:stretch; min-height:42px; margin:0; white-space:nowrap; }
+      .mg-ev-index-shell { display:grid; gap:0; }
+      .mg-ev-tabs { display:flex; gap:.35rem; align-items:flex-end; padding:0 .75rem; position:relative; z-index:1; }
+      .mg-ev-tab { display:inline-flex; align-items:center; gap:.5rem; min-height:44px; padding:.65rem 1rem; border:1px solid var(--mg-border); border-bottom:0; border-radius:12px 12px 0 0; background:var(--mg-soft); color:var(--primary-high); font-weight:600; cursor:pointer; }
+      .mg-ev-tab:hover { background:var(--primary-low); }
+      .mg-ev-tab.is-active { background:var(--secondary); color:var(--primary); box-shadow:0 1px 0 var(--secondary); }
+      .mg-ev-tab-count { display:inline-flex; align-items:center; justify-content:center; min-width:1.55rem; min-height:1.55rem; padding:0 .35rem; border-radius:999px; background:var(--primary-low); font-size:var(--font-down-1); font-weight:600; }
+      .mg-ev-index-panel { border-top-left-radius:12px; }
       .mg-ev-form { display: grid; grid-template-columns: repeat(2,minmax(280px,1fr)); gap: .85rem; align-items: start; }
       .mg-ev-form.is-upload { grid-template-columns: minmax(220px,.55fr) minmax(320px,1.45fr); }
       .mg-ev-field { display: grid; gap: .35rem; min-width: 0; align-content: start; }
@@ -55,10 +61,18 @@ export default RouteTemplate(
       .mg-ev-checks { display:grid; grid-template-columns:repeat(2,minmax(260px,1fr)); gap:.65rem 1.25rem; }
       .mg-ev-check { display:flex; gap:.55rem; align-items:flex-start; padding:.55rem .65rem; border:1px solid var(--mg-border); border-radius:10px; background:var(--mg-soft); }
       .mg-ev-check input { margin-top:.2rem; flex:0 0 auto; }
-      .mg-ev-case-summary { display:grid; gap:.65rem; }
+      .mg-ev-case-summary { display:grid; gap:.85rem; }
       .mg-ev-case-title { display:flex; gap:.75rem; align-items:center; flex-wrap:wrap; }
       .mg-ev-case-title h2 { overflow-wrap:anywhere; }
-      .mg-ev-summary-line { display:flex; gap:.55rem 1rem; flex-wrap:wrap; color:var(--mg-muted); font-size:var(--font-down-1); }
+      .mg-ev-summary-grid { display:grid; grid-template-columns:minmax(0,2fr) repeat(3,minmax(0,1fr)); gap:.65rem; }
+      .mg-ev-summary-item { display:grid; gap:.2rem; min-width:0; padding:.65rem .75rem; border:1px solid var(--mg-border); border-radius:10px; background:var(--mg-soft); align-content:start; }
+      .mg-ev-summary-item.is-media { grid-column:auto; }
+      .mg-ev-summary-label { color:var(--mg-muted); font-size:var(--font-down-1); font-weight:600; }
+      .mg-ev-summary-value { min-width:0; overflow-wrap:anywhere; font-weight:600; }
+      .mg-ev-summary-footer { display:flex; gap:.55rem .75rem; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+      .mg-ev-summary-metrics { display:flex; gap:.45rem; flex-wrap:wrap; align-items:center; }
+      .mg-ev-summary-metric { display:inline-flex; gap:.35rem; align-items:baseline; padding:.35rem .55rem; border:1px solid var(--mg-border); border-radius:9px; background:var(--secondary); color:var(--mg-muted); font-size:var(--font-down-1); }
+      .mg-ev-summary-metric strong { color:var(--primary); }
       .mg-ev-workflow { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.6rem; padding-bottom:.2rem; }
       .mg-ev-step { border:1px solid var(--mg-border); border-radius:12px; background:var(--secondary); color:var(--primary); padding:.7rem; min-width:155px; display:grid; grid-template-columns:auto 1fr; gap:.6rem; align-items:start; text-align:left; cursor:pointer; }
       .mg-ev-step:hover { background:var(--primary-very-low); }
@@ -71,16 +85,39 @@ export default RouteTemplate(
       .mg-ev-step-copy small { color:var(--mg-muted); }
       .mg-ev-workflow-content { display:grid; gap:1rem; scroll-margin-top:1rem; }
       .mg-ev-section-intro { display:grid; gap:.3rem; max-width:820px; }
+      .mg-ev-profile-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; }
+      .mg-ev-profile-card { border:1px solid var(--mg-border); border-radius:12px; padding:.8rem; background:var(--mg-soft); display:grid; gap:.65rem; align-content:start; min-width:0; }
+      .mg-ev-profile-card h3 { font-size:var(--font-up-1); }
+      .mg-ev-definition-list { display:grid; gap:.5rem; margin:0; }
+      .mg-ev-definition-list > div { display:grid; gap:.15rem; min-width:0; }
+      .mg-ev-definition-list dt { color:var(--mg-muted); font-size:var(--font-down-1); }
+      .mg-ev-definition-list dd { margin:0; font-weight:600; overflow-wrap:anywhere; }
+      .mg-ev-profile-identity { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.65rem; padding-top:.85rem; border-top:1px solid var(--mg-border); }
+      .mg-ev-profile-note { padding:.7rem .8rem; border-radius:10px; background:var(--mg-soft); color:var(--mg-muted); font-size:var(--font-down-1); line-height:1.45; }
       .mg-ev-stat-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; }
       .mg-ev-security-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; }
-      .mg-ev-security-card { border:1px solid var(--mg-border); border-radius:12px; padding:.8rem; background:var(--mg-soft); display:grid; gap:.3rem; min-width:0; }
-      .mg-ev-object-details { display:grid; gap:.25rem; font-size:var(--font-down-1); color:var(--mg-muted); }
-      .mg-ev-stat { border:1px solid var(--mg-border); border-radius:12px; padding:.85rem; background:var(--mg-soft); display:grid; gap:.3rem; min-width:0; }
+      .mg-ev-security-card { border:1px solid var(--mg-border); border-radius:12px; padding:.8rem; background:var(--mg-soft); display:grid; grid-template-rows:auto auto 1fr; gap:.3rem; align-content:start; min-width:0; }
+      .mg-ev-security-card strong { overflow-wrap:anywhere; }
+      .mg-ev-object-details { display:grid; gap:.25rem; padding:.65rem .75rem; border-radius:10px; background:var(--secondary); font-size:var(--font-down-1); color:var(--mg-muted); }
+      .mg-ev-stat { border:1px solid var(--mg-border); border-radius:12px; padding:.85rem; background:var(--mg-soft); display:grid; grid-template-rows:auto auto 1fr; gap:.35rem; align-content:start; min-width:0; }
       .mg-ev-stat strong { font-size:var(--font-up-1); overflow-wrap:anywhere; }
-      .mg-ev-object { border:1px solid var(--mg-border); border-radius:12px; padding:.85rem; background:var(--mg-soft); display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.65rem 1rem; align-items:start; }
-      .mg-ev-object-main { display:grid; gap:.4rem; min-width:0; }
+      .mg-ev-stat-detail { display:grid; gap:.15rem; align-content:start; padding-top:.2rem; }
+      .mg-ev-object { border:1px solid var(--mg-border); border-radius:12px; padding:.9rem; background:var(--mg-soft); display:grid; gap:.8rem; min-width:0; }
+      .mg-ev-object-header { display:flex; justify-content:space-between; gap:.75rem; align-items:flex-start; flex-wrap:wrap; }
+      .mg-ev-object-heading { display:grid; gap:.15rem; min-width:0; }
+      .mg-ev-object-heading strong { overflow-wrap:anywhere; }
+      .mg-ev-object-meta-grid { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(120px,.5fr); gap:.65rem; }
+      .mg-ev-object-meta-item { display:grid; gap:.15rem; min-width:0; }
+      .mg-ev-object-meta-value { overflow-wrap:anywhere; }
+      .mg-ev-object-status-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.55rem; }
+      .mg-ev-object-status { display:grid; gap:.15rem; padding:.55rem .65rem; border:1px solid var(--mg-border); border-radius:9px; background:var(--secondary); min-width:0; }
+      .mg-ev-object-status strong { overflow-wrap:anywhere; }
+      .mg-ev-object-footer { display:flex; gap:.75rem; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; padding-top:.75rem; border-top:1px solid var(--mg-border); }
+      .mg-ev-object-hash { display:grid; gap:.15rem; min-width:min(100%,420px); flex:1 1 420px; }
       .mg-ev-object-actions { display:flex; gap:.5rem; flex-wrap:wrap; justify-content:flex-end; }
-      .mg-ev-object .mg-ev-code { grid-column:1 / -1; }
+      .mg-ev-snapshot-details { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:.55rem 1rem; }
+      .mg-ev-snapshot-detail { display:grid; gap:.15rem; min-width:0; }
+      .mg-ev-snapshot-detail.is-full { grid-column:1 / -1; }
       .mg-ev-readiness-summary { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
       .mg-ev-issue-head { display:flex; justify-content:space-between; gap:.75rem; align-items:flex-start; flex-wrap:wrap; }
       .mg-ev-subsection { display:grid; gap:.7rem; }
@@ -110,8 +147,8 @@ export default RouteTemplate(
       .mg-ev-help-popover-section strong { font-size:var(--font-down-1); color:var(--primary-high); }
       .mg-ev-help-popover-example, .mg-ev-help-popover-note { padding:.6rem .7rem; border-radius:10px; background:var(--primary-very-low); overflow-wrap:anywhere; }
       .mg-ev-help-popover-note { border-left:3px solid var(--tertiary); }
-      @media (max-width: 900px) { .mg-ev-index-grid, .mg-ev-form, .mg-ev-form.is-upload, .mg-ev-stat-grid, .mg-ev-security-grid, .mg-ev-report-grid, .mg-ev-lifecycle-grid { grid-template-columns:1fr; } .mg-ev-field.is-full, .mg-ev-form-actions { grid-column:auto; } .mg-ev-checks { grid-template-columns:1fr; } }
-      @media (max-width: 620px) { .mg-ev-search, .mg-ev-release-link { grid-template-columns:1fr; } .mg-ev-release-link .btn { width:100%; } .mg-ev-search .btn { width:100%; } .mg-ev-object { grid-template-columns:1fr; } .mg-ev-object-actions { justify-content:flex-start; } .mg-ev-object .mg-ev-code { grid-column:auto; } .mg-ev-form-actions { justify-content:stretch; } .mg-ev-form-actions .btn { width:100%; } }
+      @media (max-width: 900px) { .mg-ev-form, .mg-ev-form.is-upload, .mg-ev-profile-grid, .mg-ev-profile-identity, .mg-ev-stat-grid, .mg-ev-security-grid, .mg-ev-report-grid, .mg-ev-lifecycle-grid { grid-template-columns:1fr; } .mg-ev-summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .mg-ev-summary-item.is-media { grid-column:1 / -1; } .mg-ev-field.is-full, .mg-ev-form-actions { grid-column:auto; } .mg-ev-checks, .mg-ev-object-status-grid { grid-template-columns:1fr; } }
+      @media (max-width: 620px) { .mg-ev-search, .mg-ev-release-link, .mg-ev-summary-grid, .mg-ev-object-meta-grid, .mg-ev-snapshot-details { grid-template-columns:1fr; } .mg-ev-tabs { padding:0 .35rem; } .mg-ev-tab { flex:1 1 0; justify-content:center; padding:.6rem .7rem; } .mg-ev-release-link .btn, .mg-ev-search .btn { width:100%; } .mg-ev-object-actions { justify-content:flex-start; } .mg-ev-snapshot-detail.is-full { grid-column:auto; } .mg-ev-form-actions { justify-content:stretch; } .mg-ev-form-actions .btn { width:100%; } }
     </style>
 
     <div class="mg-evidence">
@@ -127,31 +164,47 @@ export default RouteTemplate(
       {{#if @controller.notice}}<div class="mg-ev-flash is-success">{{@controller.notice}}</div>{{/if}}
 
       <section class="mg-ev-panel">
-        <div class="mg-ev-head is-start">
-          <div class="mg-ev-section-intro"><div class="mg-ev-title-with-help"><h2>Safety profile</h2><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Safety profile" aria-expanded={{eq @controller.activeHelpKey "safety_profile"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "safety_profile")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "safety_profile")}}>i</span></div><p class="mg-ev-meta">Restricted identity annexes are not included in standard exports. External source URLs are recorded manually and are never fetched automatically by the server.</p></div>
-          {{#if @controller.configLoaded}}
-            <div class="mg-ev-badges">
-              <span class="mg-ev-badge">Report language: {{@controller.reportLanguageLabel}}</span>
-              <span class="mg-ev-badge">PDF profile: {{@controller.pdfProfileLabel}}</span>
-              <span class="mg-ev-badge">Package protection: {{@controller.sealModeLabel}}</span>
-              <span class="mg-ev-badge">Certificate trust: {{@controller.sealTrustLabel}}</span>
-              <span class="mg-ev-badge">Timestamp: {{@controller.timestampLabel}}</span>
-              <span class="mg-ev-badge">Release transport: {{@controller.releaseTransportLabel}}</span>
-            </div>
-          {{else}}
-            <span class="mg-ev-badge is-danger">Configuration unavailable</span>
-          {{/if}}
+        <div class="mg-ev-section-intro">
+          <div class="mg-ev-title-with-help"><h2>Safety profile</h2><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Safety profile" aria-expanded={{eq @controller.activeHelpKey "safety_profile"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "safety_profile")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "safety_profile")}}>i</span></div>
+          <p class="mg-ev-meta">Restricted identity annexes are not included in standard exports. External source URLs are recorded manually and are never fetched automatically by the server.</p>
         </div>
         {{#if @controller.configLoaded}}
+          <div class="mg-ev-profile-grid">
+            <section class="mg-ev-profile-card">
+              <h3>Report output</h3>
+              <dl class="mg-ev-definition-list">
+                <div><dt>Language</dt><dd>{{@controller.reportLanguageLabel}}</dd></div>
+                <div><dt>PDF profile</dt><dd>{{@controller.pdfProfileLabel}}</dd></div>
+              </dl>
+            </section>
+            <section class="mg-ev-profile-card">
+              <h3>Package assurance</h3>
+              <dl class="mg-ev-definition-list">
+                <div><dt>Protection</dt><dd>{{@controller.sealModeLabel}}</dd></div>
+                <div><dt>Certificate trust</dt><dd>{{@controller.sealTrustLabel}}</dd></div>
+                <div><dt>Timestamp</dt><dd>{{@controller.timestampLabel}}</dd></div>
+              </dl>
+            </section>
+            <section class="mg-ev-profile-card">
+              <h3>Controlled release</h3>
+              <dl class="mg-ev-definition-list">
+                <div><dt>Transport</dt><dd>{{@controller.releaseTransportLabel}}</dd></div>
+              </dl>
+            </section>
+          </div>
           {{#unless @controller.releaseTransportReady}}<div class="mg-ev-flash is-error">Controlled package release is blocked until the configured site URL uses HTTPS. An explicit insecure test-only override is available for isolated test environments, but must remain disabled in production.</div>{{/unless}}
           {{#if @controller.hasIssuerIdentity}}
-            <div class="mg-ev-meta"><strong>Issuer:</strong> {{@controller.issuerName}}{{#if @controller.hasOperatorIdentity}} &nbsp;|&nbsp; <strong>Operator:</strong> {{@controller.operatorIdentity}}{{/if}}</div>
+            <div class="mg-ev-profile-identity">
+              <div class="mg-ev-summary-item"><span class="mg-ev-summary-label">Issuer</span><span class="mg-ev-summary-value">{{@controller.issuerName}}</span></div>
+              <div class="mg-ev-summary-item"><span class="mg-ev-summary-label">Operator</span><span class="mg-ev-summary-value">{{if @controller.hasOperatorIdentity @controller.operatorIdentity "Not specified"}}</span></div>
+              {{#if @controller.config.legal_notice_url}}<div class="mg-ev-summary-item"><span class="mg-ev-summary-label">Legal notice</span><span class="mg-ev-summary-value">{{@controller.config.legal_notice_url}}</span></div>{{/if}}
+            </div>
           {{else}}
             <div class="mg-ev-flash is-error">Configure a non-personal evidence issuer name before finalization. Operator identity remains optional and is omitted when blank.</div>
           {{/if}}
-          {{#if @controller.config.legal_notice_url}}<div class="mg-ev-meta"><strong>Legal notice:</strong> {{@controller.config.legal_notice_url}}</div>{{/if}}
-          {{#if @controller.config.jurisdiction_notice}}<div class="mg-ev-meta">{{@controller.config.jurisdiction_notice}}</div>{{/if}}
+          {{#if @controller.config.jurisdiction_notice}}<div class="mg-ev-profile-note">{{@controller.config.jurisdiction_notice}}</div>{{/if}}
         {{else}}
+          <div class="mg-ev-flash is-error">Configuration unavailable</div>
           <div class="mg-ev-meta">The evidence configuration could not be loaded. This is a loading or server-side error, not a field you still need to complete.</div>
           <div class="mg-ev-actions"><button class="btn btn-default" type="button" disabled={{@controller.busy}} {{on "click" @controller.retrySelectedCase}}>Retry loading</button></div>
         {{/if}}
@@ -165,52 +218,68 @@ export default RouteTemplate(
       {{/if}}
 
       {{#unless @controller.hasSelected}}
-        <div class="mg-ev-index-grid">
-          <section class="mg-ev-panel">
-            <div class="mg-ev-head"><h2>Cases</h2><span class="mg-ev-meta">{{@controller.cases.length}} shown</span></div>
-            <form class="mg-ev-search" {{on "submit" @controller.search}}>
-              <input type="search" aria-label="Search evidence cases" placeholder="Case, claimant or platform" value={{@controller.query}} {{on "input" (fn @controller.setField "query")}} />
-              <button class="btn btn-default" type="submit" disabled={{@controller.busy}}>Search</button>
-            </form>
-            <div class="mg-ev-list">
-              {{#each @controller.caseRows as |row|}}
-                <button class="mg-ev-row is-clickable" type="button" {{on "click" (fn @controller.openCase row.case_ref)}}>
-                  <strong>{{row.case_ref}}</strong>
-                  <div class="mg-ev-badges"><span class="mg-ev-badge">{{row.status_label}}</span><span class="mg-ev-badge">{{row.decision_label}}</span>{{#if row.legal_hold}}<span class="mg-ev-badge is-danger">Legal hold</span>{{/if}}</div>
-                  <span class="mg-ev-meta">{{row.media_title}} | {{row.claimant_ref}} | {{row.external_platform}}</span>
-                </button>
-              {{else}}
-                <p class="mg-ev-meta">No evidence cases found.</p>
-              {{/each}}
-            </div>
-          </section>
+        <div class="mg-ev-index-shell">
+          <div class="mg-ev-tabs" role="tablist" aria-label="Evidence case views">
+            <button id="mg-ev-tab-cases" class={{if (eq @controller.indexView "cases") "mg-ev-tab is-active" "mg-ev-tab"}} type="button" role="tab" aria-selected={{eq @controller.indexView "cases"}} aria-controls="mg-ev-panel-cases" {{on "click" (fn @controller.selectIndexView "cases")}}>Cases <span class="mg-ev-tab-count">{{@controller.cases.length}}</span></button>
+            <button id="mg-ev-tab-new" class={{if (eq @controller.indexView "new") "mg-ev-tab is-active" "mg-ev-tab"}} type="button" role="tab" aria-selected={{eq @controller.indexView "new"}} aria-controls="mg-ev-panel-new" {{on "click" (fn @controller.selectIndexView "new")}}>New case</button>
+          </div>
 
-          <section class="mg-ev-panel">
-            <div class="mg-ev-section-intro"><h2>New evidence case</h2><p class="mg-ev-meta">Create the case first; source capture and acquired evidence are added in the guided workflow. URLs are recorded but never fetched by the server.</p></div>
-            <form class="mg-ev-form" {{on "submit" @controller.createCase}}>
-              <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-media-public-id">Media public ID</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Media public ID" aria-expanded={{eq @controller.activeHelpKey "media_public_id"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "media_public_id")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "media_public_id")}}>i</span></div><input id="mg-ev-new-media-public-id" value={{@controller.newMediaPublicId}} {{on "input" (fn @controller.setField "newMediaPublicId")}} /></div>
-              <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-claimant-ref">Claimant reference</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Claimant reference" aria-expanded={{eq @controller.activeHelpKey "claimant_reference"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "claimant_reference")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "claimant_reference")}}>i</span></div><input id="mg-ev-new-claimant-ref" required value={{@controller.newClaimantRef}} {{on "input" (fn @controller.setField "newClaimantRef")}} /></div>
-              <div class="mg-ev-field is-full"><div class="mg-ev-field-label"><label for="mg-ev-new-research-question">Research question</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Research question" aria-expanded={{eq @controller.activeHelpKey "research_question"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "research_question")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "research_question")}}>i</span></div><textarea id="mg-ev-new-research-question" required value={{@controller.newResearchQuestion}} {{on "input" (fn @controller.setField "newResearchQuestion")}}></textarea></div>
-              <div class="mg-ev-field is-full"><div class="mg-ev-field-label"><label for="mg-ev-new-external-url">External URL</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for External URL" aria-expanded={{eq @controller.activeHelpKey "external_url"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_url")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_url")}}>i</span></div><input id="mg-ev-new-external-url" type="url" value={{@controller.newExternalUrl}} {{on "input" (fn @controller.setField "newExternalUrl")}} /></div>
-              <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-external-platform">External platform</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for External platform" aria-expanded={{eq @controller.activeHelpKey "external_platform"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_platform")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_platform")}}>i</span></div><input id="mg-ev-new-external-platform" value={{@controller.newExternalPlatform}} {{on "input" (fn @controller.setField "newExternalPlatform")}} /></div>
-              <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-external-username">Visible external username</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Visible external username" aria-expanded={{eq @controller.activeHelpKey "external_username"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_username")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_username")}}>i</span></div><input id="mg-ev-new-external-username" value={{@controller.newExternalUsername}} {{on "input" (fn @controller.setField "newExternalUsername")}} /></div>
-              <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-rights-statement-ref">Rights statement reference</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Rights statement reference" aria-expanded={{eq @controller.activeHelpKey "rights_statement_reference"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "rights_statement_reference")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "rights_statement_reference")}}>i</span></div><input id="mg-ev-new-rights-statement-ref" value={{@controller.newRightsStatementRef}} {{on "input" (fn @controller.setField "newRightsStatementRef")}} /></div>
-              <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-rights-statement-received">Rights statement received (local time)</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Rights statement received" aria-expanded={{eq @controller.activeHelpKey "rights_statement_received"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "rights_statement_received")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "rights_statement_received")}}>i</span></div><input id="mg-ev-new-rights-statement-received" type="datetime-local" value={{@controller.newRightsStatementReceivedAt}} {{on "input" (fn @controller.setField "newRightsStatementReceivedAt")}} /></div>
-              <div class="mg-ev-form-actions"><button class="btn btn-primary" type="submit" disabled={{or @controller.busy (not @controller.canOperateCases)}}>Create case</button></div>
-            </form>
-          </section>
+          {{#if (eq @controller.indexView "cases")}}
+            <section id="mg-ev-panel-cases" class="mg-ev-panel mg-ev-index-panel" role="tabpanel" aria-labelledby="mg-ev-tab-cases">
+              <div class="mg-ev-head"><div class="mg-ev-section-intro"><h2>Cases</h2><p class="mg-ev-meta">Search and open an existing evidence case.</p></div><span class="mg-ev-meta">{{@controller.cases.length}} shown</span></div>
+              <form class="mg-ev-search" {{on "submit" @controller.search}}>
+                <input type="search" aria-label="Search evidence cases" placeholder="Case, claimant or platform" value={{@controller.query}} {{on "input" (fn @controller.setField "query")}} />
+                <button class="btn btn-default" type="submit" disabled={{@controller.busy}}>Search</button>
+              </form>
+              <div class="mg-ev-list">
+                {{#each @controller.caseRows as |row|}}
+                  <button class="mg-ev-row is-clickable" type="button" {{on "click" (fn @controller.openCase row.case_ref)}}>
+                    <strong>{{row.case_ref}}</strong>
+                    <div class="mg-ev-badges"><span class="mg-ev-badge">{{row.status_label}}</span><span class="mg-ev-badge">{{row.decision_label}}</span>{{#if row.legal_hold}}<span class="mg-ev-badge is-danger">Legal hold</span>{{/if}}</div>
+                    <span class="mg-ev-meta">{{row.media_title}} · {{row.claimant_ref}}{{#if row.external_platform}} · {{row.external_platform}}{{/if}}</span>
+                  </button>
+                {{else}}
+                  <div class="mg-ev-row"><strong>No evidence cases found</strong><span class="mg-ev-meta">Adjust the search or use the New case tab to create the first case.</span></div>
+                {{/each}}
+              </div>
+            </section>
+          {{else}}
+            <section id="mg-ev-panel-new" class="mg-ev-panel mg-ev-index-panel" role="tabpanel" aria-labelledby="mg-ev-tab-new">
+              <div class="mg-ev-section-intro"><h2>New evidence case</h2><p class="mg-ev-meta">Create the case first; source capture and acquired evidence are added in the guided workflow. URLs are recorded but never fetched by the server.</p></div>
+              <form class="mg-ev-form" {{on "submit" @controller.createCase}}>
+                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-media-public-id">Media public ID</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Media public ID" aria-expanded={{eq @controller.activeHelpKey "media_public_id"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "media_public_id")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "media_public_id")}}>i</span></div><input id="mg-ev-new-media-public-id" value={{@controller.newMediaPublicId}} {{on "input" (fn @controller.setField "newMediaPublicId")}} /></div>
+                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-claimant-ref">Claimant reference</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Claimant reference" aria-expanded={{eq @controller.activeHelpKey "claimant_reference"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "claimant_reference")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "claimant_reference")}}>i</span></div><input id="mg-ev-new-claimant-ref" required value={{@controller.newClaimantRef}} {{on "input" (fn @controller.setField "newClaimantRef")}} /></div>
+                <div class="mg-ev-field is-full"><div class="mg-ev-field-label"><label for="mg-ev-new-research-question">Research question</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Research question" aria-expanded={{eq @controller.activeHelpKey "research_question"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "research_question")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "research_question")}}>i</span></div><textarea id="mg-ev-new-research-question" required value={{@controller.newResearchQuestion}} {{on "input" (fn @controller.setField "newResearchQuestion")}}></textarea></div>
+                <div class="mg-ev-field is-full"><div class="mg-ev-field-label"><label for="mg-ev-new-external-url">External URL</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for External URL" aria-expanded={{eq @controller.activeHelpKey "external_url"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_url")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_url")}}>i</span></div><input id="mg-ev-new-external-url" type="url" value={{@controller.newExternalUrl}} {{on "input" (fn @controller.setField "newExternalUrl")}} /></div>
+                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-external-platform">External platform</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for External platform" aria-expanded={{eq @controller.activeHelpKey "external_platform"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_platform")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_platform")}}>i</span></div><input id="mg-ev-new-external-platform" value={{@controller.newExternalPlatform}} {{on "input" (fn @controller.setField "newExternalPlatform")}} /></div>
+                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-external-username">Visible external username</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Visible external username" aria-expanded={{eq @controller.activeHelpKey "external_username"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_username")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_username")}}>i</span></div><input id="mg-ev-new-external-username" value={{@controller.newExternalUsername}} {{on "input" (fn @controller.setField "newExternalUsername")}} /></div>
+                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-rights-statement-ref">Rights statement reference</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Rights statement reference" aria-expanded={{eq @controller.activeHelpKey "rights_statement_reference"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "rights_statement_reference")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "rights_statement_reference")}}>i</span></div><input id="mg-ev-new-rights-statement-ref" value={{@controller.newRightsStatementRef}} {{on "input" (fn @controller.setField "newRightsStatementRef")}} /></div>
+                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-new-rights-statement-received">Rights statement received</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Rights statement received" aria-expanded={{eq @controller.activeHelpKey "rights_statement_received"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "rights_statement_received")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "rights_statement_received")}}>i</span></div><input id="mg-ev-new-rights-statement-received" type="datetime-local" value={{@controller.newRightsStatementReceivedAt}} {{on "input" (fn @controller.setField "newRightsStatementReceivedAt")}} /></div>
+                <div class="mg-ev-form-actions"><button class="btn btn-primary" type="submit" disabled={{or @controller.busy (not @controller.canOperateCases)}}>Create case</button></div>
+              </form>
+            </section>
+          {{/if}}
         </div>
       {{else}}
         <section class="mg-ev-panel mg-ev-case-summary">
           <div class="mg-ev-head is-start">
-            <div class="mg-ev-case-summary">
-              <div class="mg-ev-case-title"><h2>{{@controller.selected.case_ref}}</h2><span class="mg-ev-badge is-warn">{{@controller.workflowStatusLabel}}</span></div>
-              <div class="mg-ev-summary-line"><span><strong>Media:</strong> {{@controller.selected.media_title}}</span><span><strong>Decision:</strong> {{@controller.selectedHeader.decision_label}}</span><span><strong>Classification:</strong> {{@controller.selectedHeader.classification_label}}</span><span><strong>Claimant:</strong> {{@controller.selected.claimant_ref}}</span></div>
-              <div class="mg-ev-summary-line"><span>{{@controller.finalizationBlockerCount}} required action(s)</span><span>{{@controller.finalizationWarningCount}} advisory notice(s)</span><span>Retention review: {{@controller.selected.retention_due_at_utc}}</span></div>
-            </div>
+            <div class="mg-ev-case-title"><h2>{{@controller.selected.case_ref}}</h2><span class="mg-ev-badge is-warn">{{@controller.workflowStatusLabel}}</span></div>
             <div class="mg-ev-actions"><button class="btn btn-default" type="button" disabled={{@controller.busy}} {{on "click" @controller.reloadSelected}}>Refresh</button><button class="btn btn-default" type="button" {{on "click" @controller.closeCase}}>Back to cases</button></div>
           </div>
-          <div class="mg-ev-badges"><span class="mg-ev-badge">{{@controller.selectedHeader.status_label}}</span>{{#if @controller.selected.claimant_confirmed}}<span class="mg-ev-badge is-ok">Claimant confirmed</span>{{/if}}{{#if @controller.selected.legal_hold}}<span class="mg-ev-badge is-danger">Legal hold</span>{{/if}}</div>
+          <div class="mg-ev-summary-grid">
+            <div class="mg-ev-summary-item is-media"><span class="mg-ev-summary-label">Media</span><span class="mg-ev-summary-value">{{@controller.selected.media_title}}</span></div>
+            <div class="mg-ev-summary-item"><span class="mg-ev-summary-label">Decision</span><span class="mg-ev-summary-value">{{@controller.selectedHeader.decision_label}}</span></div>
+            <div class="mg-ev-summary-item"><span class="mg-ev-summary-label">Classification</span><span class="mg-ev-summary-value">{{@controller.selectedHeader.classification_label}}</span></div>
+            <div class="mg-ev-summary-item"><span class="mg-ev-summary-label">Claimant</span><span class="mg-ev-summary-value">{{@controller.selected.claimant_ref}}</span></div>
+          </div>
+          <div class="mg-ev-summary-footer">
+            <div class="mg-ev-badges"><span class="mg-ev-badge">{{@controller.selectedHeader.status_label}}</span>{{#if @controller.selected.claimant_confirmed}}<span class="mg-ev-badge is-ok">Claimant confirmed</span>{{/if}}{{#if @controller.selected.legal_hold}}<span class="mg-ev-badge is-danger">Legal hold</span>{{/if}}</div>
+            <div class="mg-ev-summary-metrics">
+              <span class="mg-ev-summary-metric"><strong>{{@controller.finalizationBlockerCount}}</strong> required actions</span>
+              <span class="mg-ev-summary-metric"><strong>{{@controller.finalizationWarningCount}}</strong> advisory notices</span>
+              <span class="mg-ev-summary-metric"><span>Retention review</span><strong>{{@controller.selectedRetentionReviewLabel}}</strong></span>
+            </div>
+          </div>
           {{#unless @controller.selectedMutable}}<div class="mg-ev-flash is-success">This case is immutable after package creation. Existing report and package bytes remain downloadable and verifiable.</div>{{/unless}}
         </section>
 
@@ -235,9 +304,9 @@ export default RouteTemplate(
                 <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-edit-external-platform">External platform</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for External platform" aria-expanded={{eq @controller.activeHelpKey "external_platform"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_platform")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_platform")}}>i</span></div><input id="mg-ev-edit-external-platform" value={{@controller.editExternalPlatform}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editExternalPlatform")}} /></div>
                 <div class="mg-ev-field is-full"><div class="mg-ev-field-label"><label for="mg-ev-edit-external-url">External URL</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for External URL" aria-expanded={{eq @controller.activeHelpKey "external_url"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_url")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_url")}}>i</span></div><input id="mg-ev-edit-external-url" type="url" value={{@controller.editExternalUrl}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editExternalUrl")}} /></div>
                 <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-edit-external-username">Visible external username</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Visible external username" aria-expanded={{eq @controller.activeHelpKey "external_username"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "external_username")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "external_username")}}>i</span></div><input id="mg-ev-edit-external-username" value={{@controller.editExternalUsername}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editExternalUsername")}} /></div>
-                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-edit-observed-at">Observed by staff (local time)</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Observed by staff" aria-expanded={{eq @controller.activeHelpKey "observed_by_staff"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "observed_by_staff")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "observed_by_staff")}}>i</span></div><input id="mg-ev-edit-observed-at" type="datetime-local" value={{@controller.editExternalObservedAt}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editExternalObservedAt")}} /></div>
+                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-edit-observed-at">Observed by staff</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Observed by staff" aria-expanded={{eq @controller.activeHelpKey "observed_by_staff"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "observed_by_staff")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "observed_by_staff")}}>i</span></div><input id="mg-ev-edit-observed-at" type="datetime-local" value={{@controller.editExternalObservedAt}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editExternalObservedAt")}} /></div>
                 <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-edit-platform-time">Platform-displayed date/time</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Platform-displayed date and time" aria-expanded={{eq @controller.activeHelpKey "platform_displayed_datetime"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "platform_displayed_datetime")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "platform_displayed_datetime")}}>i</span></div><input id="mg-ev-edit-platform-time" value={{@controller.editExternalDisplayedAt}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editExternalDisplayedAt")}} /></div>
-                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-edit-rights-received">Rights statement received (local time)</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Rights statement received" aria-expanded={{eq @controller.activeHelpKey "rights_statement_received"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "rights_statement_received")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "rights_statement_received")}}>i</span></div><input id="mg-ev-edit-rights-received" type="datetime-local" value={{@controller.editRightsStatementReceivedAt}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editRightsStatementReceivedAt")}} /></div>
+                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-edit-rights-received">Rights statement received</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Rights statement received" aria-expanded={{eq @controller.activeHelpKey "rights_statement_received"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "rights_statement_received")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "rights_statement_received")}}>i</span></div><input id="mg-ev-edit-rights-received" type="datetime-local" value={{@controller.editRightsStatementReceivedAt}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editRightsStatementReceivedAt")}} /></div>
                 <div class="mg-ev-field is-full"><div class="mg-ev-field-label"><label for="mg-ev-edit-rights-ref">Rights statement reference</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Rights statement reference" aria-expanded={{eq @controller.activeHelpKey "rights_statement_reference"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "rights_statement_reference")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "rights_statement_reference")}}>i</span></div><input id="mg-ev-edit-rights-ref" value={{@controller.editRightsStatementRef}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "editRightsStatementRef")}} /></div>
                 <div class="mg-ev-form-actions"><button class="btn btn-primary" type="submit" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}}>Save case intake</button><button class="btn btn-default" type="button" {{on "click" (fn @controller.selectWorkflowStep "evidence")}}>Continue to evidence acquisition</button></div>
               </form>
@@ -253,57 +322,65 @@ export default RouteTemplate(
                   <div class="mg-ev-security-card">
                     <div class="mg-ev-title-with-help"><span class="mg-ev-meta">Malware scanner</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for malware scan status" aria-expanded={{eq @controller.activeHelpKey "malware_scan_status"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "malware_scan_status")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "malware_scan_status")}}>i</span></div>
                     <strong>{{@controller.scannerHealthLabel}}</strong>
-                    {{#if @controller.scannerHealth.version}}<span class="mg-ev-meta">{{@controller.scannerHealth.version}}</span>{{/if}}
+                    {{#if @controller.scannerHealth.version}}<span class="mg-ev-meta">{{@controller.scannerHealth.version}}</span>{{else}}<span class="mg-ev-meta">Manual quarantine review required</span>{{/if}}
                   </div>
                   <div class="mg-ev-security-card">
                     <div class="mg-ev-title-with-help"><span class="mg-ev-meta">Technical inspection</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for technical inspection status" aria-expanded={{eq @controller.activeHelpKey "technical_inspection_status"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "technical_inspection_status")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "technical_inspection_status")}}>i</span></div>
                     <strong>{{@controller.inspectorHealthLabel}}</strong>
-                    {{#if @controller.inspectorHealth.version}}<span class="mg-ev-meta">{{@controller.inspectorHealth.version}}</span>{{/if}}
+                    {{#if @controller.inspectorHealth.version}}<span class="mg-ev-meta">{{@controller.inspectorHealth.version}}</span>{{else}}<span class="mg-ev-meta">Version not reported</span>{{/if}}
                   </div>
                   <div class="mg-ev-security-card">
                     <div class="mg-ev-title-with-help"><span class="mg-ev-meta">Private evidence storage</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for private evidence storage" aria-expanded={{eq @controller.activeHelpKey "acquisition_security"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "acquisition_security")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "acquisition_security")}}>i</span></div>
                     <strong>{{@controller.storageHealthLabel}}</strong>
-                    {{#if @controller.storageHealth.minimum_free_bytes}}<span class="mg-ev-meta">Reserve: {{@controller.storageReserveLabel}}</span>{{/if}}
+                    {{#if @controller.storageHealth.minimum_free_bytes}}<span class="mg-ev-meta">Reserved free space: {{@controller.storageReserveLabel}}</span>{{else}}<span class="mg-ev-meta">Reserve not reported</span>{{/if}}
                   </div>
                 </div>
                 {{#unless @controller.config.malware_scanner_enabled}}<div class="mg-ev-flash is-info">Automatic malware scanning is optional and currently disabled. Evidence is still hashed and inspected, but staff must record a manual quarantine decision before finalisation.</div>{{/unless}}
               </div>
-              <form class="mg-ev-form is-upload" {{on "submit" @controller.uploadObject}}>
-                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-upload-role">Evidence role</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Evidence role" aria-expanded={{eq @controller.activeHelpKey "evidence_role"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "evidence_role")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "evidence_role")}}>i</span></div><select id="mg-ev-upload-role" value={{@controller.uploadRole}} disabled={{not @controller.selectedMutable}} {{on "change" (fn @controller.setField "uploadRole")}}><option value="external_original">External original</option><option value="working_copy">Working copy</option><option value="source_screenshot">Source screenshot</option><option value="source_html">Source HTML</option><option value="source_warc">Source WARC</option><option value="source_headers">Source headers</option><option value="rights_statement">Rights statement</option><option value="other">Other</option></select></div>
-                <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-upload-file">File</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Evidence file" aria-expanded={{eq @controller.activeHelpKey "evidence_file"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "evidence_file")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "evidence_file")}}>i</span></div><input id="mg-ev-upload-file" type="file" required disabled={{not @controller.selectedMutable}} {{on "change" @controller.setUploadFile}} /></div>
-                <div class="mg-ev-field is-full"><div class="mg-ev-field-label"><label for="mg-ev-upload-description">Description</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Evidence description" aria-expanded={{eq @controller.activeHelpKey "evidence_description"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "evidence_description")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "evidence_description")}}>i</span></div><input id="mg-ev-upload-description" value={{@controller.uploadDescription}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "uploadDescription")}} /></div>
-                <div class="mg-ev-form-actions"><button class="btn btn-primary" type="submit" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}}>Store, hash and freeze evidence</button></div>
-              </form>
+
+              <div class="mg-ev-subsection">
+                <div class="mg-ev-section-intro"><h3>Add evidence object</h3><p class="mg-ev-meta">Choose the evidence role, select the file and add a short factual description.</p></div>
+                <form class="mg-ev-form is-upload" {{on "submit" @controller.uploadObject}}>
+                  <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-upload-role">Evidence role</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Evidence role" aria-expanded={{eq @controller.activeHelpKey "evidence_role"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "evidence_role")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "evidence_role")}}>i</span></div><select id="mg-ev-upload-role" value={{@controller.uploadRole}} disabled={{not @controller.selectedMutable}} {{on "change" (fn @controller.setField "uploadRole")}}><option value="external_original">External original</option><option value="working_copy">Working copy</option><option value="source_screenshot">Source screenshot</option><option value="source_html">Source HTML</option><option value="source_warc">Source WARC</option><option value="source_headers">Source headers</option><option value="rights_statement">Rights statement</option><option value="other">Other</option></select></div>
+                  <div class="mg-ev-field"><div class="mg-ev-field-label"><label for="mg-ev-upload-file">File</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Evidence file" aria-expanded={{eq @controller.activeHelpKey "evidence_file"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "evidence_file")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "evidence_file")}}>i</span></div><input id="mg-ev-upload-file" type="file" required disabled={{not @controller.selectedMutable}} {{on "change" @controller.setUploadFile}} /></div>
+                  <div class="mg-ev-field is-full"><div class="mg-ev-field-label"><label for="mg-ev-upload-description">Description</label><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Evidence description" aria-expanded={{eq @controller.activeHelpKey "evidence_description"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "evidence_description")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "evidence_description")}}>i</span></div><input id="mg-ev-upload-description" value={{@controller.uploadDescription}} disabled={{not @controller.selectedMutable}} {{on "input" (fn @controller.setField "uploadDescription")}} /></div>
+                  <div class="mg-ev-form-actions"><button class="btn btn-primary" type="submit" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}}>Store, hash and freeze evidence</button></div>
+                </form>
+              </div>
+
               <div class="mg-ev-subsection">
                 <div class="mg-ev-head"><div class="mg-ev-title-with-help"><h3>Stored evidence objects</h3><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Stored evidence objects" aria-expanded={{eq @controller.activeHelpKey "stored_evidence_objects"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "stored_evidence_objects")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "stored_evidence_objects")}}>i</span></div><span class="mg-ev-meta">{{@controller.selectedObjects.length}} object(s)</span></div>
                 <div class="mg-ev-list">
                   {{#each @controller.selectedObjects as |object|}}
                     <article class="mg-ev-object">
-                      <div class="mg-ev-object-main">
-                        <strong>{{object.object_ref}} · {{object.role_label}}</strong>
-                        <span class="mg-ev-meta">{{object.original_filename}} · {{object.size_bytes}} bytes</span>
-                        <div class="mg-ev-badges">
-                          <span class="mg-ev-badge">Quarantine: {{object.quarantine_status_label}}</span>
-                          <span class="mg-ev-badge">Malware scan: {{object.scan_state_label}}</span>
-                          <span class="mg-ev-badge">Inspection: {{object.inspection_state_label}}</span>
-                        </div>
-                        <div class="mg-ev-object-details">
-                          {{#if object.scan_signature}}<span>Detection: {{object.scan_signature}}</span>{{/if}}
-                          {{#if object.inspection_message}}<span>{{object.inspection_message}}</span>{{/if}}
-                          {{#if object.inspection_warnings}}<span>{{object.inspection_warnings}}</span>{{/if}}
+                      <div class="mg-ev-object-header">
+                        <div class="mg-ev-object-heading"><span class="mg-ev-summary-label">Evidence object</span><strong>{{object.object_ref}}</strong></div>
+                        <span class="mg-ev-badge">{{object.role_label}}</span>
+                      </div>
+                      <div class="mg-ev-object-meta-grid">
+                        <div class="mg-ev-object-meta-item"><span class="mg-ev-summary-label">Original file</span><span class="mg-ev-object-meta-value">{{object.original_filename}}</span></div>
+                        <div class="mg-ev-object-meta-item"><span class="mg-ev-summary-label">Size</span><span class="mg-ev-object-meta-value">{{object.size_bytes}} bytes</span></div>
+                      </div>
+                      <div class="mg-ev-object-status-grid">
+                        <div class="mg-ev-object-status"><span class="mg-ev-summary-label">Quarantine</span><strong>{{object.quarantine_status_label}}</strong></div>
+                        <div class="mg-ev-object-status"><span class="mg-ev-summary-label">Malware scan</span><strong>{{object.scan_state_label}}</strong></div>
+                        <div class="mg-ev-object-status"><span class="mg-ev-summary-label">Technical inspection</span><strong>{{object.inspection_state_label}}</strong></div>
+                      </div>
+                      {{#if object.scan_signature}}<div class="mg-ev-object-details"><strong>Detection</strong><span>{{object.scan_signature}}</span></div>{{/if}}
+                      {{#if object.inspection_message}}<div class="mg-ev-object-details"><strong>Inspection note</strong><span>{{object.inspection_message}}</span>{{#if object.inspection_warnings}}<span>{{object.inspection_warnings}}</span>{{/if}}</div>{{else if object.inspection_warnings}}<div class="mg-ev-object-details"><strong>Inspection warnings</strong><span>{{object.inspection_warnings}}</span></div>{{/if}}
+                      <div class="mg-ev-object-footer">
+                        <div class="mg-ev-object-hash"><span class="mg-ev-summary-label">SHA-256</span><span class="mg-ev-code">{{object.sha256}}</span></div>
+                        <div class="mg-ev-object-actions">
+                          {{#if object.can_rescan}}<button class="btn btn-default" type="button" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}} {{on "click" (fn @controller.rescanObject object.object_ref)}}>Run security checks</button>{{/if}}
+                          {{#if object.can_manual_review}}
+                            {{#if object.can_mark_clean}}<button class="btn btn-default" type="button" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}} {{on "click" (fn @controller.setQuarantine object.object_ref "clean")}}>Record manual clean review</button>{{/if}}
+                            <button class="btn btn-danger" type="button" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}} {{on "click" (fn @controller.setQuarantine object.object_ref "rejected")}}>Reject</button>
+                          {{/if}}
                         </div>
                       </div>
-                      <div class="mg-ev-object-actions">
-                        {{#if object.can_rescan}}<button class="btn btn-default" type="button" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}} {{on "click" (fn @controller.rescanObject object.object_ref)}}>Run security checks</button>{{/if}}
-                        {{#if object.can_manual_review}}
-                          {{#if object.can_mark_clean}}<button class="btn btn-default" type="button" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}} {{on "click" (fn @controller.setQuarantine object.object_ref "clean")}}>Record manual clean review</button>{{/if}}
-                          <button class="btn btn-danger" type="button" disabled={{or @controller.busy (or (not @controller.selectedMutable) (not @controller.canOperateCases))}} {{on "click" (fn @controller.setQuarantine object.object_ref "rejected")}}>Reject</button>
-                        {{/if}}
-                      </div>
-                      <span class="mg-ev-code">SHA-256 {{object.sha256}}</span>
                     </article>
                   {{else}}
-                    <p class="mg-ev-meta">No evidence objects stored yet. Add at least the acquired external evidence file and either an external URL or a source-capture object.</p>
+                    <div class="mg-ev-row"><strong>No evidence objects stored</strong><span class="mg-ev-meta">Add at least the acquired external evidence file and either an external URL or a source-capture object.</span></div>
                   {{/each}}
                 </div>
               </div>
@@ -316,11 +393,30 @@ export default RouteTemplate(
               <div class="mg-ev-section-intro"><h2>3. Identify result</h2><p class="mg-ev-meta">Review the immutable production snapshot attached by Forensics Identify. Evidence reporting does not modify the detector, scoring policy or candidate ranking.</p></div>
               {{#if @controller.selectedIdentify}}
                 <div class="mg-ev-stat-grid">
-                  <div class="mg-ev-stat"><div class="mg-ev-stat-label"><span class="mg-ev-meta">Decision</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Identify decision" aria-expanded={{eq @controller.activeHelpKey "identify_decision"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "identify_decision")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "identify_decision")}}>i</span></div><strong>{{@controller.selectedIdentify.decision_label}}</strong></div>
-                  <div class="mg-ev-stat"><div class="mg-ev-stat-label"><span class="mg-ev-meta">Attributed distribution account</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Attributed distribution account" aria-expanded={{eq @controller.activeHelpKey "attributed_account"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "attributed_account")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "attributed_account")}}>i</span></div><strong>{{@controller.selectedIdentify.attributed_username}}</strong><span class="mg-ev-code">{{@controller.selectedIdentify.attributed_account_ref}}</span></div>
-                  <div class="mg-ev-stat"><div class="mg-ev-stat-label"><span class="mg-ev-meta">Candidate population</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Candidate population" aria-expanded={{eq @controller.activeHelpKey "candidate_population"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "candidate_population")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "candidate_population")}}>i</span></div><strong>{{@controller.selectedIdentify.candidate_population_count}}</strong><span class="mg-ev-meta">{{@controller.selectedIdentify.run_kind_label}} candidates</span></div>
+                  <div class="mg-ev-stat">
+                    <div class="mg-ev-stat-label"><span class="mg-ev-meta">Decision</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Identify decision" aria-expanded={{eq @controller.activeHelpKey "identify_decision"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "identify_decision")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "identify_decision")}}>i</span></div>
+                    <strong>{{@controller.selectedIdentify.decision_label}}</strong>
+                    <div class="mg-ev-stat-detail"><span class="mg-ev-meta">Recorded technical decision</span></div>
+                  </div>
+                  <div class="mg-ev-stat">
+                    <div class="mg-ev-stat-label"><span class="mg-ev-meta">Attributed distribution account</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Attributed distribution account" aria-expanded={{eq @controller.activeHelpKey "attributed_account"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "attributed_account")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "attributed_account")}}>i</span></div>
+                    <strong>{{@controller.selectedIdentify.attributed_username}}</strong>
+                    <div class="mg-ev-stat-detail"><span class="mg-ev-meta">Account reference</span><span class="mg-ev-code">{{@controller.selectedIdentify.attributed_account_ref}}</span></div>
+                  </div>
+                  <div class="mg-ev-stat">
+                    <div class="mg-ev-stat-label"><span class="mg-ev-meta">Candidate population</span><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Candidate population" aria-expanded={{eq @controller.activeHelpKey "candidate_population"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "candidate_population")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "candidate_population")}}>i</span></div>
+                    <strong>{{@controller.selectedIdentify.candidate_population_count}}</strong>
+                    <div class="mg-ev-stat-detail"><span class="mg-ev-meta">Population type</span><span>{{@controller.selectedIdentify.run_kind_label}} candidates</span></div>
+                  </div>
                 </div>
-                <div class="mg-ev-row is-verified"><div class="mg-ev-title-with-help"><strong>Immutable identify snapshot attached</strong><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Immutable identify snapshot" aria-expanded={{eq @controller.activeHelpKey "identify_snapshot"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "identify_snapshot")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "identify_snapshot")}}>i</span></div><span>Run {{@controller.selectedIdentify.run_ref}} · Layout {{@controller.selectedIdentify.layout}}</span><span class="mg-ev-code">Raw result SHA-256 {{@controller.selectedIdentify.raw_result_sha256}}</span></div>
+                <div class="mg-ev-row is-verified">
+                  <div class="mg-ev-title-with-help"><strong>Immutable identify snapshot attached</strong><span class="mg-ev-info" role="button" tabindex="0" aria-label="Help for Immutable identify snapshot" aria-expanded={{eq @controller.activeHelpKey "identify_snapshot"}} aria-controls="mg-ev-help-overlay" {{on "click" (fn @controller.toggleHelp "identify_snapshot")}} {{on "keydown" (fn @controller.handleHelpTriggerKeydown "identify_snapshot")}}>i</span></div>
+                  <div class="mg-ev-snapshot-details">
+                    <div class="mg-ev-snapshot-detail"><span class="mg-ev-summary-label">Identify run</span><span class="mg-ev-code">{{@controller.selectedIdentify.run_ref}}</span></div>
+                    <div class="mg-ev-snapshot-detail"><span class="mg-ev-summary-label">Layout</span><span>{{@controller.selectedIdentify.layout}}</span></div>
+                    <div class="mg-ev-snapshot-detail is-full"><span class="mg-ev-summary-label">Raw result SHA-256</span><span class="mg-ev-code">{{@controller.selectedIdentify.raw_result_sha256}}</span></div>
+                  </div>
+                </div>
               {{else}}
                 <div class="mg-ev-flash is-error">No immutable identify result is attached. Create the evidence case directly from a completed production Forensics Identify result.</div>
               {{/if}}

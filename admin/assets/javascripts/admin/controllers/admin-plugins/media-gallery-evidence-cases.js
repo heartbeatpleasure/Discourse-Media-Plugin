@@ -410,6 +410,16 @@ function utc(value) {
   return Number.isNaN(date.getTime()) ? String(value) : `${date.toISOString().replace("T", " ").replace(".000Z", "Z")}`;
 }
 
+function displayJurisdictionContext(value) {
+  const context = String(value || "").trim();
+  return context.toLowerCase() === "international" ? "International" : context;
+}
+
+function canonicalJurisdictionContext(value) {
+  const context = String(value || "").trim();
+  return context.toLowerCase() === "international" ? "international" : context;
+}
+
 function localDatetimeInput(value) {
   if (!value) {
     return "";
@@ -539,6 +549,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @tracked error = "";
   @tracked notice = "";
   @tracked query = "";
+  @tracked indexView = "cases";
   @tracked newMediaPublicId = "";
   @tracked newClaimantRef = "";
   @tracked newResearchQuestion = "";
@@ -550,7 +561,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   @tracked editClaimantRef = "";
   @tracked editResearchQuestion = "";
   @tracked editClassification = "confidential";
-  @tracked editJurisdictionContext = "international";
+  @tracked editJurisdictionContext = "International";
   @tracked editExternalUrl = "";
   @tracked editExternalPlatform = "";
   @tracked editExternalUsername = "";
@@ -620,6 +631,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.reviewChecklist = {};
     this.loadSelectedFields();
     this.activeStep = this.hasSelected ? this.recommendedInitialStep : "intake";
+    this.indexView = this.hasSelected || this.cases.length > 0 ? "cases" : "new";
   }
 
   loadSelectedFields() {
@@ -627,7 +639,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.editClaimantRef = selected.claimant_ref || "";
     this.editResearchQuestion = selected.research_question || "";
     this.editClassification = selected.classification || "confidential";
-    this.editJurisdictionContext = selected.jurisdiction_context || "international";
+    this.editJurisdictionContext = displayJurisdictionContext(selected.jurisdiction_context || "International");
     this.editExternalUrl = selected.external_url || "";
     this.editExternalPlatform = selected.external_platform || "";
     this.editExternalUsername = selected.external_username || "";
@@ -683,6 +695,10 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
       decision_label: evidenceLabel(selected.decision),
       classification_label: evidenceLabel(selected.classification),
     };
+  }
+
+  get selectedRetentionReviewLabel() {
+    return utc(this.selected?.retention_due_at_utc);
   }
 
   get selectedFinalization() {
@@ -1307,6 +1323,15 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
   }
 
   @action
+  selectIndexView(view) {
+    if (!["cases", "new"].includes(view)) {
+      return;
+    }
+    this.closeHelp();
+    this.indexView = view;
+  }
+
+  @action
   setField(field, event) {
     this[field] = event?.target?.value ?? "";
   }
@@ -1508,6 +1533,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
     this.error = "";
     this.notice = "";
     this.activeStep = "intake";
+    this.indexView = "cases";
     window.history.replaceState({}, "", "/admin/plugins/media-gallery-evidence-cases");
   }
 
@@ -1564,7 +1590,7 @@ export default class AdminPluginsMediaGalleryEvidenceCasesController extends Con
         claimant_ref: this.editClaimantRef,
         research_question: this.editResearchQuestion,
         classification: this.editClassification,
-        jurisdiction_context: this.editJurisdictionContext,
+        jurisdiction_context: canonicalJurisdictionContext(this.editJurisdictionContext),
         external_url: this.editExternalUrl,
         external_platform: this.editExternalPlatform,
         external_username: this.editExternalUsername,
