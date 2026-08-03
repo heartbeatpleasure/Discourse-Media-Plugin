@@ -611,6 +611,8 @@ en:
     media_gallery_staff_access_user_diagnostics_enabled_title: "Allow staff access to User diagnostics"
     media_gallery_staff_access_logs_enabled: "Allow non-admin staff to open Media Gallery Logs. Admins always keep access."
     media_gallery_staff_access_logs_enabled_title: "Allow staff access to Logs"
+    media_gallery_log_event_retention_days: "Number of days to retain operational Media Gallery log events. Default is 365 days. Set to 0 to disable automatic log rotation. This setting removes only old media_gallery_log_events records; it never removes media items, uploads, users, fingerprints, evidence cases or packages."
+    media_gallery_log_event_retention_days_title: "Operational log retention days"
     media_gallery_staff_access_forensics_identify_enabled: "Allow non-admin staff to open and use Media Gallery Forensics identify. Admins always keep access."
     media_gallery_staff_access_forensics_identify_enabled_title: "Allow staff access to Forensics identify"
     media_gallery_log_hls_aes128_key_denials: "Logs denied AES-128 key requests separately from generic HLS denial troubleshooting. Useful during QA, but can add log volume."

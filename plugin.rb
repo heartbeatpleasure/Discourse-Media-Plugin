@@ -39,6 +39,10 @@ after_initialize do
       :privacy_reason,
       :annex_recipient_ref,
       :annex_purpose,
+      :media_gallery_s3_secret_access_key,
+      :media_gallery_target_s3_secret_access_key,
+      :media_gallery_target_s3_2_secret_access_key,
+      :media_gallery_fingerprint_secret,
     ]
   rescue
     # Keep plugin boot resilient if Rails filter configuration is unavailable.
@@ -185,6 +189,7 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_hls_clear_rollback_item.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_originals.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_forensics_retention.rb", __dir__)
+  require_dependency File.expand_path("jobs/scheduled/media_gallery_log_retention.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_health_watchdog.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_temp_workspace_cleanup.rb", __dir__)
   require_dependency File.expand_path("jobs/scheduled/media_gallery_cleanup_chunked_uploads.rb", __dir__)

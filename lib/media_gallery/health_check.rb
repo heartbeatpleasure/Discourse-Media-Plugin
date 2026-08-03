@@ -944,7 +944,7 @@ module ::MediaGallery
         ]
         Array(report["categories"]).each do |category_row|
           Array(category_row["findings"]).each do |finding|
-            csv << [
+            row = [
               category_row["title"].to_s.presence || category_row["id"].to_s,
               finding["severity"],
               finding["issue_type"],
@@ -973,9 +973,19 @@ module ::MediaGallery
               finding["url"],
               finding["key"],
             ]
+            csv << row.map { |value| csv_safe_cell(value) }
           end
         end
       end
+    end
+
+    def csv_safe_cell(value)
+      return "" if value.nil?
+
+      text = value.to_s
+      return "'#{text}" if text.start_with?("=", "+", "-", "@", "\t", "\r", "\n")
+
+      text
     end
 
     def truncated_profile_names(cached)

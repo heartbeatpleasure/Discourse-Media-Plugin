@@ -518,6 +518,7 @@ plugins:
 
   media_gallery_s3_secret_access_key:
     default: ""
+    secret: true
     client: false
 
   media_gallery_s3_force_path_style:
@@ -560,6 +561,7 @@ plugins:
 
   media_gallery_target_s3_secret_access_key:
     default: ""
+    secret: true
     client: false
 
   media_gallery_target_s3_force_path_style:
@@ -600,6 +602,7 @@ plugins:
 
   media_gallery_target_s3_2_secret_access_key:
     default: ""
+    secret: true
     client: false
 
   media_gallery_target_s3_2_force_path_style:
@@ -849,6 +852,16 @@ plugins:
     max: 60000
     client: false
 
+  # Retention for operational Media Gallery log events only. This never removes
+  # media items, uploads, user records, fingerprints, evidence cases or packages.
+  # Set to 0 to disable automatic log-event rotation.
+  media_gallery_log_event_retention_days:
+    default: 365
+    type: integer
+    min: 0
+    max: 3650
+    client: false
+
   # Optional troubleshooting: log AES-128 key-request denials once the key endpoint exists.
   # Kept separate from generic HLS denials so QA can enable it without increasing all HLS noise.
   media_gallery_log_hls_aes128_key_denials:
@@ -974,6 +987,7 @@ plugins:
   media_gallery_fingerprint_secret:
     default: ""
     type: string
+    secret: true
     client: false
 
   # Watermark layout used when generating A/B HLS variants.
