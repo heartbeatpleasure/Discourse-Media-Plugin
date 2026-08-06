@@ -51,6 +51,7 @@ module ::MediaGallery
         last_full_storage_check: last_full_storage_check_summary,
         reconciliation: last_reconciliation_summary,
         reconciliation_history: reconciliation_history,
+        reconciliation_task: ::MediaGallery::ReconciliationTasks.visible_task_summary,
       }
     rescue => e
       Rails.logger.error("[media_gallery] health summary failed: #{e.class}: #{e.message}")
@@ -639,21 +640,38 @@ module ::MediaGallery
       )
     end
 
-    def run_reconciliation!(scan_mode: "bounded")
+    def reconciliation_limits(scan_mode: "bounded")
       configured_item_limit = setting_int(:media_gallery_health_reconciliation_item_limit, 500)
       configured_object_limit = setting_int(:media_gallery_health_reconciliation_object_limit, 2000)
       configured_orphan_sample_limit = setting_int(:media_gallery_health_reconciliation_orphan_sample_limit, 50)
       expanded = scan_mode.to_s == "expanded"
 
-      report = ::MediaGallery::StorageReconciler.run(
+      {
+        scan_mode: expanded ? "expanded" : "bounded",
         item_limit: configured_item_limit,
         object_limit: expanded ? [configured_object_limit, RECONCILIATION_EXPANDED_OBJECT_LIMIT].max : configured_object_limit,
-        orphan_sample_limit: expanded ? [configured_orphan_sample_limit, RECONCILIATION_EXPANDED_ORPHAN_SAMPLE_LIMIT].max : configured_orphan_sample_limit
+        orphan_sample_limit: expanded ? [configured_orphan_sample_limit, RECONCILIATION_EXPANDED_ORPHAN_SAMPLE_LIMIT].max : configured_orphan_sample_limit,
+        configured_item_limit: configured_item_limit,
+        configured_object_limit: configured_object_limit,
+        configured_orphan_sample_limit: configured_orphan_sample_limit,
+      }
+    end
+
+    def run_reconciliation!(scan_mode: "bounded", progress_callback: nil)
+      limits = reconciliation_limits(scan_mode: scan_mode)
+      expanded = limits[:scan_mode] == "expanded"
+
+      report = ::MediaGallery::StorageReconciler.run(
+        item_limit: limits[:item_limit],
+        object_limit: limits[:object_limit],
+        orphan_sample_limit: limits[:orphan_sample_limit],
+        progress_callback: progress_callback,
       )
-      report[:scan_mode] = expanded ? "expanded" : "bounded"
+      report[:scan_mode] = limits[:scan_mode]
       report[:limits] ||= {}
-      report[:limits][:configured_object_limit] = configured_object_limit
-      report[:limits][:configured_orphan_sample_limit] = configured_orphan_sample_limit
+      report[:limits][:configured_item_limit] = limits[:configured_item_limit]
+      report[:limits][:configured_object_limit] = limits[:configured_object_limit]
+      report[:limits][:configured_orphan_sample_limit] = limits[:configured_orphan_sample_limit]
       store_reconciliation!(report)
       record_log_event(
         event_type: "media_gallery_storage_reconciliation_run",

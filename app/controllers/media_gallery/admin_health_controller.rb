@@ -42,13 +42,49 @@ module ::MediaGallery
 
     def reconcile
       scan_mode = params[:scan_mode].to_s == "expanded" || ActiveModel::Type::Boolean.new.cast(params[:expanded_scan]) ? "expanded" : "bounded"
-      ::MediaGallery::HealthCheck.run_reconciliation!(scan_mode: scan_mode)
-      payload = ::MediaGallery::HealthCheck.summary(full_storage: false)
-      payload[:reconciliation_scan_mode] = scan_mode
-      render_json_dump(payload)
+      task_result = ::MediaGallery::ReconciliationTasks.create_or_reuse_task!(scan_mode: scan_mode, user: current_user)
+      task_id = task_result[:task_id].to_s
+
+      unless task_result[:reused]
+        begin
+          ::Jobs.enqueue(:media_gallery_storage_reconciliation, task_id: task_id)
+        rescue => enqueue_error
+          ::MediaGallery::ReconciliationTasks.mark_task_failed!(task_id, enqueue_error)
+          raise enqueue_error
+        end
+      end
+
+      task = ::MediaGallery::ReconciliationTasks.read_task(task_id) || task_result[:task]
+      render json: {
+        ok: true,
+        queued: !task_result[:reused],
+        reused: task_result[:reused],
+        task_id: task_id,
+        scan_mode: task["scan_mode"] || scan_mode,
+        status: task["status"] || "queued",
+        status_url: ::MediaGallery::ReconciliationTasks.status_url(task_id),
+        polling_timeout_seconds: ::MediaGallery::ReconciliationTasks::POLLING_TIMEOUT_SECONDS,
+        reconciliation_task: ::MediaGallery::ReconciliationTasks.public_payload(task),
+      }, status: :accepted
     rescue => e
-      Rails.logger.error("[media_gallery] storage reconciliation failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
-      render_json_error("storage_reconciliation_failed", status: 422, message: "Storage reconciliation failed. Please check Rails logs and try again.")
+      Rails.logger.error("[media_gallery] storage reconciliation queue failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      render_json_error("storage_reconciliation_queue_failed", status: 422, message: "Could not queue storage reconciliation. Please check Rails logs and try again.")
+    end
+
+    def reconciliation_status
+      task = ::MediaGallery::ReconciliationTasks.read_task(params[:task_id])
+      raise Discourse::NotFound if task.blank?
+
+      if ::MediaGallery::ReconciliationTasks.stale?(task)
+        task = ::MediaGallery::ReconciliationTasks.mark_task_stale!(task["task_id"]) || task
+      end
+
+      render_json_dump(::MediaGallery::ReconciliationTasks.public_payload(task))
+    rescue Discourse::NotFound
+      raise
+    rescue => e
+      Rails.logger.error("[media_gallery] storage reconciliation status failed request_id=#{request.request_id}: #{e.class}: #{e.message}")
+      render_json_error("storage_reconciliation_status_failed", status: 422, message: "Could not read the reconciliation task status. Please check Rails logs and try again.")
     end
 
     def reconciliation_export

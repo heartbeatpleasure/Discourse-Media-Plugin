@@ -34,7 +34,7 @@ module ::MediaGallery
     }.freeze
     PUBLIC_ID_PATTERN = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
-    def run(item_limit: 500, object_limit: 2000, orphan_sample_limit: 50)
+    def run(item_limit: 500, object_limit: 2000, orphan_sample_limit: 50, progress_callback: nil)
       started_at = Time.zone.now
       item_limit = bounded_int(item_limit, min: 25, max: 5000, default: 500)
       object_limit = bounded_int(object_limit, min: 50, max: 20_000, default: 2000)
@@ -64,6 +64,17 @@ module ::MediaGallery
         },
       }
 
+      emit_progress(
+        progress_callback,
+        stage: "inspecting_items",
+        stage_label: "Inspecting media records and required assets",
+        items_checked: 0,
+        item_limit: item_limit,
+        profiles_checked: 0,
+        profiles_total: 0,
+        objects_scanned: 0,
+      )
+
       ::MediaGallery::MediaItem.includes(:user).order(updated_at: :desc).limit(item_limit).find_each do |item|
         context[:stats][:items_checked] += 1
         context[:scanned_public_ids] << item.public_id.to_s if item.public_id.present?
@@ -79,9 +90,37 @@ module ::MediaGallery
           detail: "#{e.class}: #{e.message}".truncate(500),
           suggestion: "Review this item in Media management and retry reconciliation after fixing the underlying error."
         )
+      ensure
+        emit_progress(
+          progress_callback,
+          stage: "inspecting_items",
+          stage_label: "Inspecting media records and required assets",
+          items_checked: context[:stats][:items_checked],
+          item_limit: item_limit,
+          profiles_checked: context[:stats][:profiles_checked],
+          profiles_total: context.dig(:profiles, :configured).length,
+          objects_scanned: context[:stats][:objects_scanned],
+        )
       end
 
-      scan_storage_profiles!(context, object_limit: object_limit, orphan_sample_limit: orphan_sample_limit)
+      scan_storage_profiles!(
+        context,
+        object_limit: object_limit,
+        orphan_sample_limit: orphan_sample_limit,
+        progress_callback: progress_callback,
+        item_limit: item_limit,
+      )
+
+      emit_progress(
+        progress_callback,
+        stage: "finalizing",
+        stage_label: "Finalizing reconciliation report",
+        items_checked: context[:stats][:items_checked],
+        item_limit: item_limit,
+        profiles_checked: context[:stats][:profiles_checked],
+        profiles_total: context.dig(:profiles, :configured).length,
+        objects_scanned: context[:stats][:objects_scanned],
+      )
 
       finished_at = Time.zone.now
       categories = CATEGORIES.map do |key, meta|
@@ -96,7 +135,7 @@ module ::MediaGallery
         }
       end
 
-      {
+      report = {
         ok: categories.all? { |category| category[:severity].to_s == "ok" },
         severity: highest_severity(categories.map { |category| category[:severity] }),
         generated_at: started_at.iso8601,
@@ -115,8 +154,31 @@ module ::MediaGallery
         categories: categories,
         classifications: reconciliation_classification_summary(context),
       }
+
+      emit_progress(
+        progress_callback,
+        stage: "complete",
+        stage_label: "Storage reconciliation completed",
+        items_checked: context[:stats][:items_checked],
+        item_limit: item_limit,
+        profiles_checked: context[:stats][:profiles_checked],
+        profiles_total: context.dig(:profiles, :configured).length,
+        objects_scanned: context[:stats][:objects_scanned],
+      )
+
+      report
     rescue => e
       Rails.logger.error("[media_gallery] storage reconciliation failed: #{e.class}: #{e.message}\n#{e.backtrace&.first(30)&.join("\n")}")
+      emit_progress(
+        progress_callback,
+        stage: "failed",
+        stage_label: "Storage reconciliation failed",
+        items_checked: context&.dig(:stats, :items_checked).to_i,
+        item_limit: item_limit,
+        profiles_checked: context&.dig(:stats, :profiles_checked).to_i,
+        profiles_total: context&.dig(:profiles, :configured)&.length.to_i,
+        objects_scanned: context&.dig(:stats, :objects_scanned).to_i,
+      )
       {
         ok: false,
         severity: "critical",
@@ -304,9 +366,21 @@ module ::MediaGallery
       )
     end
 
-    def scan_storage_profiles!(context, object_limit:, orphan_sample_limit:)
+    def scan_storage_profiles!(context, object_limit:, orphan_sample_limit:, progress_callback: nil, item_limit: nil)
       profiles = ::MediaGallery::StorageSettingsResolver.configured_profiles_summary
       context[:profiles][:configured] = profiles.map { |profile| profile_summary_payload(profile) }
+      profiles_total = profiles.length
+
+      emit_progress(
+        progress_callback,
+        stage: "scanning_profiles",
+        stage_label: "Scanning configured storage profiles",
+        items_checked: context[:stats][:items_checked],
+        item_limit: item_limit,
+        profiles_checked: context[:stats][:profiles_checked],
+        profiles_total: profiles_total,
+        objects_scanned: context[:stats][:objects_scanned],
+      )
 
       profiles.each do |profile|
         profile_key = profile[:profile_key].to_s
@@ -321,6 +395,19 @@ module ::MediaGallery
         context[:profiles][:checked] << profile_payload
         context[:stats][:profiles_checked] += 1
 
+        emit_progress(
+          progress_callback,
+          stage: "scanning_profiles",
+          stage_label: "Scanning storage profile #{profile_display_label_for_key(profile_key) || profile_label_for_key(profile_key)}",
+          items_checked: context[:stats][:items_checked],
+          item_limit: item_limit,
+          profiles_checked: context[:stats][:profiles_checked] - 1,
+          profiles_total: profiles_total,
+          objects_scanned: context[:stats][:objects_scanned],
+          current_profile_key: profile_key,
+          current_profile_label: profile_display_label_for_key(profile_key) || profile_label_for_key(profile_key),
+        )
+
         store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
         if store.blank?
           profile_payload[:status] = "unavailable"
@@ -334,6 +421,18 @@ module ::MediaGallery
             label: "Storage profile could not be opened",
             detail: "Storage profile #{profile_label_for_key(profile_key)} is configured but could not build a storage store.",
             suggestion: "Check storage settings for this profile."
+          )
+          emit_progress(
+            progress_callback,
+            stage: "scanning_profiles",
+            stage_label: "Scanning configured storage profiles",
+            items_checked: context[:stats][:items_checked],
+            item_limit: item_limit,
+            profiles_checked: context[:stats][:profiles_checked],
+            profiles_total: profiles_total,
+            objects_scanned: context[:stats][:objects_scanned],
+            current_profile_key: profile_key,
+            current_profile_label: profile_display_label_for_key(profile_key) || profile_label_for_key(profile_key),
           )
           next
         end
@@ -394,6 +493,19 @@ module ::MediaGallery
             label: "Storage profile scan failed",
             detail: "#{e.class}: #{e.message}#{scope_detail}".truncate(500),
             suggestion: "Check profile availability, Rails logs, and whether the storage/API key allows listing the configured scan scope."
+          )
+        ensure
+          emit_progress(
+            progress_callback,
+            stage: "scanning_profiles",
+            stage_label: "Scanning configured storage profiles",
+            items_checked: context[:stats][:items_checked],
+            item_limit: item_limit,
+            profiles_checked: context[:stats][:profiles_checked],
+            profiles_total: profiles_total,
+            objects_scanned: context[:stats][:objects_scanned],
+            current_profile_key: profile_key,
+            current_profile_label: profile_display_label_for_key(profile_key) || profile_label_for_key(profile_key),
           )
         end
       end
@@ -912,6 +1024,15 @@ module ::MediaGallery
     def highest_severity(values)
       order = { "ok" => 0, "warning" => 1, "critical" => 2 }
       Array(values).map { |v| %w[ok warning critical].include?(v.to_s) ? v.to_s : "ok" }.max_by { |value| order[value] } || "ok"
+    end
+
+    def emit_progress(callback, **payload)
+      return unless callback.respond_to?(:call)
+
+      callback.call(payload.compact)
+    rescue => e
+      Rails.logger.warn("[media_gallery] reconciliation progress update failed: #{e.class}: #{e.message}")
+      nil
     end
 
     def bounded_int(value, min:, max:, default:)

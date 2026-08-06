@@ -4,6 +4,13 @@ import { scheduleOnce } from "@ember/runloop";
 import { tracked } from "@glimmer/tracking";
 import { ajax } from "discourse/lib/ajax";
 
+const RECONCILIATION_POLL_INITIAL_DELAY_MS = 1000;
+const RECONCILIATION_POLL_INITIAL_INTERVAL_MS = 2000;
+const RECONCILIATION_POLL_MAX_INTERVAL_MS = 10000;
+const RECONCILIATION_POLL_BACKOFF_FACTOR = 1.5;
+const RECONCILIATION_POLL_MAX_CONSECUTIVE_ERRORS = 5;
+const RECONCILIATION_POLL_DEFAULT_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+
 function severityRank(severity) {
   switch (String(severity || "ok")) {
     case "critical":
@@ -471,6 +478,15 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @tracked cleanupKeyInProgress = "";
   @tracked reconciliationConfirmOpen = false;
   @tracked reconciliationRunMode = "";
+  @tracked reconciliationTask = null;
+
+  _reconciliationPollTimer = null;
+  _reconciliationPollRunId = 0;
+  _reconciliationPollStartedAt = 0;
+  _reconciliationPollIntervalMs = RECONCILIATION_POLL_INITIAL_INTERVAL_MS;
+  _reconciliationPollTimeoutMs = RECONCILIATION_POLL_DEFAULT_TIMEOUT_MS;
+  _reconciliationPollConsecutiveErrors = 0;
+  _reconciliationPollTaskId = null;
 
   get data() {
     return this.healthSnapshot.data;
@@ -513,6 +529,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   }
 
   resetState() {
+    this._cancelReconciliationPoll();
     this.isLoading = false;
     this.isFullStorage = false;
     this.error = "";
@@ -530,6 +547,107 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     this.cleanupKeyInProgress = "";
     this.reconciliationConfirmOpen = false;
     this.reconciliationRunMode = "";
+    this.reconciliationTask = null;
+  }
+
+  willDestroy() {
+    this._cancelReconciliationPoll();
+    super.willDestroy(...arguments);
+  }
+
+  get hasReconciliationTask() {
+    return Boolean(this.reconciliationTask?.task_id);
+  }
+
+  get isReconciliationActive() {
+    return ["queued", "working"].includes(String(this.reconciliationTask?.status || ""));
+  }
+
+  get reconciliationActionDisabled() {
+    return this.isLoading || this.isReconciliationActive;
+  }
+
+  get reconciliationActionLabel() {
+    if (this.isReconciliationActive) {
+      return "Reconciliation running…";
+    }
+
+    return "Run storage reconciliation";
+  }
+
+  get reconciliationTaskStatusLabel() {
+    switch (String(this.reconciliationTask?.status || "")) {
+      case "queued":
+        return "Queued";
+      case "working":
+        return "Running";
+      case "failed":
+        return "Failed";
+      case "stale":
+        return "Interrupted";
+      case "complete":
+        return "Completed";
+      default:
+        return "Pending";
+    }
+  }
+
+  get reconciliationTaskBadgeClass() {
+    switch (String(this.reconciliationTask?.status || "")) {
+      case "failed":
+      case "stale":
+        return "is-danger";
+      case "queued":
+      case "working":
+        return "is-info";
+      case "complete":
+        return "is-success";
+      default:
+        return "";
+    }
+  }
+
+  get reconciliationTaskModeLabel() {
+    return this.reconciliationTask?.scan_mode === "expanded" ? "Deeper scan" : "Bounded scan";
+  }
+
+  get reconciliationTaskMessage() {
+    const status = String(this.reconciliationTask?.status || "");
+    if (status === "queued") {
+      return "The scan is queued as a background job. You can leave or refresh this page.";
+    }
+    if (status === "working") {
+      return "The scan is running as a background job. You can leave or refresh this page.";
+    }
+    if (status === "failed" || status === "stale") {
+      return this.reconciliationTask?.error || "The background scan did not complete.";
+    }
+    if (status === "complete") {
+      return "The background scan completed.";
+    }
+    return "";
+  }
+
+  get reconciliationTaskUpdatedAtLabel() {
+    return formatDateTime(this.reconciliationTask?.updated_at);
+  }
+
+  get reconciliationTaskProgressRows() {
+    const progress = this.reconciliationTask?.progress || {};
+    const itemLimit = Number(progress.item_limit || this.reconciliationTask?.limits?.item_limit || 0);
+    const itemsChecked = Number(progress.items_checked || 0);
+    const profilesTotal = Number(progress.profiles_total || 0);
+    const profilesChecked = Number(progress.profiles_checked || 0);
+    const currentProfile = progress.current_profile_label || progress.current_profile_key || "";
+
+    return [
+      { label: "Stage", value: progress.stage_label || this.reconciliationTaskStatusLabel },
+      { label: "Items", value: itemLimit > 0 ? `${formatNumber(itemsChecked)} / up to ${formatNumber(itemLimit)}` : formatNumber(itemsChecked) },
+      { label: "Storage profiles", value: profilesTotal > 0 ? `${formatNumber(profilesChecked)} / ${formatNumber(profilesTotal)}` : formatNumber(profilesChecked) },
+      { label: "Objects scanned", value: formatNumber(progress.objects_scanned || 0) },
+      ...(currentProfile ? [{ label: "Current profile", value: currentProfile }] : []),
+      { label: "Last update", value: this.reconciliationTaskUpdatedAtLabel },
+    ];
   }
 
   get overallSeverity() {
@@ -983,6 +1101,150 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
       lastTimingMs: Number(normalizedData?.timing_ms || 0) || null,
       lastTimingBreakdown: normalizedData?.timing_breakdown_ms || null,
     };
+
+    this._syncReconciliationTask(normalizedData?.reconciliation_task || null);
+  }
+
+  _syncReconciliationTask(task) {
+    this.reconciliationTask = task || null;
+
+    if (["queued", "working"].includes(String(task?.status || "")) && task?.status_url) {
+      this._startReconciliationPoll(task.status_url, task);
+    } else {
+      this._cancelReconciliationPoll();
+    }
+  }
+
+  _cancelReconciliationPoll() {
+    this._reconciliationPollRunId += 1;
+
+    if (this._reconciliationPollTimer) {
+      clearTimeout(this._reconciliationPollTimer);
+      this._reconciliationPollTimer = null;
+    }
+
+    this._reconciliationPollStartedAt = 0;
+    this._reconciliationPollIntervalMs = RECONCILIATION_POLL_INITIAL_INTERVAL_MS;
+    this._reconciliationPollTimeoutMs = RECONCILIATION_POLL_DEFAULT_TIMEOUT_MS;
+    this._reconciliationPollConsecutiveErrors = 0;
+    this._reconciliationPollTaskId = null;
+  }
+
+  _startReconciliationPoll(statusUrl, task = null) {
+    const taskId = task?.task_id || this.reconciliationTask?.task_id || null;
+    if (!statusUrl || !taskId) {
+      return;
+    }
+
+    if (this._reconciliationPollTaskId === taskId && this._reconciliationPollTimer) {
+      return;
+    }
+
+    this._cancelReconciliationPoll();
+    const runId = this._reconciliationPollRunId;
+    this._reconciliationPollTaskId = taskId;
+    this._reconciliationPollStartedAt = Date.now();
+    this._reconciliationPollIntervalMs = RECONCILIATION_POLL_INITIAL_INTERVAL_MS;
+    this._reconciliationPollConsecutiveErrors = 0;
+
+    const pollingTimeoutSeconds = Number(task?.polling_timeout_seconds || 0);
+    this._reconciliationPollTimeoutMs = Number.isFinite(pollingTimeoutSeconds) && pollingTimeoutSeconds > 0
+      ? pollingTimeoutSeconds * 1000
+      : RECONCILIATION_POLL_DEFAULT_TIMEOUT_MS;
+
+    this._scheduleReconciliationPoll(statusUrl, runId, RECONCILIATION_POLL_INITIAL_DELAY_MS);
+  }
+
+  _scheduleReconciliationPoll(statusUrl, runId, delayMs = null) {
+    if (runId !== this._reconciliationPollRunId) {
+      return;
+    }
+
+    if (this._reconciliationPollTimer) {
+      clearTimeout(this._reconciliationPollTimer);
+    }
+
+    const delay = Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : this._reconciliationPollIntervalMs;
+    this._reconciliationPollTimer = setTimeout(() => {
+      this._reconciliationPollTimer = null;
+      this._pollReconciliationStatus(statusUrl, runId);
+    }, delay);
+  }
+
+  _advanceReconciliationPollInterval() {
+    this._reconciliationPollIntervalMs = Math.min(
+      RECONCILIATION_POLL_MAX_INTERVAL_MS,
+      Math.ceil(this._reconciliationPollIntervalMs * RECONCILIATION_POLL_BACKOFF_FACTOR)
+    );
+  }
+
+  _reconciliationPollingTimedOut() {
+    return this._reconciliationPollStartedAt > 0 &&
+      Date.now() - this._reconciliationPollStartedAt >= this._reconciliationPollTimeoutMs;
+  }
+
+  async _pollReconciliationStatus(statusUrl, runId) {
+    if (runId !== this._reconciliationPollRunId) {
+      return;
+    }
+
+    if (this._reconciliationPollingTimedOut()) {
+      this.error = "Automatic reconciliation status refresh stopped. The background job may still be running; refresh this page or check Background jobs.";
+      this._cancelReconciliationPoll();
+      return;
+    }
+
+    try {
+      const task = await ajax(statusUrl);
+      if (runId !== this._reconciliationPollRunId || this.isDestroying || this.isDestroyed) {
+        return;
+      }
+
+      this.reconciliationTask = task || null;
+      this._reconciliationPollConsecutiveErrors = 0;
+
+      const pollingTimeoutSeconds = Number(task?.polling_timeout_seconds || 0);
+      if (Number.isFinite(pollingTimeoutSeconds) && pollingTimeoutSeconds > 0) {
+        this._reconciliationPollTimeoutMs = pollingTimeoutSeconds * 1000;
+      }
+
+      const status = String(task?.status || "queued");
+      if (status === "complete") {
+        const completedMode = task?.scan_mode === "expanded" ? "expanded" : "bounded";
+        this._cancelReconciliationPoll();
+        await this.loadHealth({ fullStorage: false });
+        if (!this.isDestroying && !this.isDestroyed) {
+          this.notice = completedMode === "expanded"
+            ? "Deeper reconciliation completed in the background. No files were changed; eligible findings can be cleaned one at a time after review."
+            : "Reconciliation completed in the background. No files were changed; eligible findings can be cleaned one at a time after review.";
+        }
+        return;
+      }
+
+      if (status === "failed" || status === "stale") {
+        this.error = task?.error || "The background reconciliation did not complete.";
+        this._cancelReconciliationPoll();
+        return;
+      }
+
+      this._advanceReconciliationPollInterval();
+      this._scheduleReconciliationPoll(statusUrl, runId);
+    } catch (error) {
+      if (runId !== this._reconciliationPollRunId || this.isDestroying || this.isDestroyed) {
+        return;
+      }
+
+      this._reconciliationPollConsecutiveErrors += 1;
+      if (this._reconciliationPollConsecutiveErrors >= RECONCILIATION_POLL_MAX_CONSECUTIVE_ERRORS) {
+        this.error = `Automatic reconciliation status refresh stopped after ${this._reconciliationPollConsecutiveErrors} errors. The background job may still be running; refresh this page or check Background jobs.`;
+        this._cancelReconciliationPoll();
+        return;
+      }
+
+      this.notice = `Temporary reconciliation status refresh issue; retrying (${this._reconciliationPollConsecutiveErrors}/${RECONCILIATION_POLL_MAX_CONSECUTIVE_ERRORS})…`;
+      this._advanceReconciliationPollInterval();
+      this._scheduleReconciliationPoll(statusUrl, runId);
+    }
   }
 
   errorMessage(error) {
@@ -1047,7 +1309,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
   @action
   runReconciliation(event) {
     event?.preventDefault?.();
-    if (this.isLoading) {
+    if (this.reconciliationActionDisabled) {
       return;
     }
 
@@ -1065,7 +1327,7 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
 
   async runReconciliationRequest(scanMode = "bounded", event = null) {
     event?.preventDefault?.();
-    if (this.isLoading) {
+    if (this.reconciliationActionDisabled) {
       return;
     }
 
@@ -1085,11 +1347,20 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
         return;
       }
 
+      const task = data?.reconciliation_task || data || null;
+      this.reconciliationTask = task;
       this.isFullStorage = false;
-      this.applyResponse(data);
-      this.notice = expanded
-        ? "Deeper reconciliation completed with a temporary high object limit. No files were changed; eligible findings can be cleaned one at a time after review."
-        : "Reconciliation completed. No files were changed; eligible findings can be cleaned one at a time after review.";
+
+      if (!task?.status_url) {
+        throw new Error("The reconciliation queue response did not include a status URL.");
+      }
+
+      this.notice = data?.reused
+        ? "A storage reconciliation is already running. This page has resumed its status updates."
+        : expanded
+          ? "Deeper reconciliation queued as a background job. You can leave or refresh this page."
+          : "Reconciliation queued as a background job. You can leave or refresh this page.";
+      this._startReconciliationPoll(task.status_url, task);
     } catch (error) {
       if (!this.isDestroying && !this.isDestroyed) {
         this.error = this.errorMessage(error);

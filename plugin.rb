@@ -123,6 +123,7 @@ after_initialize do
   require_relative "lib/media_gallery/private_storage"
   require_relative "lib/media_gallery/test_downloads"
   require_relative "lib/media_gallery/forensics_identify_tasks"
+  require_relative "lib/media_gallery/reconciliation_tasks"
   require_relative "lib/media_gallery/forensics_identify_file_runner"
   require_relative "lib/media_gallery/watermark"   # ✅ NEW
   require_relative "lib/media_gallery/playback_overlay"
@@ -182,6 +183,7 @@ after_initialize do
   require_dependency File.expand_path("app/controllers/media_gallery/library_controller.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_generate_test_download.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_forensics_identify_job.rb", __dir__)
+  require_dependency File.expand_path("jobs/regular/media_gallery_storage_reconciliation.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_copy_item_to_target.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_cleanup_source_after_switch.rb", __dir__)
@@ -274,6 +276,7 @@ after_initialize do
     get "/admin/plugins/media-gallery/health" => "media_gallery/admin_health#index", defaults: { format: :json }
     get "/admin/plugins/media-gallery/security" => "media_gallery/admin_security#index", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/reconcile" => "media_gallery/admin_health#reconcile", defaults: { format: :json }
+    get "/admin/plugins/media-gallery/health/reconciliation-status/:task_id" => "media_gallery/admin_health#reconciliation_status", defaults: { format: :json }, constraints: { task_id: /[0-9a-f]{24}/i }
     get "/admin/plugins/media-gallery/health/reconciliation-export" => "media_gallery/admin_health#reconciliation_export", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/reconciliation-cleanup" => "media_gallery/admin_health#reconciliation_cleanup", defaults: { format: :json }
     post "/admin/plugins/media-gallery/health/ignore" => "media_gallery/admin_health#ignore", defaults: { format: :json }

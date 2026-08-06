@@ -736,8 +736,8 @@ export default <template>
             <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runFullStorage}}>
               Run full storage check
             </button>
-            <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.runReconciliation}}>
-              Run storage reconciliation
+            <button class="btn btn-primary" type="button" disabled={{@controller.reconciliationActionDisabled}} {{on "click" @controller.runReconciliation}}>
+              {{@controller.reconciliationActionLabel}}
             </button>
             <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
               Export reconciliation
@@ -773,6 +773,26 @@ export default <template>
           </div>
           <span class="mg-health__info" tabindex="0">i<span class="mg-health__info-text">Run reconciliation manually when you want to review missing assets, orphan candidates, deleted media leftovers, and invalid storage references. Export downloads the latest stored report as JSON. Eligible findings can be cleaned one at a time after review.</span></span>
         </div>
+
+        {{#if @controller.hasReconciliationTask}}
+          <div class="mg-health__cleanup-warning" style="margin-top: 1rem;">
+            <div class="mg-health__panel-header">
+              <div class="mg-health__panel-copy">
+                <div class="mg-health__cleanup-warning-title">{{@controller.reconciliationTaskModeLabel}}</div>
+                <div>{{@controller.reconciliationTaskMessage}}</div>
+              </div>
+              <span class="mg-health__badge {{@controller.reconciliationTaskBadgeClass}}">{{@controller.reconciliationTaskStatusLabel}}</span>
+            </div>
+            <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 0.75rem;">
+              {{#each @controller.reconciliationTaskProgressRows as |row|}}
+                <div class="mg-health__alert-card">
+                  <div class="mg-health__alert-label">{{row.label}}</div>
+                  <div class="mg-health__alert-value">{{row.value}}</div>
+                </div>
+              {{/each}}
+            </div>
+          </div>
+        {{/if}}
 
         {{#if @controller.hasReconciliation}}
           <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 1rem;">
@@ -1061,7 +1081,7 @@ export default <template>
             <div class="mg-health__modal-header">
               <div>
                 <h2>Run storage reconciliation</h2>
-                <p class="mg-health__muted">This is a read-only check. It may take longer on large storage profiles.</p>
+                <p class="mg-health__muted">This read-only check runs as a background job. You can leave or refresh this page while it continues.</p>
               </div>
             </div>
 
@@ -1080,11 +1100,11 @@ export default <template>
 
               <div class="mg-health__actions">
                 <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.cancelRunReconciliation}}>Cancel</button>
-                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.submitRunReconciliation}}>
-                  {{if @controller.isLoading "Running…" "Run bounded scan"}}
+                <button class="btn" type="button" disabled={{@controller.reconciliationActionDisabled}} {{on "click" @controller.submitRunReconciliation}}>
+                  {{if @controller.isLoading "Queuing…" "Run bounded scan"}}
                 </button>
-                <button class="btn btn-primary" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.submitRunExpandedReconciliation}}>
-                  {{if @controller.isLoading "Running…" "Run deeper scan"}}
+                <button class="btn btn-primary" type="button" disabled={{@controller.reconciliationActionDisabled}} {{on "click" @controller.submitRunExpandedReconciliation}}>
+                  {{if @controller.isLoading "Queuing…" "Run deeper scan"}}
                 </button>
               </div>
             </div>
