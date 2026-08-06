@@ -632,21 +632,53 @@ export default class AdminPluginsMediaGalleryHealthController extends Controller
     return formatDateTime(this.reconciliationTask?.updated_at);
   }
 
+  get reconciliationTaskStageLabel() {
+    const progress = this.reconciliationTask?.progress || {};
+    return progress.stage_label || this.reconciliationTaskStatusLabel;
+  }
+
+  get reconciliationTaskScopeSummary() {
+    const limits = this.reconciliationTask?.limits || {};
+    const itemLimit = Number(limits.item_limit || 0);
+    const objectLimit = Number(limits.object_limit || 0);
+    const orphanSampleLimit = Number(limits.orphan_sample_limit || 0);
+
+    if (this.reconciliationTask?.scan_mode === "expanded") {
+      return `Uses the same media item cap as a bounded scan, but scans deeper with up to ${formatNumber(objectLimit)} storage objects and ${formatNumber(orphanSampleLimit)} orphan samples per profile.`;
+    }
+
+    return `Uses the configured bounded limits: up to ${formatNumber(itemLimit)} media items, ${formatNumber(objectLimit)} storage objects per profile, and ${formatNumber(orphanSampleLimit)} orphan samples per profile.`;
+  }
+
+  get reconciliationTaskLimitRows() {
+    const limits = this.reconciliationTask?.limits || {};
+
+    return [
+      { label: "Media item cap", value: formatNumber(limits.item_limit || 0) },
+      { label: "Object cap / profile", value: formatNumber(limits.object_limit || 0) },
+      { label: "Orphan sample cap / profile", value: formatNumber(limits.orphan_sample_limit || 0) },
+    ];
+  }
+
   get reconciliationTaskProgressRows() {
     const progress = this.reconciliationTask?.progress || {};
     const itemLimit = Number(progress.item_limit || this.reconciliationTask?.limits?.item_limit || 0);
     const itemsChecked = Number(progress.items_checked || 0);
     const profilesTotal = Number(progress.profiles_total || 0);
     const profilesChecked = Number(progress.profiles_checked || 0);
-    const currentProfile = progress.current_profile_label || progress.current_profile_key || "";
+    const currentProfile = progress.current_profile_label || progress.current_profile_key || "Not started";
 
     return [
-      { label: "Stage", value: progress.stage_label || this.reconciliationTaskStatusLabel },
-      { label: "Items", value: itemLimit > 0 ? `${formatNumber(itemsChecked)} / up to ${formatNumber(itemLimit)}` : formatNumber(itemsChecked) },
-      { label: "Storage profiles", value: profilesTotal > 0 ? `${formatNumber(profilesChecked)} / ${formatNumber(profilesTotal)}` : formatNumber(profilesChecked) },
+      {
+        label: "Items checked",
+        value: itemLimit > 0 ? `${formatNumber(itemsChecked)} / ${formatNumber(itemLimit)}` : formatNumber(itemsChecked),
+      },
+      {
+        label: "Storage profiles",
+        value: profilesTotal > 0 ? `${formatNumber(profilesChecked)} / ${formatNumber(profilesTotal)}` : formatNumber(profilesChecked),
+      },
       { label: "Objects scanned", value: formatNumber(progress.objects_scanned || 0) },
-      ...(currentProfile ? [{ label: "Current profile", value: currentProfile }] : []),
-      { label: "Last update", value: this.reconciliationTaskUpdatedAtLabel },
+      { label: "Current profile", value: currentProfile },
     ];
   }
 

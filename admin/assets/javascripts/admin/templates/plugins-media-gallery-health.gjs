@@ -175,14 +175,6 @@ export default <template>
         font-size: var(--font-down-1);
       }
 
-      .mg-health__toolbar {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
-        align-items: end;
-        margin-top: 0.85rem;
-      }
-
       .mg-health__export-panel {
         margin-top: 1rem;
         border: 1px solid var(--mg-health-border);
@@ -191,11 +183,32 @@ export default <template>
         padding: 0.95rem 1rem;
       }
 
+      .mg-health__export-controls {
+        display: grid;
+        grid-template-columns: minmax(260px, 1fr) auto;
+        gap: 0.75rem 1rem;
+        align-items: end;
+        margin-top: 0.85rem;
+      }
+
+      .mg-health__export-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .mg-health__export-actions .btn {
+        min-height: 2.75rem;
+        display: inline-flex;
+        align-items: center;
+      }
+
       .mg-health__toolbar-field {
         display: flex;
         flex-direction: column;
         gap: 0.35rem;
-        min-width: min(440px, 100%);
+        min-width: 0;
       }
 
       .mg-health__toolbar-field label {
@@ -303,6 +316,70 @@ export default <template>
         font-weight: 700;
       }
 
+      .mg-health__task-scope {
+        margin-top: 0.35rem;
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+        line-height: 1.4;
+      }
+
+      .mg-health__task-limits {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+
+      .mg-health__task-limit {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border: 1px solid var(--mg-health-border);
+        border-radius: 999px;
+        background: var(--secondary);
+        padding: 0.3rem 0.65rem;
+        min-width: 0;
+      }
+
+      .mg-health__task-limit-label {
+        color: var(--mg-health-muted);
+        font-size: var(--font-down-1);
+      }
+
+      .mg-health__task-limit-value {
+        font-weight: 700;
+      }
+
+      .mg-health__task-stage {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.75rem 1rem;
+        align-items: start;
+        margin-top: 0.75rem;
+        border: 1px solid var(--mg-health-border);
+        border-radius: 14px;
+        background: var(--secondary);
+        padding: 0.85rem 1rem;
+      }
+
+      .mg-health__task-stage-value {
+        margin-top: 0.15rem;
+        font-weight: 700;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+      .mg-health__task-stage-updated {
+        min-width: max-content;
+        text-align: right;
+      }
+
+      .mg-health__task-metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin-top: 0.75rem;
+      }
 
       .mg-health__modal-header {
         display: flex;
@@ -595,14 +672,21 @@ export default <template>
       }
 
       @media (max-width: 980px) {
-        .mg-health__example-meta {
+        .mg-health__example-meta,
+        .mg-health__task-metrics {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
       @media (max-width: 560px) {
-        .mg-health__example-meta {
+        .mg-health__example-meta,
+        .mg-health__task-metrics {
           grid-template-columns: 1fr;
+        }
+
+        .mg-health__export-actions .btn {
+          flex: 1 1 auto;
+          justify-content: center;
         }
       }
 
@@ -682,6 +766,20 @@ export default <template>
 
         .mg-health__actions {
           justify-content: flex-start;
+        }
+
+        .mg-health__export-controls,
+        .mg-health__task-stage {
+          grid-template-columns: 1fr;
+        }
+
+        .mg-health__export-actions {
+          justify-content: flex-start;
+        }
+
+        .mg-health__task-stage-updated {
+          min-width: 0;
+          text-align: left;
         }
 
         .mg-health__issue {
@@ -780,10 +878,32 @@ export default <template>
               <div class="mg-health__panel-copy">
                 <div class="mg-health__cleanup-warning-title">{{@controller.reconciliationTaskModeLabel}}</div>
                 <div>{{@controller.reconciliationTaskMessage}}</div>
+                <div class="mg-health__task-scope">{{@controller.reconciliationTaskScopeSummary}}</div>
               </div>
               <span class="mg-health__badge {{@controller.reconciliationTaskBadgeClass}}">{{@controller.reconciliationTaskStatusLabel}}</span>
             </div>
-            <div class="mg-health__alert-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 0.75rem;">
+
+            <div class="mg-health__task-limits" aria-label="Effective scan limits">
+              {{#each @controller.reconciliationTaskLimitRows as |row|}}
+                <span class="mg-health__task-limit">
+                  <span class="mg-health__task-limit-label">{{row.label}}</span>
+                  <span class="mg-health__task-limit-value">{{row.value}}</span>
+                </span>
+              {{/each}}
+            </div>
+
+            <div class="mg-health__task-stage">
+              <div>
+                <div class="mg-health__alert-label">Stage</div>
+                <div class="mg-health__task-stage-value">{{@controller.reconciliationTaskStageLabel}}</div>
+              </div>
+              <div class="mg-health__task-stage-updated">
+                <div class="mg-health__alert-label">Last update</div>
+                <div class="mg-health__alert-value">{{@controller.reconciliationTaskUpdatedAtLabel}}</div>
+              </div>
+            </div>
+
+            <div class="mg-health__task-metrics">
               {{#each @controller.reconciliationTaskProgressRows as |row|}}
                 <div class="mg-health__alert-card">
                   <div class="mg-health__alert-label">{{row.label}}</div>
@@ -835,7 +955,7 @@ export default <template>
 
           <div class="mg-health__export-panel">
             <div class="mg-health__alert-label">Export report</div>
-            <div class="mg-health__toolbar">
+            <div class="mg-health__export-controls">
               <div class="mg-health__toolbar-field">
                 <label>Export category</label>
                 <select value={{@controller.exportCategory}} disabled={{@controller.isLoading}} {{on "change" @controller.setExportCategory}}>
@@ -844,12 +964,14 @@ export default <template>
                   {{/each}}
                 </select>
               </div>
-              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
-                Export JSON
-              </button>
-              <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliationCsv}}>
-                Export CSV
-              </button>
+              <div class="mg-health__export-actions">
+                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliation}}>
+                  Export JSON
+                </button>
+                <button class="btn" type="button" disabled={{@controller.isLoading}} {{on "click" @controller.exportReconciliationCsv}}>
+                  Export CSV
+                </button>
+              </div>
             </div>
           </div>
         {{else}}
