@@ -491,6 +491,13 @@ plugins:
     default: "/shared/media_gallery/private"
     client: false
 
+  # Optional local redundancy for HLS packages stored on any S3-compatible profile.
+  # Disabling this stops new local mirrors; existing mirrors remain until reviewed
+  # and removed through the scoped Health reconciliation cleanup.
+  media_gallery_hls_local_mirror_enabled:
+    default: true
+    client: false
+
   # S3 profile 1.
   media_gallery_s3_profile_name:
     default: "S3 profile 1"

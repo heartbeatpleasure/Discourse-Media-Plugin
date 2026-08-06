@@ -13,6 +13,7 @@ module ::MediaGallery
       hls_temporary_prefix
       hls_old_package_prefix
       migration_source_leftovers
+      local_hls_mirror
       hls_media_prefix
       untracked_media_prefix
     ].freeze
@@ -241,6 +242,8 @@ module ::MediaGallery
       end
 
       case classification.to_s
+      when "local_hls_mirror"
+        raise UnsafeCleanup, "Only the exact local HLS mirror prefix can be cleaned by this action." unless prefix == File.join(public_id, "hls")
       when "hls_media_prefix"
         raise UnsafeCleanup, "Only the HLS prefix can be cleaned for HLS orphan findings." unless prefix == File.join(public_id, "hls")
       when "hls_temporary_prefix"
@@ -262,6 +265,8 @@ module ::MediaGallery
 
       item = ::MediaGallery::MediaItem.find_by(public_id: public_id)
       case classification.to_s
+      when "local_hls_mirror"
+        validate_local_hls_mirror_cleanup!(item, profile_key: profile_key, prefix: prefix)
       when "hls_media_prefix"
         raise UnsafeCleanup, "The media item still exists; clean it from Management instead." if item.present?
       when "untracked_media_prefix"
@@ -279,6 +284,43 @@ module ::MediaGallery
           end
         end
       end
+    end
+
+    def validate_local_hls_mirror_cleanup!(item, profile_key:, prefix:)
+      raise UnsafeCleanup, "Local HLS mirror cleanup requires the media item to still exist." if item.blank?
+      raise UnsafeCleanup, "Local HLS mirror cleanup is available only after local HLS mirroring is disabled." if ::MediaGallery::Hls.local_mirror_enabled?
+      raise UnsafeCleanup, "The selected finding is not on the local storage profile." unless profile_key.to_s == "local"
+      raise UnsafeCleanup, "The selected prefix is not the exact local HLS mirror for this item." unless prefix == File.join(item.public_id.to_s, "hls")
+      raise UnsafeCleanup, "Local HLS mirror cleanup applies only to video items." unless item.media_type.to_s == "video"
+
+      current_profile = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
+      current_backend = ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(current_profile).to_s
+      raise UnsafeCleanup, "This item currently uses local storage. Its active HLS package will not be removed." if current_backend == "local"
+      raise UnsafeCleanup, "This item does not currently use an S3-compatible storage profile." unless current_backend == "s3"
+
+      role = item.respond_to?(:storage_manifest_hash) ? item.storage_manifest_hash.dig("roles", "hls") : nil
+      raise UnsafeCleanup, "The current item has no managed HLS role." unless role.is_a?(Hash)
+      raise UnsafeCleanup, "The current HLS role is not stored on an S3-compatible profile." unless role["backend"].to_s == "s3"
+      raise UnsafeCleanup, "The active remote HLS package is not fully available; local mirror cleanup is unsafe." unless active_item_hls_storage_available?(item, role: role)
+
+      true
+    end
+
+    def active_item_hls_storage_available?(item, role: nil)
+      role ||= item.respond_to?(:storage_manifest_hash) ? item.storage_manifest_hash.dig("roles", "hls") : nil
+      return false unless role.is_a?(Hash)
+
+      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
+      return false unless ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(profile_key).to_s == "s3"
+
+      store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
+      return false if store.blank?
+
+      master_key = role["master_key"].to_s.presence || File.join(item.public_id.to_s, "hls", "master.m3u8")
+      complete_key = role["complete_key"].to_s.presence || File.join(item.public_id.to_s, "hls", ".complete")
+      store.exists?(master_key) && store.exists?(complete_key)
+    rescue
+      false
     end
 
     def active_item_storage_available?(item)

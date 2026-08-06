@@ -54,6 +54,8 @@ module ::MediaGallery
           known_plugin_prefixes: [],
           unsampled_media_objects: 0,
           unsampled_media_prefixes: [],
+          local_hls_mirror_objects: 0,
+          local_hls_mirror_prefixes: [],
           truncated_profiles: [],
           truncated_profile_labels: [],
         },
@@ -233,6 +235,7 @@ module ::MediaGallery
 
       roles = roles_for_item(item)
       register_expected_roles!(context, item, roles, profile_key: profile_key)
+      register_expected_local_hls_mirror!(context, item, roles, profile_key: profile_key, backend: backend)
       check_invalid_roles!(context, item, roles, profile_key: profile_key, backend: backend)
       check_missing_assets!(context, item, roles, profile_key: profile_key, backend: backend)
       check_deleted_leftovers!(context, item, roles, profile_key: profile_key, backend: backend) if asset_deleted?(item)
@@ -254,6 +257,18 @@ module ::MediaGallery
         role_keys(role).each { |key| context[:expected_keys][profile_key] << key }
         role_prefixes(item, role).each { |prefix| context[:expected_prefixes][profile_key] << normalized_prefix(prefix) }
       end
+    end
+
+    def register_expected_local_hls_mirror!(context, item, roles, profile_key:, backend:)
+      return unless backend.to_s == "s3"
+      return unless item.media_type.to_s == "video"
+      return unless roles["hls"].is_a?(Hash)
+      return unless roles["hls"]["backend"].to_s == "s3"
+      return unless ::MediaGallery::Hls.local_mirror_enabled?
+
+      context[:expected_prefixes]["local"] << normalized_prefix(File.join(item.public_id.to_s, "hls"))
+    rescue => e
+      Rails.logger.warn("[media_gallery] failed to register expected local HLS mirror public_id=#{item&.public_id} profile=#{profile_key} error=#{e.class}: #{e.message}")
     end
 
     def check_invalid_roles!(context, item, roles, profile_key:, backend:)
@@ -540,7 +555,7 @@ module ::MediaGallery
 
       attach_media_context_to_orphan_groups!(context, groups.values, profile_key: profile_key)
       groups.values
-        .reject { |group| group[:classification].to_s == "unsampled_media_prefix" }
+        .reject { |group| %w[unsampled_media_prefix local_hls_mirror_expected].include?(group[:classification].to_s) }
         .sort_by { |group| [-group[:object_count].to_i, group[:group_prefix].to_s] }
     end
 
@@ -629,7 +644,21 @@ module ::MediaGallery
         cleanup_status = cleanup_state["status"].to_s.presence || switch_state["cleanup_status"].to_s.presence
         cleanup_mode = cleanup_state["cleanup_mode"].to_s.presence || switch_state["cleanup_mode"].to_s.presence
 
-        if current_profile_key.present? && current_profile_key != profile_key.to_s
+        if local_hls_mirror_group?(group, item: item, found_profile_key: profile_key, current_profile_key: current_profile_key)
+          group[:local_mirror_enabled] = ::MediaGallery::Hls.local_mirror_enabled?
+          group[:active_hls_available] = active_hls_available_for_item?(item)
+          register_local_hls_mirror_storage!(context, profile_key, group)
+
+          if group[:local_mirror_enabled]
+            group[:classification] = "local_hls_mirror_expected"
+            group[:issue_type] = "configured_local_hls_mirror"
+            group[:label] = "Configured local HLS mirror"
+          else
+            group[:classification] = "local_hls_mirror"
+            group[:issue_type] = "local_hls_mirror_available_for_cleanup"
+            group[:label] = "Local HLS mirror remains while mirroring is disabled"
+          end
+        elsif current_profile_key.present? && current_profile_key != profile_key.to_s
           group[:classification] = "migration_source_leftovers"
           group[:issue_type] = "migration_source_storage_leftovers"
           group[:label] = "Possible migration/source storage leftovers"
@@ -643,6 +672,30 @@ module ::MediaGallery
       end
     rescue => e
       Rails.logger.warn("[media_gallery] storage reconciliation media context lookup failed: #{e.class}: #{e.message}")
+    end
+
+    def local_hls_mirror_group?(group, item:, found_profile_key:, current_profile_key:)
+      return false unless group[:classification].to_s == "hls_media_prefix"
+      return false unless found_profile_key.to_s == "local"
+      return false unless item.media_type.to_s == "video"
+      return false unless ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(current_profile_key).to_s == "s3"
+
+      role = ::MediaGallery::AssetManifest.role_for(item, "hls")
+      return false unless role.is_a?(Hash) && role["backend"].to_s == "s3"
+
+      expected_prefix = normalize_key(File.join(item.public_id.to_s, "hls"))
+      normalize_key(group[:group_prefix]) == expected_prefix
+    rescue
+      false
+    end
+
+    def active_hls_available_for_item?(item)
+      role = ::MediaGallery::AssetManifest.role_for(item, "hls")
+      return false unless role.is_a?(Hash) && role["backend"].to_s == "s3"
+
+      role_available?(item, role, "hls")
+    rescue
+      false
     end
 
     def storage_scan_scope_for(store)
@@ -688,6 +741,8 @@ module ::MediaGallery
         migration_cleanup_status: group[:migration_cleanup_status],
         migration_cleanup_mode: group[:migration_cleanup_mode],
         migration_cleanup_pending: group[:migration_cleanup_pending],
+        local_mirror_enabled: group[:local_mirror_enabled],
+        active_hls_available: group[:active_hls_available],
         cleanup_available: cleanup[:available],
         cleanup_kind: cleanup[:kind],
         cleanup_label: cleanup[:label],
@@ -732,6 +787,14 @@ module ::MediaGallery
           hint: "Deletes this media prefix only from the non-current source profile after the active target assets are verified.",
           risk: "medium"
         }
+      when "local_hls_mirror"
+        {
+          available: group[:active_hls_available] == true && group[:local_mirror_enabled] != true,
+          kind: "delete_prefix",
+          label: "Remove local HLS mirror",
+          hint: "Deletes only this item's local HLS mirror after re-verifying that the item uses an S3-compatible profile and its active remote HLS package is complete. Local-primary items are never eligible.",
+          risk: "low"
+        }
       when "hls_media_prefix"
         {
           available: group[:status].to_s.blank?,
@@ -766,6 +829,10 @@ module ::MediaGallery
         cleanup_status = group[:migration_cleanup_status].to_s.presence
         cleanup_text = cleanup_status.present? ? " Current cleanup status: #{cleanup_status}." : ""
         "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} were found on #{found}. The active playback profile for this media item is #{current}. This commonly means migration source cleanup is pending or incomplete.#{cleanup_text}#{sample_text}"
+      when "local_hls_mirror"
+        current = group[:current_profile_label].presence || group[:current_profile_key].presence || "an S3-compatible profile"
+        verification = group[:active_hls_available] == true ? "The active remote HLS package was verified." : "The active remote HLS package could not be fully verified, so cleanup is blocked."
+        "#{object_count} local HLS object#{'s' if object_count != 1} under #{prefix} belong to an item whose active playback profile is #{current}. Local HLS mirroring is currently disabled. #{verification}#{sample_text}"
       when "hls_media_prefix"
         "#{object_count} HLS storage object#{'s' if object_count != 1} under #{prefix} are not referenced by any sampled media item or manifest. This often comes from deleted media or an incomplete cleanup path.#{sample_text}"
       when "untracked_media_prefix"
@@ -784,6 +851,12 @@ module ::MediaGallery
       case group[:classification].to_s
       when "migration_source_leftovers"
         "Open the item in Migration manager and verify whether source cleanup is pending, failed, or intentionally deferred. Do not delete until the active target profile and playback are verified."
+      when "local_hls_mirror"
+        if group[:active_hls_available] == true
+          "Use Remove local HLS mirror to reclaim local disk space. The cleanup revalidates the current per-item profile and remote HLS package immediately before deleting only the local <public_id>/hls prefix."
+        else
+          "Do not remove this local copy yet. Verify or restore the active remote HLS package, rerun reconciliation, and clean only after the remote package is complete."
+        end
       when "hls_media_prefix"
         "Check whether this public_id still exists in Media management or was deleted through frontend, Reports, or Management. Use a scoped cleanup only after confirming it is not the active package."
       when "untracked_media_prefix"
@@ -814,6 +887,13 @@ module ::MediaGallery
       append_limited_unique!(context[:stats][:unsampled_media_prefixes], prefix, limit: 50)
     end
 
+    def register_local_hls_mirror_storage!(context, profile_key, group)
+      object_count = group[:object_count].to_i
+      context[:stats][:local_hls_mirror_objects] += object_count
+      prefix = [profile_key.to_s, group[:group_prefix].to_s].reject(&:blank?).join(": ")
+      append_limited_unique!(context[:stats][:local_hls_mirror_prefixes], prefix, limit: 50)
+    end
+
     def append_limited_unique!(array, value, limit:)
       return if value.blank? || array.include?(value) || array.length >= limit.to_i
 
@@ -833,6 +913,8 @@ module ::MediaGallery
         known_plugin_prefixes: Array(stats[:known_plugin_prefixes]).first(20),
         unsampled_media_objects: stats[:unsampled_media_objects].to_i,
         unsampled_media_prefixes: Array(stats[:unsampled_media_prefixes]).first(20),
+        local_hls_mirror_objects: stats[:local_hls_mirror_objects].to_i,
+        local_hls_mirror_prefixes: Array(stats[:local_hls_mirror_prefixes]).first(20),
       }
     end
 
@@ -953,7 +1035,7 @@ module ::MediaGallery
       label
     end
 
-    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, media_item_exists: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, cleanup_available: nil, cleanup_kind: nil, cleanup_label: nil, cleanup_hint: nil, cleanup_risk: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
+    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, media_item_exists: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, local_mirror_enabled: nil, active_hls_available: nil, cleanup_available: nil, cleanup_kind: nil, cleanup_label: nil, cleanup_hint: nil, cleanup_risk: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
       public_id ||= item&.public_id
       title ||= item&.title.to_s.presence || (public_id.present? ? "Untitled media" : label)
       status ||= item&.status
@@ -994,6 +1076,8 @@ module ::MediaGallery
         migration_cleanup_status: migration_cleanup_status,
         migration_cleanup_mode: migration_cleanup_mode,
         migration_cleanup_pending: migration_cleanup_pending,
+        local_mirror_enabled: local_mirror_enabled,
+        active_hls_available: active_hls_available,
         cleanup_available: cleanup_available,
         cleanup_kind: cleanup_kind,
         cleanup_label: cleanup_label,

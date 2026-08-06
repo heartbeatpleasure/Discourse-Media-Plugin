@@ -149,6 +149,8 @@ function classificationLabel(value) {
       return "migration/source leftovers";
     case "hls_media_prefix":
       return "HLS media prefix";
+    case "local_hls_mirror":
+      return "local HLS mirror";
     case "hls_temporary_prefix":
       return "HLS temporary workspace";
     case "hls_old_package_prefix":
@@ -222,6 +224,17 @@ function storageContextRows(example) {
     rows.push({
       label: "Meaning",
       value: `Old/source files were found on ${foundProfile}. Playback currently uses ${activeProfile}.`,
+      className: "is-wide is-note",
+    });
+  } else if (example?.classification === "local_hls_mirror" && foundProfile && activeProfile) {
+    rows.push({
+      label: "Remote HLS",
+      value: example?.active_hls_available ? "Verified complete" : "Not fully verified — cleanup blocked",
+      className: example?.active_hls_available ? "is-compact" : "is-wide is-note",
+    });
+    rows.push({
+      label: "Meaning",
+      value: `A local HLS copy remains on ${foundProfile}, while playback uses ${activeProfile}. Only the local HLS prefix can be removed, and only after remote verification.`,
       className: "is-wide is-note",
     });
   } else if (example?.classification === "untracked_media_prefix" && foundProfile) {

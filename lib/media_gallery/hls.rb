@@ -13,12 +13,12 @@ require_relative "fingerprint_watermark"
 module ::MediaGallery
   # HLS packaging + readiness + managed-store publishing.
   #
-  # Current rollout strategy:
+  # Storage strategy:
   # - packaging happens inside a processing workspace / scratch directory
   # - the finalized package is published from scratch into the active managed
   #   store only after validation succeeds
-  # - for non-local backends we keep a best-effort local mirror for backwards
-  #   compatibility with older admin / tooling flows while managed storage stays
+  # - an optional best-effort local mirror can be retained for HLS packages
+  #   published to any S3-compatible profile; the selected managed profile remains
   #   the canonical source of truth
   module Hls
     module_function
@@ -33,6 +33,14 @@ module ::MediaGallery
 
     def enabled?
       SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled
+    end
+
+    def local_mirror_enabled?
+      return true unless SiteSetting.respond_to?(:media_gallery_hls_local_mirror_enabled)
+
+      ActiveModel::Type::Boolean.new.cast(SiteSetting.media_gallery_hls_local_mirror_enabled)
+    rescue
+      true
     end
 
     # AES-128 HLS hardening helpers.
@@ -218,7 +226,7 @@ module ::MediaGallery
       role = managed_role_for(item)
       return true if managed_role_ready?(item, role)
 
-      legacy_local_ready?(item)
+      local_mirror_ready?(item)
     end
 
     def package_video!(item, input_path:, workspace: nil, aes128: nil)
@@ -429,7 +437,7 @@ module ::MediaGallery
       end
 
       prune_unpublished_hls_objects!(store, prefix: hls_prefix, keep_keys: published_keys)
-      mirror_packaged_video_to_legacy_root!(item, packaged_root: packaged_root) if store.backend.to_s != "local"
+      mirror_packaged_video_to_local_root!(item, packaged_root: packaged_root) if store.backend.to_s != "local" && local_mirror_enabled?
       build_role_for_store(item, backend: store.backend, hls_meta: hls_meta, packaged_root: packaged_root)
     ensure
       cleanup_packaged_root!(hls_meta)
@@ -626,7 +634,7 @@ module ::MediaGallery
       5000
     end
 
-    def legacy_local_ready?(item)
+    def local_mirror_ready?(item)
       return false unless MediaGallery::PrivateStorage.enabled?
 
       master = MediaGallery::PrivateStorage.hls_master_abs_path(item)
@@ -658,7 +666,7 @@ module ::MediaGallery
         end
       end
     end
-    private_class_method :legacy_local_ready?
+    private_class_method :local_mirror_ready?
 
     def local_role_ready?(item, role)
       master = MediaGallery::PrivateStorage.hls_master_abs_path(item)
@@ -831,7 +839,7 @@ module ::MediaGallery
     end
     private_class_method :packaged_root_for
 
-    def mirror_packaged_video_to_legacy_root!(item, packaged_root:)
+    def mirror_packaged_video_to_local_root!(item, packaged_root:)
       return false if packaged_root.blank? || !Dir.exist?(packaged_root)
       return false unless MediaGallery::PrivateStorage.enabled?
 
@@ -852,10 +860,10 @@ module ::MediaGallery
       swap_in_packaged_hls!(final_root: final_root, tmp_root: tmp_root, item_root: item_root)
       true
     rescue => e
-      Rails.logger.warn("[media_gallery] failed to mirror packaged HLS to legacy root public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
+      Rails.logger.warn("[media_gallery] failed to mirror packaged HLS to local root public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
       false
     end
-    private_class_method :mirror_packaged_video_to_legacy_root!
+    private_class_method :mirror_packaged_video_to_local_root!
 
     def cleanup_packaged_root!(hls_meta)
       return unless hls_meta.is_a?(Hash)
