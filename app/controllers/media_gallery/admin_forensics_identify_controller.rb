@@ -2730,6 +2730,11 @@ module ::MediaGallery
         )
       end
 
+      managed_role = MediaGallery::Hls.managed_role_for(media_item)
+      unless MediaGallery::Hls.local_hls_fallback_allowed?(media_item, role: managed_role)
+        raise "managed_hls_unavailable_and_local_fallback_disabled"
+      end
+
       localize_legacy_hls_playlist_to_tempfile!(
         media_item: media_item,
         public_id: public_id,
@@ -2740,6 +2745,11 @@ module ::MediaGallery
     end
 
     def localize_legacy_hls_playlist_to_tempfile!(media_item:, public_id:, variant:, fingerprint_id: nil, download_media_segments: true)
+      managed_role = MediaGallery::Hls.managed_role_for(media_item)
+      unless MediaGallery::Hls.local_hls_fallback_allowed?(media_item, role: managed_role)
+        raise "managed_hls_unavailable_and_local_fallback_disabled"
+      end
+
       if variant.blank?
         master_abs = MediaGallery::PrivateStorage.hls_master_abs_path(media_item)
         raise "master_playlist_not_found" if master_abs.blank? || !File.exist?(master_abs)

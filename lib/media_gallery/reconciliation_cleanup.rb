@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 module ::MediaGallery
   module ReconciliationCleanup
     extend self
@@ -65,7 +67,13 @@ module ::MediaGallery
       backend = finding["backend"].to_s
 
       validate_public_prefix!(public_id: public_id, prefix: prefix, classification: classification)
-      validate_prefix_state!(finding, public_id: public_id, prefix: prefix, profile_key: profile_key, classification: classification)
+      pre_cleanup_verification = validate_prefix_state!(
+        finding,
+        public_id: public_id,
+        prefix: prefix,
+        profile_key: profile_key,
+        classification: classification,
+      )
 
       store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
       raise UnsafeCleanup, "Storage profile is unavailable for this finding." if store.blank?
@@ -109,6 +117,7 @@ module ::MediaGallery
         "sample_keys_before" => sample_before.first(10),
         "remaining_sample_keys" => remaining.first(10),
         "local_prefix_directory_cleanup" => local_directory_cleanup,
+        "pre_cleanup_verification" => pre_cleanup_verification.is_a?(Hash) ? pre_cleanup_verification : nil,
         "warnings" => warnings,
         "finished_at" => Time.now.utc.iso8601,
       }.compact
@@ -301,26 +310,406 @@ module ::MediaGallery
       role = item.respond_to?(:storage_manifest_hash) ? item.storage_manifest_hash.dig("roles", "hls") : nil
       raise UnsafeCleanup, "The current item has no managed HLS role." unless role.is_a?(Hash)
       raise UnsafeCleanup, "The current HLS role is not stored on an S3-compatible profile." unless role["backend"].to_s == "s3"
-      raise UnsafeCleanup, "The active remote HLS package is not fully available; local mirror cleanup is unsafe." unless active_item_hls_storage_available?(item, role: role)
 
-      true
+      verification = verify_active_remote_hls_package(item, role: role)
+      unless verification["ok"] == true
+        log_remote_hls_verification_failure(item, verification)
+        raise UnsafeCleanup, "The active remote HLS package did not pass complete verification; local mirror cleanup is unsafe."
+      end
+
+      verification
     end
 
     def active_item_hls_storage_available?(item, role: nil)
-      role ||= item.respond_to?(:storage_manifest_hash) ? item.storage_manifest_hash.dig("roles", "hls") : nil
-      return false unless role.is_a?(Hash)
-
-      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
-      return false unless ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(profile_key).to_s == "s3"
-
-      store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
-      return false if store.blank?
-
-      master_key = role["master_key"].to_s.presence || File.join(item.public_id.to_s, "hls", "master.m3u8")
-      complete_key = role["complete_key"].to_s.presence || File.join(item.public_id.to_s, "hls", ".complete")
-      store.exists?(master_key) && store.exists?(complete_key)
+      verification = verify_active_remote_hls_package(item, role: role)
+      log_remote_hls_verification_failure(item, verification) unless verification["ok"] == true
+      verification["ok"] == true
     rescue
       false
+    end
+
+    # Perform a complete deletion guard for a remote HLS package. This is more
+    # intentionally expensive than the normal readiness check: it runs only for
+    # an explicit local-mirror cleanup and validates every object referenced by
+    # the current playlists before the local fallback is removed.
+    def verify_active_remote_hls_package(item, role: nil)
+      errors = []
+      checked_keys = {}
+      role ||= item.respond_to?(:storage_manifest_hash) ? item.storage_manifest_hash.dig("roles", "hls") : nil
+      role = role.deep_stringify_keys if role.is_a?(Hash)
+
+      unless item.present? && role.is_a?(Hash)
+        return remote_hls_verification_result(item, role, errors: ["managed_hls_role_missing"])
+      end
+
+      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
+      profile_backend = ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(profile_key).to_s
+      errors << "current_profile_not_s3" unless profile_backend == "s3"
+      errors << "hls_role_backend_not_s3" unless role["backend"].to_s == "s3"
+
+      expected_prefix = normalize_key(File.join(item.public_id.to_s, "hls"))
+      key_prefix = normalize_key(role["key_prefix"].presence || expected_prefix)
+      errors << "hls_role_prefix_mismatch" unless key_prefix == expected_prefix
+
+      store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
+      errors << "current_profile_store_unavailable" if store.blank?
+      errors << "current_profile_store_not_s3" if store.present? && store.backend.to_s != "s3"
+      return remote_hls_verification_result(item, role, profile_key: profile_key, key_prefix: key_prefix, errors: errors) if errors.present?
+
+      store.ensure_available!
+      entries = remote_hls_prefix_entries(store, key_prefix)
+      entries_by_key = entries.each_with_object({}) do |entry, memo|
+        key = normalize_key(entry["key"] || entry[:key])
+        next if key.blank?
+
+        memo[key] = {
+          "key" => key,
+          "bytes" => (entry["bytes"] || entry[:bytes]).to_i,
+        }
+      end
+      errors << "remote_hls_prefix_empty" if entries_by_key.blank?
+
+      master_key = normalize_key(role["master_key"].presence || File.join(key_prefix, "master.m3u8"))
+      complete_key = normalize_key(role["complete_key"].presence || File.join(key_prefix, ".complete"))
+      master_raw = read_required_remote_text_object(
+        store,
+        entries_by_key,
+        master_key,
+        label: "master_playlist",
+        errors: errors,
+        checked_keys: checked_keys,
+      )
+      require_remote_object(entries_by_key, complete_key, label: "complete_marker", errors: errors, checked_keys: checked_keys)
+
+      master_variant_keys = []
+      if master_raw.present?
+        master_uris = playlist_media_uris(master_raw)
+        errors << "master_playlist_has_no_variants" if master_uris.blank?
+        master_variant_keys = master_uris.filter_map do |uri|
+          resolved = resolve_playlist_object_key(master_key, uri, key_prefix: key_prefix)
+          errors << "master_playlist_has_unsafe_variant_uri" if resolved.blank?
+          resolved
+        end
+      end
+
+      variants = ::MediaGallery::Hls.role_variants_for(role)
+      errors << "hls_role_has_no_variants" if variants.blank?
+      media_playlists = []
+      uses_ab_layout = ::MediaGallery::Hls.role_uses_ab_layout?(role)
+
+      variants.each do |variant|
+        variant_key = normalize_key(::MediaGallery::Hls.variant_playlist_key_for(item, variant, role: role))
+        errors << "master_playlist_missing_variant_#{safe_error_token(variant)}" unless master_variant_keys.include?(variant_key)
+
+        variant_raw = read_required_remote_text_object(
+          store,
+          entries_by_key,
+          variant_key,
+          label: "variant_playlist_#{safe_error_token(variant)}",
+          errors: errors,
+          checked_keys: checked_keys,
+        )
+        next if variant_raw.blank?
+
+        canonical_media_uris = playlist_media_uris(variant_raw)
+        canonical_map_uris = playlist_map_uris(variant_raw)
+        errors << "variant_playlist_has_no_segments_#{safe_error_token(variant)}" if canonical_media_uris.blank?
+        media_playlists << [variant.to_s, variant_key, variant_raw]
+
+        if uses_ab_layout
+          %w[a b].each do |ab|
+            ab_playlist_key = normalize_key(File.join(key_prefix, ab, variant.to_s, "index.m3u8"))
+            ab_raw = read_required_remote_text_object(
+              store,
+              entries_by_key,
+              ab_playlist_key,
+              label: "#{ab}_variant_playlist_#{safe_error_token(variant)}",
+              errors: errors,
+              checked_keys: checked_keys,
+            )
+            next if ab_raw.blank?
+
+            ab_media_uris = playlist_media_uris(ab_raw)
+            ab_map_uris = playlist_map_uris(ab_raw)
+            if normalized_playlist_uri_identities(ab_media_uris) != normalized_playlist_uri_identities(canonical_media_uris)
+              errors << "#{ab}_variant_segment_manifest_mismatch_#{safe_error_token(variant)}"
+            end
+            if normalized_playlist_uri_identities(ab_map_uris) != normalized_playlist_uri_identities(canonical_map_uris)
+              errors << "#{ab}_variant_init_manifest_mismatch_#{safe_error_token(variant)}"
+            end
+
+            verify_playlist_referenced_objects(
+              entries_by_key,
+              playlist_key: ab_playlist_key,
+              raw: ab_raw,
+              key_prefix: key_prefix,
+              errors: errors,
+              checked_keys: checked_keys,
+              label: "#{ab}_variant_#{safe_error_token(variant)}",
+            )
+            media_playlists << [variant.to_s, ab_playlist_key, ab_raw]
+          end
+        else
+          verify_playlist_referenced_objects(
+            entries_by_key,
+            playlist_key: variant_key,
+            raw: variant_raw,
+            key_prefix: key_prefix,
+            errors: errors,
+            checked_keys: checked_keys,
+            label: "variant_#{safe_error_token(variant)}",
+          )
+        end
+      end
+
+      verify_remote_fingerprint_metadata(
+        item,
+        role,
+        store,
+        entries_by_key,
+        errors: errors,
+        checked_keys: checked_keys,
+      )
+      verify_remote_aes128_state(
+        item,
+        role,
+        media_playlists,
+        errors: errors,
+      )
+
+      remote_hls_verification_result(
+        item,
+        role,
+        profile_key: profile_key,
+        key_prefix: key_prefix,
+        errors: errors,
+        listed_objects: entries_by_key.length,
+        checked_objects: checked_keys.length,
+      )
+    rescue => e
+      remote_hls_verification_result(
+        item,
+        role,
+        profile_key: (profile_key rescue nil),
+        key_prefix: (key_prefix rescue nil),
+        errors: ["remote_hls_verification_exception_#{safe_error_token(e.class.name)}"],
+      )
+    end
+
+    def remote_hls_prefix_entries(store, key_prefix)
+      if store.respond_to?(:list_prefix_entries)
+        return Array(store.list_prefix_entries(key_prefix))
+      end
+
+      Array(store.list_prefix(key_prefix)).map do |key|
+        info = store.respond_to?(:object_info) ? store.object_info(key) : {}
+        { "key" => key.to_s, "bytes" => info.is_a?(Hash) ? (info[:bytes] || info["bytes"]).to_i : 0 }
+      end
+    end
+
+    def require_remote_object(entries_by_key, key, label:, errors:, checked_keys:)
+      normalized = normalize_key(key)
+      entry = entries_by_key[normalized]
+      if entry.blank?
+        errors << "#{label}_missing"
+        return false
+      end
+      if entry["bytes"].to_i <= 0
+        errors << "#{label}_empty"
+        return false
+      end
+
+      checked_keys[normalized] = true
+      true
+    end
+
+    def read_required_remote_text_object(store, entries_by_key, key, label:, errors:, checked_keys:)
+      return nil unless require_remote_object(entries_by_key, key, label: label, errors: errors, checked_keys: checked_keys)
+
+      raw = store.read(key).to_s
+      if raw.blank?
+        errors << "#{label}_unreadable"
+        return nil
+      end
+      unless raw.each_line.any? { |line| line.to_s.strip == "#EXTM3U" }
+        errors << "#{label}_invalid_m3u8"
+        return nil
+      end
+
+      raw
+    rescue
+      errors << "#{label}_read_failed"
+      nil
+    end
+
+    def verify_playlist_referenced_objects(entries_by_key, playlist_key:, raw:, key_prefix:, errors:, checked_keys:, label:)
+      references = playlist_media_uris(raw) + playlist_map_uris(raw)
+      references.each_with_index do |uri, index|
+        resolved = resolve_playlist_object_key(playlist_key, uri, key_prefix: key_prefix)
+        if resolved.blank?
+          errors << "#{label}_unsafe_object_uri_#{index}"
+          next
+        end
+
+        require_remote_object(
+          entries_by_key,
+          resolved,
+          label: "#{label}_object_#{index}",
+          errors: errors,
+          checked_keys: checked_keys,
+        )
+      end
+    end
+
+    def verify_remote_fingerprint_metadata(item, role, store, entries_by_key, errors:, checked_keys:)
+      key = role["fingerprint_meta_key"].to_s.presence
+      return true if key.blank?
+
+      key = normalize_key(key)
+      return false unless require_remote_object(entries_by_key, key, label: "fingerprint_metadata", errors: errors, checked_keys: checked_keys)
+
+      raw = store.read(key).to_s
+      meta = JSON.parse(raw) rescue nil
+      unless meta.is_a?(Hash)
+        errors << "fingerprint_metadata_invalid_json"
+        return false
+      end
+      if meta["public_id"].present? && meta["public_id"].to_s != item.public_id.to_s
+        errors << "fingerprint_metadata_public_id_mismatch"
+      end
+      if meta["media_item_id"].present? && meta["media_item_id"].to_i != item.id.to_i
+        errors << "fingerprint_metadata_item_id_mismatch"
+      end
+
+      true
+    rescue
+      errors << "fingerprint_metadata_read_failed"
+      false
+    end
+
+    def verify_remote_aes128_state(item, role, media_playlists, errors:)
+      encryption = role["encryption"].is_a?(Hash) ? role["encryption"].deep_stringify_keys : nil
+      playlists_with_aes = media_playlists.select { |_variant, _key, raw| playlist_aes128_key_uris(raw).present? }
+
+      if encryption.blank?
+        errors << "aes128_playlist_present_without_role_metadata" if playlists_with_aes.present?
+        return playlists_with_aes.blank?
+      end
+
+      unless encryption["method"].to_s.casecmp("AES-128").zero?
+        errors << "unsupported_hls_encryption_method"
+        return false
+      end
+
+      errors << "aes128_role_not_ready" unless truthy?(encryption["ready"])
+      key_id = encryption["key_id"].to_s.presence
+      errors << "aes128_role_key_id_missing" if key_id.blank?
+      errors << "aes128_role_scheme_missing" if encryption["scheme"].to_s.blank?
+
+      media_playlists.each do |variant, playlist_key, raw|
+        key_uris = playlist_aes128_key_uris(raw)
+        if key_uris.blank?
+          errors << "aes128_key_tag_missing_#{safe_error_token(playlist_key)}"
+          next
+        end
+
+        key_uris.each do |uri|
+          parsed_key_id = ::MediaGallery::HlsAes128.key_id_from_placeholder_uri(uri)
+          if parsed_key_id.blank? || (key_id.present? && parsed_key_id.to_s != key_id.to_s)
+            errors << "aes128_key_tag_mismatch_#{safe_error_token(playlist_key)}"
+          end
+        end
+
+        next if key_id.blank?
+        key_bytes = ::MediaGallery::HlsAes128.fetch_key_bytes(item: item, key_id: key_id, variant: variant)
+        unless ::MediaGallery::HlsAes128.valid_key_bytes?(key_bytes)
+          errors << "aes128_key_record_missing_#{safe_error_token(variant)}"
+        end
+      end
+
+      errors.none? { |error| error.to_s.start_with?("aes128_") || error.to_s == "unsupported_hls_encryption_method" }
+    rescue
+      errors << "aes128_state_verification_failed"
+      false
+    end
+
+    def playlist_media_uris(raw)
+      raw.to_s.each_line.filter_map do |line|
+        value = line.to_s.strip
+        next if value.blank? || value.start_with?("#")
+
+        value
+      end
+    end
+
+    def playlist_map_uris(raw)
+      raw.to_s.each_line.filter_map do |line|
+        value = line.to_s.strip
+        next unless value.start_with?("#EXT-X-MAP:")
+
+        value[/URI="([^"]+)"/i, 1].to_s.presence
+      end
+    end
+
+    def playlist_aes128_key_uris(raw)
+      raw.to_s.each_line.filter_map do |line|
+        value = line.to_s.strip
+        next unless value.start_with?("#EXT-X-KEY:") && value.match?(/METHOD=AES-128/i)
+
+        value[/URI="([^"]+)"/i, 1].to_s.presence
+      end
+    end
+
+    def normalized_playlist_uri_identities(uris)
+      Array(uris).map do |uri|
+        uri.to_s.split(/[?#]/, 2).first.to_s.sub(%r{\A\./}, "")
+      end
+    end
+
+    def resolve_playlist_object_key(playlist_key, uri, key_prefix:)
+      raw = uri.to_s.split(/[?#]/, 2).first.to_s.strip
+      return nil if raw.blank?
+      return nil if raw.start_with?("/") || raw.match?(%r{\A[a-z][a-z0-9+.-]*://}i)
+
+      base_dir = File.dirname(normalize_key(playlist_key))
+      resolved = normalize_key(File.expand_path(raw, File.join("/", base_dir)).delete_prefix("/"))
+      prefix = normalize_key(key_prefix)
+      return nil unless resolved == prefix || resolved.start_with?("#{prefix}/")
+
+      resolved
+    rescue
+      nil
+    end
+
+    def remote_hls_verification_result(item, role, profile_key: nil, key_prefix: nil, errors:, listed_objects: 0, checked_objects: 0)
+      normalized_errors = Array(errors).map(&:to_s).reject(&:blank?).uniq.first(100)
+      {
+        "ok" => normalized_errors.blank?,
+        "public_id" => item&.public_id.to_s.presence,
+        "media_item_id" => item&.id,
+        "profile_key" => profile_key.to_s.presence,
+        "role_backend" => role.is_a?(Hash) ? role["backend"].to_s.presence : nil,
+        "key_prefix" => key_prefix.to_s.presence,
+        "listed_objects" => listed_objects.to_i,
+        "checked_objects" => checked_objects.to_i,
+        "errors" => normalized_errors,
+      }.compact
+    end
+
+    def log_remote_hls_verification_failure(item, verification)
+      return if verification.is_a?(Hash) && verification["ok"] == true
+
+      errors = verification.is_a?(Hash) ? Array(verification["errors"]).first(20) : ["verification_result_missing"]
+      Rails.logger.warn(
+        "[media_gallery] local HLS mirror cleanup blocked public_id=#{item&.public_id} " \
+        "profile_key=#{verification.is_a?(Hash) ? verification['profile_key'] : nil} errors=#{errors.join(',')}"
+      )
+    rescue
+      nil
+    end
+
+    def safe_error_token(value)
+      value.to_s.gsub(/[^a-zA-Z0-9_-]+/, "_").downcase[0, 120]
     end
 
     def active_item_storage_available?(item)

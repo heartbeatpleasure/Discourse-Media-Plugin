@@ -205,6 +205,7 @@ module ::MediaGallery
     def template_playlist_path(item, variant: DEFAULT_VARIANT)
       access = managed_hls_access_for(item)
       return ::MediaGallery::Hls.variant_playlist_key_for(item, variant, role: access[:role]) if access.present?
+      return nil unless local_hls_fallback_allowed?(item)
 
       ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
     end
@@ -580,6 +581,8 @@ module ::MediaGallery
         return access[:store].read(key)
       end
 
+      raise Discourse::NotFound unless local_hls_fallback_allowed?(item)
+
       path = ::MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
       raise Discourse::NotFound if path.blank? || !File.exist?(path)
       File.read(path)
@@ -663,6 +666,14 @@ module ::MediaGallery
       nil
     end
     private_class_method :managed_hls_access_for
+
+    def local_hls_fallback_allowed?(item)
+      role = ::MediaGallery::Hls.managed_role_for(item)
+      ::MediaGallery::Hls.local_hls_fallback_allowed?(item, role: role)
+    rescue
+      false
+    end
+    private_class_method :local_hls_fallback_allowed?
 
     def aes128_context_for(item:, selection:, stage_dir:)
       encryption = aes128_encryption_for_test_download(item: item, variant: selection[:variant])
@@ -840,6 +851,8 @@ module ::MediaGallery
           access[:store].download_to_file!(key, dest)
           source_locator = "managed:#{key}"
         else
+          raise "managed_hls_unavailable_and_local_fallback_disabled" unless local_hls_fallback_allowed?(item)
+
           base = ::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
           variant = ::MediaGallery::PathSecurity.normalize_path_component!(selection[:variant].to_s, name: "variant")
           relative = File.join(ab, variant, filename)

@@ -571,7 +571,7 @@ en:
     media_gallery_heartbeat_ttl_seconds_title: "Heartbeat TTL seconds"
     media_gallery_hls_enabled: "When enabled, processed videos can be packaged into HLS playlists and segments. HLS supports stronger download deterrence and fingerprinting than a single direct MP4 stream."
     media_gallery_hls_enabled_title: "Enable HLS packaging"
-    media_gallery_hls_local_mirror_enabled: "Keep an additional local copy of finalized HLS packages when the media item is published to any S3-compatible storage profile. This can provide local redundancy and fallback compatibility, but uses extra server disk space. Disabling it stops new mirrors; existing verified mirrors can be removed from the Health reconciliation page."
+    media_gallery_hls_local_mirror_enabled: "Keep an additional local copy of finalized HLS packages when the media item is published to any S3-compatible storage profile. This provides local redundancy and permits local fallback when remote HLS is unavailable, but uses extra server disk space. Disabling it stops new mirrors and disables local HLS fallback for S3-backed items; existing mirrors can be removed from Health reconciliation only after complete remote-package verification."
     media_gallery_hls_local_mirror_enabled_title: "Keep local mirrors of remote HLS packages"
     media_gallery_hls_managed_readiness_cache_seconds: "How long to cache the result of managed HLS readiness checks. Higher values reduce storage checks; lower values reflect changes faster."
     media_gallery_hls_managed_readiness_cache_seconds_title: "HLS readiness cache seconds"

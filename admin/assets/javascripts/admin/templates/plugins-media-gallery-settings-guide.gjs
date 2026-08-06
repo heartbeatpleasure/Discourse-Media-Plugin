@@ -468,9 +468,9 @@ export default RouteTemplate(
             <div class="mg-guide__row-copy">
               <h3>Local HLS mirror</h3>
               <code class="mg-guide__setting-name">media_gallery_hls_local_mirror_enabled</code>
-              <p class="mg-guide__setting-help">Optionally keeps a second local HLS package when an item is published to S3 profile 1, 2 or 3. Disable it when remote storage is authoritative and local redundancy is not required. Existing mirrors are never deleted automatically; after disabling, review and remove verified mirrors through Health reconciliation.</p>
+              <p class="mg-guide__setting-help">Optionally keeps a second local HLS package when an item is published to S3 profile 1, 2 or 3. When enabled, that copy may also be used if remote HLS is unavailable. Disabling stops new mirrors and prevents S3-backed items from silently falling back to older local copies. Existing mirrors are never deleted automatically; Health reconciliation removes them only after a fresh complete verification of the active remote package.</p>
             </div>
-            <div class="mg-guide__setting-value"><span class="mg-guide__value-label">Choose deliberately</span><span class="mg-guide__value-text">true for local redundancy / false for remote-only HLS</span></div>
+            <div class="mg-guide__setting-value"><span class="mg-guide__value-label">Choose deliberately</span><span class="mg-guide__value-text">true for local redundancy + fallback / false for remote-only HLS</span></div>
             <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery_hls_local_mirror_enabled">Open setting</a>
           </article>
 

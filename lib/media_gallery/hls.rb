@@ -43,6 +43,63 @@ module ::MediaGallery
       true
     end
 
+    # Decide whether callers may use the persistent local HLS package when the
+    # managed HLS role is unavailable. The stored per-item profile is the source
+    # of truth: local-primary and genuinely legacy items remain compatible, while
+    # S3-backed items may use a local fallback only when mirroring is enabled.
+    #
+    # This deliberately does not use +profile_key_for_item+, because that method
+    # falls back to the site's current default profile. Applying today's default
+    # to an older item with no managed-storage metadata could incorrectly disable
+    # its only legacy local HLS package.
+    def local_hls_fallback_allowed?(item, role: nil)
+      return true if item.blank?
+
+      role = role.deep_stringify_keys if role.is_a?(Hash)
+      stored_profile = item.try(:managed_storage_profile).to_s.presence
+      canonical_profile =
+        if stored_profile.present?
+          ::MediaGallery::StorageSettingsResolver.canonicalize_profile_key(stored_profile)
+        end
+      profile_backend =
+        if canonical_profile.present?
+          ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(canonical_profile).to_s.presence
+        end
+
+      item_backend = item.try(:managed_storage_backend).to_s.presence
+      stored_manifest = item.try(:storage_manifest_hash)
+      stored_manifest = item.try(:storage_manifest) unless stored_manifest.is_a?(Hash)
+      stored_manifest = stored_manifest.deep_stringify_keys if stored_manifest.is_a?(Hash)
+      stored_role = stored_manifest.is_a?(Hash) ? stored_manifest.dig("roles", "hls") : nil
+      stored_role = stored_role.deep_stringify_keys if stored_role.is_a?(Hash)
+      stored_role_backend = stored_role.is_a?(Hash) ? stored_role["backend"].to_s.presence : nil
+      canonical_backend = profile_backend || item_backend || stored_role_backend
+
+      return true if canonical_backend.blank?
+      return true if canonical_backend == "local"
+      return local_mirror_enabled? if canonical_backend == "s3"
+
+      true
+    rescue
+      # Fail safely even if profile normalization itself raises. Explicit local
+      # metadata remains usable; explicit S3 metadata still follows the mirror
+      # setting. Only genuinely metadata-less legacy items default to local.
+      raw_profile = item.try(:managed_storage_profile).to_s
+      return true if %w[local active_local target_local].include?(raw_profile)
+      return local_mirror_enabled? if %w[s3_1 s3_2 s3_3 active_s3 target_s3 target_s3_2 target_s3_3].include?(raw_profile)
+
+      raw_backend = item.try(:managed_storage_backend).to_s
+      return true if raw_backend == "local"
+      return local_mirror_enabled? if raw_backend == "s3"
+      stored_manifest = item.try(:storage_manifest_hash)
+      stored_manifest = item.try(:storage_manifest) unless stored_manifest.is_a?(Hash)
+      stored_manifest = stored_manifest.deep_stringify_keys if stored_manifest.is_a?(Hash)
+      stored_role = stored_manifest.is_a?(Hash) ? stored_manifest.dig("roles", "hls") : nil
+      return local_mirror_enabled? if stored_role.is_a?(Hash) && stored_role["backend"].to_s == "s3"
+
+      true
+    end
+
     # AES-128 HLS hardening helpers.
     #
     # The AES implementation is intentionally incremental. These helpers expose
@@ -225,6 +282,7 @@ module ::MediaGallery
 
       role = managed_role_for(item)
       return true if managed_role_ready?(item, role)
+      return false unless local_hls_fallback_allowed?(item, role: role)
 
       local_mirror_ready?(item)
     end
@@ -512,6 +570,8 @@ module ::MediaGallery
           return meta.deep_stringify_keys if meta.is_a?(Hash)
         end
       end
+
+      return nil unless local_hls_fallback_allowed?(item, role: role)
 
       path = File.join(::MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id), "fingerprint_meta.json")
       return nil unless File.exist?(path)

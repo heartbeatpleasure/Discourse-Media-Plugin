@@ -492,8 +492,9 @@ plugins:
     client: false
 
   # Optional local redundancy for HLS packages stored on any S3-compatible profile.
-  # Disabling this stops new local mirrors; existing mirrors remain until reviewed
-  # and removed through the scoped Health reconciliation cleanup.
+  # Disabling this stops new local mirrors and prevents S3-backed items from using
+  # an existing local mirror as a silent fallback. Existing mirrors remain until
+  # reviewed and removed through fully verified scoped Health reconciliation cleanup.
   media_gallery_hls_local_mirror_enabled:
     default: true
     client: false

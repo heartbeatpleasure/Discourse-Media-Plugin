@@ -591,6 +591,13 @@ module ::MediaGallery
       nil
     end
 
+    def ensure_local_hls_fallback_allowed!(item)
+      managed_role = ::MediaGallery::Hls.managed_role_for(item)
+      return true if ::MediaGallery::Hls.local_hls_fallback_allowed?(item, role: managed_role)
+
+      raise Discourse::NotFound
+    end
+
     def read_master_playlist!(item, role: nil)
       if role.present?
         store = hls_store_for(item, role)
@@ -600,6 +607,7 @@ module ::MediaGallery
         return read_hls_store_object!(store, key, item: item, role: role, cache_kind: "master")
       end
 
+      ensure_local_hls_fallback_allowed!(item)
       path = MediaGallery::PrivateStorage.hls_master_abs_path(item)
       raise Discourse::NotFound unless path.present? && File.exist?(path)
       read_local_playlist!(path, cache_kind: "master")
@@ -614,6 +622,7 @@ module ::MediaGallery
         return read_hls_store_object!(store, key, item: item, role: role, cache_kind: "variant:#{variant}")
       end
 
+      ensure_local_hls_fallback_allowed!(item)
       path = MediaGallery::PrivateStorage.hls_variant_playlist_abs_path(item.public_id, variant)
       raise Discourse::NotFound unless path.present? && File.exist?(path)
       read_local_playlist!(path, cache_kind: "variant:#{variant}")
@@ -660,6 +669,7 @@ module ::MediaGallery
         return { mode: :local, local_path: abs }
       end
 
+      ensure_local_hls_fallback_allowed!(item)
       abs = resolve_segment_abs_path(item.public_id, variant, segment, ab: ab)
       raise Discourse::NotFound unless abs.present? && File.exist?(abs)
       { mode: :local, local_path: abs }

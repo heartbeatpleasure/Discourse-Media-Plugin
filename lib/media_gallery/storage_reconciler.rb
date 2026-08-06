@@ -792,7 +792,7 @@ module ::MediaGallery
           available: group[:active_hls_available] == true && group[:local_mirror_enabled] != true,
           kind: "delete_prefix",
           label: "Remove local HLS mirror",
-          hint: "Deletes only this item's local HLS mirror after re-verifying that the item uses an S3-compatible profile and its active remote HLS package is complete. Local-primary items are never eligible.",
+          hint: "Deletes only this item's local HLS mirror after a fresh complete verification of the current S3 package, including every playlist-referenced object, fingerprint metadata and AES key state. Local-primary items are never eligible.",
           risk: "low"
         }
       when "hls_media_prefix"
@@ -831,7 +831,11 @@ module ::MediaGallery
         "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} were found on #{found}. The active playback profile for this media item is #{current}. This commonly means migration source cleanup is pending or incomplete.#{cleanup_text}#{sample_text}"
       when "local_hls_mirror"
         current = group[:current_profile_label].presence || group[:current_profile_key].presence || "an S3-compatible profile"
-        verification = group[:active_hls_available] == true ? "The active remote HLS package was verified." : "The active remote HLS package could not be fully verified, so cleanup is blocked."
+        verification = if group[:active_hls_available] == true
+          "The active remote HLS package passed the preliminary availability check. A complete object-by-object verification will run again before cleanup."
+        else
+          "The active remote HLS package did not pass the preliminary availability check, so cleanup is blocked."
+        end
         "#{object_count} local HLS object#{'s' if object_count != 1} under #{prefix} belong to an item whose active playback profile is #{current}. Local HLS mirroring is currently disabled. #{verification}#{sample_text}"
       when "hls_media_prefix"
         "#{object_count} HLS storage object#{'s' if object_count != 1} under #{prefix} are not referenced by any sampled media item or manifest. This often comes from deleted media or an incomplete cleanup path.#{sample_text}"
@@ -853,9 +857,9 @@ module ::MediaGallery
         "Open the item in Migration manager and verify whether source cleanup is pending, failed, or intentionally deferred. Do not delete until the active target profile and playback are verified."
       when "local_hls_mirror"
         if group[:active_hls_available] == true
-          "Use Remove local HLS mirror to reclaim local disk space. The cleanup revalidates the current per-item profile and remote HLS package immediately before deleting only the local <public_id>/hls prefix."
+          "Use Remove local HLS mirror to reclaim local disk space. Immediately before deletion, cleanup verifies the current per-item S3 profile and every object referenced by its HLS playlists, plus required fingerprint metadata and AES key state."
         else
-          "Do not remove this local copy yet. Verify or restore the active remote HLS package, rerun reconciliation, and clean only after the remote package is complete."
+          "Do not remove this local copy yet. Verify or restore the active remote HLS package, rerun reconciliation, and clean only after the preliminary check succeeds."
         end
       when "hls_media_prefix"
         "Check whether this public_id still exists in Media management or was deleted through frontend, Reports, or Management. Use a scoped cleanup only after confirming it is not the active package."

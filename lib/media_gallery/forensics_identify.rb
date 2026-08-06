@@ -1404,6 +1404,9 @@ module ::MediaGallery
 
       return nil unless defined?(::MediaGallery::PrivateStorage)
 
+      managed_role = ::MediaGallery::Hls.managed_role_for(media_item)
+      return nil unless ::MediaGallery::Hls.local_hls_fallback_allowed?(media_item, role: managed_role)
+
       root = ::MediaGallery::PrivateStorage.hls_root_abs_dir(media_item.public_id)
       return root if root.present? && Dir.exist?(root)
 
