@@ -17,9 +17,9 @@ module ::MediaGallery
   # - packaging happens inside a processing workspace / scratch directory
   # - the finalized package is published from scratch into the active managed
   #   store only after validation succeeds
-  # - an optional best-effort local mirror can be retained for HLS packages
-  #   published to any S3-compatible profile; the selected managed profile remains
-  #   the canonical source of truth
+  # - an optional secondary storage replica is handled asynchronously after the
+  #   canonical managed package has been committed; HLS publishing itself writes
+  #   only to the selected active profile
   module Hls
     module_function
 
@@ -35,12 +35,16 @@ module ::MediaGallery
       SiteSetting.respond_to?(:media_gallery_hls_enabled) && SiteSetting.media_gallery_hls_enabled
     end
 
-    def local_mirror_enabled?
-      return true unless SiteSetting.respond_to?(:media_gallery_hls_local_mirror_enabled)
+    # A persistent local HLS fallback is expected only when the general
+    # secondary replica is enabled, targets Local storage, includes the HLS
+    # role, and the recorded replica generation is complete and current.
+    def local_replica_fallback_enabled?(item = nil)
+      return false unless defined?(::MediaGallery::StorageReplica)
+      return false if item.blank?
 
-      ActiveModel::Type::Boolean.new.cast(SiteSetting.media_gallery_hls_local_mirror_enabled)
+      ::MediaGallery::StorageReplica.local_hls_fallback_enabled_for?(item)
     rescue
-      true
+      false
     end
 
     # Decide whether callers may use the persistent local HLS package when the
@@ -77,7 +81,7 @@ module ::MediaGallery
 
       return true if canonical_backend.blank?
       return true if canonical_backend == "local"
-      return local_mirror_enabled? if canonical_backend == "s3"
+      return local_replica_fallback_enabled?(item) if canonical_backend == "s3"
 
       true
     rescue
@@ -86,16 +90,16 @@ module ::MediaGallery
       # setting. Only genuinely metadata-less legacy items default to local.
       raw_profile = item.try(:managed_storage_profile).to_s
       return true if %w[local active_local target_local].include?(raw_profile)
-      return local_mirror_enabled? if %w[s3_1 s3_2 s3_3 active_s3 target_s3 target_s3_2 target_s3_3].include?(raw_profile)
+      return local_replica_fallback_enabled?(item) if %w[s3_1 s3_2 s3_3 active_s3 target_s3 target_s3_2 target_s3_3].include?(raw_profile)
 
       raw_backend = item.try(:managed_storage_backend).to_s
       return true if raw_backend == "local"
-      return local_mirror_enabled? if raw_backend == "s3"
+      return local_replica_fallback_enabled?(item) if raw_backend == "s3"
       stored_manifest = item.try(:storage_manifest_hash)
       stored_manifest = item.try(:storage_manifest) unless stored_manifest.is_a?(Hash)
       stored_manifest = stored_manifest.deep_stringify_keys if stored_manifest.is_a?(Hash)
       stored_role = stored_manifest.is_a?(Hash) ? stored_manifest.dig("roles", "hls") : nil
-      return local_mirror_enabled? if stored_role.is_a?(Hash) && stored_role["backend"].to_s == "s3"
+      return local_replica_fallback_enabled?(item) if stored_role.is_a?(Hash) && stored_role["backend"].to_s == "s3"
 
       true
     end
@@ -495,7 +499,6 @@ module ::MediaGallery
       end
 
       prune_unpublished_hls_objects!(store, prefix: hls_prefix, keep_keys: published_keys)
-      mirror_packaged_video_to_local_root!(item, packaged_root: packaged_root) if store.backend.to_s != "local" && local_mirror_enabled?
       build_role_for_store(item, backend: store.backend, hls_meta: hls_meta, packaged_root: packaged_root)
     ensure
       cleanup_packaged_root!(hls_meta)
@@ -899,32 +902,6 @@ module ::MediaGallery
     end
     private_class_method :packaged_root_for
 
-    def mirror_packaged_video_to_local_root!(item, packaged_root:)
-      return false if packaged_root.blank? || !Dir.exist?(packaged_root)
-      return false unless MediaGallery::PrivateStorage.enabled?
-
-      item_root = MediaGallery::PrivateStorage.item_private_dir(item.public_id)
-      final_root = MediaGallery::PrivateStorage.hls_root_abs_dir(item.public_id)
-      MediaGallery::PrivateStorage.ensure_dir!(item_root)
-
-      tmp_root = File.join(item_root, "hls__tmp_#{SecureRandom.hex(8)}")
-      FileUtils.rm_rf(tmp_root) if Dir.exist?(tmp_root)
-      FileUtils.mkdir_p(tmp_root)
-
-      each_packaged_file(packaged_root) do |abs_path, rel_path|
-        dest = File.join(tmp_root, rel_path)
-        FileUtils.mkdir_p(File.dirname(dest))
-        FileUtils.cp(abs_path, dest)
-      end
-
-      swap_in_packaged_hls!(final_root: final_root, tmp_root: tmp_root, item_root: item_root)
-      true
-    rescue => e
-      Rails.logger.warn("[media_gallery] failed to mirror packaged HLS to local root public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
-      false
-    end
-    private_class_method :mirror_packaged_video_to_local_root!
-
     def cleanup_packaged_root!(hls_meta)
       return unless hls_meta.is_a?(Hash)
       return unless ActiveModel::Type::Boolean.new.cast(hls_meta["cleanup_build_root_after_publish"])
@@ -938,39 +915,6 @@ module ::MediaGallery
     end
     private_class_method :cleanup_packaged_root!
 
-    def swap_in_packaged_hls!(final_root:, tmp_root:, item_root:)
-      return if final_root.blank? || tmp_root.blank? || item_root.blank?
-
-      old_root = nil
-      if Dir.exist?(final_root)
-        old_root = File.join(item_root, "hls__old_#{Time.now.utc.strftime('%Y%m%d%H%M%S')}_#{SecureRandom.hex(4)}")
-        FileUtils.mv(final_root, old_root)
-      end
-
-      FileUtils.mv(tmp_root, final_root)
-      cleanup_old_hls_swap_root!(old_root, item_root: item_root) if old_root.present?
-      true
-    rescue => e
-      begin
-        FileUtils.rm_rf(final_root) if final_root.present? && Dir.exist?(final_root)
-        FileUtils.mv(old_root, final_root) if old_root.present? && Dir.exist?(old_root)
-      rescue
-      end
-      raise e
-    end
-    private_class_method :swap_in_packaged_hls!
-
-
-    def cleanup_old_hls_swap_root!(old_root, item_root:)
-      return false if old_root.blank? || !Dir.exist?(old_root)
-
-      ::MediaGallery::PathSecurity.remove_tree_under!(old_root, item_root.to_s)
-      true
-    rescue => e
-      Rails.logger.warn("[media_gallery] failed to cleanup old HLS swap root=#{old_root} error=#{e.class}: #{e.message}")
-      false
-    end
-    private_class_method :cleanup_old_hls_swap_root!
 
     def format_template(template, variant:, segment: nil, ab: nil)
       format(template.to_s, variant: variant.to_s, segment: segment.to_s, ab: ab.to_s)

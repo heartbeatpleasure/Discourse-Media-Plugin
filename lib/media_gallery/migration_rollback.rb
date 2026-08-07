@@ -59,6 +59,7 @@ module ::MediaGallery
       item.save!
 
       ::MediaGallery::OperationLogger.info("migration_rollback_completed", item: item, operation: "rollback", data: { source_profile_key: rollback_state["source_profile_key"], target_profile_key: rollback_state["target_profile_key"], requested_by: requested_by, force: !!force })
+      enqueue_storage_replica_after_rollback!(item, requested_by: requested_by)
 
       rollback_state
     rescue => e
@@ -70,6 +71,22 @@ module ::MediaGallery
       ::MediaGallery::OperationLogger.error("migration_rollback_failed", item: item, operation: "rollback", data: { error: state["last_error"], error_code: state["last_error_code"], requested_by: requested_by, force: !!force })
       raise e
     end
+
+    def enqueue_storage_replica_after_rollback!(item, requested_by: nil)
+      return false unless defined?(::MediaGallery::StorageReplica)
+
+      ::MediaGallery::StorageReplica.enqueue_after_primary_change!(
+        item,
+        reason: "migration_rollback_completed",
+        requested_by: requested_by,
+      )
+    rescue => e
+      Rails.logger.warn(
+        "[media_gallery] storage replica enqueue after migration rollback failed item_id=#{item&.id} "         "error=#{e.class}: #{e.message}"
+      )
+      false
+    end
+    private_class_method :enqueue_storage_replica_after_rollback!
 
     def rollback_state_for(item)
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}

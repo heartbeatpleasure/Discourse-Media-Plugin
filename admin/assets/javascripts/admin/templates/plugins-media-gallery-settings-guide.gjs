@@ -466,12 +466,23 @@ export default RouteTemplate(
 
           <article class="mg-guide__setting-row">
             <div class="mg-guide__row-copy">
-              <h3>Local HLS mirror</h3>
-              <code class="mg-guide__setting-name">media_gallery_hls_local_mirror_enabled</code>
-              <p class="mg-guide__setting-help">Optionally keeps a second local HLS package when an item is published to S3 profile 1, 2 or 3. When enabled, that copy may also be used if remote HLS is unavailable. Disabling stops new mirrors and prevents S3-backed items from silently falling back to older local copies. Existing mirrors are never deleted automatically; Health reconciliation removes them only after a fresh complete verification of the active remote package.</p>
+              <h3>Secondary storage replica</h3>
+              <code class="mg-guide__setting-name">media_gallery_storage_replica_enabled</code>
+              <p class="mg-guide__setting-help">Optionally maintains one asynchronous secondary copy on Local storage or S3 profile 1, 2 or 3. The active profile remains canonical. Select HLS only for a lightweight video package copy, or all managed assets to include main media, thumbnail and HLS. Source and destination must be different physical storage locations. Existing replicas are not deleted when this is disabled; Health reconciliation verifies the active source before offering scoped cleanup.</p>
             </div>
-            <div class="mg-guide__setting-value"><span class="mg-guide__value-label">Choose deliberately</span><span class="mg-guide__value-text">true for local redundancy + fallback / false for remote-only HLS</span></div>
-            <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery_hls_local_mirror_enabled">Open setting</a>
+            <div class="mg-guide__setting-value"><span class="mg-guide__value-label">Default</span><span class="mg-guide__value-text">disabled</span></div>
+            <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery_storage_replica">Open settings</a>
+          </article>
+
+          <article class="mg-guide__setting-row">
+            <div class="mg-guide__row-copy">
+              <h3>Replica destination and scope</h3>
+              <code class="mg-guide__setting-name">media_gallery_storage_replica_profile_key</code>
+              <code class="mg-guide__setting-name">media_gallery_storage_replica_scope</code>
+              <p class="mg-guide__setting-help">The destination may be Local or any configured S3-compatible profile. HLS-only local replicas may be used as the existing local HLS fallback; replicas on other profiles are storage copies for redundancy or migration preparation and do not automatically change playback routing.</p>
+            </div>
+            <div class="mg-guide__setting-value"><span class="mg-guide__value-label">Scopes</span><span class="mg-guide__value-text">hls_only / all_managed_assets</span></div>
+            <a class="btn" href="/admin/site_settings/category/all_results?filter=media_gallery_storage_replica">Open settings</a>
           </article>
 
           <article class="mg-guide__setting-row">

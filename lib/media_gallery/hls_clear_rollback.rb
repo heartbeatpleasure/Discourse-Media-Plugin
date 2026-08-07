@@ -81,6 +81,7 @@ module ::MediaGallery
           ::MediaGallery::HlsAes128Backfill.persist_hls_role_and_meta!(item, hls_role: hls_role, hls_meta: hls_meta)
           deactivated_keys = deactivate_aes_key_records!(item)
           result = mark_succeeded!(item, requested_by: requested_by, force: force, hls_role: hls_role, hls_meta: hls_meta, deactivated_keys: deactivated_keys)
+          enqueue_storage_replica_after_hls_change!(item, requested_by: requested_by)
           ::MediaGallery::HlsAes128Backfill.mark_superseded_by_clear_hls!(item, requested_by: requested_by) if defined?(::MediaGallery::HlsAes128Backfill)
           append_management_log!(item, action: "hls_clear_rollback_succeeded", requested_by: requested_by, changes: { "hls_clear_rollback" => ["processing", result["status"]], "hls_aes128" => ["encrypted", "clear_hls"] })
           log_info("hls_clear_rollback_job_succeeded", item: item, requested_by: requested_by, force: force, data: { deactivated_keys: deactivated_keys })
@@ -95,6 +96,23 @@ module ::MediaGallery
       end
       raise e
     end
+
+    def enqueue_storage_replica_after_hls_change!(item, requested_by: nil)
+      return false unless defined?(::MediaGallery::StorageReplica)
+
+      ::MediaGallery::StorageReplica.enqueue_after_primary_change!(
+        item,
+        reason: "hls_clear_rollback",
+        requested_by: requested_by,
+      )
+    rescue => e
+      Rails.logger.warn(
+        "[media_gallery] storage replica enqueue after clear HLS rollback failed item_id=#{item&.id} " \
+        "error=#{e.class}: #{e.message}"
+      )
+      false
+    end
+    private_class_method :enqueue_storage_replica_after_hls_change!
 
     def enqueue_job!(item, requested_by:, force: false, run_token: nil)
       unless defined?(::Jobs::MediaGalleryHlsClearRollbackItem)
@@ -313,11 +331,19 @@ module ::MediaGallery
     end
 
     def with_item_mutex(item, &blk)
+      runner = lambda do
+        if defined?(::MediaGallery::StorageReplica)
+          ::MediaGallery::StorageReplica.synchronize_item(item, &blk)
+        else
+          blk.call
+        end
+      end
+
       name = "media_gallery_hls_clear_rollback_#{item.id}"
       if defined?(::DistributedMutex)
-        ::DistributedMutex.synchronize(name, validity: 2.hours, &blk)
+        ::DistributedMutex.synchronize(name, validity: 2.hours) { runner.call }
       else
-        yield
+        runner.call
       end
     end
 

@@ -491,12 +491,29 @@ plugins:
     default: "/shared/media_gallery/private"
     client: false
 
-  # Optional local redundancy for HLS packages stored on any S3-compatible profile.
-  # Disabling this stops new local mirrors and prevents S3-backed items from using
-  # an existing local mirror as a silent fallback. Existing mirrors remain until
-  # reviewed and removed through fully verified scoped Health reconciliation cleanup.
-  media_gallery_hls_local_mirror_enabled:
-    default: true
+  # Optional secondary replica for managed media. The media item's own profile
+  # remains canonical. Replica writes happen asynchronously after primary storage
+  # succeeds, and failures never make the primary upload fail.
+  media_gallery_storage_replica_enabled:
+    default: false
+    client: false
+
+  media_gallery_storage_replica_profile_key:
+    default: "local"
+    type: enum
+    choices:
+      - local
+      - s3_1
+      - s3_2
+      - s3_3
+    client: false
+
+  media_gallery_storage_replica_scope:
+    default: "hls_only"
+    type: enum
+    choices:
+      - hls_only
+      - all_managed_assets
     client: false
 
   # S3 profile 1.

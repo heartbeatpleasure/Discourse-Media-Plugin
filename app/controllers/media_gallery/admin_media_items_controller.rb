@@ -245,17 +245,19 @@ module ::MediaGallery
       title = item.title.to_s
       delete_summary = nil
 
-      item.with_lock do
-        delete_summary = ::MediaGallery::MediaAssetCleanup.cleanup_item!(
-          item,
-          mode: "admin_hard_delete",
-          actor: current_user,
-          request: request,
-          note: note,
-          trigger_event_type: "admin_media_item_deleted"
-        )
-        log_admin_delete!(item, note: note, delete_summary: delete_summary)
-        item.destroy!
+      ::MediaGallery::StorageReplica.synchronize_item(item) do
+        item.with_lock do
+          delete_summary = ::MediaGallery::MediaAssetCleanup.cleanup_item!(
+            item,
+            mode: "admin_hard_delete",
+            actor: current_user,
+            request: request,
+            note: note,
+            trigger_event_type: "admin_media_item_deleted"
+          )
+          log_admin_delete!(item, note: note, delete_summary: delete_summary)
+          item.destroy!
+        end
       end
 
       partial = Array(delete_summary&.dig("warnings")).present?
@@ -539,13 +541,15 @@ module ::MediaGallery
     def switch_to_target
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
-      state = ::MediaGallery::MigrationSwitch.switch!(
-        item,
-        target_profile: target_profile,
-        requested_by: current_user.username,
-        mode: "manual",
-        auto_cleanup: boolean_param(:auto_cleanup)
-      )
+      state = ::MediaGallery::StorageReplica.synchronize_item(item) do
+        ::MediaGallery::MigrationSwitch.switch!(
+          item,
+          target_profile: target_profile,
+          requested_by: current_user.username,
+          mode: "manual",
+          auto_cleanup: boolean_param(:auto_cleanup)
+        )
+      end
 
       audit_admin_action!("migration_switch_requested", item: item, operation: "switch", result: state["status"], data: { target_profile: target_profile, auto_cleanup: boolean_param(:auto_cleanup) })
       render_json_dump(ok: true, public_id: item.public_id, migration_switch: state)
@@ -564,7 +568,13 @@ module ::MediaGallery
 
     def rollback_to_source
       item = load_item!
-      state = ::MediaGallery::MigrationRollback.rollback!(item, requested_by: current_user.username, force: boolean_param(:force))
+      state = ::MediaGallery::StorageReplica.synchronize_item(item) do
+        ::MediaGallery::MigrationRollback.rollback!(
+          item,
+          requested_by: current_user.username,
+          force: boolean_param(:force),
+        )
+      end
       audit_admin_action!("migration_rollback_requested", item: item, operation: "rollback", result: state["status"], data: { force: boolean_param(:force) })
       render_json_dump(ok: true, public_id: item.public_id, migration_rollback: state)
     rescue => e

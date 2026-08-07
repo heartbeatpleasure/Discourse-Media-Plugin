@@ -99,6 +99,7 @@ module ::MediaGallery
           persist_hls_role_and_meta!(item, hls_role: hls_role, hls_meta: hls_meta)
           item.reload if operation == "key_rotation"
           result = mark_succeeded!(item, requested_by: requested_by, force: force, hls_role: hls_role, hls_meta: hls_meta)
+          enqueue_storage_replica_after_hls_change!(item, reason: operation == "key_rotation" ? "hls_aes128_key_rotation" : "hls_aes128_backfill", requested_by: requested_by)
           next_rotation_context = operation == "key_rotation" ? hls_aes128_rotation_context(item) : {}
           success_changes = { "hls_aes128_backfill" => ["processing", result["status"]], "hls_aes128_key" => ["previous", result["key_id"].to_s.presence || "rotated"] }
           success_changes.merge!(hls_aes128_rotation_audit_changes(previous_rotation_context, next_rotation_context)) if operation == "key_rotation"
@@ -123,6 +124,23 @@ module ::MediaGallery
       end
       raise e
     end
+
+    def enqueue_storage_replica_after_hls_change!(item, reason:, requested_by: nil)
+      return false unless defined?(::MediaGallery::StorageReplica)
+
+      ::MediaGallery::StorageReplica.enqueue_after_primary_change!(
+        item,
+        reason: reason,
+        requested_by: requested_by,
+      )
+    rescue => e
+      Rails.logger.warn(
+        "[media_gallery] storage replica enqueue after HLS change failed item_id=#{item&.id} " \
+        "reason=#{reason} error=#{e.class}: #{e.message}"
+      )
+      false
+    end
+    private_class_method :enqueue_storage_replica_after_hls_change!
 
     def enqueue_backfill_job!(item, requested_by:, force: false, run_token: nil, operation: nil)
       unless defined?(::Jobs::MediaGalleryHlsAes128BackfillItem)
@@ -565,11 +583,19 @@ module ::MediaGallery
     end
 
     def with_item_mutex(item, &blk)
+      runner = lambda do
+        if defined?(::MediaGallery::StorageReplica)
+          ::MediaGallery::StorageReplica.synchronize_item(item, &blk)
+        else
+          blk.call
+        end
+      end
+
       name = "media_gallery_hls_aes128_backfill_#{item.id}"
       if defined?(::DistributedMutex)
-        ::DistributedMutex.synchronize(name, validity: 2.hours, &blk)
+        ::DistributedMutex.synchronize(name, validity: 2.hours) { runner.call }
       else
-        yield
+        runner.call
       end
     end
   end

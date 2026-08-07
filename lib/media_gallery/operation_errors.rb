@@ -103,6 +103,8 @@ module ::MediaGallery
         present("Cleanup stopped because the source profile changed after the switch.", retryable: false, recommended_action: "Check the storage configuration before continuing.")
       when "cleanup_target_profile_changed_since_switch"
         present("Cleanup stopped because the active target profile changed after the switch.", retryable: false, recommended_action: "Check the storage configuration before continuing.")
+      when "cleanup_source_is_storage_replica_target"
+        present("Cleanup is blocked because the former source profile is now the configured secondary replica destination.", retryable: false, recommended_action: "Disable or move the secondary replica before removing that profile's files.")
       when "switch_state_missing"
         present("There is no switch state for this item yet.", retryable: false, recommended_action: "Run copy and switch first.")
       when "rollback_source_missing"

@@ -19,6 +19,20 @@ module Jobs
       if defined?(::DistributedMutex)
         ::DistributedMutex.synchronize(mutex_key, validity: 4.hours) do
           item.reload
+          ::MediaGallery::StorageReplica.synchronize_item(item) do
+            ::MediaGallery::MigrationCopy.perform_copy!(
+              item,
+              target_profile: target_profile,
+              run_token: run_token,
+              force: force,
+              auto_switch: auto_switch,
+              auto_cleanup: auto_cleanup,
+              full_migration: full_migration
+            )
+          end
+        end
+      else
+        ::MediaGallery::StorageReplica.synchronize_item(item) do
           ::MediaGallery::MigrationCopy.perform_copy!(
             item,
             target_profile: target_profile,
@@ -29,16 +43,6 @@ module Jobs
             full_migration: full_migration
           )
         end
-      else
-        ::MediaGallery::MigrationCopy.perform_copy!(
-          item,
-          target_profile: target_profile,
-          run_token: run_token,
-          force: force,
-          auto_switch: auto_switch,
-          auto_cleanup: auto_cleanup,
-          full_migration: full_migration
-        )
       end
     rescue => e
       Rails.logger.error("[media-gallery] copy job failed for item=#{item&.id || args[:media_item_id]}: #{e.class}: #{e.message}")

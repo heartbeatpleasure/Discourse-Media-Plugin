@@ -54,8 +54,8 @@ module ::MediaGallery
           known_plugin_prefixes: [],
           unsampled_media_objects: 0,
           unsampled_media_prefixes: [],
-          local_hls_mirror_objects: 0,
-          local_hls_mirror_prefixes: [],
+          storage_replica_objects: 0,
+          storage_replica_locations: [],
           truncated_profiles: [],
           truncated_profile_labels: [],
         },
@@ -235,7 +235,7 @@ module ::MediaGallery
 
       roles = roles_for_item(item)
       register_expected_roles!(context, item, roles, profile_key: profile_key)
-      register_expected_local_hls_mirror!(context, item, roles, profile_key: profile_key, backend: backend)
+      inspect_storage_replicas!(context, item, roles, profile_key: profile_key, backend: backend)
       check_invalid_roles!(context, item, roles, profile_key: profile_key, backend: backend)
       check_missing_assets!(context, item, roles, profile_key: profile_key, backend: backend)
       check_deleted_leftovers!(context, item, roles, profile_key: profile_key, backend: backend) if asset_deleted?(item)
@@ -259,17 +259,296 @@ module ::MediaGallery
       end
     end
 
-    def register_expected_local_hls_mirror!(context, item, roles, profile_key:, backend:)
-      return unless backend.to_s == "s3"
-      return unless item.media_type.to_s == "video"
-      return unless roles["hls"].is_a?(Hash)
-      return unless roles["hls"]["backend"].to_s == "s3"
-      return unless ::MediaGallery::Hls.local_mirror_enabled?
+    def inspect_storage_replicas!(context, item, roles, profile_key:, backend:)
+      config = ::MediaGallery::StorageReplica.configured_replica_for_item(item)
+      if config[:enabled] && !config[:configuration_valid]
+        add_finding(
+          context,
+          "invalid_storage_references",
+          issue_type: "storage_replica_configuration_invalid",
+          severity: "warning",
+          item: item,
+          profile_key: config[:target_profile_key],
+          backend: config[:target_backend],
+          label: "Secondary storage replica configuration is invalid",
+          replica_enabled: true,
+          replica_scope: config[:scope],
+          replica_target_profile_key: config[:target_profile_key],
+          detail: "The secondary replica cannot run for this item: #{Array(config[:errors]).join(', ')}.",
+          suggestion: "Choose a configured destination profile that differs from the active profile and physical storage location.",
+        )
+      end
 
-      context[:expected_prefixes]["local"] << normalized_prefix(File.join(item.public_id.to_s, "hls"))
+      candidates = storage_replica_candidates(item, current_profile_key: profile_key, current_backend: backend)
+      candidates.each do |candidate|
+        target_profile_key = candidate[:target_profile_key].to_s
+        replica_scope = candidate[:scope].to_s
+        state = candidate[:state].is_a?(Hash) ? candidate[:state] : {}
+        next if target_profile_key.blank? || target_profile_key == profile_key.to_s
+
+        source_location = ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(profile_key).to_s.presence
+        target_location = ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(target_profile_key).to_s.presence
+        next if source_location.present? && target_location.present? && source_location == target_location
+
+        presence = ::MediaGallery::StorageReplica.presence_on_profile(
+          item,
+          profile_key: target_profile_key,
+          replica_scope: replica_scope,
+          state: state,
+        )
+        layout = presence[:layout] || ::MediaGallery::StorageReplica.replica_layout_for(item, replica_scope: replica_scope, state: state)
+        expected_now = ::MediaGallery::StorageReplica.current_replica_expected_for?(
+          item,
+          target_profile_key: target_profile_key,
+          replica_scope: replica_scope,
+        ) && replica_source_roles_present?(roles, replica_scope: replica_scope)
+
+        register_replica_layout!(context, target_profile_key, layout)
+
+        if expected_now
+          replica_complete = replica_state_current_and_complete?(
+            item,
+            state,
+            target_profile_key: target_profile_key,
+            replica_scope: replica_scope,
+            presence: presence,
+          )
+          if !replica_complete && state.blank?
+            replica_complete = replica_objects_match_primary?(
+              item,
+              target_profile_key: target_profile_key,
+              replica_scope: replica_scope,
+              presence: presence,
+            )
+          end
+          next if replica_complete
+
+          add_finding(
+            context,
+            "invalid_storage_references",
+            issue_type: "storage_replica_incomplete",
+            severity: "warning",
+            item: item,
+            profile_key: target_profile_key,
+            backend: ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(target_profile_key),
+            label: "Secondary storage replica is incomplete",
+            replica_enabled: true,
+            replica_scope: replica_scope,
+            replica_target_profile_key: target_profile_key,
+            detail: storage_replica_incomplete_detail(item, state, presence, target_profile_key: target_profile_key, replica_scope: replica_scope),
+            suggestion: "Check the storage replica job in Background jobs and verify the destination profile. A replica failure does not affect the canonical primary assets.",
+          )
+          next
+        end
+
+        next unless presence[:present]
+
+        primary_available = primary_assets_available_for_replica?(item, replica_scope: replica_scope)
+        register_storage_replica_stats!(context, target_profile_key, presence)
+        add_finding(
+          context,
+          "orphaned_files",
+          issue_type: "storage_replica_available_for_cleanup",
+          severity: "warning",
+          item: item,
+          profile_key: target_profile_key,
+          profile_label: profile_label_for_key(target_profile_key),
+          profile_display_label: profile_display_label_for_key(target_profile_key),
+          backend: ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(target_profile_key),
+          storage_key: item.public_id.to_s,
+          group_prefix: item.public_id.to_s,
+          object_count: presence[:object_count].to_i,
+          sample_keys: Array(presence[:keys]).first(5),
+          classification: "storage_replica",
+          current_profile_key: profile_key,
+          current_profile_label: profile_label_for_key(profile_key),
+          media_item_exists: true,
+          replica_enabled: false,
+          replica_scope: replica_scope,
+          replica_target_profile_key: target_profile_key,
+          primary_assets_available: primary_available,
+          cleanup_available: primary_available,
+          cleanup_kind: "cleanup_storage_replica",
+          cleanup_label: "Remove secondary replica",
+          cleanup_hint: "Deletes only the replicated managed asset roles from this non-current profile after a fresh complete verification of the active primary assets.",
+          cleanup_risk: "low",
+          label: "Secondary storage replica is no longer configured",
+          detail: storage_replica_cleanup_detail(item, presence, target_profile_key: target_profile_key, replica_scope: replica_scope, primary_available: primary_available),
+          suggestion: primary_available ? "Use Remove secondary replica to reclaim storage. The active primary assets are verified again immediately before deletion." : "Do not remove this replica yet. Restore or verify the active primary assets and rerun reconciliation.",
+          can_ignore: true,
+        )
+      end
     rescue => e
-      Rails.logger.warn("[media_gallery] failed to register expected local HLS mirror public_id=#{item&.public_id} profile=#{profile_key} error=#{e.class}: #{e.message}")
+      Rails.logger.warn("[media_gallery] storage replica reconciliation failed public_id=#{item&.public_id} error=#{e.class}: #{e.message}")
     end
+
+    def storage_replica_candidates(item, current_profile_key:, current_backend:)
+      state = ::MediaGallery::StorageReplica.state_for(item) rescue {}
+      records = ::MediaGallery::StorageReplica.replica_records(state)
+      configured_target = ::MediaGallery::StorageReplica.destination_profile_key.to_s
+      configured_scope = ::MediaGallery::StorageReplica.scope.to_s
+      candidates = []
+
+      if ::MediaGallery::StorageReplica.enabled?
+        # The configured scope is the sole expected shape on its target. When the
+        # scope has just changed, carry the prior target record into this candidate
+        # so old main/thumbnail keys remain accounted for until the refresh job
+        # removes them; do not produce an overlapping destructive cleanup finding.
+        same_target_record = records.find { |row| row["target_profile_key"].to_s == configured_target }
+        configured_state = same_target_record.present? ? same_target_record : {}
+        candidates << { target_profile_key: configured_target, scope: configured_scope, state: configured_state }
+
+        records.each do |record|
+          next if record["target_profile_key"].to_s == configured_target
+          candidates << {
+            target_profile_key: record["target_profile_key"].to_s,
+            scope: record["scope"].to_s,
+            state: record,
+          }
+        end
+      else
+        candidates.concat(
+          records.map do |record|
+            {
+              target_profile_key: record["target_profile_key"].to_s,
+              scope: record["scope"].to_s,
+              state: record,
+            }
+          end,
+        )
+        unless records.any? { |row| row["target_profile_key"].to_s == configured_target }
+          candidates << { target_profile_key: configured_target, scope: configured_scope, state: {} }
+        end
+      end
+
+      # Compatibility discovery for HLS-only local copies created by releases
+      # before the general storage-replica settings existed.
+      if current_backend.to_s == "s3" && current_profile_key.to_s != "local" && candidates.none? { |row| row[:target_profile_key].to_s == "local" }
+        candidates << { target_profile_key: "local", scope: "hls_only", state: {} }
+      end
+
+      candidates
+        .reject { |row| row[:target_profile_key].to_s.blank? || row[:scope].to_s.blank? }
+        .uniq { |row| [row[:target_profile_key].to_s, row[:scope].to_s] }
+    end
+    private_class_method :storage_replica_candidates
+
+    def replica_source_roles_present?(roles, replica_scope:)
+      if replica_scope.to_s == "hls_only"
+        roles["hls"].is_a?(Hash)
+      else
+        roles["main"].is_a?(Hash)
+      end
+    end
+    private_class_method :replica_source_roles_present?
+
+    def replica_objects_match_primary?(item, target_profile_key:, replica_scope:, presence:)
+      return false unless presence[:present]
+      source_profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
+      source_store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(source_profile_key)
+      target_store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(target_profile_key)
+      return false if source_store.blank? || target_store.blank?
+
+      expected = ::MediaGallery::StorageReplica.replica_objects_for(
+        item,
+        source_store: source_store,
+        replica_scope: replica_scope,
+      )
+      return false if expected.blank?
+
+      target_info = presence[:object_info_by_key].is_a?(Hash) ? presence[:object_info_by_key] : {}
+      expected.all? do |row|
+        key = normalize_key(row[:key])
+        next false if key.blank?
+
+        source = source_store.object_info(key).deep_stringify_keys
+        target = target_info[key]
+        target = target_store.object_info(key).deep_stringify_keys if target.blank?
+        next false unless ActiveModel::Type::Boolean.new.cast(source["exists"]) && ActiveModel::Type::Boolean.new.cast(target["exists"])
+
+        source_bytes = source["bytes"].to_i
+        target_bytes = target["bytes"].to_i
+        source_bytes.positive? && source_bytes == target_bytes
+      end
+    rescue
+      false
+    end
+    private_class_method :replica_objects_match_primary?
+
+    def register_replica_layout!(context, profile_key, layout)
+      Array(layout[:single_keys]).each { |key| context[:expected_keys][profile_key] << normalize_key(key) }
+      Array(layout[:prefixes]).each { |prefix| context[:expected_prefixes][profile_key] << normalized_prefix(prefix) }
+    end
+    private_class_method :register_replica_layout!
+
+    def replica_state_current_and_complete?(item, state, target_profile_key:, replica_scope:, presence:)
+      return false unless state.is_a?(Hash)
+      return false unless ::MediaGallery::StorageReplica::COMPLETE_STATUSES.include?(state["status"].to_s)
+      return false unless state["target_profile_key"].to_s == target_profile_key.to_s
+      return false unless state["scope"].to_s == replica_scope.to_s
+      return false unless state["source_generation"].to_s == ::MediaGallery::StorageReplica.source_generation(item).to_s
+      return false unless presence[:present]
+
+      present_keys = Array(presence[:keys]).map { |key| normalize_key(key) }.to_set
+      return false unless Array(state["replicated_single_keys"]).all? { |key| present_keys.include?(normalize_key(key)) }
+      return false unless Array(state["replicated_prefixes"]).all? do |prefix|
+        normalized = normalized_prefix(prefix)
+        present_keys.any? { |key| key.start_with?(normalized) }
+      end
+
+      expected = state["object_count"].to_i
+      expected <= 0 || presence[:object_count].to_i >= expected
+    rescue
+      false
+    end
+    private_class_method :replica_state_current_and_complete?
+
+    def primary_assets_available_for_replica?(item, replica_scope:)
+      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item)
+      store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
+      return false if store.blank?
+
+      ::MediaGallery::StorageReplica.role_names_for_scope(replica_scope).all? do |role_name|
+        role = ::MediaGallery::AssetManifest.role_for(item, role_name)
+        next true if role.blank? && role_name == "thumbnail"
+        next true if role.blank? && role_name == "hls"
+        next false unless role.is_a?(Hash)
+
+        if role_name == "hls"
+          master = role["master_key"].to_s.presence || File.join(item.public_id.to_s, "hls", "master.m3u8")
+          complete = role["complete_key"].to_s.presence
+          store.exists?(master) && (complete.blank? || store.exists?(complete))
+        else
+          key = role["key"].to_s.presence
+          key.present? && store.exists?(key)
+        end
+      end
+    rescue
+      false
+    end
+    private_class_method :primary_assets_available_for_replica?
+
+    def register_storage_replica_stats!(context, profile_key, presence)
+      context[:stats][:storage_replica_objects] += presence[:object_count].to_i
+      label = [profile_key.to_s, presence.dig(:layout, :role_names)&.join("+")].compact.join(": ")
+      append_limited_unique!(context[:stats][:storage_replica_locations], label, limit: 50)
+    end
+    private_class_method :register_storage_replica_stats!
+
+    def storage_replica_incomplete_detail(item, state, presence, target_profile_key:, replica_scope:)
+      target = profile_display_label_for_key(target_profile_key).presence || profile_label_for_key(target_profile_key)
+      status = state["status"].to_s.presence || "not yet copied"
+      "The configured #{replica_scope == 'all_managed_assets' ? 'all-assets' : 'HLS-only'} replica for #{item.public_id} on #{target} is not current and complete. Job status: #{status}. Objects currently detected: #{presence[:object_count].to_i}."
+    end
+    private_class_method :storage_replica_incomplete_detail
+
+    def storage_replica_cleanup_detail(item, presence, target_profile_key:, replica_scope:, primary_available:)
+      target = profile_display_label_for_key(target_profile_key).presence || profile_label_for_key(target_profile_key)
+      source = profile_label_for_key(::MediaGallery::StorageSettingsResolver.profile_key_for_item(item))
+      verification = primary_available ? "The active primary assets passed the preliminary availability check." : "The active primary assets did not pass the preliminary availability check, so cleanup is blocked."
+      "#{presence[:object_count].to_i} replicated object(s) for #{item.public_id} remain on #{target}, but that destination and scope are no longer configured for this item. The canonical profile is #{source}. Scope: #{replica_scope == 'all_managed_assets' ? 'all managed assets' : 'HLS only'}. #{verification}"
+    end
+    private_class_method :storage_replica_cleanup_detail
 
     def check_invalid_roles!(context, item, roles, profile_key:, backend:)
       roles.each do |role_name, role|
@@ -555,7 +834,7 @@ module ::MediaGallery
 
       attach_media_context_to_orphan_groups!(context, groups.values, profile_key: profile_key)
       groups.values
-        .reject { |group| %w[unsampled_media_prefix local_hls_mirror_expected].include?(group[:classification].to_s) }
+        .reject { |group| %w[unsampled_media_prefix].include?(group[:classification].to_s) }
         .sort_by { |group| [-group[:object_count].to_i, group[:group_prefix].to_s] }
     end
 
@@ -644,21 +923,7 @@ module ::MediaGallery
         cleanup_status = cleanup_state["status"].to_s.presence || switch_state["cleanup_status"].to_s.presence
         cleanup_mode = cleanup_state["cleanup_mode"].to_s.presence || switch_state["cleanup_mode"].to_s.presence
 
-        if local_hls_mirror_group?(group, item: item, found_profile_key: profile_key, current_profile_key: current_profile_key)
-          group[:local_mirror_enabled] = ::MediaGallery::Hls.local_mirror_enabled?
-          group[:active_hls_available] = active_hls_available_for_item?(item)
-          register_local_hls_mirror_storage!(context, profile_key, group)
-
-          if group[:local_mirror_enabled]
-            group[:classification] = "local_hls_mirror_expected"
-            group[:issue_type] = "configured_local_hls_mirror"
-            group[:label] = "Configured local HLS mirror"
-          else
-            group[:classification] = "local_hls_mirror"
-            group[:issue_type] = "local_hls_mirror_available_for_cleanup"
-            group[:label] = "Local HLS mirror remains while mirroring is disabled"
-          end
-        elsif current_profile_key.present? && current_profile_key != profile_key.to_s
+        if current_profile_key.present? && current_profile_key != profile_key.to_s
           group[:classification] = "migration_source_leftovers"
           group[:issue_type] = "migration_source_storage_leftovers"
           group[:label] = "Possible migration/source storage leftovers"
@@ -672,30 +937,6 @@ module ::MediaGallery
       end
     rescue => e
       Rails.logger.warn("[media_gallery] storage reconciliation media context lookup failed: #{e.class}: #{e.message}")
-    end
-
-    def local_hls_mirror_group?(group, item:, found_profile_key:, current_profile_key:)
-      return false unless group[:classification].to_s == "hls_media_prefix"
-      return false unless found_profile_key.to_s == "local"
-      return false unless item.media_type.to_s == "video"
-      return false unless ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(current_profile_key).to_s == "s3"
-
-      role = ::MediaGallery::AssetManifest.role_for(item, "hls")
-      return false unless role.is_a?(Hash) && role["backend"].to_s == "s3"
-
-      expected_prefix = normalize_key(File.join(item.public_id.to_s, "hls"))
-      normalize_key(group[:group_prefix]) == expected_prefix
-    rescue
-      false
-    end
-
-    def active_hls_available_for_item?(item)
-      role = ::MediaGallery::AssetManifest.role_for(item, "hls")
-      return false unless role.is_a?(Hash) && role["backend"].to_s == "s3"
-
-      role_available?(item, role, "hls")
-    rescue
-      false
     end
 
     def storage_scan_scope_for(store)
@@ -787,14 +1028,6 @@ module ::MediaGallery
           hint: "Deletes this media prefix only from the non-current source profile after the active target assets are verified.",
           risk: "medium"
         }
-      when "local_hls_mirror"
-        {
-          available: group[:active_hls_available] == true && group[:local_mirror_enabled] != true,
-          kind: "delete_prefix",
-          label: "Remove local HLS mirror",
-          hint: "Deletes only this item's local HLS mirror after a fresh complete verification of the current S3 package, including every playlist-referenced object, fingerprint metadata and AES key state. Local-primary items are never eligible.",
-          risk: "low"
-        }
       when "hls_media_prefix"
         {
           available: group[:status].to_s.blank?,
@@ -829,14 +1062,6 @@ module ::MediaGallery
         cleanup_status = group[:migration_cleanup_status].to_s.presence
         cleanup_text = cleanup_status.present? ? " Current cleanup status: #{cleanup_status}." : ""
         "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} were found on #{found}. The active playback profile for this media item is #{current}. This commonly means migration source cleanup is pending or incomplete.#{cleanup_text}#{sample_text}"
-      when "local_hls_mirror"
-        current = group[:current_profile_label].presence || group[:current_profile_key].presence || "an S3-compatible profile"
-        verification = if group[:active_hls_available] == true
-          "The active remote HLS package passed the preliminary availability check. A complete object-by-object verification will run again before cleanup."
-        else
-          "The active remote HLS package did not pass the preliminary availability check, so cleanup is blocked."
-        end
-        "#{object_count} local HLS object#{'s' if object_count != 1} under #{prefix} belong to an item whose active playback profile is #{current}. Local HLS mirroring is currently disabled. #{verification}#{sample_text}"
       when "hls_media_prefix"
         "#{object_count} HLS storage object#{'s' if object_count != 1} under #{prefix} are not referenced by any sampled media item or manifest. This often comes from deleted media or an incomplete cleanup path.#{sample_text}"
       when "untracked_media_prefix"
@@ -855,12 +1080,6 @@ module ::MediaGallery
       case group[:classification].to_s
       when "migration_source_leftovers"
         "Open the item in Migration manager and verify whether source cleanup is pending, failed, or intentionally deferred. Do not delete until the active target profile and playback are verified."
-      when "local_hls_mirror"
-        if group[:active_hls_available] == true
-          "Use Remove local HLS mirror to reclaim local disk space. Immediately before deletion, cleanup verifies the current per-item S3 profile and every object referenced by its HLS playlists, plus required fingerprint metadata and AES key state."
-        else
-          "Do not remove this local copy yet. Verify or restore the active remote HLS package, rerun reconciliation, and clean only after the preliminary check succeeds."
-        end
       when "hls_media_prefix"
         "Check whether this public_id still exists in Media management or was deleted through frontend, Reports, or Management. Use a scoped cleanup only after confirming it is not the active package."
       when "untracked_media_prefix"
@@ -891,11 +1110,65 @@ module ::MediaGallery
       append_limited_unique!(context[:stats][:unsampled_media_prefixes], prefix, limit: 50)
     end
 
-    def register_local_hls_mirror_storage!(context, profile_key, group)
+    def grouped_orphan_detail(group)
       object_count = group[:object_count].to_i
-      context[:stats][:local_hls_mirror_objects] += object_count
+      prefix = group[:group_prefix].to_s
+      sample_keys = Array(group[:sample_keys]).map(&:to_s).reject(&:blank?)
+      sample_text = sample_keys.present? ? " Sample keys: #{sample_keys.join(', ')}." : ""
+
+      case group[:classification].to_s
+      when "migration_source_leftovers"
+        found = group[:profile_display_label].presence || group[:profile_label].presence || group[:profile_key].presence || "this storage profile"
+        current = group[:current_profile_label].presence || group[:current_profile_key].presence || "another profile"
+        cleanup_status = group[:migration_cleanup_status].to_s.presence
+        cleanup_text = cleanup_status.present? ? " Current cleanup status: #{cleanup_status}." : ""
+        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} were found on #{found}. The active playback profile for this media item is #{current}. This commonly means migration source cleanup is pending or incomplete.#{cleanup_text}#{sample_text}"
+      when "hls_media_prefix"
+        "#{object_count} HLS storage object#{'s' if object_count != 1} under #{prefix} are not referenced by any sampled media item or manifest. This often comes from deleted media or an incomplete cleanup path.#{sample_text}"
+      when "untracked_media_prefix"
+        found = group[:profile_display_label].presence || group[:profile_label].presence || group[:profile_key].presence || "this storage profile"
+        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} were found on #{found}, but no active Media Gallery item exists for this public_id. This is usually a deleted-media or old test/import leftover.#{sample_text}"
+      when "hls_temporary_prefix"
+        "#{object_count} HLS temporary storage object#{'s' if object_count != 1} under #{prefix} look like leftover packaging workspace files.#{sample_text}"
+      when "hls_old_package_prefix"
+        "#{object_count} old HLS package object#{'s' if object_count != 1} under #{prefix} look like leftover swap/rollback artifacts.#{sample_text}"
+      else
+        "#{object_count} storage object#{'s' if object_count != 1} under #{prefix} are not referenced by sampled media items or manifests.#{sample_text}"
+      end
+    end
+
+    def grouped_orphan_suggestion(group)
+      case group[:classification].to_s
+      when "migration_source_leftovers"
+        "Open the item in Migration manager and verify whether source cleanup is pending, failed, or intentionally deferred. Do not delete until the active target profile and playback are verified."
+      when "hls_media_prefix"
+        "Check whether this public_id still exists in Media management or was deleted through frontend, Reports, or Management. Use a scoped cleanup only after confirming it is not the active package."
+      when "untracked_media_prefix"
+        "No active media item was found for this UUID-scoped storage prefix. If this came from a deleted test/upload item, use the scoped cleanup button; otherwise verify the prefix manually before deleting."
+      when "hls_temporary_prefix", "hls_old_package_prefix"
+        "Review age and recent HLS jobs. These should normally be cleared by HLS artifact cleanup after the safe retention window."
+      else
+        "Review this prefix before cleanup. It may be a legacy file, a deleted media leftover, or a file outside the Media Gallery manifest model."
+      end
+    end
+
+    def known_plugin_storage_key?(key)
+      KNOWN_PLUGIN_STORAGE_PREFIXES.key?(normalize_key(key).split("/").first.to_s)
+    end
+
+    def register_known_plugin_storage!(context, profile_key, key)
+      top = normalize_key(key).split("/").first.to_s
+      label = KNOWN_PLUGIN_STORAGE_PREFIXES[top] || top
+      context[:stats][:known_plugin_objects] += 1
+      entry = [profile_key.to_s, label].reject(&:blank?).join(": ")
+      append_limited_unique!(context[:stats][:known_plugin_prefixes], entry, limit: 50)
+    end
+
+    def register_unsampled_media_storage!(context, profile_key, group)
+      object_count = group[:object_count].to_i
+      context[:stats][:unsampled_media_objects] += object_count
       prefix = [profile_key.to_s, group[:group_prefix].to_s].reject(&:blank?).join(": ")
-      append_limited_unique!(context[:stats][:local_hls_mirror_prefixes], prefix, limit: 50)
+      append_limited_unique!(context[:stats][:unsampled_media_prefixes], prefix, limit: 50)
     end
 
     def append_limited_unique!(array, value, limit:)
@@ -917,8 +1190,8 @@ module ::MediaGallery
         known_plugin_prefixes: Array(stats[:known_plugin_prefixes]).first(20),
         unsampled_media_objects: stats[:unsampled_media_objects].to_i,
         unsampled_media_prefixes: Array(stats[:unsampled_media_prefixes]).first(20),
-        local_hls_mirror_objects: stats[:local_hls_mirror_objects].to_i,
-        local_hls_mirror_prefixes: Array(stats[:local_hls_mirror_prefixes]).first(20),
+        storage_replica_objects: stats[:storage_replica_objects].to_i,
+        storage_replica_locations: Array(stats[:storage_replica_locations]).first(20),
       }
     end
 
@@ -991,7 +1264,9 @@ module ::MediaGallery
 
     def asset_deleted?(item)
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}
-      meta["reported_asset_deletion"].is_a?(Hash) || meta["asset_deleted_after_report"].present?
+      meta["reported_asset_deletion"].is_a?(Hash) ||
+        meta["asset_deleted_after_report"].present? ||
+        item.status.to_s == "asset_deleted"
     end
 
     def add_finding(context, category, **attrs)
@@ -1039,7 +1314,7 @@ module ::MediaGallery
       label
     end
 
-    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, media_item_exists: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, local_mirror_enabled: nil, active_hls_available: nil, cleanup_available: nil, cleanup_kind: nil, cleanup_label: nil, cleanup_hint: nil, cleanup_risk: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
+    def finding_payload(category:, issue_type:, severity:, label:, item: nil, public_id: nil, title: nil, status: nil, profile_key: nil, profile_label: nil, profile_display_label: nil, backend: nil, role: nil, storage_key: nil, group_prefix: nil, object_count: nil, sample_keys: nil, classification: nil, current_profile_key: nil, current_profile_label: nil, media_item_exists: nil, migration_cleanup_status: nil, migration_cleanup_mode: nil, migration_cleanup_pending: nil, local_mirror_enabled: nil, active_hls_available: nil, replica_enabled: nil, replica_scope: nil, replica_target_profile_key: nil, primary_assets_available: nil, cleanup_available: nil, cleanup_kind: nil, cleanup_label: nil, cleanup_hint: nil, cleanup_risk: nil, missing: nil, detail: nil, suggestion: nil, can_ignore: true)
       public_id ||= item&.public_id
       title ||= item&.title.to_s.presence || (public_id.present? ? "Untitled media" : label)
       status ||= item&.status
@@ -1082,6 +1357,10 @@ module ::MediaGallery
         migration_cleanup_pending: migration_cleanup_pending,
         local_mirror_enabled: local_mirror_enabled,
         active_hls_available: active_hls_available,
+        replica_enabled: replica_enabled,
+        replica_scope: replica_scope,
+        replica_target_profile_key: replica_target_profile_key,
+        primary_assets_available: primary_assets_available,
         cleanup_available: cleanup_available,
         cleanup_kind: cleanup_kind,
         cleanup_label: cleanup_label,

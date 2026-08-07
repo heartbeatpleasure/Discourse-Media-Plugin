@@ -19,6 +19,7 @@ module ::MediaGallery
       finalize_state = ::MediaGallery::MigrationFinalize.finalize_state_for(item)
       raise "cleanup_already_finalized" if finalize_state["status"].to_s == "finalized" && !force
       context = cleanup_context_for(item, switch_state)
+      ensure_inactive_profile_not_replica_target!(item, context)
 
       state = cleanup_state_for(item)
       cleanup_matches_current_switch = cleanup_state_matches_current_context?(state, context)
@@ -56,6 +57,7 @@ module ::MediaGallery
       finalize_state = ::MediaGallery::MigrationFinalize.finalize_state_for(item)
       raise "cleanup_already_finalized" if finalize_state["status"].to_s == "finalized" && !force
       context = cleanup_context_for(item, switch_state)
+      ensure_inactive_profile_not_replica_target!(item, context)
 
       current_state = cleanup_state_for(item)
       cleanup_matches_current_switch = cleanup_state_matches_current_context?(current_state, context)
@@ -172,6 +174,20 @@ module ::MediaGallery
       ::MediaGallery::OperationLogger.error("migration_cleanup_failed", item: item, operation: "cleanup", data: { error: state["last_error"], error_code: state["last_error_code"], cleanup_mode: state["cleanup_mode"], source_profile_key: state["source_profile_key"], target_profile_key: state["target_profile_key"] })
       raise e
     end
+
+    def ensure_inactive_profile_not_replica_target!(item, context)
+      return true unless defined?(::MediaGallery::StorageReplica)
+
+      profile_key = context[:inactive_profile_key].to_s
+      return true if profile_key.blank?
+      return true unless ::MediaGallery::StorageReplica.current_replica_target_expected_for?(
+        item,
+        target_profile_key: profile_key,
+      )
+
+      raise "cleanup_source_is_storage_replica_target"
+    end
+    private_class_method :ensure_inactive_profile_not_replica_target!
 
     def cleanup_state_for(item)
       meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata : {}

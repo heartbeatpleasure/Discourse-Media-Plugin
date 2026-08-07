@@ -17,18 +17,20 @@ module Jobs
       return if item.blank?
 
       with_processing_mutex do
-        item.reload
-        return if item.blank? || item.ready?
-        return unless processable_now?(item, args)
+        with_storage_replica_mutex(item) do
+          item.reload
+          return if item.blank? || item.ready?
+          return unless processable_now?(item, args)
 
-        stale_recovery = item.status == "processing" && processing_stale?(item)
-        mark_processing_started!(
-          item,
-          force_run: ActiveModel::Type::Boolean.new.cast(args[:force_run]),
-          run_token: @current_run_token,
-          recovered_stale_processing: stale_recovery
-        )
-        process_item!(item)
+          stale_recovery = item.status == "processing" && processing_stale?(item)
+          mark_processing_started!(
+            item,
+            force_run: ActiveModel::Type::Boolean.new.cast(args[:force_run]),
+            run_token: @current_run_token,
+            recovered_stale_processing: stale_recovery
+          )
+          process_item!(item)
+        end
       end
     rescue => e
       handle_processing_failure!(item, e)
@@ -40,6 +42,14 @@ module Jobs
       # Avoid multiple ffmpeg jobs saturating CPU on small servers.
       if defined?(::DistributedMutex)
         ::DistributedMutex.synchronize("media_gallery_process_mutex", validity: 2.hours, &blk)
+      else
+        yield
+      end
+    end
+
+    def with_storage_replica_mutex(item, &block)
+      if defined?(::MediaGallery::StorageReplica)
+        ::MediaGallery::StorageReplica.synchronize_item(item, &block)
       else
         yield
       end
@@ -379,7 +389,20 @@ module Jobs
         end
 
         mark_processing_succeeded!(item)
+        enqueue_storage_replica!(item, reason: "processing_completed")
       end
+    end
+
+    def enqueue_storage_replica!(item, reason:)
+      return false unless defined?(::MediaGallery::StorageReplica)
+
+      ::MediaGallery::StorageReplica.enqueue_after_primary_change!(item, reason: reason)
+    rescue => e
+      Rails.logger.warn(
+        "[media_gallery] storage replica enqueue hook failed item_id=#{item&.id} " \
+        "public_id=#{item&.public_id} reason=#{reason} error=#{e.class}: #{e.message}"
+      )
+      false
     end
 
     def maybe_export_original!(item, upload, input_path)

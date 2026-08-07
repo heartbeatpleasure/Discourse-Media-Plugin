@@ -24,9 +24,10 @@ module ::MediaGallery
       end
 
       raise "finalize_not_available" unless switch_state["status"].to_s == "switched"
-      raise "cleanup_failed_finalize_blocked" if cleanup_state["status"].to_s == "failed" && !force
+      source_retained = source_retained_as_storage_replica?(item, switch_state)
+      raise "cleanup_failed_finalize_blocked" if cleanup_state["status"].to_s == "failed" && !force && !source_retained
 
-      if cleanup_state["status"].to_s != "cleaned"
+      if cleanup_state["status"].to_s != "cleaned" && !source_retained
         cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: requested_by, force: force)
         state = {
           "status" => "pending_cleanup",
@@ -41,12 +42,14 @@ module ::MediaGallery
 
       state = {
         "status" => "finalized",
-        "finalize_mode" => "switched",
+        "finalize_mode" => source_retained ? "switched_with_storage_replica" : "switched",
         "requested_by" => requested_by.to_s.presence,
         "finalized_at" => Time.now.utc.iso8601,
         "cleaned_at" => cleanup_state["cleaned_at"],
-        "source_profile_key" => cleanup_state["source_profile_key"],
-        "target_profile_key" => cleanup_state["target_profile_key"],
+        "cleanup_status" => source_retained ? "retained_as_storage_replica" : cleanup_state["status"],
+        "source_retained_as_storage_replica" => source_retained,
+        "source_profile_key" => cleanup_state["source_profile_key"].presence || switch_state["source_profile_key"],
+        "target_profile_key" => cleanup_state["target_profile_key"].presence || switch_state["target_profile_key"],
         "last_error" => nil,
       }
 
@@ -63,6 +66,21 @@ module ::MediaGallery
       ::MediaGallery::OperationLogger.error("migration_finalize_failed", item: item, operation: "finalize", data: { error: state["last_error"], error_code: state["last_error_code"], requested_by: requested_by, force: !!force })
       raise e
     end
+
+    def source_retained_as_storage_replica?(item, switch_state)
+      return false unless defined?(::MediaGallery::StorageReplica)
+
+      source_profile_key = switch_state["source_profile_key"].to_s
+      return false if source_profile_key.blank?
+
+      ::MediaGallery::StorageReplica.current_replica_target_expected_for?(
+        item,
+        target_profile_key: source_profile_key,
+      )
+    rescue
+      false
+    end
+    private_class_method :source_retained_as_storage_replica?
 
     def finalize_after_rollback!(item, cleanup_state:, rollback_state:, requested_by:, force: false)
       cleanup_status = cleanup_state["status"].to_s

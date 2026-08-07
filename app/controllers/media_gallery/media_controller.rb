@@ -403,24 +403,26 @@ module ::MediaGallery
 
       delete_summary = nil
 
-      item.with_lock do
-        delete_summary = ::MediaGallery::MediaAssetCleanup.cleanup_item!(
-          item,
-          mode: "user_hard_delete",
-          actor: current_user,
-          request: request,
-          trigger_event_type: "user_media_item_deleted"
-        )
+      ::MediaGallery::StorageReplica.synchronize_item(item) do
+        item.with_lock do
+          delete_summary = ::MediaGallery::MediaAssetCleanup.cleanup_item!(
+            item,
+            mode: "user_hard_delete",
+            actor: current_user,
+            request: request,
+            trigger_event_type: "user_media_item_deleted"
+          )
 
-        audit_user_delete!(item, delete_summary: delete_summary)
+          audit_user_delete!(item, delete_summary: delete_summary)
 
-        # Finally delete DB record (also deletes media likes/comments via dependent: :delete_all).
-        # Comment likes are removed explicitly so the media-item index does not need a
-        # direct has_many association to the comment-like model. This keeps normal
-        # gallery loading independent from the comment-like table/reflection.
-        delete_comment_likes_for_item!(item)
-        delete_comment_reports_for_item!(item)
-        item.destroy!
+          # Finally delete DB record (also deletes media likes/comments via dependent: :delete_all).
+          # Comment likes are removed explicitly so the media-item index does not need a
+          # direct has_many association to the comment-like model. This keeps normal
+          # gallery loading independent from the comment-like table/reflection.
+          delete_comment_likes_for_item!(item)
+          delete_comment_reports_for_item!(item)
+          item.destroy!
+        end
       end
 
       partial = Array(delete_summary&.dig("warnings")).present?

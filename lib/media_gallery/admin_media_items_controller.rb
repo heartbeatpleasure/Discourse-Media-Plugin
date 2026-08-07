@@ -143,13 +143,15 @@ module ::MediaGallery
       item = load_item!
       target_profile = params[:target_profile].to_s.presence || "target"
       auto_cleanup = ActiveModel::Type::Boolean.new.cast(params[:auto_cleanup])
-      state = ::MediaGallery::MigrationSwitch.switch!(
-        item,
-        target_profile: target_profile,
-        requested_by: current_user.username,
-        mode: "manual",
-        auto_cleanup: auto_cleanup
-      )
+      state = ::MediaGallery::StorageReplica.synchronize_item(item) do
+        ::MediaGallery::MigrationSwitch.switch!(
+          item,
+          target_profile: target_profile,
+          requested_by: current_user.username,
+          mode: "manual",
+          auto_cleanup: auto_cleanup
+        )
+      end
 
       render_json_dump(ok: true, public_id: item.public_id, migration_switch: state)
     rescue => e

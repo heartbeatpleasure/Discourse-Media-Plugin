@@ -34,6 +34,8 @@ module ::MediaGallery
         cleanup_storage_prefix!(finding)
       when "cleanup_deleted_media_item"
         cleanup_deleted_media_item!(finding, actor: actor, request: request)
+      when "cleanup_storage_replica"
+        cleanup_storage_replica!(finding)
       else
         raise UnsafeCleanup, "Unsupported reconciliation cleanup action."
       end
@@ -210,6 +212,350 @@ module ::MediaGallery
       false
     end
 
+    def cleanup_storage_replica!(finding)
+      public_id = finding["public_id"].to_s
+      raise UnsafeCleanup, "Replica cleanup finding has no media public_id." if public_id.blank?
+
+      item = ::MediaGallery::MediaItem.find_by(public_id: public_id)
+      raise UnsafeCleanup, "Secondary replica cleanup requires the media item to still exist." if item.blank?
+
+      ::MediaGallery::StorageReplica.synchronize_item(item) do
+        item.reload
+        cleanup_storage_replica_locked!(finding, item)
+      end
+    rescue UnsafeCleanup
+      raise
+    rescue => e
+      raise UnsafeCleanup, "Secondary replica cleanup failed: #{e.class}: #{e.message}"
+    end
+
+    def cleanup_storage_replica_locked!(finding, item)
+      public_id = item.public_id.to_s
+      target_profile_key = finding["profile_key"].to_s
+      replica_scope = finding["replica_scope"].to_s.presence || "hls_only"
+      raise UnsafeCleanup, "Replica cleanup finding has no destination profile." if target_profile_key.blank?
+      raise UnsafeCleanup, "Replica scope is invalid." unless ::MediaGallery::StorageReplica::SCOPES.include?(replica_scope)
+
+      validate_replica_cleanup_context!(item, target_profile_key: target_profile_key)
+      verification = verify_active_replica_source(item, replica_scope: replica_scope)
+      unless verification["ok"] == true
+        Rails.logger.warn(
+          "[media_gallery] storage replica cleanup blocked public_id=#{public_id} " \
+          "source=#{verification['profile_key']} target=#{target_profile_key} errors=#{Array(verification['errors']).join(',')}"
+        )
+        raise UnsafeCleanup, "The active primary assets did not pass complete verification; replica cleanup is unsafe."
+      end
+
+      # Settings and item profile can change while source verification performs
+      # remote listing/read operations. Re-evaluate all destructive guards
+      # immediately before opening and deleting from the replica destination.
+      item.reload
+      validate_replica_cleanup_context!(item, target_profile_key: target_profile_key)
+
+      state_for_target = ::MediaGallery::StorageReplica.state_for_target_scope(
+        item,
+        target_profile_key: target_profile_key,
+        replica_scope: replica_scope,
+      )
+      layout = ::MediaGallery::StorageReplica.replica_layout_for(
+        item,
+        replica_scope: replica_scope,
+        state: state_for_target,
+      )
+      validate_replica_layout!(item, layout, replica_scope: replica_scope)
+
+      store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(target_profile_key)
+      raise UnsafeCleanup, "Replica destination profile is unavailable." if store.blank?
+      store.ensure_available!
+
+      deleted_keys = []
+      deleted_prefixes = []
+      warnings = []
+      key_results = []
+      prefix_results = []
+
+      Array(layout[:single_keys]).each do |key|
+        result = purge_replica_key(store, key)
+        ok = truthy?(result["ok"])
+        warnings << "replica_key_delete_failed:#{key}" unless ok
+        deleted_keys << key if ok
+        key_results << result.merge("key" => key, "deleted" => ok).except("ok")
+      end
+
+      Array(layout[:prefixes]).each do |prefix|
+        result = purge_replica_prefix(store, prefix)
+        remaining = Array(result["remaining_sample_keys"]).map(&:to_s)
+        local_cleanup = prune_empty_local_prefix_directory(store, prefix, public_id: public_id, remaining: remaining)
+        ok = truthy?(result["ok"]) && remaining.blank? && !truthy?(local_cleanup["remaining"])
+        warnings << "replica_prefix_delete_failed:#{prefix}" unless ok
+        deleted_prefixes << prefix if ok
+        prefix_results << result.merge(
+          "prefix" => prefix,
+          "deleted" => ok,
+          "local_directory_cleanup" => local_cleanup,
+        ).except("ok")
+      end
+
+      local_item_directory_cleanup = prune_empty_replica_item_directory(
+        store,
+        public_id,
+        object_cleanup_succeeded: warnings.blank?,
+      )
+      if truthy?(local_item_directory_cleanup["remaining"]) && truthy?(local_item_directory_cleanup["empty"])
+        warnings << "empty_local_replica_item_directory_remains"
+      end
+
+      complete = warnings.blank?
+      ::MediaGallery::StorageReplica.mark_cleaned!(
+        item,
+        target_profile_key: target_profile_key,
+        replica_scope: replica_scope,
+        deleted_keys: deleted_keys,
+        deleted_prefixes: deleted_prefixes,
+      ) if complete
+
+      {
+        "schema_version" => 2,
+        "mode" => "reconciliation_storage_replica_cleanup",
+        "status" => complete ? "complete" : "partial",
+        "classification" => "storage_replica",
+        "public_id" => public_id,
+        "profile_key" => target_profile_key,
+        "profile_label" => profile_label(target_profile_key),
+        "backend" => ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(target_profile_key),
+        "group_prefix" => public_id,
+        "replica_scope" => replica_scope,
+        "deleted" => complete,
+        "remaining" => !complete,
+        "key_results" => key_results,
+        "prefix_results" => prefix_results,
+        "local_item_directory_cleanup" => local_item_directory_cleanup,
+        "pre_cleanup_verification" => verification,
+        "warnings" => warnings,
+        "finished_at" => Time.now.utc.iso8601,
+      }
+    end
+
+    # Replica cleanup must reclaim the complete destination copy. On versioned
+    # S3-compatible stores that includes historical object versions and delete
+    # markers, not only the currently visible object. Stores without purge
+    # support retain the previous current-object deletion behavior.
+    def purge_replica_key(store, key)
+      existed = safe_store_exists(store, key)
+
+      if store.respond_to?(:purge_key!)
+        begin
+          raw = stringify_cleanup_hash(store.purge_key!(key))
+          remaining = safe_store_exists(store, key)
+          current_cleared = remaining == false ||
+            (remaining.nil? && raw["remaining_current_count"].to_i.zero?)
+          versions_cleared = raw["remaining_version_entries"].nil? ||
+            raw["remaining_version_entries"].to_i.zero?
+          ok = truthy?(raw["ok"]) && current_cleared && versions_cleared
+
+          return {
+            "ok" => ok,
+            "method" => "purge_key",
+            "existed" => existed,
+            "remaining" => remaining,
+            "purge_result" => raw,
+          }.compact
+        rescue NotImplementedError
+          # Compatibility with custom stores that inherit the abstract method.
+        rescue => e
+          return {
+            "ok" => false,
+            "method" => "purge_key",
+            "existed" => existed,
+            "remaining" => safe_store_exists(store, key),
+            "error" => "#{e.class}: #{e.message}",
+          }.compact
+        end
+      end
+
+      deleted = existed ? !!store.delete(key) : true
+      remaining = safe_store_exists(store, key)
+      ok = remaining == false || (remaining.nil? && deleted)
+      {
+        "ok" => ok,
+        "method" => "delete",
+        "existed" => existed,
+        "remaining" => remaining,
+      }.compact
+    end
+
+    def purge_replica_prefix(store, prefix)
+      sample_before = Array(store.list_prefix(prefix, limit: 10)).map(&:to_s)
+
+      if store.respond_to?(:purge_prefix!)
+        begin
+          raw = stringify_cleanup_hash(store.purge_prefix!(prefix))
+          remaining = Array(store.list_prefix(prefix, limit: 10)).map(&:to_s)
+          current_cleared = remaining.blank? && raw["remaining_current_count"].to_i.zero?
+          versions_cleared = raw["remaining_version_entries"].nil? ||
+            raw["remaining_version_entries"].to_i.zero?
+          ok = truthy?(raw["ok"]) && current_cleared && versions_cleared
+
+          return {
+            "ok" => ok,
+            "method" => "purge_prefix",
+            "existed" => sample_before.present? || truthy?(raw["existed"]),
+            "remaining_sample_keys" => remaining.first(10),
+            "purge_result" => raw,
+          }.compact
+        rescue NotImplementedError
+          # Compatibility with custom stores that inherit the abstract method.
+        rescue => e
+          return {
+            "ok" => false,
+            "method" => "purge_prefix",
+            "existed" => sample_before.present?,
+            "remaining_sample_keys" => Array(store.list_prefix(prefix, limit: 10)).map(&:to_s),
+            "error" => "#{e.class}: #{e.message}",
+          }.compact
+        end
+      end
+
+      result = delete_prefix_until_clear(store, prefix)
+      remaining = Array(result[:remaining]).map(&:to_s)
+      {
+        "ok" => truthy?(result[:ok]),
+        "method" => "delete_prefix",
+        "existed" => sample_before.present?,
+        "remaining_sample_keys" => remaining.first(10),
+        "delete_attempts" => result[:attempts],
+      }.compact
+    end
+
+    def stringify_cleanup_hash(value)
+      return {} unless value.is_a?(Hash)
+
+      value.each_with_object({}) { |(key, entry), result| result[key.to_s] = entry }
+    end
+
+    def validate_replica_cleanup_context!(item, target_profile_key:)
+      if ::MediaGallery::StorageReplica.current_replica_target_expected_for?(
+        item,
+        target_profile_key: target_profile_key,
+      )
+        raise UnsafeCleanup, "This destination is currently enabled as the secondary replica. Disable it or choose another destination before cleanup."
+      end
+
+      source_profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
+      if source_profile_key.blank? || source_profile_key == target_profile_key.to_s
+        raise UnsafeCleanup, "The replica destination is now the item's active profile."
+      end
+
+      source_location = ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(source_profile_key).to_s.presence
+      target_location = ::MediaGallery::StorageSettingsResolver.profile_location_fingerprint_key(target_profile_key).to_s.presence
+      if source_location.present? && target_location.present? && source_location == target_location
+        raise UnsafeCleanup, "The active profile and replica destination point to the same storage location."
+      end
+
+      true
+    end
+
+    def prune_empty_replica_item_directory(store, public_id, object_cleanup_succeeded:)
+      return { "applicable" => false } unless store.respond_to?(:backend) && store.backend.to_s == "local"
+      return { "applicable" => true, "attempted" => false, "reason" => "object_cleanup_incomplete" } unless object_cleanup_succeeded
+      return { "applicable" => true, "attempted" => false, "reason" => "store_method_unavailable" } unless store.respond_to?(:prune_empty_prefix_directory)
+
+      existed = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(public_id)
+      empty_before = existed && store.respond_to?(:prefix_directory_empty?) && store.prefix_directory_empty?(public_id)
+      removed = empty_before ? store.prune_empty_prefix_directory(public_id, boundary_prefix: public_id) : false
+      remains = store.respond_to?(:prefix_directory_exists?) && store.prefix_directory_exists?(public_id)
+      empty_after = remains && store.respond_to?(:prefix_directory_empty?) && store.prefix_directory_empty?(public_id)
+      {
+        "applicable" => true,
+        "attempted" => !!empty_before,
+        "removed" => !!removed,
+        "remaining" => !!remains,
+        "empty" => !!empty_after,
+      }
+    rescue => e
+      { "applicable" => true, "attempted" => true, "removed" => false, "remaining" => true, "error" => "#{e.class}: #{e.message}" }
+    end
+
+    def verify_active_replica_source(item, replica_scope:)
+      errors = []
+      checked = []
+      profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
+      store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
+      errors << "active_profile_store_unavailable" if store.blank?
+      return { "ok" => false, "profile_key" => profile_key, "errors" => errors } if errors.present?
+
+      store.ensure_available!
+      roles = ::MediaGallery::StorageReplica.role_names_for_scope(replica_scope)
+      roles.each do |role_name|
+        role = ::MediaGallery::AssetManifest.role_for(item, role_name)
+        next if role.blank? && %w[thumbnail hls].include?(role_name)
+        if role.blank?
+          errors << "#{role_name}_role_missing"
+          next
+        end
+
+        if role_name == "hls"
+          hls_result = verify_active_remote_hls_package(item, role: role)
+          errors.concat(Array(hls_result["errors"])) unless hls_result["ok"] == true
+          checked.concat(Array(hls_result["checked_keys"]))
+        else
+          key = normalize_key(role["key"])
+          expected_key = if role_name == "main"
+            normalize_key(::MediaGallery::PrivateStorage.processed_rel_path(item))
+          else
+            normalize_key(::MediaGallery::PrivateStorage.thumbnail_rel_path(item))
+          end
+          profile_backend = ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(profile_key).to_s
+          errors << "#{role_name}_role_backend_mismatch" unless role["backend"].to_s == profile_backend
+          errors << "#{role_name}_key_mismatch" unless key == expected_key
+          if key.blank?
+            errors << "#{role_name}_key_missing"
+            next
+          end
+          info = store.object_info(key).deep_stringify_keys
+          errors << "#{role_name}_object_missing" unless truthy?(info["exists"])
+          errors << "#{role_name}_object_empty" if truthy?(info["exists"]) && info["bytes"].to_i <= 0
+          checked << key if truthy?(info["exists"])
+        end
+      end
+
+      {
+        "ok" => errors.blank?,
+        "profile_key" => profile_key,
+        "scope" => replica_scope,
+        "checked_objects" => checked.uniq.length,
+        "checked_keys" => checked.uniq.first(100),
+        "errors" => errors.uniq.first(100),
+      }
+    rescue => e
+      { "ok" => false, "profile_key" => (profile_key rescue nil), "scope" => replica_scope, "errors" => ["replica_source_verification_exception_#{safe_error_token(e.class.name)}"] }
+    end
+
+    def validate_replica_layout!(item, layout, replica_scope:)
+      public_id = item.public_id.to_s
+      allowed_single = [
+        ::MediaGallery::PrivateStorage.processed_rel_path(item),
+        ::MediaGallery::PrivateStorage.thumbnail_rel_path(item),
+      ].map { |key| normalize_key(key) }
+      Array(layout[:single_keys]).each do |key|
+        normalized = normalize_key(key)
+        raise UnsafeCleanup, "Replica cleanup contains an unexpected managed asset key." unless allowed_single.include?(normalized)
+      end
+      Array(layout[:prefixes]).each do |prefix|
+        raise UnsafeCleanup, "Replica cleanup contains an unexpected prefix." unless normalize_key(prefix) == File.join(public_id, "hls")
+      end
+      if replica_scope == "hls_only" && Array(layout[:single_keys]).present?
+        raise UnsafeCleanup, "HLS-only replica cleanup cannot delete main or thumbnail objects."
+      end
+      true
+    end
+
+    def safe_store_exists(store, key)
+      !!store.exists?(key)
+    rescue
+      nil
+    end
+
     def cleanup_deleted_media_item!(finding, actor:, request:)
       public_id = finding["public_id"].to_s
       raise UnsafeCleanup, "Finding has no media public_id." if public_id.blank?
@@ -218,17 +564,19 @@ module ::MediaGallery
       raise UnsafeCleanup, "Deleted-media cleanup requires the media record to still exist." if item.blank?
       raise UnsafeCleanup, "This media record is not marked as asset-deleted." unless asset_deleted?(item)
 
-      summary = ::MediaGallery::MediaAssetCleanup.cleanup_item!(
-        item,
-        mode: "health_deleted_media_leftovers_cleanup",
-        actor: actor,
-        request: request,
-        note: "Scoped cleanup from Health storage reconciliation.",
-        trigger_event_type: "media_gallery_reconciliation_cleanup_completed",
-        delete_uploads: false,
-        delete_item_prefixes: true,
-        delete_filesystem_paths: true
-      )
+      summary = ::MediaGallery::StorageReplica.synchronize_item(item) do
+        ::MediaGallery::MediaAssetCleanup.cleanup_item!(
+          item,
+          mode: "health_deleted_media_leftovers_cleanup",
+          actor: actor,
+          request: request,
+          note: "Scoped cleanup from Health storage reconciliation.",
+          trigger_event_type: "media_gallery_reconciliation_cleanup_completed",
+          delete_uploads: false,
+          delete_item_prefixes: true,
+          delete_filesystem_paths: true
+        )
+      end
 
       {
         "schema_version" => 1,
@@ -284,6 +632,9 @@ module ::MediaGallery
         raise UnsafeCleanup, "Migration-source cleanup requires the media item to still exist." if item.blank?
         current_profile = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
         raise UnsafeCleanup, "The finding profile is now the current media profile. Run reconciliation again." if current_profile.blank? || current_profile == profile_key.to_s
+        if defined?(::MediaGallery::StorageReplica) && ::MediaGallery::StorageReplica.current_replica_target_expected_for?(item, target_profile_key: profile_key)
+          raise UnsafeCleanup, "This profile is currently the configured secondary replica destination. Use replica-aware cleanup after disabling or moving the replica."
+        end
         raise UnsafeCleanup, "The active target assets are not available; source cleanup is unsafe." unless active_item_storage_available?(item)
       when "hls_temporary_prefix", "hls_old_package_prefix"
         if item.present?
@@ -297,7 +648,9 @@ module ::MediaGallery
 
     def validate_local_hls_mirror_cleanup!(item, profile_key:, prefix:)
       raise UnsafeCleanup, "Local HLS mirror cleanup requires the media item to still exist." if item.blank?
-      raise UnsafeCleanup, "Local HLS mirror cleanup is available only after local HLS mirroring is disabled." if ::MediaGallery::Hls.local_mirror_enabled?
+      if ::MediaGallery::StorageReplica.current_replica_target_expected_for?(item, target_profile_key: "local")
+        raise UnsafeCleanup, "Local HLS cleanup is available only after Local storage is no longer enabled as this item's secondary replica destination."
+      end
       raise UnsafeCleanup, "The selected finding is not on the local storage profile." unless profile_key.to_s == "local"
       raise UnsafeCleanup, "The selected prefix is not the exact local HLS mirror for this item." unless prefix == File.join(item.public_id.to_s, "hls")
       raise UnsafeCleanup, "Local HLS mirror cleanup applies only to video items." unless item.media_type.to_s == "video"
@@ -314,7 +667,7 @@ module ::MediaGallery
       verification = verify_active_remote_hls_package(item, role: role)
       unless verification["ok"] == true
         log_remote_hls_verification_failure(item, verification)
-        raise UnsafeCleanup, "The active remote HLS package did not pass complete verification; local mirror cleanup is unsafe."
+        raise UnsafeCleanup, "The active remote HLS package did not pass complete verification; local HLS replica cleanup is unsafe."
       end
 
       verification
@@ -344,8 +697,8 @@ module ::MediaGallery
 
       profile_key = ::MediaGallery::StorageSettingsResolver.profile_key_for_item(item).to_s
       profile_backend = ::MediaGallery::StorageSettingsResolver.backend_for_profile_key(profile_key).to_s
-      errors << "current_profile_not_s3" unless profile_backend == "s3"
-      errors << "hls_role_backend_not_s3" unless role["backend"].to_s == "s3"
+      errors << "current_profile_backend_invalid" unless %w[local s3].include?(profile_backend)
+      errors << "hls_role_backend_mismatch" unless role["backend"].to_s == profile_backend
 
       expected_prefix = normalize_key(File.join(item.public_id.to_s, "hls"))
       key_prefix = normalize_key(role["key_prefix"].presence || expected_prefix)
@@ -353,7 +706,7 @@ module ::MediaGallery
 
       store = ::MediaGallery::StorageSettingsResolver.build_store_for_profile_key(profile_key)
       errors << "current_profile_store_unavailable" if store.blank?
-      errors << "current_profile_store_not_s3" if store.present? && store.backend.to_s != "s3"
+      errors << "current_profile_store_backend_mismatch" if store.present? && store.backend.to_s != profile_backend
       return remote_hls_verification_result(item, role, profile_key: profile_key, key_prefix: key_prefix, errors: errors) if errors.present?
 
       store.ensure_available!
@@ -485,6 +838,7 @@ module ::MediaGallery
         errors: errors,
         listed_objects: entries_by_key.length,
         checked_objects: checked_keys.length,
+        checked_keys: checked_keys.keys,
       )
     rescue => e
       remote_hls_verification_result(
@@ -681,7 +1035,7 @@ module ::MediaGallery
       nil
     end
 
-    def remote_hls_verification_result(item, role, profile_key: nil, key_prefix: nil, errors:, listed_objects: 0, checked_objects: 0)
+    def remote_hls_verification_result(item, role, profile_key: nil, key_prefix: nil, errors:, listed_objects: 0, checked_objects: 0, checked_keys: nil)
       normalized_errors = Array(errors).map(&:to_s).reject(&:blank?).uniq.first(100)
       {
         "ok" => normalized_errors.blank?,
@@ -692,6 +1046,7 @@ module ::MediaGallery
         "key_prefix" => key_prefix.to_s.presence,
         "listed_objects" => listed_objects.to_i,
         "checked_objects" => checked_objects.to_i,
+        "checked_keys" => Array(checked_keys).map(&:to_s).reject(&:blank?).first(100),
         "errors" => normalized_errors,
       }.compact
     end

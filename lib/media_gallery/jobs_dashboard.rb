@@ -24,12 +24,13 @@ module ::MediaGallery
     ].freeze
     FAILED_STATUSES = %w[failed error danger stale stale_queued stale_working].freeze
     COMPLETED_STATUSES = %w[
-      ready copied verified switched cleaned finalized rolled_back skipped cancelled cleared completed complete success logged idle scheduled
+      ready copied verified switched cleaned finalized rolled_back skipped cancelled cleared completed complete complete_unconfigured success logged idle scheduled
     ].freeze
 
     TYPE_GROUPS = {
       "processing" => "Media processing",
       "migration" => "Migration",
+      "storage" => "Storage replicas",
       "aes" => "AES / HLS",
       "forensics" => "Forensics",
       "test_download" => "Test downloads",
@@ -126,6 +127,7 @@ module ::MediaGallery
       rows << state_row(item, meta["migration_cleanup"], key: "migration_cleanup", group: "migration", label: "Migration cleanup", operation: "cleanup")
       rows << state_row(item, meta["migration_rollback"], key: "migration_rollback", group: "migration", label: "Migration rollback", operation: "rollback")
       rows << state_row(item, meta["migration_finalize"], key: "migration_finalize", group: "migration", label: "Migration finalize", operation: "finalize")
+      rows << state_row(item, meta["storage_replica"], key: "storage_replica", group: "storage", label: "Secondary storage replica", operation: "storage_replica")
 
       aes_state = meta["hls_aes128_backfill"]
       if aes_state.is_a?(Hash) && aes_state.present?

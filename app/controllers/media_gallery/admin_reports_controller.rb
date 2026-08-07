@@ -74,92 +74,100 @@ module ::MediaGallery
       report_payload = nil
       delete_summary = nil
 
-      item.with_lock do
-        meta = metadata_for(item)
-        reports = reports_from_meta(meta)
-        report = reports.find { |entry| entry.is_a?(Hash) && entry["id"].to_s == report_id }
-        raise Discourse::NotFound if report.blank?
+      review_locked = proc do
+        item.with_lock do
+          meta = metadata_for(item)
+          reports = reports_from_meta(meta)
+          report = reports.find { |entry| entry.is_a?(Hash) && entry["id"].to_s == report_id }
+          raise Discourse::NotFound if report.blank?
 
-        if report["status"].to_s != "open"
-          return render_json_error("report_already_reviewed", status: 422, message: "This report has already been reviewed.")
+          if report["status"].to_s != "open"
+            return render_json_error("report_already_reviewed", status: 422, message: "This report has already been reviewed.")
+          end
+
+          now = Time.now.utc.iso8601
+          report["status"] = decision == "reject" ? "rejected" : (decision == "resolve" ? "resolved" : "accepted")
+          report["decision"] = decision
+          report["reviewed_at"] = now
+          report["reviewed_by_user_id"] = current_user.id
+          report["reviewed_by_username"] = current_user.username
+          report["review_note"] = note if note.present?
+
+          case decision
+          when "accept_hide"
+            apply_visibility!(meta, item, hidden: true, reason: "Report accepted by staff.", at: now)
+            append_management_log!(meta, action: "report_accept_hide", item: item, note: note, changes: { "hidden" => [item.admin_hidden?, true], "report_id" => [nil, report_id] })
+          when "accept_delete_asset"
+            delete_summary = delete_reported_asset!(item)
+            report["delete_summary"] = delete_summary
+            meta[ASSET_DELETION_KEY] = asset_deletion_metadata(item, report, delete_summary, at: now)
+            apply_visibility!(meta, item, hidden: true, reason: "Report accepted by staff; asset deleted.", at: now)
+            append_management_log!(meta, action: "report_accept_delete_asset", item: item, note: note, changes: { "hidden" => [item.admin_hidden?, true], "asset_deleted" => [false, true], "report_id" => [nil, report_id] })
+          when "reject"
+            auto_hide_review = reconcile_report_auto_hide_after_review!(
+              meta,
+              item,
+              reports,
+              report,
+              at: now,
+              reason: "Report rejected by staff."
+            )
+            append_management_log!(
+              meta,
+              action: "report_reject",
+              item: item,
+              note: note,
+              changes: {
+                "report_id" => [nil, report_id],
+                "auto_hidden_restored" => [nil, auto_hide_review["restored"]],
+                "remaining_report_score" => [nil, auto_hide_review["score"]],
+              }.compact
+            )
+          when "resolve"
+            auto_hide_review = reconcile_report_auto_hide_after_review!(
+              meta,
+              item,
+              reports,
+              report,
+              at: now,
+              reason: "Report resolved without action by staff."
+            )
+            append_management_log!(
+              meta,
+              action: "report_resolve",
+              item: item,
+              note: note,
+              changes: {
+                "report_id" => [nil, report_id],
+                "auto_hidden_restored" => [nil, auto_hide_review["restored"]],
+                "remaining_report_score" => [nil, auto_hide_review["score"]],
+              }.compact
+            )
+          end
+
+          meta[REPORTS_KEY] = reports
+
+          update_attrs = { extra_metadata: meta, updated_at: Time.now }
+          if decision == "accept_delete_asset"
+            update_attrs.merge!(
+              original_upload_id: nil,
+              processed_upload_id: nil,
+              thumbnail_upload_id: nil,
+              status: "failed",
+              error_message: "asset_deleted_after_media_report"
+            )
+          end
+
+          item.update_columns(update_attrs)
+          item.reload
+          report_payload = report_payload_for(item, report)
         end
+      end
 
-        now = Time.now.utc.iso8601
-        report["status"] = decision == "reject" ? "rejected" : (decision == "resolve" ? "resolved" : "accepted")
-        report["decision"] = decision
-        report["reviewed_at"] = now
-        report["reviewed_by_user_id"] = current_user.id
-        report["reviewed_by_username"] = current_user.username
-        report["review_note"] = note if note.present?
-
-        case decision
-        when "accept_hide"
-          apply_visibility!(meta, item, hidden: true, reason: "Report accepted by staff.", at: now)
-          append_management_log!(meta, action: "report_accept_hide", item: item, note: note, changes: { "hidden" => [item.admin_hidden?, true], "report_id" => [nil, report_id] })
-        when "accept_delete_asset"
-          delete_summary = delete_reported_asset!(item)
-          report["delete_summary"] = delete_summary
-          meta[ASSET_DELETION_KEY] = asset_deletion_metadata(item, report, delete_summary, at: now)
-          apply_visibility!(meta, item, hidden: true, reason: "Report accepted by staff; asset deleted.", at: now)
-          append_management_log!(meta, action: "report_accept_delete_asset", item: item, note: note, changes: { "hidden" => [item.admin_hidden?, true], "asset_deleted" => [false, true], "report_id" => [nil, report_id] })
-        when "reject"
-          auto_hide_review = reconcile_report_auto_hide_after_review!(
-            meta,
-            item,
-            reports,
-            report,
-            at: now,
-            reason: "Report rejected by staff."
-          )
-          append_management_log!(
-            meta,
-            action: "report_reject",
-            item: item,
-            note: note,
-            changes: {
-              "report_id" => [nil, report_id],
-              "auto_hidden_restored" => [nil, auto_hide_review["restored"]],
-              "remaining_report_score" => [nil, auto_hide_review["score"]],
-            }.compact
-          )
-        when "resolve"
-          auto_hide_review = reconcile_report_auto_hide_after_review!(
-            meta,
-            item,
-            reports,
-            report,
-            at: now,
-            reason: "Report resolved without action by staff."
-          )
-          append_management_log!(
-            meta,
-            action: "report_resolve",
-            item: item,
-            note: note,
-            changes: {
-              "report_id" => [nil, report_id],
-              "auto_hidden_restored" => [nil, auto_hide_review["restored"]],
-              "remaining_report_score" => [nil, auto_hide_review["score"]],
-            }.compact
-          )
-        end
-
-        meta[REPORTS_KEY] = reports
-
-        update_attrs = { extra_metadata: meta, updated_at: Time.now }
-        if decision == "accept_delete_asset"
-          update_attrs.merge!(
-            original_upload_id: nil,
-            processed_upload_id: nil,
-            thumbnail_upload_id: nil,
-            status: "failed",
-            error_message: "asset_deleted_after_media_report"
-          )
-        end
-
-        item.update_columns(update_attrs)
-        item.reload
-        report_payload = report_payload_for(item, report)
+      if decision == "accept_delete_asset"
+        ::MediaGallery::StorageReplica.synchronize_item(item, &review_locked)
+      else
+        review_locked.call
       end
 
       ::MediaGallery::OperationLogger.warn(

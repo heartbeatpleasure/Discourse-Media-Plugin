@@ -65,14 +65,22 @@ module ::MediaGallery
       item.save!
 
       ::MediaGallery::OperationLogger.info("migration_switch_completed", item: item, operation: "switch", data: { source_profile_key: switch_state["source_profile_key"], target_profile_key: switch_state["target_profile_key"], mode: mode, auto_cleanup: !!auto_cleanup })
+      enqueue_storage_replica_after_switch!(item, requested_by: requested_by)
 
       if auto_cleanup
-        cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: requested_by, force: false)
-        if cleanup_state.is_a?(Hash)
-          switch_state["cleanup_enqueued_at"] = cleanup_state["queued_at"]
-          switch_state["cleanup_status"] = cleanup_state["status"].to_s.presence || "queued"
-          switch_state["cleanup_pending"] = true
-          switch_state["cleanup_status_updated_at"] = cleanup_state["queued_at"] || Time.now.utc.iso8601
+        if storage_replica_retains_profile?(item, switch_state["source_profile_key"])
+          switch_state["cleanup_status"] = "retained_as_storage_replica"
+          switch_state["cleanup_pending"] = false
+          switch_state["cleanup_status_updated_at"] = Time.now.utc.iso8601
+          switch_state["cleanup_note"] = "Source cleanup was skipped because this profile is the configured secondary replica destination."
+        else
+          cleanup_state = ::MediaGallery::MigrationCleanup.enqueue_cleanup!(item, requested_by: requested_by, force: false)
+          if cleanup_state.is_a?(Hash)
+            switch_state["cleanup_enqueued_at"] = cleanup_state["queued_at"]
+            switch_state["cleanup_status"] = cleanup_state["status"].to_s.presence || "queued"
+            switch_state["cleanup_pending"] = true
+            switch_state["cleanup_status_updated_at"] = cleanup_state["queued_at"] || Time.now.utc.iso8601
+          end
         end
         meta = item.extra_metadata.is_a?(Hash) ? item.extra_metadata.deep_dup : {}
         meta[SWITCH_STATE_KEY] = switch_state
@@ -85,6 +93,36 @@ module ::MediaGallery
       raise e
     end
 
+
+    def storage_replica_retains_profile?(item, profile_key)
+      return false unless defined?(::MediaGallery::StorageReplica)
+      return false if profile_key.to_s.blank?
+
+      ::MediaGallery::StorageReplica.current_replica_target_expected_for?(
+        item,
+        target_profile_key: profile_key.to_s,
+      )
+    rescue
+      false
+    end
+    private_class_method :storage_replica_retains_profile?
+
+    def enqueue_storage_replica_after_switch!(item, requested_by: nil)
+      return false unless defined?(::MediaGallery::StorageReplica)
+
+      ::MediaGallery::StorageReplica.enqueue_after_primary_change!(
+        item,
+        reason: "migration_switch_completed",
+        requested_by: requested_by,
+      )
+    rescue => e
+      Rails.logger.warn(
+        "[media_gallery] storage replica enqueue after migration switch failed item_id=#{item&.id} " \
+        "error=#{e.class}: #{e.message}"
+      )
+      false
+    end
+    private_class_method :enqueue_storage_replica_after_switch!
 
     def stringify_fingerprint(value)
       return nil if value.blank?

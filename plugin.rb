@@ -77,6 +77,7 @@ after_initialize do
   require_relative "lib/media_gallery/local_asset_store"
   require_relative "lib/media_gallery/s3_asset_store"
   require_relative "lib/media_gallery/asset_manifest"
+  require_relative "lib/media_gallery/storage_replica"
   require_relative "lib/media_gallery/media_asset_cleanup"
   require_relative "lib/media_gallery/reconciliation_cleanup"
   require_relative "lib/media_gallery/delivery_resolver"
@@ -184,6 +185,7 @@ after_initialize do
   require_dependency File.expand_path("jobs/regular/media_gallery_generate_test_download.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_forensics_identify_job.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_storage_reconciliation.rb", __dir__)
+  require_dependency File.expand_path("jobs/regular/media_gallery_replicate_item.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_process_item.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_copy_item_to_target.rb", __dir__)
   require_dependency File.expand_path("jobs/regular/media_gallery_cleanup_source_after_switch.rb", __dir__)
